@@ -51,6 +51,22 @@ func TestValidatePlanAcceptsDeclaredSensitiveOutput(t *testing.T) {
 	}
 }
 
+func TestValidatePlanAcceptsExternalArtifactReference(t *testing.T) {
+	contracts := []domain.ArtifactContract{{Type: "MachineSet", Version: "v1alpha1"}}
+	plan := domain.Plan{Steps: []domain.PlanStep{{ID: "consume", ArtifactInputs: []domain.ArtifactInput{{Name: "machines", Type: "MachineSet", Version: "v1alpha1", ArtifactID: "art_verified"}}}}}
+	if err := ValidatePlan(plan, contracts, nil); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestValidatePlanRejectsAmbiguousExternalArtifactReference(t *testing.T) {
+	contracts := []domain.ArtifactContract{{Type: "MachineSet", Version: "v1alpha1"}}
+	plan := domain.Plan{Steps: []domain.PlanStep{{ID: "consume", ArtifactInputs: []domain.ArtifactInput{{Name: "machines", Type: "MachineSet", Version: "v1alpha1", ArtifactID: "art_verified", FromStep: "produce", FromOutput: "machines"}}}}}
+	if err := ValidatePlan(plan, contracts, nil); err == nil {
+		t.Fatal("expected ambiguous source rejection")
+	}
+}
+
 func TestExtractJSONUsesRFC6901Pointers(t *testing.T) {
 	value, err := ExtractJSON(json.RawMessage(`{"data":{"a/b":[{"value":3}]}}`), "/data/a~1b/0")
 	if err != nil {

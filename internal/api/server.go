@@ -70,6 +70,7 @@ func NewServer(store *storage.Store, registry *plugins.Registry, artifactStore *
 	router.HandleFunc("POST /api/v1/operations/{id}/cancel", server.cancelOperation)
 	router.HandleFunc("GET /api/v1/operations/{id}/logs", server.listLogs)
 	router.HandleFunc("GET /api/v1/operations/{id}/events", server.operationEvents)
+	router.HandleFunc("GET /api/v1/artifacts", server.listAvailableArtifacts)
 	router.HandleFunc("GET /api/v1/artifacts/{id}/download", server.downloadArtifact)
 	router.Handle("/", webHandler)
 	return securityHeaders(requestLog(server.authenticate(auditMutations(store, recoverer(router))))), nil
@@ -452,6 +453,10 @@ func (s *Server) createOperation(response http.ResponseWriter, request *http.Req
 		writeError(response, http.StatusUnprocessableEntity, "invalid_artifact_graph", err.Error())
 		return
 	}
+	if err := s.validateExternalArtifactInputs(request.Context(), input.WorkspaceID, plan); err != nil {
+		writeError(response, http.StatusUnprocessableEntity, "invalid_artifact_reference", err.Error())
+		return
+	}
 	if err := s.validateResourceEffects(request.Context(), input.WorkspaceID, manifest, plan); err != nil {
 		writeError(response, http.StatusConflict, "resource_conflict", err.Error())
 		return
@@ -493,10 +498,12 @@ func (s *Server) createOperation(response http.ResponseWriter, request *http.Req
 
 func preflightPlan(ctx context.Context, plugin plugins.Plugin, plan domain.Plan) []domain.ValidationIssue {
 	issues := make([]domain.ValidationIssue, 0, len(plan.Steps))
+	priorMutation := false
 	for _, step := range plan.Steps {
 		path := "plan.steps." + step.ID
-		if len(step.ArtifactInputs) > 0 {
-			issues = append(issues, domain.ValidationIssue{Level: "info", Path: path, Message: "Dynamic preflight will run after required typed inputs are produced and verified."})
+		if len(step.ArtifactInputs) > 0 || priorMutation {
+			issues = append(issues, domain.ValidationIssue{Level: "info", Path: path, Message: "Dynamic preflight will run after prior outputs and mutations are verified."})
+			priorMutation = priorMutation || step.Mutating || len(step.Effects) > 0
 			continue
 		}
 		health, err := plugin.Precheck(ctx, step, func(string, string) error { return nil })
@@ -509,8 +516,64 @@ func preflightPlan(ctx context.Context, plugin plugins.Plugin, plan domain.Plan)
 			continue
 		}
 		issues = append(issues, domain.ValidationIssue{Level: "info", Path: path, Message: "Non-mutating preflight passed: " + health.Summary})
+		priorMutation = step.Mutating || len(step.Effects) > 0
 	}
 	return issues
+}
+
+func (s *Server) validateExternalArtifactInputs(ctx context.Context, workspaceID string, plan domain.Plan) error {
+	verified := map[string]domain.Artifact{}
+	for _, step := range plan.Steps {
+		for _, input := range step.ArtifactInputs {
+			if input.ArtifactID == "" {
+				continue
+			}
+			artifact, ok := verified[input.ArtifactID]
+			if !ok {
+				var err error
+				artifact, err = s.store.GetArtifact(ctx, input.ArtifactID)
+				if err != nil {
+					return fmt.Errorf("step %q input %q references an unavailable artifact", step.ID, input.Name)
+				}
+				source, err := s.store.GetOperation(ctx, artifact.OperationID)
+				if err != nil || source.WorkspaceID != workspaceID || source.Status != domain.OperationSucceeded {
+					return fmt.Errorf("step %q input %q must reference a successful operation in the same workspace", step.ID, input.Name)
+				}
+				if err := s.verifyArtifactPayload(ctx, artifact); err != nil {
+					return fmt.Errorf("step %q input %q failed integrity verification: %w", step.ID, input.Name, err)
+				}
+				verified[input.ArtifactID] = artifact
+			}
+			if artifact.Type != input.Type || artifact.Version != input.Version {
+				return fmt.Errorf("step %q input %q requires %s/%s but artifact %s provides %s/%s", step.ID, input.Name, input.Type, input.Version, input.ArtifactID, artifact.Type, artifact.Version)
+			}
+		}
+	}
+	return nil
+}
+
+func (s *Server) verifyArtifactPayload(ctx context.Context, artifact domain.Artifact) error {
+	stored, err := s.artifacts.ReadVerified(ctx, artifact.StorageKey, artifact.StorageDigest, artifact.StoredSizeBytes)
+	if err != nil {
+		return err
+	}
+	value := stored
+	if artifact.Sensitive {
+		if s.vault == nil {
+			return errors.New("artifact vault is unavailable")
+		}
+		value, err = s.vault.DecryptBound(artifact.EncryptionNonce, stored, []byte(artifact.ID))
+		if err != nil {
+			return err
+		}
+	}
+	if err := artifacts.Verify(value, artifact.Digest, artifact.SizeBytes); err != nil {
+		return err
+	}
+	if artifact.MediaType == "application/json" && !json.Valid(value) {
+		return errors.New("artifact contains invalid JSON")
+	}
+	return nil
 }
 
 func (s *Server) queueOperation(response http.ResponseWriter, request *http.Request) {
@@ -597,6 +660,22 @@ func (s *Server) operationEvents(response http.ResponseWriter, request *http.Req
 	}
 }
 
+func (s *Server) listAvailableArtifacts(response http.ResponseWriter, request *http.Request) {
+	limit := 200
+	if raw := request.URL.Query().Get("limit"); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err == nil && parsed >= 1 && parsed <= 500 {
+			limit = parsed
+		}
+	}
+	items, err := s.store.ListAvailableArtifacts(request.Context(), limit)
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, "database_error", "Could not list verified artifacts.")
+		return
+	}
+	writeJSON(response, http.StatusOK, map[string]any{"items": items})
+}
+
 func (s *Server) downloadArtifact(response http.ResponseWriter, request *http.Request) {
 	artifact, err := s.store.GetArtifact(request.Context(), request.PathValue("id"))
 	if errors.Is(err, storage.ErrNotFound) {
@@ -650,6 +729,7 @@ func validatePlanEffects(manifest plugins.Manifest, plan domain.Plan) error {
 		return fmt.Errorf("plan exceeds the maximum number of steps")
 	}
 	stepIDs := map[string]bool{}
+	createdResources := map[string]bool{}
 	for _, step := range plan.Steps {
 		if step.ID == "" || step.Name == "" || stepIDs[step.ID] || !json.Valid(step.Input) {
 			return fmt.Errorf("plan contains an invalid or duplicate step identity")
@@ -670,6 +750,12 @@ func validatePlanEffects(manifest plugins.Manifest, plan domain.Plan) error {
 			}
 			if effect.ExternalID == "" || effect.Kind == "" || effect.Name == "" {
 				return fmt.Errorf("step %q declares an incomplete resource effect", step.ID)
+			}
+			if effect.Action == "create" {
+				if createdResources[effect.ExternalID] {
+					return fmt.Errorf("resource %q is created more than once in the plan", effect.ExternalID)
+				}
+				createdResources[effect.ExternalID] = true
 			}
 		}
 	}

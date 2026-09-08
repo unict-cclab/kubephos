@@ -70,6 +70,36 @@ func TestPreflightPlanRunsReachableChecksAndDefersArtifactConsumers(t *testing.T
 	}
 }
 
+func TestPreflightPlanDefersStepsAfterInfrastructureEffects(t *testing.T) {
+	plugin := &preflightPlugin{health: domain.HealthReport{Status: domain.HealthHealthy, Summary: "ready"}}
+	plan := domain.Plan{Steps: []domain.PlanStep{
+		{ID: "create", Effects: []domain.ResourceEffect{{Action: "create", ExternalID: "machine/1", Kind: "machine", Name: "one"}}},
+		{ID: "verify-dependent-state"},
+	}}
+	issues := preflightPlan(context.Background(), plugin, plan)
+	if plugin.calls != 1 {
+		t.Fatalf("expected only the first preflight to run, got %d", plugin.calls)
+	}
+	if len(issues) != 2 || issues[1].Level != "info" {
+		t.Fatalf("unexpected issues %#v", issues)
+	}
+}
+
+func TestPreflightPlanDefersStepsAfterGenericMutation(t *testing.T) {
+	plugin := &preflightPlugin{health: domain.HealthReport{Status: domain.HealthHealthy, Summary: "ready"}}
+	plan := domain.Plan{Steps: []domain.PlanStep{
+		{ID: "install", Mutating: true},
+		{ID: "verify-dependent-state"},
+	}}
+	issues := preflightPlan(context.Background(), plugin, plan)
+	if plugin.calls != 1 {
+		t.Fatalf("expected only the mutating step preflight to run, got %d", plugin.calls)
+	}
+	if len(issues) != 2 || issues[1].Level != "info" {
+		t.Fatalf("unexpected issues %#v", issues)
+	}
+}
+
 func TestPreflightPlanRejectsUnhealthyStep(t *testing.T) {
 	plugin := &preflightPlugin{health: domain.HealthReport{Status: domain.HealthUnhealthy, Summary: "unreachable"}}
 	issues := preflightPlan(context.Background(), plugin, domain.Plan{Steps: []domain.PlanStep{{ID: "first"}}})
@@ -86,6 +116,17 @@ func TestPlanEffectsRequireProvisionCapability(t *testing.T) {
 	manifest := plugins.Manifest{ID: "test", Provider: "proxmox", Capabilities: []string{"infrastructure.provision"}}
 	if err := validatePlanEffects(manifest, plan); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestPlanEffectsRejectDuplicateCreates(t *testing.T) {
+	plan := domain.Plan{PluginID: "test", Steps: []domain.PlanStep{{ID: "create", Name: "Create", Input: json.RawMessage(`{}`), Effects: []domain.ResourceEffect{
+		{Action: "create", ExternalID: "qemu/9000", Kind: "virtual-machine", Name: "one"},
+		{Action: "create", ExternalID: "qemu/9000", Kind: "virtual-machine", Name: "two"},
+	}}}}
+	manifest := plugins.Manifest{ID: "test", Provider: "proxmox", Capabilities: []string{"infrastructure.provision"}}
+	if err := validatePlanEffects(manifest, plan); err == nil {
+		t.Fatal("expected duplicate resource create rejection")
 	}
 }
 

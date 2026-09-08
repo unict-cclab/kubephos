@@ -265,11 +265,24 @@ func (w *Worker) resolveArtifactInputs(ctx context.Context, operation domain.Ope
 	}
 	step.ResolvedInputs = make(map[string]domain.ResolvedArtifact, len(step.ArtifactInputs))
 	for _, input := range step.ArtifactInputs {
-		producerStepID, exists := stepIDs[input.FromStep]
-		if !exists {
-			return domain.PlanStep{}, fmt.Errorf("input %q references unavailable step %q", input.Name, input.FromStep)
+		var artifact domain.Artifact
+		var err error
+		if input.ArtifactID != "" {
+			artifact, err = w.store.GetArtifact(ctx, input.ArtifactID)
+			if err == nil {
+				var source domain.Operation
+				source, err = w.store.GetOperation(ctx, artifact.OperationID)
+				if err == nil && (source.WorkspaceID != operation.WorkspaceID || source.Status != domain.OperationSucceeded) {
+					err = errors.New("external artifact does not belong to a successful operation in this workspace")
+				}
+			}
+		} else {
+			producerStepID, exists := stepIDs[input.FromStep]
+			if !exists {
+				return domain.PlanStep{}, fmt.Errorf("input %q references unavailable step %q", input.Name, input.FromStep)
+			}
+			artifact, err = w.store.GetArtifactByOutput(ctx, operation.ID, producerStepID, input.FromOutput)
 		}
-		artifact, err := w.store.GetArtifactByOutput(ctx, operation.ID, producerStepID, input.FromOutput)
 		if err != nil {
 			return domain.PlanStep{}, fmt.Errorf("resolve input %q: %w", input.Name, err)
 		}
@@ -348,7 +361,7 @@ func (w *Worker) persistStepOutputs(ctx context.Context, operation domain.Operat
 }
 
 func (w *Worker) cleanup(operation domain.Operation, step domain.PlanStep, result json.RawMessage, plugin plugins.Plugin, cause error) error {
-	if len(step.Effects) == 0 {
+	if !step.Mutating && len(step.Effects) == 0 {
 		return cause
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
@@ -372,18 +385,30 @@ func (w *Worker) reserveEffects(ctx context.Context, operation domain.Operation,
 	if provider == "" && len(step.Effects) > 0 {
 		return errors.New("resource effects require a provider identity")
 	}
+	creates := make([]domain.InfrastructureResource, 0, len(step.Effects))
+	for _, effect := range step.Effects {
+		if effect.Action == "create" {
+			resourceID := id.New("res")
+			creates = append(creates, domain.InfrastructureResource{ID: resourceID, Provider: provider, ExternalID: effect.ExternalID, WorkspaceID: operation.WorkspaceID, Kind: effect.Kind, Name: effect.Name, Ownership: "managed", Protection: "managed"})
+		}
+	}
+	createIDs, err := w.store.ReserveManagedResources(ctx, creates, operation.ID)
+	if err != nil {
+		return err
+	}
+	release := func() {
+		_ = w.store.ReleaseManagedResourceReservations(ctx, creates, operation.ID)
+	}
 	for _, effect := range step.Effects {
 		switch effect.Action {
 		case "create":
-			resource := domain.InfrastructureResource{ID: id.New("res"), Provider: provider, ExternalID: effect.ExternalID, WorkspaceID: operation.WorkspaceID, Kind: effect.Kind, Name: effect.Name, Ownership: "managed", Protection: "managed"}
-			if err := w.store.ReserveManagedResource(ctx, resource, operation.ID); err != nil {
-				return err
-			}
 			details, _ := json.Marshal(map[string]any{"operationId": operation.ID, "externalId": effect.ExternalID, "state": "reserved"})
-			if err := w.store.AppendAuditEvent(ctx, domain.AuditEvent{Actor: "worker", Action: "infrastructure.reserve", TargetType: effect.Kind, TargetID: resource.ID, Outcome: "succeeded", Details: details}); err != nil {
+			if err := w.store.AppendAuditEvent(ctx, domain.AuditEvent{Actor: "worker", Action: "infrastructure.reserve", TargetType: effect.Kind, TargetID: createIDs[effect.ExternalID], Outcome: "succeeded", Details: details}); err != nil {
+				release()
 				return err
 			}
 			if err := log("info", fmt.Sprintf("Reserved managed resource %s before execution", effect.ExternalID)); err != nil {
+				release()
 				return err
 			}
 		case "delete":

@@ -29,6 +29,8 @@ export interface SchemaProperty {
   'x-kubephos-provider'?: string
   'x-kubephos-secret-kind'?: string
   'x-kubephos-required-trait'?: string
+  'x-kubephos-artifact-type'?: string
+  'x-kubephos-artifact-version'?: string
 }
 
 export interface JsonSchema {
@@ -88,8 +90,9 @@ export interface ResourceEffect {
 export interface PlanStep {
   id: string
   name: string
+  mutating?: boolean
   effects?: ResourceEffect[]
-  artifactInputs?: Array<{name: string; type: string; version: string; fromStep: string; fromOutput: string}>
+  artifactInputs?: Array<{name: string; type: string; version: string; artifactId?: string; fromStep?: string; fromOutput?: string}>
   outputs?: Array<{name: string; type: string; version: string; mediaType: string; source: string; sensitive?: boolean}>
 }
 
@@ -105,6 +108,8 @@ export interface OperationStep {
 
 export interface Artifact {
   id: string
+  operationId: string
+  workspaceId?: string
   stepId?: string
   outputName?: string
   name: string
@@ -205,6 +210,7 @@ export interface PlatformData {
   system: SystemStatus | null
   workspaces: Workspace[]
   operations: Operation[]
+  artifacts: Artifact[]
   plugins: Plugin[]
   applications: Application[]
   credentials: Credential[]

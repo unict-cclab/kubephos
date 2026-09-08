@@ -114,6 +114,10 @@ func validateValue(rule map[string]any, value any, path string) []Issue {
 			if !strings.HasPrefix(current, "app:") || !strings.Contains(strings.TrimPrefix(current, "app:"), "@") {
 				issues = append(issues, Issue{Path: path, Message: "Value must reference a catalog application version."})
 			}
+		case "kubephos-artifact-ref":
+			if !strings.HasPrefix(current, "art_") {
+				issues = append(issues, Issue{Path: path, Message: "Value must reference a verified artifact."})
+			}
 		}
 	case json.Number:
 		value, err := current.Float64()

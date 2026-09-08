@@ -44,6 +44,15 @@ func ValidatePlan(plan domain.Plan, declaredInputs, declaredOutputs []domain.Art
 			if !allowedInputs[input.Type+"\x00"+input.Version] {
 				return fmt.Errorf("step %q input %q uses undeclared artifact contract %s/%s", step.ID, input.Name, input.Type, input.Version)
 			}
+			if input.ArtifactID != "" {
+				if !strings.HasPrefix(input.ArtifactID, "art_") || input.FromStep != "" || input.FromOutput != "" {
+					return fmt.Errorf("step %q input %q contains an invalid external artifact reference", step.ID, input.Name)
+				}
+				continue
+			}
+			if input.FromStep == "" || input.FromOutput == "" {
+				return fmt.Errorf("step %q input %q does not declare an artifact source", step.ID, input.Name)
+			}
 			producer, exists := producers[input.FromStep+"\x00"+input.FromOutput]
 			if !exists {
 				return fmt.Errorf("step %q input %q references an unavailable earlier output", step.ID, input.Name)

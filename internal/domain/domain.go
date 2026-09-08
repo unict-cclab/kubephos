@@ -175,6 +175,7 @@ type PlanStep struct {
 	ID             string                      `json:"id"`
 	Name           string                      `json:"name"`
 	Input          json.RawMessage             `json:"input"`
+	Mutating       bool                        `json:"mutating,omitempty"`
 	ArtifactInputs []ArtifactInput             `json:"artifactInputs,omitempty"`
 	Outputs        []ArtifactOutput            `json:"outputs,omitempty"`
 	ResolvedInputs map[string]ResolvedArtifact `json:"resolvedInputs,omitempty"`
@@ -185,8 +186,9 @@ type ArtifactInput struct {
 	Name       string `json:"name"`
 	Type       string `json:"type"`
 	Version    string `json:"version"`
-	FromStep   string `json:"fromStep"`
-	FromOutput string `json:"fromOutput"`
+	ArtifactID string `json:"artifactId,omitempty"`
+	FromStep   string `json:"fromStep,omitempty"`
+	FromOutput string `json:"fromOutput,omitempty"`
 }
 
 type ArtifactContract struct {
@@ -252,6 +254,7 @@ type LogEntry struct {
 type Artifact struct {
 	ID              string    `json:"id"`
 	OperationID     string    `json:"operationId"`
+	WorkspaceID     string    `json:"workspaceId,omitempty"`
 	StepID          string    `json:"stepId,omitempty"`
 	OutputName      string    `json:"outputName,omitempty"`
 	Name            string    `json:"name"`

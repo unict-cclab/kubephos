@@ -6,7 +6,7 @@ import {ToastRegion, type ToastMessage} from './components/ToastRegion'
 import {Views} from './components/Views'
 import type {PlatformData, Session, View, Workspace} from './types'
 
-const emptyData: PlatformData = {system: null, workspaces: [], operations: [], plugins: [], applications: [], credentials: [], connections: [], resources: [], audit: []}
+const emptyData: PlatformData = {system: null, workspaces: [], operations: [], artifacts: [], plugins: [], applications: [], credentials: [], connections: [], resources: [], audit: []}
 const viewMetadata: Record<View, [string, string]> = {
   overview: ['CONTROL PLANE', 'Overview'],
   workspaces: ['ENVIRONMENTS', 'Workspaces'],
@@ -47,10 +47,11 @@ export default function App() {
     if (!session?.authenticated) return
     setRefreshing(true)
     try {
-      const [system, workspaces, operations, plugins, applications, credentials, connections, resources, audit] = await Promise.all([
+      const [system, workspaces, operations, artifacts, plugins, applications, credentials, connections, resources, audit] = await Promise.all([
         request<PlatformData['system']>('/system'),
         request<{items: PlatformData['workspaces']}>('/workspaces'),
         request<{items: PlatformData['operations']}>('/operations'),
+        request<{items: PlatformData['artifacts']}>('/artifacts?limit=500'),
         request<{items: PlatformData['plugins']}>('/plugins'),
         request<{items: PlatformData['applications']}>('/catalog/applications'),
         request<{items: PlatformData['credentials']}>('/credentials'),
@@ -58,7 +59,7 @@ export default function App() {
         request<{items: PlatformData['resources']}>('/infrastructure/resources'),
         request<{items: PlatformData['audit']}>('/audit?limit=20')
       ])
-      setData({system, workspaces: workspaces.items, operations: operations.items, plugins: plugins.items, applications: applications.items, credentials: credentials.items, connections: connections.items, resources: resources.items, audit: audit.items})
+      setData({system, workspaces: workspaces.items, operations: operations.items, artifacts: artifacts.items, plugins: plugins.items, applications: applications.items, credentials: credentials.items, connections: connections.items, resources: resources.items, audit: audit.items})
       setConnected(true)
       if (!silent) notify('Everything is up to date.')
     } catch (cause) {
@@ -95,7 +96,7 @@ export default function App() {
     await load(true)
     notify(message)
   }, [load, notify])
-  const common = useMemo(() => ({session: session ?? {authenticated: false}, applications: data.applications, connections: data.connections, credentials: data.credentials, onDone: afterMutation}), [afterMutation, data.applications, data.connections, data.credentials, session])
+  const common = useMemo(() => ({session: session ?? {authenticated: false}, applications: data.applications, artifacts: data.artifacts, connections: data.connections, credentials: data.credentials, onDone: afterMutation}), [afterMutation, data.applications, data.artifacts, data.connections, data.credentials, session])
 
   const logout = async () => {
     try {

@@ -103,6 +103,9 @@ type vmConfig struct {
 	Name        string `json:"name"`
 	Tags        string `json:"tags"`
 	Description string `json:"description"`
+	CIUser      string `json:"ciuser"`
+	SSHKeys     string `json:"sshkeys"`
+	IPConfig0   string `json:"ipconfig0"`
 }
 
 func (Plugin) Manifest() plugins.Manifest {

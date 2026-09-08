@@ -1,13 +1,14 @@
 import {useMemo, useState, type FormEvent} from 'react'
 import {ApiError, request} from '../api'
 import {readSchemaValues} from '../lib'
-import type {Application, Connection, Credential, CredentialDefinition, Plugin, Session, Workspace} from '../types'
+import type {Application, Artifact, Connection, Credential, CredentialDefinition, Plugin, Session, Workspace} from '../types'
 import {Dialog} from './Dialog'
 import {SchemaFields} from './SchemaFields'
 
 interface CommonProps {
   session: Session
   applications: Application[]
+  artifacts: Artifact[]
   connections: Connection[]
   credentials: Credential[]
   onDone: (message: string) => Promise<void>
@@ -106,7 +107,7 @@ export function OperationDialog({workspace, plugins, open, close, onCreated, ...
         {plugins.map(plugin => <option key={plugin.id} value={plugin.id}>{plugin.name} · {plugin.version}</option>)}
       </select></label>
       <label>Operation name<input name="title" maxLength={120} defaultValue={selected?.name ?? ''} required /></label>
-      {selected && <SchemaFields schema={selected.schema} applications={common.applications} connections={common.connections} credentials={common.credentials} />}
+      {selected && <SchemaFields schema={selected.schema} applications={common.applications} artifacts={common.artifacts.filter(item => item.workspaceId === workspace?.id)} connections={common.connections} credentials={common.credentials} />}
       <ValidationCallout text="KubePhos validates every input and shows the resolved plan before it can be queued." />
       <p className="form-error">{error}</p>
       <Actions close={close} pending={pending} label="Validate plan" />
@@ -141,7 +142,7 @@ export function CredentialDialog({open, close, plugins, ...common}: CommonProps 
       <label>Credential type<select value={selected?.kind ?? ''} onChange={event => setKind(event.target.value)} required>{definitions.map(item => <option key={item.kind} value={item.kind}>{item.name}</option>)}</select></label>
       <p className="field-description">{selected?.description}</p>
       <label>Name<input name="name" maxLength={80} placeholder="Development infrastructure" required /></label>
-      {selected && <SchemaFields schema={selected.schema} prefix="credential" applications={common.applications} connections={common.connections} credentials={common.credentials} />}
+      {selected && <SchemaFields schema={selected.schema} prefix="credential" applications={common.applications} artifacts={common.artifacts} connections={common.connections} credentials={common.credentials} />}
       <ValidationCallout text="The plaintext is encrypted before storage and is never returned by the API." />
       <p className="form-error">{error}</p>
       <Actions close={close} pending={pending} label="Encrypt and save" />
@@ -175,7 +176,7 @@ export function ConnectionDialog({open, close, plugins, ...common}: CommonProps 
     <form onSubmit={submit} key={selected?.id ?? ''}>
       <label>Provider capability<select value={selected?.id ?? ''} onChange={event => setPluginID(event.target.value)} required>{compatible.map(item => <option key={item.id} value={item.id}>{item.name} · {item.provider}</option>)}</select></label>
       <label>Name<input name="name" maxLength={80} placeholder="Development Proxmox" required /></label>
-      {selected && <SchemaFields schema={selected.schema} prefix="connection" applications={common.applications} connections={common.connections} credentials={common.credentials} />}
+      {selected && <SchemaFields schema={selected.schema} prefix="connection" applications={common.applications} artifacts={common.artifacts} connections={common.connections} credentials={common.credentials} />}
       <ValidationCallout text="Credentials remain encrypted and operations receive only this connection reference." />
       <p className="form-error">{error}</p>
       <Actions close={close} pending={pending} label="Validate and save" />

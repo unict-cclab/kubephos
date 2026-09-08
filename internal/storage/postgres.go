@@ -401,7 +401,19 @@ func (s *Store) ListInfrastructureResources(ctx context.Context) ([]domain.Infra
 }
 
 func (s *Store) ReserveManagedResource(ctx context.Context, resource domain.InfrastructureResource, operationID string) error {
-	command, err := s.pool.Exec(ctx, `
+	_, err := s.ReserveManagedResources(ctx, []domain.InfrastructureResource{resource}, operationID)
+	return err
+}
+
+func (s *Store) ReserveManagedResources(ctx context.Context, resources []domain.InfrastructureResource, operationID string) (map[string]string, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+	reserved := make(map[string]string, len(resources))
+	for _, resource := range resources {
+		command, err := tx.Exec(ctx, `
 		INSERT INTO infrastructure_resources (
 			id, provider, external_id, workspace_id, kind, name, state,
 			ownership, protection, metadata, created_by_operation_id, last_seen_at
@@ -420,25 +432,51 @@ func (s *Store) ReserveManagedResource(ctx context.Context, resource domain.Infr
 		  AND infrastructure_resources.protection = 'managed'
 		  AND infrastructure_resources.state IN ('deleted', 'cleaned')
 	`, resource.ID, resource.Provider, resource.ExternalID, resource.WorkspaceID, resource.Kind, resource.Name, operationID)
-	if err != nil {
-		return err
-	}
-	if command.RowsAffected() == 1 {
-		return nil
-	}
-	var owner string
-	err = s.pool.QueryRow(ctx, `
-		SELECT COALESCE(created_by_operation_id, '')
+		if err != nil {
+			return nil, err
+		}
+		if command.RowsAffected() == 1 {
+			reserved[resource.ExternalID] = resource.ID
+			continue
+		}
+		var resourceID string
+		var owner string
+		err = tx.QueryRow(ctx, `
+		SELECT id, COALESCE(created_by_operation_id, '')
 		FROM infrastructure_resources
 		WHERE provider = $1 AND external_id = $2
-	`, resource.Provider, resource.ExternalID).Scan(&owner)
+	`, resource.Provider, resource.ExternalID).Scan(&resourceID, &owner)
+		if err != nil {
+			return nil, err
+		}
+		if owner != operationID {
+			return nil, fmt.Errorf("%w: resource %s already exists or is protected", ErrConflict, resource.ExternalID)
+		}
+		reserved[resource.ExternalID] = resourceID
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return reserved, nil
+}
+
+func (s *Store) ReleaseManagedResourceReservations(ctx context.Context, resources []domain.InfrastructureResource, operationID string) error {
+	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return err
 	}
-	if owner == operationID {
-		return nil
+	defer tx.Rollback(ctx)
+	for _, resource := range resources {
+		if _, err := tx.Exec(ctx, `
+			UPDATE infrastructure_resources
+			SET state = 'cleaned', updated_at = now(), last_seen_at = now()
+			WHERE provider = $1 AND external_id = $2
+			  AND created_by_operation_id = $3 AND state = 'reserved'
+		`, resource.Provider, resource.ExternalID, operationID); err != nil {
+			return err
+		}
 	}
-	return fmt.Errorf("%w: resource %s already exists or is protected", ErrConflict, resource.ExternalID)
+	return tx.Commit(ctx)
 }
 
 func (s *Store) EnsureResourceAvailable(ctx context.Context, provider, externalID string) error {
@@ -984,6 +1022,33 @@ func (s *Store) ListArtifacts(ctx context.Context, operationID string) ([]domain
 	for rows.Next() {
 		var artifact domain.Artifact
 		if err := rows.Scan(&artifact.ID, &artifact.OperationID, &artifact.StepID, &artifact.OutputName, &artifact.Name, &artifact.Type, &artifact.Version, &artifact.MediaType, &artifact.StorageKey, &artifact.Digest, &artifact.SizeBytes, &artifact.StorageDigest, &artifact.StoredSizeBytes, &artifact.EncryptionNonce, &artifact.Sensitive, &artifact.VerifiedAt, &artifact.CreatedAt); err != nil {
+			return nil, err
+		}
+		result = append(result, artifact)
+	}
+	return result, rows.Err()
+}
+
+func (s *Store) ListAvailableArtifacts(ctx context.Context, limit int) ([]domain.Artifact, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT a.id, a.operation_id, o.workspace_id, COALESCE(a.step_id, ''), COALESCE(a.output_name, ''),
+		       a.name, a.artifact_type, a.artifact_version, a.media_type, a.storage_key, a.digest,
+		       a.size_bytes, a.storage_digest, a.stored_size_bytes, a.encryption_nonce,
+		       a.sensitive, a.verified_at, a.created_at
+		FROM artifacts a
+		JOIN operations o ON o.id = a.operation_id
+		WHERE o.status = $1 AND a.verified_at IS NOT NULL
+		ORDER BY a.created_at DESC
+		LIMIT $2
+	`, domain.OperationSucceeded, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := []domain.Artifact{}
+	for rows.Next() {
+		var artifact domain.Artifact
+		if err := rows.Scan(&artifact.ID, &artifact.OperationID, &artifact.WorkspaceID, &artifact.StepID, &artifact.OutputName, &artifact.Name, &artifact.Type, &artifact.Version, &artifact.MediaType, &artifact.StorageKey, &artifact.Digest, &artifact.SizeBytes, &artifact.StorageDigest, &artifact.StoredSizeBytes, &artifact.EncryptionNonce, &artifact.Sensitive, &artifact.VerifiedAt, &artifact.CreatedAt); err != nil {
 			return nil, err
 		}
 		result = append(result, artifact)

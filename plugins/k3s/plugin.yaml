@@ -1,0 +1,73 @@
+apiVersion: plugins.kubephos.io/v1alpha1
+kind: Plugin
+metadata:
+  id: io.kubephos.cluster.k3s.bootstrap
+  name: Kubernetes cluster bootstrap
+  version: 0.1.0
+  description: Builds a managed K3s cluster from a verified machine topology.
+spec:
+  protocol: v1alpha1
+  commands:
+    - describe
+    - validate
+    - plan
+    - precheck
+    - execute
+    - verify
+    - status
+    - cancel
+    - cleanup
+  configurationSchema:
+    type: object
+    additionalProperties: false
+    required:
+      - machineSetRef
+      - machineAccessRef
+      - clusterName
+      - controlPlanes
+    properties:
+      machineSetRef:
+        type: string
+        title: Machine topology
+        format: kubephos-artifact-ref
+        x-kubephos-artifact-type: MachineSet
+        x-kubephos-artifact-version: v1alpha1
+      machineAccessRef:
+        type: string
+        title: Machine access
+        format: kubephos-artifact-ref
+        x-kubephos-artifact-type: MachineAccess
+        x-kubephos-artifact-version: v1alpha1
+      clusterName:
+        type: string
+        title: Cluster name
+        pattern: "^[a-z0-9][a-z0-9-]{0,31}$"
+        default: development
+      controlPlanes:
+        type: integer
+        title: Control plane nodes
+        enum:
+          - 1
+          - 3
+        default: 1
+  runtime:
+    executable: k3s-plugin
+    timeout: 30m
+  artifacts:
+    inputs:
+      - type: MachineSet
+        version: v1alpha1
+      - type: MachineAccess
+        version: v1alpha1
+    outputs:
+      - type: ClusterConnection
+        version: v1alpha1
+      - type: ClusterInventory
+        version: v1alpha1
+  capabilities:
+    - cluster.bootstrap
+    - cluster.preflight
+    - cluster.cleanup
+  permissions:
+    - network.ssh
+    - cluster.admin

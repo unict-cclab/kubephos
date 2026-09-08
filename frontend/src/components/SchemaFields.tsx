@@ -1,15 +1,16 @@
-import type {Application, Connection, Credential, JsonSchema, SchemaProperty} from '../types'
+import type {Application, Artifact, Connection, Credential, JsonSchema, SchemaProperty} from '../types'
 import {humanize} from '../lib'
 
 interface SchemaFieldsProps {
   schema: JsonSchema
   prefix?: string
   applications: Application[]
+  artifacts: Artifact[]
   connections: Connection[]
   credentials: Credential[]
 }
 
-export function SchemaFields({schema, prefix = 'schema', applications, connections, credentials}: SchemaFieldsProps) {
+export function SchemaFields({schema, prefix = 'schema', applications, artifacts, connections, credentials}: SchemaFieldsProps) {
   const required = new Set(schema.required ?? [])
   return <div className="schema-fields">
     {Object.entries(schema.properties ?? {}).map(([name, property]) => <SchemaField
@@ -19,6 +20,7 @@ export function SchemaFields({schema, prefix = 'schema', applications, connectio
       property={property}
       required={required.has(name)}
       applications={applications}
+      artifacts={artifacts}
       connections={connections}
       credentials={credentials}
     />)}
@@ -31,7 +33,7 @@ interface SchemaFieldProps extends Omit<SchemaFieldsProps, 'schema'> {
   required: boolean
 }
 
-function SchemaField({name, prefix, property, required, applications, connections, credentials}: SchemaFieldProps) {
+function SchemaField({name, prefix, property, required, applications, artifacts, connections, credentials}: SchemaFieldProps) {
   const title = property.title ?? humanize(name)
   const fieldName = `${prefix}.${name}`
   const wide = ['string', 'object', 'array'].includes(property.type ?? 'string') ? 'wide' : ''
@@ -49,6 +51,12 @@ function SchemaField({name, prefix, property, required, applications, connection
     choices = applications
       .filter(item => !trait || item.descriptor.spec?.interface?.components?.some(component => component.traits?.includes(trait)))
       .map(item => ({value: item.reference, label: `${item.name} · ${item.version}`}))
+  } else if (property.format === 'kubephos-artifact-ref') {
+    const type = property['x-kubephos-artifact-type']
+    const version = property['x-kubephos-artifact-version']
+    choices = artifacts
+      .filter(item => (!type || item.type === type) && (!version || item.version === version))
+      .map(item => ({value: item.id, label: `${item.name} · ${item.type}/${item.version} · ${item.operationId.slice(0, 12)}…`}))
   } else if (property.enum) {
     choices = property.enum.map(value => ({value: String(value), label: String(value)}))
   }

@@ -17,15 +17,17 @@
           "id": { "type": "string", "minLength": 1 },
           "name": { "type": "string", "minLength": 1 },
           "input": {},
+          "mutating": { "type": "boolean", "default": false },
           "artifactInputs": {
             "type": "array",
             "items": {
               "type": "object",
-              "required": ["name", "type", "version", "fromStep", "fromOutput"],
+              "required": ["name", "type", "version"],
               "properties": {
                 "name": { "$ref": "#/$defs/outputName" },
                 "type": { "$ref": "#/$defs/artifactType" },
                 "version": { "$ref": "#/$defs/artifactVersion" },
+                "artifactId": { "type": "string", "pattern": "^art_[A-Za-z0-9]+$" },
                 "fromStep": { "type": "string", "minLength": 1 },
                 "fromOutput": { "$ref": "#/$defs/outputName" }
               },
