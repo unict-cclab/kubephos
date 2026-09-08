@@ -55,3 +55,10 @@ databaseChangeLog:
         - sqlFile:
             path: changes/008-typed-artifacts.sql
             relativeToChangelogFile: true
+  - changeSet:
+      id: 009-encrypted-artifacts
+      author: kubephos
+      changes:
+        - sqlFile:
+            path: changes/009-encrypted-artifacts.sql
+            relativeToChangelogFile: true

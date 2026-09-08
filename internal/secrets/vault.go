@@ -35,19 +35,31 @@ func Open(path string) (*Vault, error) {
 }
 
 func (v *Vault) Encrypt(value []byte) ([]byte, []byte, string, error) {
-	nonce := make([]byte, v.aead.NonceSize())
-	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
+	nonce, ciphertext, err := v.EncryptBound(value, nil)
+	if err != nil {
 		return nil, nil, "", err
 	}
-	ciphertext := v.aead.Seal(nil, nonce, value, nil)
 	digest := sha256.Sum256(value)
 	return nonce, ciphertext, hex.EncodeToString(digest[:6]), nil
 }
 
+func (v *Vault) EncryptBound(value, additionalData []byte) ([]byte, []byte, error) {
+	nonce := make([]byte, v.aead.NonceSize())
+	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
+		return nil, nil, err
+	}
+	ciphertext := v.aead.Seal(nil, nonce, value, additionalData)
+	return nonce, ciphertext, nil
+}
+
 func (v *Vault) Decrypt(nonce, ciphertext []byte) ([]byte, error) {
-	value, err := v.aead.Open(nil, nonce, ciphertext, nil)
+	return v.DecryptBound(nonce, ciphertext, nil)
+}
+
+func (v *Vault) DecryptBound(nonce, ciphertext, additionalData []byte) ([]byte, error) {
+	value, err := v.aead.Open(nil, nonce, ciphertext, additionalData)
 	if err != nil {
-		return nil, errors.New("credential could not be decrypted")
+		return nil, errors.New("encrypted value could not be decrypted")
 	}
 	return value, nil
 }

@@ -13,6 +13,7 @@ import (
 	"kubephos.dev/kubephos/internal/domain"
 	"kubephos.dev/kubephos/internal/id"
 	"kubephos.dev/kubephos/internal/plugins"
+	"kubephos.dev/kubephos/internal/secrets"
 	"kubephos.dev/kubephos/internal/storage"
 )
 
@@ -20,13 +21,14 @@ type Worker struct {
 	store       *storage.Store
 	registry    *plugins.Registry
 	artifacts   *artifacts.Client
+	vault       *secrets.Vault
 	instanceID  string
 	concurrency int
 	poll        time.Duration
 }
 
-func NewWorker(store *storage.Store, registry *plugins.Registry, artifactStore *artifacts.Client, instanceID string, concurrency int, poll time.Duration) *Worker {
-	return &Worker{store: store, registry: registry, artifacts: artifactStore, instanceID: instanceID, concurrency: concurrency, poll: poll}
+func NewWorker(store *storage.Store, registry *plugins.Registry, artifactStore *artifacts.Client, vault *secrets.Vault, instanceID string, concurrency int, poll time.Duration) *Worker {
+	return &Worker{store: store, registry: registry, artifacts: artifactStore, vault: vault, instanceID: instanceID, concurrency: concurrency, poll: poll}
 }
 
 func (w *Worker) Run(ctx context.Context) error {
@@ -145,7 +147,13 @@ func (w *Worker) process(parent context.Context, owner string, operation domain.
 			w.stopOrFail(parent, operation.ID, step.ID, err)
 			return
 		}
-		if err := w.store.SetStepState(runCtx, operation.ID, step.ID, domain.StepVerifying, result, nil, ""); err != nil {
+		persistedResult, err := persistedStepResult(planned, result)
+		if err != nil {
+			err = w.cleanup(operation, runtimeStep, result, plugin, err)
+			w.fail(parent, operation.ID, step.ID, err)
+			return
+		}
+		if err := w.store.SetStepState(runCtx, operation.ID, step.ID, domain.StepVerifying, persistedResult, nil, ""); err != nil {
 			err = w.cleanup(operation, runtimeStep, result, plugin, err)
 			w.fail(parent, operation.ID, step.ID, err)
 			return
@@ -185,7 +193,7 @@ func (w *Worker) process(parent context.Context, owner string, operation domain.
 				return
 			}
 		}
-		if err := w.store.SetStepState(runCtx, operation.ID, step.ID, domain.StepSucceeded, result, healthRaw, ""); err != nil {
+		if err := w.store.SetStepState(runCtx, operation.ID, step.ID, domain.StepSucceeded, persistedResult, healthRaw, ""); err != nil {
 			err = w.cleanup(operation, runtimeStep, result, plugin, err)
 			w.fail(parent, operation.ID, step.ID, err)
 			return
@@ -236,6 +244,17 @@ func (w *Worker) process(parent context.Context, owner string, operation domain.
 	}
 }
 
+func persistedStepResult(step domain.PlanStep, result json.RawMessage) (json.RawMessage, error) {
+	outputs := make([]map[string]any, 0, len(step.Outputs))
+	for _, output := range step.Outputs {
+		outputs = append(outputs, map[string]any{"name": output.Name, "type": output.Type, "version": output.Version, "sensitive": output.Sensitive})
+	}
+	if len(outputs) == 0 {
+		return result, nil
+	}
+	return json.Marshal(map[string]any{"artifactOutputs": outputs})
+}
+
 func (w *Worker) resolveArtifactInputs(ctx context.Context, operation domain.Operation, position int, step domain.PlanStep) (domain.PlanStep, error) {
 	if len(step.ArtifactInputs) == 0 {
 		return step, nil
@@ -257,12 +276,22 @@ func (w *Worker) resolveArtifactInputs(ctx context.Context, operation domain.Ope
 		if artifact.Type != input.Type || artifact.Version != input.Version {
 			return domain.PlanStep{}, fmt.Errorf("input %q expected %s/%s, received %s/%s", input.Name, input.Type, input.Version, artifact.Type, artifact.Version)
 		}
-		if artifact.Sensitive {
-			return domain.PlanStep{}, fmt.Errorf("input %q requires encrypted artifact materialization", input.Name)
-		}
-		value, err := w.artifacts.ReadVerified(ctx, artifact.StorageKey, artifact.Digest, artifact.SizeBytes)
+		storedValue, err := w.artifacts.ReadVerified(ctx, artifact.StorageKey, artifact.StorageDigest, artifact.StoredSizeBytes)
 		if err != nil {
 			return domain.PlanStep{}, fmt.Errorf("verify input %q: %w", input.Name, err)
+		}
+		value := storedValue
+		if artifact.Sensitive {
+			if w.vault == nil {
+				return domain.PlanStep{}, fmt.Errorf("input %q cannot be decrypted because the artifact vault is unavailable", input.Name)
+			}
+			value, err = w.vault.DecryptBound(artifact.EncryptionNonce, storedValue, []byte(artifact.ID))
+			if err != nil {
+				return domain.PlanStep{}, fmt.Errorf("decrypt input %q: %w", input.Name, err)
+			}
+		}
+		if err := artifacts.Verify(value, artifact.Digest, artifact.SizeBytes); err != nil {
+			return domain.PlanStep{}, fmt.Errorf("verify plaintext input %q: %w", input.Name, err)
 		}
 		if artifact.MediaType == "application/json" && !json.Valid(value) {
 			return domain.PlanStep{}, fmt.Errorf("input %q contains invalid JSON", input.Name)
@@ -281,7 +310,21 @@ func (w *Worker) persistStepOutputs(ctx context.Context, operation domain.Operat
 		if err != nil {
 			return fmt.Errorf("extract output %q: %w", output.Name, err)
 		}
-		stored, err := w.artifacts.Put(ctx, artifacts.StepOutputKey(operation.ID, step.ID, output.Name), output.Name+".json", output.MediaType, value)
+		artifactID := id.New("art")
+		storageValue := []byte(value)
+		storageMediaType := output.MediaType
+		var encryptionNonce []byte
+		if output.Sensitive {
+			if w.vault == nil {
+				return fmt.Errorf("encrypt output %q: artifact vault is unavailable", output.Name)
+			}
+			encryptionNonce, storageValue, err = w.vault.EncryptBound(value, []byte(artifactID))
+			if err != nil {
+				return fmt.Errorf("encrypt output %q: %w", output.Name, err)
+			}
+			storageMediaType = "application/octet-stream"
+		}
+		stored, err := w.artifacts.Put(ctx, artifacts.StepOutputKey(operation.ID, step.ID, output.Name), output.Name+".json", storageMediaType, storageValue)
 		if err != nil {
 			return fmt.Errorf("store output %q: %w", output.Name, err)
 		}
@@ -289,9 +332,10 @@ func (w *Worker) persistStepOutputs(ctx context.Context, operation domain.Operat
 			return fmt.Errorf("verify stored output %q: %w", output.Name, err)
 		}
 		_, err = w.store.CreateArtifact(ctx, domain.Artifact{
-			ID: id.New("art"), OperationID: operation.ID, StepID: step.ID, OutputName: output.Name,
+			ID: artifactID, OperationID: operation.ID, StepID: step.ID, OutputName: output.Name,
 			Name: output.Name, Type: output.Type, Version: output.Version, MediaType: output.MediaType,
-			StorageKey: stored.Key, Digest: stored.Digest, SizeBytes: stored.Size, Sensitive: output.Sensitive,
+			StorageKey: stored.Key, Digest: artifacts.Digest(value), SizeBytes: int64(len(value)),
+			StorageDigest: stored.Digest, StoredSizeBytes: stored.Size, EncryptionNonce: encryptionNonce, Sensitive: output.Sensitive,
 		})
 		if err != nil {
 			return fmt.Errorf("save output %q metadata: %w", output.Name, err)

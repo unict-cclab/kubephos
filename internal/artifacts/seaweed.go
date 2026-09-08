@@ -96,25 +96,23 @@ func (c *Client) Get(ctx context.Context, key string) (io.ReadCloser, string, er
 }
 
 func (c *Client) ReadVerified(ctx context.Context, key, expectedDigest string, expectedSize int64) ([]byte, error) {
+	if expectedSize < 0 || expectedSize > MaxArtifactBytes+1024 {
+		return nil, fmt.Errorf("stored artifact size %d is outside the permitted range", expectedSize)
+	}
 	reader, _, err := c.Get(ctx, key)
 	if err != nil {
 		return nil, err
 	}
 	defer reader.Close()
-	value, err := io.ReadAll(io.LimitReader(reader, MaxArtifactBytes+1))
+	value, err := io.ReadAll(io.LimitReader(reader, MaxArtifactBytes+1025))
 	if err != nil {
 		return nil, err
 	}
-	if len(value) > MaxArtifactBytes {
-		return nil, fmt.Errorf("artifact exceeds %d bytes", MaxArtifactBytes)
+	if len(value) > MaxArtifactBytes+1024 {
+		return nil, fmt.Errorf("stored artifact exceeds %d bytes", MaxArtifactBytes+1024)
 	}
-	if int64(len(value)) != expectedSize {
-		return nil, fmt.Errorf("artifact size mismatch: expected %d, received %d", expectedSize, len(value))
-	}
-	digest := sha256.Sum256(value)
-	actual := "sha256:" + hex.EncodeToString(digest[:])
-	if actual != expectedDigest {
-		return nil, fmt.Errorf("artifact digest mismatch: expected %s, received %s", expectedDigest, actual)
+	if err := Verify(value, expectedDigest, expectedSize); err != nil {
+		return nil, err
 	}
 	return value, nil
 }

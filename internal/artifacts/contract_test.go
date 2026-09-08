@@ -43,6 +43,14 @@ func TestValidatePlanRejectsUndeclaredContract(t *testing.T) {
 	}
 }
 
+func TestValidatePlanAcceptsDeclaredSensitiveOutput(t *testing.T) {
+	contract := []domain.ArtifactContract{{Type: "ClusterConnection", Version: "v1alpha1"}}
+	plan := domain.Plan{Steps: []domain.PlanStep{{ID: "produce", Outputs: []domain.ArtifactOutput{{Name: "connection", Type: "ClusterConnection", Version: "v1alpha1", MediaType: "application/json", Sensitive: true}}}}}
+	if err := ValidatePlan(plan, nil, contract); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestExtractJSONUsesRFC6901Pointers(t *testing.T) {
 	value, err := ExtractJSON(json.RawMessage(`{"data":{"a/b":[{"value":3}]}}`), "/data/a~1b/0")
 	if err != nil {

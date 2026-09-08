@@ -114,7 +114,7 @@ func work(configValue config.Config) error {
 	if err := store.Ready(ctx); err != nil {
 		return err
 	}
-	_, resolver, err := credentialRuntime(store, configValue.CredentialKeyFile)
+	vault, resolver, err := credentialRuntime(store, configValue.CredentialKeyFile)
 	if err != nil {
 		return err
 	}
@@ -124,7 +124,7 @@ func work(configValue config.Config) error {
 	}
 	artifactStore := artifacts.New(configValue.ArtifactEndpoint)
 	slog.Info("starting worker", "instance", configValue.InstanceID, "concurrency", configValue.WorkerConcurrency)
-	return engine.NewWorker(store, registry, artifactStore, configValue.InstanceID, configValue.WorkerConcurrency, configValue.WorkerPoll).Run(ctx)
+	return engine.NewWorker(store, registry, artifactStore, vault, configValue.InstanceID, configValue.WorkerConcurrency, configValue.WorkerPoll).Run(ctx)
 }
 
 func credentialRuntime(store *storage.Store, keyFile string) (*secrets.Vault, plugins.SecretResolver, error) {

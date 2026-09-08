@@ -2,9 +2,9 @@ apiVersion: plugins.kubephos.io/v1alpha1
 kind: Plugin
 metadata:
   id: io.kubephos.applications.inspect
-  name: Application package check
+  name: Application package materializer
   version: 0.1.0
-  description: Resolves a catalog package and verifies its pinned source, workloads and endpoints.
+  description: Resolves, materializes and verifies a pinned application package and its declared interface.
 spec:
   protocol: v1alpha1
   commands:
@@ -33,11 +33,14 @@ spec:
     timeout: 10m
   artifacts:
     outputs:
+      - type: ManifestSet
+        version: v1alpha1
       - type: WorkloadTargets
         version: v1alpha1
       - type: ServiceEndpoints
         version: v1alpha1
   capabilities:
     - applications.inspect
+    - applications.materialize
   permissions:
     - catalog.read:applications

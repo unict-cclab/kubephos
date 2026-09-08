@@ -13,10 +13,11 @@ import (
 type Plugin struct{}
 
 type referenceSpec struct {
-	Message     string `json:"message"`
-	Steps       int    `json:"steps"`
-	DelayMillis int    `json:"delayMillis"`
-	FailureStep int    `json:"failureStep,omitempty"`
+	Message         string `json:"message"`
+	Steps           int    `json:"steps"`
+	DelayMillis     int    `json:"delayMillis"`
+	FailureStep     int    `json:"failureStep,omitempty"`
+	SensitiveOutput bool   `json:"sensitiveOutput,omitempty"`
 }
 
 func (Plugin) Manifest() plugins.Manifest {
@@ -25,7 +26,7 @@ func (Plugin) Manifest() plugins.Manifest {
 		Name:            "System verification",
 		Version:         "0.1.0",
 		Description:     "Verifies validation, workers, health gates and live logs.",
-		Schema:          json.RawMessage(`{"type":"object","required":["message","steps","delayMillis"],"properties":{"message":{"type":"string","minLength":1,"maxLength":120,"title":"Message"},"steps":{"type":"integer","minimum":1,"maximum":8,"default":3,"title":"Steps"},"delayMillis":{"type":"integer","minimum":100,"maximum":10000,"default":700,"title":"Delay per step"},"failureStep":{"type":"integer","minimum":0,"maximum":8,"default":0,"title":"Failure step"}}}`),
+		Schema:          json.RawMessage(`{"type":"object","required":["message","steps","delayMillis"],"additionalProperties":false,"properties":{"message":{"type":"string","minLength":1,"maxLength":120,"title":"Message"},"steps":{"type":"integer","minimum":1,"maximum":8,"default":3,"title":"Steps"},"delayMillis":{"type":"integer","minimum":100,"maximum":10000,"default":700,"title":"Delay per step"},"failureStep":{"type":"integer","minimum":0,"maximum":8,"default":0,"title":"Failure step"},"sensitiveOutput":{"type":"boolean","default":false,"title":"Protect step outputs"}}}`),
 		ArtifactInputs:  []domain.ArtifactContract{{Type: "CheckResult", Version: "v1alpha1"}},
 		ArtifactOutputs: []domain.ArtifactContract{{Type: "CheckResult", Version: "v1alpha1"}},
 	}
@@ -87,7 +88,7 @@ func (Plugin) Plan(ctx context.Context, raw json.RawMessage) (domain.Plan, error
 		}
 		step := domain.PlanStep{
 			ID: fmt.Sprintf("check-%d", position), Name: fmt.Sprintf("Verification %d", position), Input: input,
-			Outputs: []domain.ArtifactOutput{{Name: "result", Type: "CheckResult", Version: "v1alpha1", MediaType: "application/json"}},
+			Outputs: []domain.ArtifactOutput{{Name: "result", Type: "CheckResult", Version: "v1alpha1", MediaType: "application/json", Sensitive: spec.SensitiveOutput}},
 		}
 		if position > 1 {
 			step.ArtifactInputs = []domain.ArtifactInput{{Name: "previous-result", Type: "CheckResult", Version: "v1alpha1", FromStep: fmt.Sprintf("check-%d", position-1), FromOutput: "result"}}

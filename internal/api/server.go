@@ -456,6 +456,18 @@ func (s *Server) createOperation(response http.ResponseWriter, request *http.Req
 		writeError(response, http.StatusConflict, "resource_conflict", err.Error())
 		return
 	}
+	preflight := preflightPlan(request.Context(), plugin, plan)
+	validation.Issues = append(validation.Issues, preflight...)
+	for _, issue := range preflight {
+		if issue.Level == "error" {
+			validation.Valid = false
+		}
+	}
+	validation.CheckedAt = time.Now().UTC()
+	if !validation.Valid {
+		writeJSON(response, http.StatusUnprocessableEntity, map[string]any{"code": "preflight_failed", "validation": validation})
+		return
+	}
 	planHash, err := resolvedPlanHash(manifest, input.Spec, plan)
 	if err != nil {
 		writeError(response, http.StatusInternalServerError, "planning_failed", "Could not fingerprint the validated plan.")
@@ -477,6 +489,28 @@ func (s *Server) createOperation(response http.ResponseWriter, request *http.Req
 		return
 	}
 	writeJSON(response, http.StatusCreated, operation)
+}
+
+func preflightPlan(ctx context.Context, plugin plugins.Plugin, plan domain.Plan) []domain.ValidationIssue {
+	issues := make([]domain.ValidationIssue, 0, len(plan.Steps))
+	for _, step := range plan.Steps {
+		path := "plan.steps." + step.ID
+		if len(step.ArtifactInputs) > 0 {
+			issues = append(issues, domain.ValidationIssue{Level: "info", Path: path, Message: "Dynamic preflight will run after required typed inputs are produced and verified."})
+			continue
+		}
+		health, err := plugin.Precheck(ctx, step, func(string, string) error { return nil })
+		if err != nil {
+			issues = append(issues, domain.ValidationIssue{Level: "error", Path: path, Message: "Preflight failed: " + err.Error()})
+			continue
+		}
+		if health.Status != domain.HealthHealthy {
+			issues = append(issues, domain.ValidationIssue{Level: "error", Path: path, Message: "Preflight is not healthy: " + health.Summary})
+			continue
+		}
+		issues = append(issues, domain.ValidationIssue{Level: "info", Path: path, Message: "Non-mutating preflight passed: " + health.Summary})
+	}
+	return issues
 }
 
 func (s *Server) queueOperation(response http.ResponseWriter, request *http.Request) {

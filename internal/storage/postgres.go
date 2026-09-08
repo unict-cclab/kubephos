@@ -947,6 +947,12 @@ func (s *Store) Stats(ctx context.Context) (domain.DashboardStats, error) {
 }
 
 func (s *Store) CreateArtifact(ctx context.Context, artifact domain.Artifact) (domain.Artifact, error) {
+	if artifact.StorageDigest == "" {
+		artifact.StorageDigest = artifact.Digest
+	}
+	if artifact.StoredSizeBytes == 0 && artifact.SizeBytes > 0 {
+		artifact.StoredSizeBytes = artifact.SizeBytes
+	}
 	var stepID any
 	if artifact.StepID != "" {
 		stepID = artifact.StepID
@@ -956,16 +962,16 @@ func (s *Store) CreateArtifact(ctx context.Context, artifact domain.Artifact) (d
 		outputName = artifact.OutputName
 	}
 	err := s.pool.QueryRow(ctx, `
-		INSERT INTO artifacts (id, operation_id, step_id, output_name, name, artifact_type, artifact_version, media_type, storage_key, digest, size_bytes, sensitive)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+		INSERT INTO artifacts (id, operation_id, step_id, output_name, name, artifact_type, artifact_version, media_type, storage_key, digest, size_bytes, storage_digest, stored_size_bytes, encryption_nonce, sensitive)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
 		RETURNING created_at, verified_at
-	`, artifact.ID, artifact.OperationID, stepID, outputName, artifact.Name, artifact.Type, artifact.Version, artifact.MediaType, artifact.StorageKey, artifact.Digest, artifact.SizeBytes, artifact.Sensitive).Scan(&artifact.CreatedAt, &artifact.VerifiedAt)
+	`, artifact.ID, artifact.OperationID, stepID, outputName, artifact.Name, artifact.Type, artifact.Version, artifact.MediaType, artifact.StorageKey, artifact.Digest, artifact.SizeBytes, artifact.StorageDigest, artifact.StoredSizeBytes, artifact.EncryptionNonce, artifact.Sensitive).Scan(&artifact.CreatedAt, &artifact.VerifiedAt)
 	return artifact, err
 }
 
 func (s *Store) ListArtifacts(ctx context.Context, operationID string) ([]domain.Artifact, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT id, operation_id, COALESCE(step_id, ''), COALESCE(output_name, ''), name, artifact_type, artifact_version, media_type, storage_key, digest, size_bytes, sensitive, verified_at, created_at
+		SELECT id, operation_id, COALESCE(step_id, ''), COALESCE(output_name, ''), name, artifact_type, artifact_version, media_type, storage_key, digest, size_bytes, storage_digest, stored_size_bytes, encryption_nonce, sensitive, verified_at, created_at
 		FROM artifacts
 		WHERE operation_id = $1
 		ORDER BY created_at
@@ -977,7 +983,7 @@ func (s *Store) ListArtifacts(ctx context.Context, operationID string) ([]domain
 	result := []domain.Artifact{}
 	for rows.Next() {
 		var artifact domain.Artifact
-		if err := rows.Scan(&artifact.ID, &artifact.OperationID, &artifact.StepID, &artifact.OutputName, &artifact.Name, &artifact.Type, &artifact.Version, &artifact.MediaType, &artifact.StorageKey, &artifact.Digest, &artifact.SizeBytes, &artifact.Sensitive, &artifact.VerifiedAt, &artifact.CreatedAt); err != nil {
+		if err := rows.Scan(&artifact.ID, &artifact.OperationID, &artifact.StepID, &artifact.OutputName, &artifact.Name, &artifact.Type, &artifact.Version, &artifact.MediaType, &artifact.StorageKey, &artifact.Digest, &artifact.SizeBytes, &artifact.StorageDigest, &artifact.StoredSizeBytes, &artifact.EncryptionNonce, &artifact.Sensitive, &artifact.VerifiedAt, &artifact.CreatedAt); err != nil {
 			return nil, err
 		}
 		result = append(result, artifact)
@@ -988,10 +994,10 @@ func (s *Store) ListArtifacts(ctx context.Context, operationID string) ([]domain
 func (s *Store) GetArtifact(ctx context.Context, artifactID string) (domain.Artifact, error) {
 	var artifact domain.Artifact
 	err := s.pool.QueryRow(ctx, `
-		SELECT id, operation_id, COALESCE(step_id, ''), COALESCE(output_name, ''), name, artifact_type, artifact_version, media_type, storage_key, digest, size_bytes, sensitive, verified_at, created_at
+		SELECT id, operation_id, COALESCE(step_id, ''), COALESCE(output_name, ''), name, artifact_type, artifact_version, media_type, storage_key, digest, size_bytes, storage_digest, stored_size_bytes, encryption_nonce, sensitive, verified_at, created_at
 		FROM artifacts
 		WHERE id = $1
-	`, artifactID).Scan(&artifact.ID, &artifact.OperationID, &artifact.StepID, &artifact.OutputName, &artifact.Name, &artifact.Type, &artifact.Version, &artifact.MediaType, &artifact.StorageKey, &artifact.Digest, &artifact.SizeBytes, &artifact.Sensitive, &artifact.VerifiedAt, &artifact.CreatedAt)
+	`, artifactID).Scan(&artifact.ID, &artifact.OperationID, &artifact.StepID, &artifact.OutputName, &artifact.Name, &artifact.Type, &artifact.Version, &artifact.MediaType, &artifact.StorageKey, &artifact.Digest, &artifact.SizeBytes, &artifact.StorageDigest, &artifact.StoredSizeBytes, &artifact.EncryptionNonce, &artifact.Sensitive, &artifact.VerifiedAt, &artifact.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.Artifact{}, ErrNotFound
 	}
@@ -1001,10 +1007,10 @@ func (s *Store) GetArtifact(ctx context.Context, artifactID string) (domain.Arti
 func (s *Store) GetArtifactByOutput(ctx context.Context, operationID, stepID, outputName string) (domain.Artifact, error) {
 	var artifact domain.Artifact
 	err := s.pool.QueryRow(ctx, `
-		SELECT id, operation_id, COALESCE(step_id, ''), COALESCE(output_name, ''), name, artifact_type, artifact_version, media_type, storage_key, digest, size_bytes, sensitive, verified_at, created_at
+		SELECT id, operation_id, COALESCE(step_id, ''), COALESCE(output_name, ''), name, artifact_type, artifact_version, media_type, storage_key, digest, size_bytes, storage_digest, stored_size_bytes, encryption_nonce, sensitive, verified_at, created_at
 		FROM artifacts
 		WHERE operation_id = $1 AND step_id = $2 AND output_name = $3
-	`, operationID, stepID, outputName).Scan(&artifact.ID, &artifact.OperationID, &artifact.StepID, &artifact.OutputName, &artifact.Name, &artifact.Type, &artifact.Version, &artifact.MediaType, &artifact.StorageKey, &artifact.Digest, &artifact.SizeBytes, &artifact.Sensitive, &artifact.VerifiedAt, &artifact.CreatedAt)
+	`, operationID, stepID, outputName).Scan(&artifact.ID, &artifact.OperationID, &artifact.StepID, &artifact.OutputName, &artifact.Name, &artifact.Type, &artifact.Version, &artifact.MediaType, &artifact.StorageKey, &artifact.Digest, &artifact.SizeBytes, &artifact.StorageDigest, &artifact.StoredSizeBytes, &artifact.EncryptionNonce, &artifact.Sensitive, &artifact.VerifiedAt, &artifact.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.Artifact{}, ErrNotFound
 	}

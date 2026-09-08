@@ -2,6 +2,8 @@ package artifacts
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -65,14 +67,27 @@ func ValidatePlan(plan domain.Plan, declaredInputs, declaredOutputs []domain.Art
 			if output.MediaType != "application/json" {
 				return fmt.Errorf("step %q output %q uses unsupported media type %q", step.ID, output.Name, output.MediaType)
 			}
-			if output.Sensitive {
-				return fmt.Errorf("step %q output %q requires encrypted artifact support", step.ID, output.Name)
-			}
 			if err := validatePointer(output.Source); err != nil {
 				return fmt.Errorf("step %q output %q: %w", step.ID, output.Name, err)
 			}
 			producers[step.ID+"\x00"+output.Name] = output
 		}
+	}
+	return nil
+}
+
+func Digest(value []byte) string {
+	digest := sha256.Sum256(value)
+	return "sha256:" + hex.EncodeToString(digest[:])
+}
+
+func Verify(value []byte, expectedDigest string, expectedSize int64) error {
+	if int64(len(value)) != expectedSize {
+		return fmt.Errorf("artifact size mismatch: expected %d, received %d", expectedSize, len(value))
+	}
+	actual := Digest(value)
+	if actual != expectedDigest {
+		return fmt.Errorf("artifact digest mismatch: expected %s, received %s", expectedDigest, actual)
 	}
 	return nil
 }

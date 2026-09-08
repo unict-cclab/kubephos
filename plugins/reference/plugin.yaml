@@ -19,6 +19,7 @@ spec:
     - cleanup
   configurationSchema:
     type: object
+    additionalProperties: false
     required:
       - message
       - steps
@@ -52,6 +53,11 @@ spec:
         minimum: 0
         maximum: 8
         default: 0
+      sensitiveOutput:
+        type: boolean
+        title: Protect step outputs
+        description: Encrypt typed outputs and prevent browser download.
+        default: false
   runtime:
     executable: reference-plugin
     timeout: 15m

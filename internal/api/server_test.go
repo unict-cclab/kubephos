@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 
@@ -25,6 +26,55 @@ func TestResolvedPlanHashIsDeterministic(t *testing.T) {
 	}
 	if len(first) != 64 {
 		t.Fatalf("expected SHA-256 hex, got %d characters", len(first))
+	}
+}
+
+type preflightPlugin struct {
+	calls  int
+	health domain.HealthReport
+}
+
+func (p *preflightPlugin) Manifest() plugins.Manifest { return plugins.Manifest{ID: "test"} }
+func (p *preflightPlugin) Validate(context.Context, json.RawMessage) domain.ValidationReport {
+	return domain.ValidationReport{Valid: true}
+}
+func (p *preflightPlugin) Plan(context.Context, json.RawMessage) (domain.Plan, error) {
+	return domain.Plan{}, nil
+}
+func (p *preflightPlugin) Precheck(context.Context, domain.PlanStep, plugins.Logger) (domain.HealthReport, error) {
+	p.calls++
+	return p.health, nil
+}
+func (p *preflightPlugin) Execute(context.Context, domain.PlanStep, plugins.Logger) (json.RawMessage, error) {
+	return nil, nil
+}
+func (p *preflightPlugin) Verify(context.Context, domain.PlanStep, json.RawMessage, plugins.Logger) (domain.HealthReport, error) {
+	return domain.HealthReport{}, nil
+}
+func (p *preflightPlugin) Cleanup(context.Context, domain.PlanStep, json.RawMessage, plugins.Logger) error {
+	return nil
+}
+
+func TestPreflightPlanRunsReachableChecksAndDefersArtifactConsumers(t *testing.T) {
+	plugin := &preflightPlugin{health: domain.HealthReport{Status: domain.HealthHealthy, Summary: "ready"}}
+	plan := domain.Plan{Steps: []domain.PlanStep{
+		{ID: "first"},
+		{ID: "second", ArtifactInputs: []domain.ArtifactInput{{Name: "input"}}},
+	}}
+	issues := preflightPlan(context.Background(), plugin, plan)
+	if plugin.calls != 1 {
+		t.Fatalf("expected one reachable preflight, got %d", plugin.calls)
+	}
+	if len(issues) != 2 || issues[0].Level != "info" || issues[1].Level != "info" {
+		t.Fatalf("unexpected issues %#v", issues)
+	}
+}
+
+func TestPreflightPlanRejectsUnhealthyStep(t *testing.T) {
+	plugin := &preflightPlugin{health: domain.HealthReport{Status: domain.HealthUnhealthy, Summary: "unreachable"}}
+	issues := preflightPlan(context.Background(), plugin, domain.Plan{Steps: []domain.PlanStep{{ID: "first"}}})
+	if len(issues) != 1 || issues[0].Level != "error" {
+		t.Fatalf("unexpected issues %#v", issues)
 	}
 }
 

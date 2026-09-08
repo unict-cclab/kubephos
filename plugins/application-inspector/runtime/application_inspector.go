@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"gopkg.in/yaml.v3"
 
@@ -44,8 +45,35 @@ type Result struct {
 	ApplicationRef   string            `json:"applicationRef"`
 	SourceRevision   string            `json:"sourceRevision"`
 	ManifestDigest   string            `json:"manifestDigest"`
+	ManifestSet      ManifestSet       `json:"manifestSet"`
 	WorkloadTargets  []WorkloadTarget  `json:"workloadTargets"`
 	ServiceEndpoints []ServiceEndpoint `json:"serviceEndpoints"`
+}
+
+type ManifestSet struct {
+	APIVersion string              `json:"apiVersion"`
+	Kind       string              `json:"kind"`
+	Metadata   ManifestSetMetadata `json:"metadata"`
+	Spec       ManifestSetSpec     `json:"spec"`
+}
+
+type ManifestSetMetadata struct {
+	ApplicationRef string `json:"applicationRef"`
+	Digest         string `json:"digest"`
+}
+
+type ManifestSetSpec struct {
+	Renderer string         `json:"renderer"`
+	Content  string         `json:"content"`
+	Source   ManifestSource `json:"source"`
+}
+
+type ManifestSource struct {
+	Type       string `json:"type"`
+	Repository string `json:"repository"`
+	Revision   string `json:"revision"`
+	Path       string `json:"path"`
+	Entrypoint string `json:"entrypoint"`
 }
 
 type WorkloadTarget struct {
@@ -88,15 +116,16 @@ type manifestResource struct {
 func (Plugin) Manifest() plugins.Manifest {
 	return plugins.Manifest{
 		ID:          "io.kubephos.applications.inspect",
-		Name:        "Application package check",
+		Name:        "Application package materializer",
 		Version:     "0.1.0",
-		Description: "Resolves a catalog package and verifies its pinned source, workloads and endpoints.",
+		Description: "Resolves, materializes and verifies a pinned application package and its declared interface.",
 		Schema:      json.RawMessage(`{"type":"object","required":["applicationRef"],"additionalProperties":false,"properties":{"applicationRef":{"type":"string","title":"Application","description":"Immutable application version from the catalog.","format":"kubephos-application-ref"}}}`),
 		ArtifactOutputs: []domain.ArtifactContract{
+			{Type: "ManifestSet", Version: "v1alpha1"},
 			{Type: "WorkloadTargets", Version: "v1alpha1"},
 			{Type: "ServiceEndpoints", Version: "v1alpha1"},
 		},
-		Capabilities: []string{"applications.inspect"},
+		Capabilities: []string{"applications.inspect", "applications.materialize"},
 		Permissions:  []string{"catalog.read:applications"},
 	}
 }
@@ -129,6 +158,7 @@ func (Plugin) Plan(ctx context.Context, invocation Invocation) (domain.Plan, err
 	return domain.Plan{PluginID: Plugin{}.Manifest().ID, Steps: []domain.PlanStep{{
 		ID: "inspect-package", Name: "Verify application package", Input: input,
 		Outputs: []domain.ArtifactOutput{
+			{Name: "manifest-set", Type: "ManifestSet", Version: "v1alpha1", MediaType: "application/json", Source: "/manifestSet"},
 			{Name: "workload-targets", Type: "WorkloadTargets", Version: "v1alpha1", MediaType: "application/json", Source: "/workloadTargets"},
 			{Name: "service-endpoints", Type: "ServiceEndpoints", Version: "v1alpha1", MediaType: "application/json", Source: "/serviceEndpoints"},
 		},
@@ -168,15 +198,32 @@ func (Plugin) Execute(ctx context.Context, step domain.PlanStep, log plugins.Log
 	if err != nil {
 		return nil, err
 	}
+	if !utf8.Valid(manifest) {
+		return nil, errors.New("manifest entrypoint is not valid UTF-8")
+	}
 	workloads, endpoints, err := inspectManifest(manifest, input.Descriptor)
 	if err != nil {
 		return nil, err
 	}
 	digest := sha256.Sum256(manifest)
+	digestValue := "sha256:" + hex.EncodeToString(digest[:])
 	result := Result{
-		ApplicationRef:   input.ApplicationRef,
-		SourceRevision:   input.Descriptor.Spec.Package.Revision,
-		ManifestDigest:   "sha256:" + hex.EncodeToString(digest[:]),
+		ApplicationRef: input.ApplicationRef,
+		SourceRevision: input.Descriptor.Spec.Package.Revision,
+		ManifestDigest: digestValue,
+		ManifestSet: ManifestSet{
+			APIVersion: "artifacts.kubephos.dev/v1alpha1",
+			Kind:       "ManifestSet",
+			Metadata:   ManifestSetMetadata{ApplicationRef: input.ApplicationRef, Digest: digestValue},
+			Spec: ManifestSetSpec{
+				Renderer: input.Descriptor.Spec.Package.Format,
+				Content:  string(manifest),
+				Source: ManifestSource{
+					Type: input.Descriptor.Spec.Package.Type, Repository: input.Descriptor.Spec.Package.Repository,
+					Revision: input.Descriptor.Spec.Package.Revision, Path: input.Descriptor.Spec.Package.Path, Entrypoint: input.Descriptor.Spec.Package.Entrypoint,
+				},
+			},
+		},
 		WorkloadTargets:  workloads,
 		ServiceEndpoints: endpoints,
 	}
@@ -201,10 +248,25 @@ func (Plugin) Verify(ctx context.Context, step domain.PlanStep, raw json.RawMess
 	if result.ApplicationRef != input.ApplicationRef || result.SourceRevision != input.Descriptor.Spec.Package.Revision || len(result.WorkloadTargets) != len(input.Descriptor.Spec.Interface.Components) || !strings.HasPrefix(result.ManifestDigest, "sha256:") {
 		return domain.HealthReport{Status: domain.HealthUnhealthy, Summary: "Inspection result does not match the validated application", Checks: map[string]string{"identity": "mismatch"}}, nil
 	}
+	manifestDigest := sha256.Sum256([]byte(result.ManifestSet.Spec.Content))
+	actualDigest := "sha256:" + hex.EncodeToString(manifestDigest[:])
+	if result.ManifestSet.APIVersion != "artifacts.kubephos.dev/v1alpha1" || result.ManifestSet.Kind != "ManifestSet" ||
+		result.ManifestSet.Metadata.ApplicationRef != input.ApplicationRef || result.ManifestSet.Metadata.Digest != actualDigest || result.ManifestDigest != actualDigest ||
+		len(result.ManifestSet.Spec.Content) > maxManifestBytes || !utf8.ValidString(result.ManifestSet.Spec.Content) ||
+		result.ManifestSet.Spec.Renderer != input.Descriptor.Spec.Package.Format ||
+		result.ManifestSet.Spec.Source.Type != input.Descriptor.Spec.Package.Type || result.ManifestSet.Spec.Source.Repository != input.Descriptor.Spec.Package.Repository ||
+		result.ManifestSet.Spec.Source.Revision != input.Descriptor.Spec.Package.Revision || result.ManifestSet.Spec.Source.Path != input.Descriptor.Spec.Package.Path ||
+		result.ManifestSet.Spec.Source.Entrypoint != input.Descriptor.Spec.Package.Entrypoint {
+		return domain.HealthReport{Status: domain.HealthUnhealthy, Summary: "Materialized manifest identity or digest is invalid", Checks: map[string]string{"manifestSet": "invalid"}}, nil
+	}
+	verifiedWorkloads, verifiedEndpoints, err := inspectManifest([]byte(result.ManifestSet.Spec.Content), input.Descriptor)
+	if err != nil || len(verifiedWorkloads) != len(result.WorkloadTargets) || len(verifiedEndpoints) != len(result.ServiceEndpoints) {
+		return domain.HealthReport{Status: domain.HealthUnhealthy, Summary: "Materialized manifest no longer matches the declared interface", Checks: map[string]string{"manifestSet": "inconsistent"}}, nil
+	}
 	if err := log("info", "Application package identity and declared interface are consistent"); err != nil {
 		return domain.HealthReport{}, err
 	}
-	return domain.HealthReport{Status: domain.HealthHealthy, Summary: "Application package is ready for deployment", Checks: map[string]string{"identity": "verified", "manifest": "verified", "interface": "verified"}}, nil
+	return domain.HealthReport{Status: domain.HealthHealthy, Summary: "Application package is materialized and ready for deployment", Checks: map[string]string{"identity": "verified", "manifest": "verified", "manifestSet": "verified", "interface": "verified"}}, nil
 }
 
 func resolve(invocation Invocation) (specification, catalog.Descriptor, error) {

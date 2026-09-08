@@ -250,20 +250,23 @@ type LogEntry struct {
 }
 
 type Artifact struct {
-	ID          string    `json:"id"`
-	OperationID string    `json:"operationId"`
-	StepID      string    `json:"stepId,omitempty"`
-	OutputName  string    `json:"outputName,omitempty"`
-	Name        string    `json:"name"`
-	Type        string    `json:"type"`
-	Version     string    `json:"version"`
-	MediaType   string    `json:"mediaType"`
-	StorageKey  string    `json:"-"`
-	Digest      string    `json:"digest"`
-	SizeBytes   int64     `json:"sizeBytes"`
-	Sensitive   bool      `json:"sensitive"`
-	VerifiedAt  time.Time `json:"verifiedAt"`
-	CreatedAt   time.Time `json:"createdAt"`
+	ID              string    `json:"id"`
+	OperationID     string    `json:"operationId"`
+	StepID          string    `json:"stepId,omitempty"`
+	OutputName      string    `json:"outputName,omitempty"`
+	Name            string    `json:"name"`
+	Type            string    `json:"type"`
+	Version         string    `json:"version"`
+	MediaType       string    `json:"mediaType"`
+	StorageKey      string    `json:"-"`
+	Digest          string    `json:"digest"`
+	SizeBytes       int64     `json:"sizeBytes"`
+	StorageDigest   string    `json:"-"`
+	StoredSizeBytes int64     `json:"-"`
+	EncryptionNonce []byte    `json:"-"`
+	Sensitive       bool      `json:"sensitive"`
+	VerifiedAt      time.Time `json:"verifiedAt"`
+	CreatedAt       time.Time `json:"createdAt"`
 }
 
 type DashboardStats struct {

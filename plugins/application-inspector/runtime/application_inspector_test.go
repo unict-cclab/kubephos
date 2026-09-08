@@ -59,10 +59,10 @@ func TestPlanDeclaresTypedInterfaceArtifacts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(plan.Steps) != 1 || len(plan.Steps[0].Outputs) != 2 {
+	if len(plan.Steps) != 1 || len(plan.Steps[0].Outputs) != 3 {
 		t.Fatalf("unexpected typed outputs: %#v", plan.Steps)
 	}
-	if plan.Steps[0].Outputs[0].Type != "WorkloadTargets" || plan.Steps[0].Outputs[1].Type != "ServiceEndpoints" {
+	if plan.Steps[0].Outputs[0].Type != "ManifestSet" || plan.Steps[0].Outputs[1].Type != "WorkloadTargets" || plan.Steps[0].Outputs[2].Type != "ServiceEndpoints" {
 		t.Fatalf("unexpected artifact types: %#v", plan.Steps[0].Outputs)
 	}
 }
