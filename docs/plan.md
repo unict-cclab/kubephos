@@ -950,7 +950,7 @@ Ultimo aggiornamento: 8 settembre 2026.
 | Milestone | Stato | Criterio di completamento |
 |---|---|---|
 | 1. Fondazioni | Completata | `docker compose up -d` avvia piattaforma, migrazioni e worker; un job validato termina con log live |
-| 2. Vertical slice | In corso | Una pipeline composta da plug-in di riferimento produce e visualizza artifact |
+| 2. Vertical slice | Completata | Una pipeline composta da plug-in di riferimento produce e visualizza artifact |
 | 3. Motore degli esperimenti | In corso | Le esecuzioni sono recuperabili, cancellabili e protette da lease e health gate |
 | 4. Confronti e storico | Non iniziata | Due strategie con più ripetizioni sono confrontabili dalla UI |
 | 5. Ecosistema dei plug-in | In corso | Un plug-in OCI esterno viene aggiunto senza ricompilare il core |
@@ -980,6 +980,12 @@ Distinta gestita iniziale:
 
 PostgreSQL e SeaweedFS non pubblicano porte host per default. L'utente accede ai dati attraverso KubePhos; l'esposizione diretta sarà disponibile soltanto in un profilo diagnostico esplicito per evitare collisioni e ampliare inutilmente la superficie di accesso.
 
+PostgreSQL usa il tag `18.6-alpine3.23`, Liquibase il tag `4.32.0` e SeaweedFS il tag `4.29`. Tutte le immagini del Docker Compose usano tag di versione, aggiornati insieme alla distinta gestita del framework e non configurabili dalla UI.
+
+Il vault locale genera una chiave AES-GCM nel volume privato `platform-data`. Le credenziali vengono validate usando lo schema dichiarato dal plug-in, cifrate prima della persistenza e restituite dalle API soltanto come metadati e fingerprint. Configurazioni, piani, log e artifact conservano esclusivamente riferimenti opachi. Il runtime risolve un riferimento soltanto se il manifest dichiara il permesso `secrets.read:<kind>`.
+
+L'immagine applicativa viene costruita una sola volta dal servizio `app`; il servizio `worker` riusa lo stesso tag e avvia un comando differente.
+
 L'applicazione pubblica la porta HTTP soltanto su `127.0.0.1` per default. Un bind remoto deve essere una scelta esplicita. Prima di supportare accesso multiutente o la Infrastructure Console dovranno essere completati autenticazione, ruoli, autorizzazione per capability, protezione CSRF, audit e gestione delle sessioni. Harbor, NFS e SSH non potranno essere abilitati su un'istanza priva di questi controlli.
 
 Verifiche completate nella prima iterazione:
@@ -996,15 +1002,20 @@ Verifiche completate nella prima iterazione:
 - esecuzione del plug-in come processo separato con protocollo JSON e log live;
 - verifica all'avvio della corrispondenza tra identità del descrittore e dell'eseguibile;
 - generazione del form frontend dal JSON Schema del plug-in senza campi specifici nella UI;
-- immagini del managed stack risolte e fissate per digest;
+- versioni del managed stack dichiarate esplicitamente; PostgreSQL e SeaweedFS usano tag di versione leggibili;
 - fallimento intenzionale con conservazione degli step successivi;
 - cancellazione di un'operazione in corso;
 - quattro operazioni contemporanee eseguite dal worker pool;
 - rendering reale del frontend tramite browser headless.
 - accesso API a Proxmox verificato in sola lettura, con il nodo online e tutte le risorse preesistenti classificate come importate e protette;
 - arresto controllato e arresto forzato del worker verificati end-to-end: lease scadute e interruzioni terminano in uno stato fallito ispezionabile, senza rieseguire automaticamente step dall'esito incerto.
+- creazione di credenziali dalla UI mediante form generato dal manifest, validazione server-side, cifratura e persistenza condivisa tra API e worker;
+- verifica negativa che token ID e secret non compaiano in API, configurazioni, piani, log, artifact o dump del database;
+- plug-in Proxmox esterno con sole richieste `GET`, validazione dinamica prima della conferma, due health gate e inventory reale completata;
+- riavvio di API e worker seguito da una nuova discovery riuscita, a conferma della persistenza e decifratura condivisa della credenziale;
+- rendering tramite browser headless della schermata Infrastructure e del vault redatto.
 
-Vincolo operativo corrente: le tre macchine virtuali già presenti sul server Proxmox devono essere ignorate. Nessun test della prima iterazione può modificarle. Le future integrazioni Proxmox dovranno iniziare con discovery e preflight in sola lettura, distinguere esplicitamente risorse gestite e importate e rifiutare modifiche a risorse non marcate come appartenenti a KubePhos.
+Vincolo operativo corrente: le tre macchine virtuali già presenti sul server Proxmox devono essere ignorate. Il plug-in di discovery le ha rilevate insieme al template e le ha classificate come `imported` e `read-only`; nessuna richiesta di scrittura è stata eseguita. I test futuri di registry, NFS, cluster e componenti gestiti useranno esclusivamente nuove VM con nome, tag e record di ownership KubePhos. Cleanup e modifiche saranno rifiutati per ogni risorsa preesistente o priva di tale ownership.
 
 ### 1. Fondazioni
 
@@ -1071,7 +1082,7 @@ Vincolo operativo corrente: le tre macchine virtuali già presenti sul server Pr
 - convertire le integrazioni esistenti in plug-in;
 - mantenere nel monorepo i plug-in ufficiali senza importarli nel core;
 - distribuire ogni plug-in come artifact OCI indipendente;
-- mantenere le dipendenze upstream pinning per digest;
+- mantenere versioni upstream esplicite; PostgreSQL e SeaweedFS usano tag, mentre gli artifact degli esperimenti restano identificati per digest;
 - eliminare configurazioni e wrapper duplicati;
 - aggiungere test end-to-end e documentazione operativa.
 

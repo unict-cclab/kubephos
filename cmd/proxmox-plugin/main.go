@@ -9,7 +9,7 @@ import (
 	"os"
 
 	"kubephos.dev/kubephos/internal/domain"
-	"kubephos.dev/kubephos/plugins/reference/runtime"
+	proxmox "kubephos.dev/kubephos/plugins/proxmox/runtime"
 )
 
 func main() {
@@ -23,18 +23,15 @@ func run() error {
 	if len(os.Args) != 2 {
 		return errors.New("one protocol command is required")
 	}
-	input, err := io.ReadAll(io.LimitReader(os.Stdin, 1<<20))
+	input, err := io.ReadAll(io.LimitReader(os.Stdin, 2<<20))
 	if err != nil {
 		return err
 	}
-	var invocation struct {
-		Input json.RawMessage `json:"input"`
-	}
+	var invocation proxmox.Invocation
 	if err := json.Unmarshal(input, &invocation); err != nil {
 		return err
 	}
-	input = invocation.Input
-	plugin := reference.Plugin{}
+	plugin := proxmox.Plugin{}
 	log := func(_ string, message string) error {
 		fmt.Fprintln(os.Stderr, message)
 		return nil
@@ -44,26 +41,26 @@ func run() error {
 	case "describe":
 		output = plugin.Manifest()
 	case "validate":
-		output = plugin.Validate(context.Background(), input)
+		output = plugin.Validate(context.Background(), invocation)
 	case "plan":
-		output, err = plugin.Plan(context.Background(), input)
+		output, err = plugin.Plan(context.Background(), invocation.Input)
 	case "precheck":
 		var request stepRequest
-		err = json.Unmarshal(input, &request)
+		err = json.Unmarshal(invocation.Input, &request)
 		if err == nil {
-			output, err = plugin.Precheck(context.Background(), request.Step, log)
+			output, err = plugin.Precheck(context.Background(), request.Step, invocation.Secrets, log)
 		}
 	case "execute":
 		var request stepRequest
-		err = json.Unmarshal(input, &request)
+		err = json.Unmarshal(invocation.Input, &request)
 		if err == nil {
-			output, err = plugin.Execute(context.Background(), request.Step, log)
+			output, err = plugin.Execute(context.Background(), request.Step, invocation.Secrets, log)
 		}
 	case "verify":
 		var request verifyRequest
-		err = json.Unmarshal(input, &request)
+		err = json.Unmarshal(invocation.Input, &request)
 		if err == nil {
-			output, err = plugin.Verify(context.Background(), request.Step, request.Result, log)
+			output, err = plugin.Verify(context.Background(), request.Step, request.Result, invocation.Secrets, log)
 		}
 	case "status":
 		output = map[string]string{"status": "idle"}

@@ -32,7 +32,14 @@ type descriptor struct {
 		Protocol            string         `yaml:"protocol"`
 		Commands            []string       `yaml:"commands"`
 		ConfigurationSchema map[string]any `yaml:"configurationSchema"`
-		Runtime             struct {
+		CredentialSchemas   []struct {
+			Kind        string         `yaml:"kind"`
+			Name        string         `yaml:"name"`
+			Description string         `yaml:"description"`
+			Schema      map[string]any `yaml:"schema"`
+		} `yaml:"credentialSchemas"`
+		Permissions []string `yaml:"permissions"`
+		Runtime     struct {
 			Executable string `yaml:"executable"`
 			Timeout    string `yaml:"timeout"`
 		} `yaml:"runtime"`
@@ -40,12 +47,14 @@ type descriptor struct {
 }
 
 type Process struct {
-	manifest   Manifest
-	executable string
-	timeout    time.Duration
+	manifest    Manifest
+	executable  string
+	timeout     time.Duration
+	resolver    SecretResolver
+	secretKinds map[string]bool
 }
 
-func LoadDirectory(directory string) (*Registry, error) {
+func LoadDirectory(directory string, resolver SecretResolver) (*Registry, error) {
 	entries, err := os.ReadDir(directory)
 	if err != nil {
 		return nil, err
@@ -57,7 +66,7 @@ func LoadDirectory(directory string) (*Registry, error) {
 			continue
 		}
 		path := filepath.Join(directory, entry.Name(), "plugin.yaml")
-		value, err := LoadProcess(path)
+		value, err := LoadProcess(path, resolver)
 		if errors.Is(err, os.ErrNotExist) {
 			continue
 		}
@@ -77,7 +86,7 @@ func LoadDirectory(directory string) (*Registry, error) {
 	return NewRegistry(values...), nil
 }
 
-func LoadProcess(path string) (*Process, error) {
+func LoadProcess(path string, resolver SecretResolver) (*Process, error) {
 	value, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
@@ -123,16 +132,37 @@ func LoadProcess(path string) (*Process, error) {
 			return nil, errors.New("plugin runtime timeout is invalid")
 		}
 	}
+	credentialSchemas := make([]CredentialSchema, 0, len(definition.Spec.CredentialSchemas))
+	for _, value := range definition.Spec.CredentialSchemas {
+		if value.Kind == "" || value.Name == "" {
+			return nil, errors.New("credential schema identity is incomplete")
+		}
+		raw, err := json.Marshal(value.Schema)
+		if err != nil {
+			return nil, err
+		}
+		credentialSchemas = append(credentialSchemas, CredentialSchema{Kind: value.Kind, Name: value.Name, Description: value.Description, Schema: raw})
+	}
+	secretKinds := map[string]bool{}
+	for _, permission := range definition.Spec.Permissions {
+		if strings.HasPrefix(permission, "secrets.read:") {
+			secretKinds[strings.TrimPrefix(permission, "secrets.read:")] = true
+		}
+	}
 	plugin := &Process{
 		manifest: Manifest{
-			ID:          definition.Metadata.ID,
-			Name:        definition.Metadata.Name,
-			Version:     definition.Metadata.Version,
-			Description: definition.Metadata.Description,
-			Schema:      schema,
+			ID:                definition.Metadata.ID,
+			Name:              definition.Metadata.Name,
+			Version:           definition.Metadata.Version,
+			Description:       definition.Metadata.Description,
+			Schema:            schema,
+			CredentialSchemas: credentialSchemas,
+			Permissions:       definition.Spec.Permissions,
 		},
-		executable: executable,
-		timeout:    timeout,
+		executable:  executable,
+		timeout:     timeout,
+		resolver:    resolver,
+		secretKinds: secretKinds,
 	}
 	describeContext, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -185,7 +215,15 @@ func (p *Process) Verify(ctx context.Context, step domain.PlanStep, result json.
 func (p *Process) invoke(parent context.Context, command string, input, output any, log Logger) error {
 	ctx, cancel := context.WithTimeout(parent, p.timeout)
 	defer cancel()
-	payload, err := json.Marshal(input)
+	inputPayload, err := json.Marshal(input)
+	if err != nil {
+		return err
+	}
+	resolved, err := p.resolveSecrets(ctx, inputPayload)
+	if err != nil {
+		return err
+	}
+	payload, err := json.Marshal(map[string]any{"input": json.RawMessage(inputPayload), "secrets": resolved})
 	if err != nil {
 		return err
 	}
@@ -218,6 +256,50 @@ func (p *Process) invoke(parent context.Context, command string, input, output a
 		return fmt.Errorf("plugin returned invalid JSON: %w", err)
 	}
 	return nil
+}
+
+func (p *Process) resolveSecrets(ctx context.Context, payload []byte) (map[string]json.RawMessage, error) {
+	result := map[string]json.RawMessage{}
+	if len(p.secretKinds) == 0 {
+		return result, nil
+	}
+	var value any
+	if err := json.Unmarshal(payload, &value); err != nil {
+		return nil, err
+	}
+	refs := map[string]bool{}
+	collectCredentialRefs(value, refs)
+	for credentialID := range refs {
+		if p.resolver == nil {
+			return nil, errors.New("credential resolver is unavailable")
+		}
+		kind, secret, err := p.resolver(ctx, credentialID)
+		if err != nil {
+			return nil, fmt.Errorf("resolve credential %s: %w", credentialID, err)
+		}
+		if !p.secretKinds[kind] {
+			return nil, fmt.Errorf("plugin is not permitted to read credential kind %q", kind)
+		}
+		result[credentialID] = secret
+	}
+	return result, nil
+}
+
+func collectCredentialRefs(value any, result map[string]bool) {
+	switch current := value.(type) {
+	case map[string]any:
+		for _, item := range current {
+			collectCredentialRefs(item, result)
+		}
+	case []any:
+		for _, item := range current {
+			collectCredentialRefs(item, result)
+		}
+	case string:
+		if strings.HasPrefix(current, "cred_") {
+			result[current] = true
+		}
+	}
 }
 
 func scanLines(reader io.Reader, result chan<- []string, log Logger) {

@@ -90,13 +90,19 @@
       <section class="view" id="view-infrastructure">
         <div class="section-heading">
           <div><p class="eyebrow">ONE ACCESS POINT</p><h2>Infrastructure Console</h2></div>
-          <p class="section-copy">Managed access without remembering addresses or opening another terminal.</p>
+          <button class="button primary" id="add-credential-button">Add credential</button>
         </div>
+        <p class="section-copy infrastructure-copy">Managed access without remembering addresses or opening another terminal.</p>
         <div class="workspace-grid">
           <article class="feature-card"><span class="feature-icon">▣</span><div><h3>Container Registry</h3><p>Browse Harbor projects, images, tags and immutable digests.</p></div><span class="planned">Planned</span></article>
           <article class="feature-card"><span class="feature-icon">▤</span><div><h3>Shared Storage</h3><p>Explore NFS shares, upload data and protect destructive actions.</p></div><span class="planned">Planned</span></article>
           <article class="feature-card"><span class="feature-icon">›_</span><div><h3>Secure Shell</h3><p>Open audited, short-lived SSH sessions directly in the browser.</p></div><span class="planned">Planned</span></article>
         </div>
+        <div class="section-heading credential-heading">
+          <div><p class="eyebrow">SERVER-SIDE VAULT</p><h2>Credentials</h2></div>
+          <p class="section-copy">Values are encrypted and never returned to the browser.</p>
+        </div>
+        <div id="credential-list" class="credential-list"></div>
         <div class="notice"><strong>Safety boundary</strong><p>Imported infrastructure is read-only by default. Credentials remain server-side and every write produces an audit event.</p></div>
       </section>
     </main>
@@ -122,6 +128,19 @@
       <div class="validation-callout"><span>✓</span><p><strong>No operation starts yet.</strong> KubePhos validates every input and shows the resolved plan before it can be queued.</p></div>
       <p class="form-error" id="operation-error"></p>
       <div class="modal-actions"><button class="button secondary" type="button" data-close-dialog="operation-dialog">Cancel</button><button class="button primary" type="submit" id="operation-submit">Validate plan</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="credential-dialog" class="modal">
+    <form method="dialog" id="credential-form">
+      <div class="modal-header"><div><p class="eyebrow">ENCRYPTED STORAGE</p><h2>Add credential</h2></div><button class="icon-button" type="button" data-close-dialog="credential-dialog" aria-label="Close">×</button></div>
+      <label>Credential type<select name="kind" id="credential-kind" required></select></label>
+      <p class="field-description" id="credential-description"></p>
+      <label>Name<input name="name" maxlength="80" placeholder="Development infrastructure" required></label>
+      <div id="credential-fields" class="schema-fields"></div>
+      <div class="validation-callout"><span>✓</span><p><strong>Server-side only.</strong> The plaintext is encrypted before storage and is never returned by the API.</p></div>
+      <p class="form-error" id="credential-error"></p>
+      <div class="modal-actions"><button class="button secondary" type="button" data-close-dialog="credential-dialog">Cancel</button><button class="button primary" type="submit" id="credential-submit">Encrypt and save</button></div>
     </form>
   </dialog>
 

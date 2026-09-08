@@ -10,14 +10,19 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"kubephos.dev/kubephos/internal/artifacts"
 	"kubephos.dev/kubephos/internal/domain"
 	"kubephos.dev/kubephos/internal/id"
 	"kubephos.dev/kubephos/internal/plugins"
+	"kubephos.dev/kubephos/internal/schema"
+	"kubephos.dev/kubephos/internal/secrets"
 	"kubephos.dev/kubephos/internal/storage"
 	"kubephos.dev/kubephos/internal/webui"
 )
@@ -26,16 +31,19 @@ type Server struct {
 	store     *storage.Store
 	registry  *plugins.Registry
 	artifacts *artifacts.Client
+	vault     *secrets.Vault
 	version   string
 }
 
-func NewServer(store *storage.Store, registry *plugins.Registry, artifactStore *artifacts.Client, version string) http.Handler {
-	server := &Server{store: store, registry: registry, artifacts: artifactStore, version: version}
+func NewServer(store *storage.Store, registry *plugins.Registry, artifactStore *artifacts.Client, vault *secrets.Vault, version string) http.Handler {
+	server := &Server{store: store, registry: registry, artifacts: artifactStore, vault: vault, version: version}
 	router := http.NewServeMux()
 	router.HandleFunc("GET /health/live", server.live)
 	router.HandleFunc("GET /health/ready", server.ready)
 	router.HandleFunc("GET /api/v1/system", server.system)
 	router.HandleFunc("GET /api/v1/plugins", server.listPlugins)
+	router.HandleFunc("GET /api/v1/credentials", server.listCredentials)
+	router.HandleFunc("POST /api/v1/credentials", server.createCredential)
 	router.HandleFunc("GET /api/v1/workspaces", server.listWorkspaces)
 	router.HandleFunc("POST /api/v1/workspaces", server.createWorkspace)
 	router.HandleFunc("GET /api/v1/workspaces/{id}", server.getWorkspace)
@@ -84,6 +92,81 @@ func (s *Server) system(response http.ResponseWriter, request *http.Request) {
 
 func (s *Server) listPlugins(response http.ResponseWriter, _ *http.Request) {
 	writeJSON(response, http.StatusOK, map[string]any{"items": s.registry.Manifests()})
+}
+
+func (s *Server) listCredentials(response http.ResponseWriter, request *http.Request) {
+	items, err := s.store.ListCredentials(request.Context())
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, "database_error", "Could not list credentials.")
+		return
+	}
+	writeJSON(response, http.StatusOK, map[string]any{"items": items})
+}
+
+func (s *Server) createCredential(response http.ResponseWriter, request *http.Request) {
+	var input struct {
+		Name  string          `json:"name"`
+		Kind  string          `json:"kind"`
+		Value json.RawMessage `json:"value"`
+	}
+	if err := decodeJSON(request, &input); err != nil {
+		writeError(response, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	input.Name = strings.TrimSpace(input.Name)
+	input.Kind = strings.TrimSpace(input.Kind)
+	if input.Name == "" || len(input.Name) > 80 {
+		writeError(response, http.StatusUnprocessableEntity, "invalid_name", "Name must contain between 1 and 80 characters.")
+		return
+	}
+	if !regexp.MustCompile(`^[a-z0-9][a-z0-9.-]{0,79}$`).MatchString(input.Kind) {
+		writeError(response, http.StatusUnprocessableEntity, "invalid_kind", "Credential kind is invalid.")
+		return
+	}
+	definition, found := s.credentialSchema(input.Kind)
+	if !found {
+		writeError(response, http.StatusUnprocessableEntity, "unsupported_kind", "No installed plugin declares this credential kind.")
+		return
+	}
+	issues, err := schema.Validate(definition, input.Value)
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, "invalid_schema", err.Error())
+		return
+	}
+	if len(issues) > 0 {
+		writeJSON(response, http.StatusUnprocessableEntity, map[string]any{"code": "validation_failed", "issues": issues})
+		return
+	}
+	nonce, ciphertext, fingerprint, err := s.vault.Encrypt(input.Value)
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, "encryption_failed", "Could not encrypt credential.")
+		return
+	}
+	credential, err := s.store.CreateCredential(request.Context(), domain.EncryptedCredential{
+		Credential: domain.Credential{ID: id.New("cred"), Name: input.Name, Kind: input.Kind, Fingerprint: fingerprint},
+		Nonce:      nonce, Ciphertext: ciphertext,
+	})
+	if err != nil {
+		var databaseError *pgconn.PgError
+		if errors.As(err, &databaseError) && databaseError.Code == "23505" {
+			writeError(response, http.StatusConflict, "credential_conflict", "A credential with this name and kind already exists.")
+			return
+		}
+		writeError(response, http.StatusInternalServerError, "database_error", "Could not store credential.")
+		return
+	}
+	writeJSON(response, http.StatusCreated, credential)
+}
+
+func (s *Server) credentialSchema(kind string) (json.RawMessage, bool) {
+	for _, manifest := range s.registry.Manifests() {
+		for _, definition := range manifest.CredentialSchemas {
+			if definition.Kind == kind {
+				return definition.Schema, true
+			}
+		}
+	}
+	return nil, false
 }
 
 func (s *Server) listWorkspaces(response http.ResponseWriter, request *http.Request) {
@@ -197,6 +280,20 @@ func (s *Server) createOperation(response http.ResponseWriter, request *http.Req
 		writeError(response, http.StatusUnprocessableEntity, "invalid_plugin", err.Error())
 		return
 	}
+	manifest := plugin.Manifest()
+	issues, err := schema.Validate(manifest.Schema, input.Spec)
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, "invalid_schema", err.Error())
+		return
+	}
+	if len(issues) > 0 {
+		converted := make([]domain.ValidationIssue, 0, len(issues))
+		for _, issue := range issues {
+			converted = append(converted, domain.ValidationIssue{Level: "error", Path: issue.Path, Message: issue.Message})
+		}
+		writeJSON(response, http.StatusUnprocessableEntity, map[string]any{"code": "validation_failed", "validation": domain.ValidationReport{Valid: false, Issues: converted, CheckedAt: time.Now().UTC()}})
+		return
+	}
 	validation := plugin.Validate(request.Context(), input.Spec)
 	if !validation.Valid {
 		writeJSON(response, http.StatusUnprocessableEntity, map[string]any{"code": "validation_failed", "validation": validation})
@@ -211,7 +308,6 @@ func (s *Server) createOperation(response http.ResponseWriter, request *http.Req
 		writeError(response, http.StatusUnprocessableEntity, "empty_plan", "The plugin produced an empty plan.")
 		return
 	}
-	manifest := plugin.Manifest()
 	planHash, err := resolvedPlanHash(manifest, input.Spec, plan)
 	if err != nil {
 		writeError(response, http.StatusInternalServerError, "planning_failed", "Could not fingerprint the validated plan.")

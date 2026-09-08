@@ -1,0 +1,76 @@
+apiVersion: plugins.kubephos.io/v1alpha1
+kind: Plugin
+metadata:
+  id: io.kubephos.infrastructure.proxmox.discovery
+  name: Proxmox discovery
+  version: 0.1.0
+  description: Validates a Proxmox connection and inventories existing resources without modifying them.
+spec:
+  protocol: v1alpha1
+  commands:
+    - describe
+    - validate
+    - plan
+    - precheck
+    - execute
+    - verify
+    - status
+    - cancel
+    - cleanup
+  configurationSchema:
+    type: object
+    additionalProperties: false
+    required:
+      - endpoint
+      - credentialRef
+      - verifyTLS
+    properties:
+      endpoint:
+        type: string
+        title: Proxmox endpoint
+        description: Base URL of the Proxmox API, including port 8006.
+        format: uri
+      credentialRef:
+        type: string
+        title: API credential
+        description: Server-side API token used only by this plugin.
+        format: kubephos-secret-ref
+        x-kubephos-secret-kind: proxmox-api-token
+      verifyTLS:
+        type: boolean
+        title: Verify TLS certificate
+        description: Disable only for a development server using a private certificate.
+        default: true
+  credentialSchemas:
+    - kind: proxmox-api-token
+      name: Proxmox API token
+      description: Token ID and secret generated in Proxmox.
+      schema:
+        type: object
+        additionalProperties: false
+        required:
+          - tokenId
+          - tokenSecret
+        properties:
+          tokenId:
+            type: string
+            title: Token ID
+            description: Full token ID, for example user@realm!kubephos.
+            minLength: 3
+            maxLength: 240
+          tokenSecret:
+            type: string
+            title: Token secret
+            description: Secret value shown when the API token is created.
+            writeOnly: true
+            minLength: 8
+            maxLength: 512
+  runtime:
+    executable: proxmox-plugin
+    timeout: 2m
+  capabilities:
+    - infrastructure.discovery
+    - infrastructure.preflight
+  permissions:
+    - network.proxmox.read
+    - secrets.read:proxmox-api-token

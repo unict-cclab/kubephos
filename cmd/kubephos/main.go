@@ -17,6 +17,7 @@ import (
 	"kubephos.dev/kubephos/internal/config"
 	"kubephos.dev/kubephos/internal/engine"
 	"kubephos.dev/kubephos/internal/plugins"
+	"kubephos.dev/kubephos/internal/secrets"
 	"kubephos.dev/kubephos/internal/storage"
 )
 
@@ -63,13 +64,17 @@ func serve(configValue config.Config) error {
 	if err := store.Ready(ctx); err != nil {
 		return err
 	}
-	registry, err := plugins.LoadDirectory(configValue.PluginDirectory)
+	vault, resolver, err := credentialRuntime(store, configValue.CredentialKeyFile)
+	if err != nil {
+		return err
+	}
+	registry, err := plugins.LoadDirectory(configValue.PluginDirectory, resolver)
 	if err != nil {
 		return err
 	}
 	artifactStore := artifacts.New(configValue.ArtifactEndpoint)
 	slog.Info("starting api", "address", configValue.HTTPAddress, "version", version)
-	return api.Serve(ctx, configValue.HTTPAddress, api.NewServer(store, registry, artifactStore, version))
+	return api.Serve(ctx, configValue.HTTPAddress, api.NewServer(store, registry, artifactStore, vault, version))
 }
 
 func work(configValue config.Config) error {
@@ -83,13 +88,39 @@ func work(configValue config.Config) error {
 	if err := store.Ready(ctx); err != nil {
 		return err
 	}
-	registry, err := plugins.LoadDirectory(configValue.PluginDirectory)
+	_, resolver, err := credentialRuntime(store, configValue.CredentialKeyFile)
+	if err != nil {
+		return err
+	}
+	registry, err := plugins.LoadDirectory(configValue.PluginDirectory, resolver)
 	if err != nil {
 		return err
 	}
 	artifactStore := artifacts.New(configValue.ArtifactEndpoint)
 	slog.Info("starting worker", "instance", configValue.InstanceID, "concurrency", configValue.WorkerConcurrency)
 	return engine.NewWorker(store, registry, artifactStore, configValue.InstanceID, configValue.WorkerConcurrency, configValue.WorkerPoll).Run(ctx)
+}
+
+func credentialRuntime(store *storage.Store, keyFile string) (*secrets.Vault, plugins.SecretResolver, error) {
+	vault, err := secrets.Open(keyFile)
+	if err != nil {
+		return nil, nil, err
+	}
+	resolver := func(ctx context.Context, credentialID string) (string, json.RawMessage, error) {
+		credential, err := store.GetEncryptedCredential(ctx, credentialID)
+		if err != nil {
+			return "", nil, err
+		}
+		value, err := vault.Decrypt(credential.Nonce, credential.Ciphertext)
+		if err != nil {
+			return "", nil, err
+		}
+		if !json.Valid(value) {
+			return "", nil, errors.New("credential payload is invalid")
+		}
+		return credential.Kind, value, nil
+	}
+	return vault, resolver, nil
 }
 
 func status(configValue config.Config) error {

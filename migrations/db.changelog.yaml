@@ -6,3 +6,10 @@ databaseChangeLog:
         - sqlFile:
             path: changes/001-initial-schema.sql
             relativeToChangelogFile: true
+  - changeSet:
+      id: 002-credentials
+      author: kubephos
+      changes:
+        - sqlFile:
+            path: changes/002-credentials.sql
+            relativeToChangelogFile: true

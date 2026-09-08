@@ -91,6 +91,49 @@ func (s *Store) GetWorkspace(ctx context.Context, workspaceID string) (domain.Wo
 	return workspace, err
 }
 
+func (s *Store) CreateCredential(ctx context.Context, credential domain.EncryptedCredential) (domain.Credential, error) {
+	err := s.pool.QueryRow(ctx, `
+		INSERT INTO credentials (id, name, kind, fingerprint, nonce, ciphertext)
+		VALUES ($1, $2, $3, $4, $5, $6)
+		RETURNING created_at, updated_at
+	`, credential.ID, credential.Name, credential.Kind, credential.Fingerprint, credential.Nonce, credential.Ciphertext).Scan(&credential.CreatedAt, &credential.UpdatedAt)
+	return credential.Credential, err
+}
+
+func (s *Store) ListCredentials(ctx context.Context) ([]domain.Credential, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, name, kind, fingerprint, created_at, updated_at
+		FROM credentials
+		ORDER BY name
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := []domain.Credential{}
+	for rows.Next() {
+		var credential domain.Credential
+		if err := rows.Scan(&credential.ID, &credential.Name, &credential.Kind, &credential.Fingerprint, &credential.CreatedAt, &credential.UpdatedAt); err != nil {
+			return nil, err
+		}
+		result = append(result, credential)
+	}
+	return result, rows.Err()
+}
+
+func (s *Store) GetEncryptedCredential(ctx context.Context, credentialID string) (domain.EncryptedCredential, error) {
+	var credential domain.EncryptedCredential
+	err := s.pool.QueryRow(ctx, `
+		SELECT id, name, kind, fingerprint, nonce, ciphertext, created_at, updated_at
+		FROM credentials
+		WHERE id = $1
+	`, credentialID).Scan(&credential.ID, &credential.Name, &credential.Kind, &credential.Fingerprint, &credential.Nonce, &credential.Ciphertext, &credential.CreatedAt, &credential.UpdatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.EncryptedCredential{}, ErrNotFound
+	}
+	return credential, err
+}
+
 func (s *Store) CreateOperation(ctx context.Context, operation domain.Operation) (domain.Operation, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {

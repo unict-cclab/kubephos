@@ -10,12 +10,23 @@ import (
 )
 
 type Manifest struct {
-	ID          string          `json:"id"`
+	ID                string             `json:"id"`
+	Name              string             `json:"name"`
+	Version           string             `json:"version"`
+	Description       string             `json:"description"`
+	Schema            json.RawMessage    `json:"schema"`
+	CredentialSchemas []CredentialSchema `json:"credentialSchemas"`
+	Permissions       []string           `json:"permissions"`
+}
+
+type CredentialSchema struct {
+	Kind        string          `json:"kind"`
 	Name        string          `json:"name"`
-	Version     string          `json:"version"`
 	Description string          `json:"description"`
 	Schema      json.RawMessage `json:"schema"`
 }
+
+type SecretResolver func(context.Context, string) (string, json.RawMessage, error)
 
 type Logger func(level, message string) error
 

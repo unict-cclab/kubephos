@@ -4,10 +4,11 @@ x-platform-environment: &platform-environment
   KUBEPHOS_DATABASE_URL: postgres://kubephos:${POSTGRES_PASSWORD:-kubephos-dev}@postgres:5432/kubephos?sslmode=disable
   KUBEPHOS_ARTIFACT_ENDPOINT: http://seaweedfs:8888
   KUBEPHOS_PLUGIN_DIRECTORY: /opt/kubephos/plugins
+  KUBEPHOS_CREDENTIAL_KEY_FILE: /var/lib/kubephos/master.key
 
 services:
   postgres:
-    image: postgres@sha256:697c180dbf244d3ce4a8f4cbc0156cde840af055c1bf8b76aebe422a4822086f
+    image: postgres:18.6-alpine3.23
     environment:
       POSTGRES_DB: kubephos
       POSTGRES_USER: kubephos
@@ -22,7 +23,7 @@ services:
     restart: unless-stopped
 
   migrate:
-    image: liquibase/liquibase@sha256:fbee3db36feece76da4207e9cca12873efecc057aba074232338bff600c19246
+    image: liquibase/liquibase:4.32.0
     environment:
       LIQUIBASE_COMMAND_URL: jdbc:postgresql://postgres:5432/kubephos
       LIQUIBASE_COMMAND_USERNAME: kubephos
@@ -38,7 +39,7 @@ services:
     restart: "no"
 
   seaweedfs:
-    image: chrislusf/seaweedfs@sha256:d47c7ee99fcb951351d7194915f4e3a5ea604a8e8871183d713907dec4fb9bf5
+    image: chrislusf/seaweedfs:4.29
     command: server -dir=/data -filer -s3 -ip=seaweedfs
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "-", "http://seaweedfs:9333/cluster/status"]
@@ -70,14 +71,12 @@ services:
       retries: 12
     ports:
       - "${KUBEPHOS_BIND_ADDRESS:-127.0.0.1}:${KUBEPHOS_PORT:-8080}:8080"
+    volumes:
+      - platform-data:/var/lib/kubephos
     restart: unless-stopped
 
   worker:
     image: kubephos:${KUBEPHOS_VERSION:-dev}
-    build:
-      context: .
-      args:
-        VERSION: ${KUBEPHOS_VERSION:-dev}
     command: worker
     environment:
       <<: *platform-environment
@@ -89,8 +88,11 @@ services:
         condition: service_completed_successfully
       seaweedfs:
         condition: service_healthy
+    volumes:
+      - platform-data:/var/lib/kubephos
     restart: unless-stopped
 
 volumes:
   postgres-data:
   seaweed-data:
+  platform-data:

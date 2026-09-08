@@ -9,10 +9,10 @@ spec:
   platform:
     postgres:
       version: 18.6-alpine3.23
-      image: postgres@sha256:697c180dbf244d3ce4a8f4cbc0156cde840af055c1bf8b76aebe422a4822086f
+      image: postgres:18.6-alpine3.23
     liquibase:
       version: 4.32.0
-      image: liquibase/liquibase@sha256:fbee3db36feece76da4207e9cca12873efecc057aba074232338bff600c19246
+      image: liquibase/liquibase:4.32.0
     seaweedfs:
       version: "4.29"
-      image: chrislusf/seaweedfs@sha256:d47c7ee99fcb951351d7194915f4e3a5ea604a8e8871183d713907dec4fb9bf5
+      image: chrislusf/seaweedfs:4.29

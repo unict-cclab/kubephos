@@ -3,6 +3,7 @@ const state = {
   workspaces: [],
   operations: [],
   plugins: [],
+  credentials: [],
   selectedOperation: null,
   eventSource: null
 }
@@ -35,13 +36,14 @@ async function api(path, options = {}) {
 
 async function loadAll(silent = false) {
   try {
-    const [system, workspaces, operations, plugins] = await Promise.all([
-      api('/system'), api('/workspaces'), api('/operations'), api('/plugins')
+    const [system, workspaces, operations, plugins, credentials] = await Promise.all([
+      api('/system'), api('/workspaces'), api('/operations'), api('/plugins'), api('/credentials')
     ])
     state.system = system
     state.workspaces = workspaces.items
     state.operations = operations.items
     state.plugins = plugins.items
+    state.credentials = credentials.items
     render()
     setHealth(true)
     if (!silent) toast('Everything is up to date.')
@@ -62,6 +64,7 @@ function render() {
   renderOperations('#operation-list', state.operations)
   renderWorkspaces()
   renderPlugins()
+  renderCredentials()
 }
 
 function renderOperations(selector, operations) {
@@ -107,6 +110,25 @@ function renderPlugins() {
   </article>`).join('') || `<div class="empty-state"><div><strong>No plugins installed</strong>Add a conforming plugin to provide a capability.</div></div>`
 }
 
+function credentialTypes() {
+  const values = new Map()
+  state.plugins.forEach(plugin => (plugin.credentialSchemas || []).forEach(definition => values.set(definition.kind, definition)))
+  return [...values.values()].sort((left, right) => left.name.localeCompare(right.name))
+}
+
+function renderCredentials() {
+  const root = $('#credential-list')
+  if (!state.credentials.length) {
+    root.innerHTML = `<div class="empty-state"><div><strong>No credentials stored</strong>Add a credential declared by an installed plugin.</div></div>`
+    return
+  }
+  root.innerHTML = state.credentials.map(credential => `<article class="credential-row">
+    <span class="feature-icon">⌁</span>
+    <div><h3>${escapeText(credential.name)}</h3><p>${escapeText(credential.kind)} · fingerprint ${escapeText(credential.fingerprint)}</p></div>
+    <span class="status ready">Encrypted</span>
+  </article>`).join('')
+}
+
 function switchView(view) {
   if (!views[view]) return
   $$('.view').forEach(element => element.classList.toggle('active', element.id === `view-${view}`))
@@ -147,26 +169,77 @@ function renderPluginFields(pluginID) {
   $('#plugin-fields').innerHTML = Object.entries(schema.properties || {}).map(([name, property]) => schemaField(name, property, required.has(name))).join('')
 }
 
-function schemaField(name, property, required) {
+function schemaField(name, property, required, scope = 'schema') {
   const title = property.title || humanize(name)
   const hint = property.description ? `<small>${escapeText(property.description)}</small>` : ''
   const requiredAttribute = required ? ' required' : ''
   const value = property.default ?? (property.type === 'boolean' ? false : '')
   const width = property.type === 'string' || property.type === 'object' || property.type === 'array' ? ' wide' : ''
+  const fieldAttribute = `data-${scope}-property="${escapeText(name)}" data-${scope}-type="${escapeText(property.type || 'string')}"`
+  if (property.format === 'kubephos-secret-ref') {
+    const kind = property['x-kubephos-secret-kind'] || ''
+    const credentials = state.credentials.filter(item => item.kind === kind)
+    const options = credentials.map(item => `<option value="${escapeText(item.id)}">${escapeText(item.name)} · ${escapeText(item.fingerprint)}</option>`).join('')
+    return `<label class="${width}">${escapeText(title)}<select ${fieldAttribute}${requiredAttribute}${credentials.length ? '' : ' disabled'}>${options || '<option value="">Add a compatible credential first</option>'}</select>${hint}</label>`
+  }
   if (property.enum) {
-    return `<label class="${width}">${escapeText(title)}<select data-schema-property="${escapeText(name)}" data-schema-type="${escapeText(property.type || 'string')}"${requiredAttribute}>${property.enum.map(option => `<option value="${escapeText(option)}"${option === value ? ' selected' : ''}>${escapeText(option)}</option>`).join('')}</select>${hint}</label>`
+    return `<label class="${width}">${escapeText(title)}<select ${fieldAttribute}${requiredAttribute}>${property.enum.map(option => `<option value="${escapeText(option)}"${option === value ? ' selected' : ''}>${escapeText(option)}</option>`).join('')}</select>${hint}</label>`
   }
   if (property.type === 'boolean') {
-    return `<label class="checkbox-field wide"><input type="checkbox" data-schema-property="${escapeText(name)}" data-schema-type="boolean"${value ? ' checked' : ''}>${escapeText(title)}</label>`
+    return `<label class="checkbox-field wide"><input type="checkbox" ${fieldAttribute}${value ? ' checked' : ''}>${escapeText(title)}</label>`
   }
   if (property.type === 'object' || property.type === 'array') {
     const initial = value === '' ? '' : JSON.stringify(value, null, 2)
-    return `<label class="wide">${escapeText(title)}<textarea rows="4" data-schema-property="${escapeText(name)}" data-schema-type="${escapeText(property.type)}"${requiredAttribute}>${escapeText(initial)}</textarea>${hint}</label>`
+    return `<label class="wide">${escapeText(title)}<textarea rows="4" ${fieldAttribute}${requiredAttribute}>${escapeText(initial)}</textarea>${hint}</label>`
   }
   const numeric = property.type === 'integer' || property.type === 'number'
   const bounds = `${property.minimum !== undefined ? ` min="${Number(property.minimum)}"` : ''}${property.maximum !== undefined ? ` max="${Number(property.maximum)}"` : ''}`
   const length = `${property.minLength !== undefined ? ` minlength="${Number(property.minLength)}"` : ''}${property.maxLength !== undefined ? ` maxlength="${Number(property.maxLength)}"` : ''}`
-  return `<label class="${width}">${escapeText(title)}<input type="${numeric ? 'number' : 'text'}" value="${escapeText(value)}" data-schema-property="${escapeText(name)}" data-schema-type="${escapeText(property.type || 'string')}"${bounds}${length}${requiredAttribute}>${hint}</label>`
+  return `<label class="${width}">${escapeText(title)}<input type="${numeric ? 'number' : property.writeOnly ? 'password' : 'text'}" value="${escapeText(value)}" ${fieldAttribute}${bounds}${length}${requiredAttribute}>${hint}</label>`
+}
+
+function openCredentialForm() {
+  const types = credentialTypes()
+  if (!types.length) {
+    toast('No installed plugin declares a credential type.', true)
+    return
+  }
+  const dialog = $('#credential-dialog')
+  dialog.querySelector('form').reset()
+  $('#credential-kind').innerHTML = types.map(value => `<option value="${escapeText(value.kind)}">${escapeText(value.name)}</option>`).join('')
+  renderCredentialFields(types[0].kind)
+  $('#credential-error').textContent = ''
+  dialog.showModal()
+}
+
+function renderCredentialFields(kind) {
+  const definition = credentialTypes().find(value => value.kind === kind)
+  const schema = definition?.schema || {}
+  const required = new Set(schema.required || [])
+  $('#credential-description').textContent = definition?.description || ''
+  $('#credential-fields').innerHTML = Object.entries(schema.properties || {}).map(([name, property]) => schemaField(name, property, required.has(name), 'credential')).join('')
+}
+
+async function createCredential(event) {
+  event.preventDefault()
+  const form = event.currentTarget
+  const submit = $('#credential-submit')
+  submit.disabled = true
+  $('#credential-error').textContent = ''
+  try {
+    await api('/credentials', {
+      method: 'POST',
+      body: JSON.stringify({ name: form.name.value, kind: form.kind.value, value: readValues('#credential-fields', 'credential') })
+    })
+    $('#credential-dialog').close()
+    await loadAll(true)
+    switchView('infrastructure')
+    toast('Credential encrypted and stored.')
+  } catch (error) {
+    $('#credential-error').textContent = (error.body?.issues || []).map(issue => `${issue.path}: ${issue.message}`).join(' ') || error.message
+  } finally {
+    submit.disabled = false
+  }
 }
 
 async function createWorkspace(event) {
@@ -204,7 +277,7 @@ async function createOperation(event) {
         workspaceId: form.workspaceId.value,
         pluginId: form.pluginId.value,
         title: form.title.value,
-        spec: readSchemaValues()
+        spec: readValues('#plugin-fields', 'schema')
       })
     })
     $('#operation-dialog').close()
@@ -219,16 +292,17 @@ async function createOperation(event) {
   }
 }
 
-function readSchemaValues() {
+function readValues(selector, scope) {
   const result = {}
-  $$('#plugin-fields [data-schema-property]').forEach(field => {
-    const type = field.dataset.schemaType
+  $$(`${selector} [data-${scope}-property]`).forEach(field => {
+    const property = field.dataset[`${scope}Property`]
+    const type = field.dataset[`${scope}Type`]
     let value = field.value
     if (type === 'boolean') value = field.checked
     if (type === 'integer') value = Number.parseInt(value, 10)
     if (type === 'number') value = Number(value)
     if ((type === 'object' || type === 'array') && value !== '') value = JSON.parse(value)
-    if (value !== '') result[field.dataset.schemaProperty] = value
+    if (value !== '') result[property] = value
   })
   return result
 }
@@ -412,6 +486,9 @@ $('#refresh-button').addEventListener('click', () => loadAll())
 $('#workspace-form').addEventListener('submit', createWorkspace)
 $('#operation-form').addEventListener('submit', createOperation)
 $('#operation-plugin').addEventListener('change', event => renderPluginFields(event.target.value))
+$('#add-credential-button').addEventListener('click', openCredentialForm)
+$('#credential-form').addEventListener('submit', createCredential)
+$('#credential-kind').addEventListener('change', event => renderCredentialFields(event.target.value))
 window.addEventListener('hashchange', () => switchView(location.hash.slice(1) || 'overview'))
 switchView(location.hash.slice(1) || 'overview')
 loadAll(true)
