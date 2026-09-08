@@ -2,5 +2,6 @@
 coverage.out
 dist/
 node_modules/
+*.tsbuildinfo
 tmp/
 .kubephos/
