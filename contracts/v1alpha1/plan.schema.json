@@ -18,6 +18,7 @@
           "name": { "type": "string", "minLength": 1 },
           "input": {},
           "mutating": { "type": "boolean", "default": false },
+          "cleanup": { "type": "boolean", "default": false },
           "artifactInputs": {
             "type": "array",
             "items": {

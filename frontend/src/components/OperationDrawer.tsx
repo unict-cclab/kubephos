@@ -1,18 +1,20 @@
 import {useCallback, useEffect, useState} from 'react'
 import {request} from '../api'
 import {formatBytes, formatDate, shortID} from '../lib'
-import type {LogEntry, Operation, Session} from '../types'
+import type {LogEntry, Operation, Plugin, Session} from '../types'
 import {Status} from './Views'
 
 interface Props {
   operationID: string | null
   session: Session
+  plugins: Plugin[]
   close: () => void
+  open: (id: string) => void
   changed: () => Promise<void>
   notify: (message: string, error?: boolean) => void
 }
 
-export function OperationDrawer({operationID, session, close, changed, notify}: Props) {
+export function OperationDrawer({operationID, session, plugins, close, open, changed, notify}: Props) {
   const [operation, setOperation] = useState<Operation | null>(null)
   const [logs, setLogs] = useState<LogEntry[]>([])
   const [pending, setPending] = useState(false)
@@ -82,15 +84,31 @@ export function OperationDrawer({operationID, session, close, changed, notify}: 
     }
   }
 
+  const prepareCleanup = async () => {
+    if (!operation) return
+    setPending(true)
+    try {
+      const created = await request<Operation>(`/operations/${operation.id}/cleanup`, {method: 'POST', body: '{}'}, session.csrfToken)
+      await changed()
+      open(created.id)
+      notify('Cleanup plan validated. Review and confirm it before execution.')
+    } catch (cause) {
+      notify(cause instanceof Error ? cause.message : 'Could not prepare cleanup.', true)
+    } finally {
+      setPending(false)
+    }
+  }
+
   const canQueue = operation?.status === 'ready'
   const canCancel = operation && ['ready', 'queued', 'prechecking', 'running', 'verifying'].includes(operation.status)
+  const canCleanup = operation && terminal(operation.status) && !operation.plan.steps.some(step => step.cleanup) && plugins.find(plugin => plugin.id === operation.pluginId)?.capabilities?.includes('lifecycle.cleanup')
   return <aside className={`drawer ${operationID ? 'open' : ''}`} aria-hidden={!operationID}>
     <button className="drawer-backdrop" onClick={close} aria-label="Close operation details" />
     <div className="drawer-panel" role="dialog" aria-modal="true" aria-label="Operation details">
       <div className="drawer-header"><div><p className="eyebrow">OPERATION</p><h2>{operation?.title ?? 'Loading…'}</h2></div><button className="icon-button" onClick={close} aria-label="Close">×</button></div>
       {operation && <>
         <div className="detail-summary"><div><Status value={operation.status} /><p>{shortID(operation.id)} · {formatDate(operation.createdAt)}</p></div></div>
-        <div className="detail-actions">{canQueue && <button className="button primary" disabled={pending} onClick={queue}>Confirm plan and start</button>}{canCancel && <button className="button danger" disabled={pending} onClick={cancel}>Cancel</button>}</div>
+        <div className="detail-actions">{canQueue && <button className="button primary" disabled={pending} onClick={queue}>Confirm plan and start</button>}{canCleanup && <button className="button danger" disabled={pending} onClick={prepareCleanup}>Prepare cleanup</button>}{canCancel && <button className="button danger" disabled={pending} onClick={cancel}>Cancel</button>}</div>
         {operation.error && <div className="validation-item error">{operation.error}</div>}
         <p className="eyebrow">VALIDATED PLAN</p>
         <div className="plan-hash" title={operation.planHash}>SHA-256 {operation.planHash}</div>

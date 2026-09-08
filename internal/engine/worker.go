@@ -141,6 +141,13 @@ func (w *Worker) process(parent context.Context, owner string, operation domain.
 			w.fail(parent, operation.ID, step.ID, err)
 			return
 		}
+		if planned.Cleanup {
+			if err := w.runCleanupStep(runCtx, operation, step.ID, runtimeStep, plugin, healthRaw, log); err != nil {
+				w.stopOrFail(parent, operation.ID, step.ID, err)
+				return
+			}
+			continue
+		}
 		result, err := plugin.Execute(runCtx, runtimeStep, log)
 		if err != nil {
 			err = w.cleanup(operation, runtimeStep, result, plugin, err)
@@ -242,6 +249,32 @@ func (w *Worker) process(parent context.Context, owner string, operation domain.
 	if err := w.store.CompleteOperation(runCtx, operation.ID); err != nil {
 		slog.Error("complete operation", "operation", operation.ID, "error", err)
 	}
+}
+
+func (w *Worker) runCleanupStep(ctx context.Context, operation domain.Operation, stepID string, step domain.PlanStep, plugin plugins.Plugin, precheck json.RawMessage, log plugins.Logger) error {
+	if err := plugin.Cleanup(ctx, step, nil, log); err != nil {
+		return fmt.Errorf("cleanup execution failed: %w", err)
+	}
+	if err := w.store.SetStepState(ctx, operation.ID, stepID, domain.StepVerifying, nil, precheck, ""); err != nil {
+		return err
+	}
+	if err := w.store.SetOperationStatus(ctx, operation.ID, domain.OperationVerifying, fmt.Sprintf("Verifying %s.", step.Name)); err != nil {
+		return err
+	}
+	health, err := plugin.Verify(ctx, step, nil, log)
+	if err != nil {
+		return err
+	}
+	healthRaw, _ := json.Marshal(health)
+	if health.Status != domain.HealthHealthy {
+		return fmt.Errorf("cleanup health gate failed: %s", health.Summary)
+	}
+	if len(step.Effects) > 0 {
+		if err := w.completeEffects(ctx, operation, step, json.RawMessage(`{"resources":[]}`)); err != nil {
+			return err
+		}
+	}
+	return w.store.SetStepState(ctx, operation.ID, stepID, domain.StepSucceeded, json.RawMessage(`{"cleanup":"completed"}`), healthRaw, "")
 }
 
 func persistedStepResult(step domain.PlanStep, result json.RawMessage) (json.RawMessage, error) {

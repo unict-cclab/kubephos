@@ -36,7 +36,7 @@ func TestDiscoveryUsesOnlyGetAndProtectsResources(t *testing.T) {
 	}))
 	defer server.Close()
 	secret := json.RawMessage(`{"tokenId":"test@pam!kubephos","tokenSecret":"top-secret"}`)
-	spec := json.RawMessage(`{"endpoint":"` + server.URL + `","credentialRef":"cred_test","verifyTLS":false}`)
+	spec := json.RawMessage(`{"endpoint":"` + server.URL + `","credentialRef":"cred_test","verifyTLS":false,"addressStart":"10.10.0.10","prefixLength":24,"gateway":"10.10.0.1","dnsServer":"1.1.1.1"}`)
 	invocation := Invocation{Input: spec, Secrets: map[string]json.RawMessage{"cred_test": secret}}
 	report := (Plugin{}).Validate(context.Background(), invocation)
 	if !report.Valid {
@@ -70,6 +70,18 @@ func TestDiscoveryUsesOnlyGetAndProtectsResources(t *testing.T) {
 	for _, method := range methods {
 		if method != http.MethodGet {
 			t.Fatalf("unexpected method %s", method)
+		}
+	}
+}
+
+func TestValidateNetworkProfileRejectsUnusablePool(t *testing.T) {
+	for _, spec := range []Spec{
+		{AddressStart: "invalid", PrefixLength: 24, Gateway: "10.10.0.1", DNSServer: "1.1.1.1"},
+		{AddressStart: "10.10.0.1", PrefixLength: 24, Gateway: "10.10.0.1", DNSServer: "1.1.1.1"},
+		{AddressStart: "10.10.0.10", PrefixLength: 24, Gateway: "10.11.0.1", DNSServer: "1.1.1.1"},
+	} {
+		if err := validateNetworkProfile(spec); err == nil {
+			t.Fatalf("expected invalid network profile for %#v", spec)
 		}
 	}
 }

@@ -68,6 +68,7 @@ spec:
     - cluster.bootstrap
     - cluster.preflight
     - cluster.cleanup
+    - lifecycle.cleanup
   permissions:
     - network.ssh
     - cluster.admin

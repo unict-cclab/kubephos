@@ -25,6 +25,10 @@ spec:
       - endpoint
       - credentialRef
       - verifyTLS
+      - addressStart
+      - prefixLength
+      - gateway
+      - dnsServer
     properties:
       endpoint:
         type: string
@@ -42,6 +46,22 @@ spec:
         title: Verify TLS certificate
         description: Disable only for a development server using a private certificate.
         default: true
+      addressStart:
+        type: string
+        title: First managed VM address
+        description: First free IPv4 address reserved for KubePhos machines.
+      prefixLength:
+        type: integer
+        title: Network prefix length
+        minimum: 8
+        maximum: 30
+        default: 24
+      gateway:
+        type: string
+        title: Network gateway
+      dnsServer:
+        type: string
+        title: DNS server
   credentialSchemas:
     - kind: proxmox-api-token
       name: Proxmox API token

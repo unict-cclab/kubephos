@@ -55,8 +55,20 @@ func TestBootstrapValidatesInstallsVerifiesAndCleansCluster(t *testing.T) {
 	if decoded.ClusterConnection.Spec.Server != "https://10.20.0.10:6443" || strings.Contains(decoded.ClusterConnection.Spec.Kubeconfig, "127.0.0.1") || len(decoded.ClusterInventory.Spec.Nodes) != 3 {
 		t.Fatalf("unexpected cluster result %#v", decoded)
 	}
+	step.Cleanup = true
+	health, err = plugin.Precheck(context.Background(), step, func(string, string) error { return nil })
+	if err != nil || health.Status != domain.HealthHealthy {
+		t.Fatalf("cleanup precheck failed %#v %v", health, err)
+	}
 	if err := plugin.Cleanup(context.Background(), step, result, func(string, string) error { return nil }); err != nil {
 		t.Fatal(err)
+	}
+	if err := plugin.Cleanup(context.Background(), step, result, func(string, string) error { return nil }); err != nil {
+		t.Fatalf("repeated cleanup must succeed: %v", err)
+	}
+	health, err = plugin.Verify(context.Background(), step, nil, func(string, string) error { return nil })
+	if err != nil || health.Status != domain.HealthHealthy {
+		t.Fatalf("cleanup verification failed %#v %v", health, err)
 	}
 	runner.lock.Lock()
 	defer runner.lock.Unlock()
@@ -85,6 +97,8 @@ func (r *fakeRunner) Run(_ context.Context, target machine, _ machineAccess, com
 	r.lock.Lock()
 	defer r.lock.Unlock()
 	switch {
+	case command == "sudo -n true":
+		return "", nil
 	case strings.HasPrefix(command, "sudo -n true"):
 		if _, exists := r.installed[target.Name]; exists {
 			return "", errors.New("k3s already installed")
@@ -116,6 +130,11 @@ func (r *fakeRunner) Run(_ context.Context, target machine, _ machineAccess, com
 		return "apiVersion: v1\nkind: Config\nclusters:\n  - cluster:\n      server: https://127.0.0.1:6443\nusers:\n  - name: default\n    user:\n      token: test\ncontexts:\n  - name: default\n    context:\n      cluster: default\n      user: default\ncurrent-context: default\n", nil
 	case strings.HasPrefix(command, "if [ -x /usr/local/bin/k3s-agent-uninstall.sh ]"):
 		delete(r.installed, target.Name)
+		return "", nil
+	case command == "test ! -x /usr/local/bin/k3s && test ! -e /etc/systemd/system/k3s.service && test ! -e /etc/systemd/system/k3s-agent.service":
+		if _, exists := r.installed[target.Name]; exists {
+			return "", errors.New("k3s remains installed")
+		}
 		return "", nil
 	default:
 		return "", fmt.Errorf("unexpected command %q", command)

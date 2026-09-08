@@ -80,3 +80,21 @@ func TestResolveCatalogRequiresPermission(t *testing.T) {
 		t.Fatalf("unexpected catalog result: %#v", result)
 	}
 }
+
+func TestReferenceResolutionExcludesVerifiedArtifactContents(t *testing.T) {
+	payload, err := referenceResolutionPayload([]byte(`{"step":{"input":{"machineSetRef":"art_one"},"resolvedInputs":{"machines":{"value":{"connectionRef":"conn_provider"}},"access":{"value":{"credentialRef":"cred_private"}}}}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	connectionRefs := map[string]bool{}
+	credentialRefs := map[string]bool{}
+	var value any
+	if err := json.Unmarshal(payload, &value); err != nil {
+		t.Fatal(err)
+	}
+	collectRefs(value, "conn_", connectionRefs)
+	collectRefs(value, "cred_", credentialRefs)
+	if len(connectionRefs) != 0 || len(credentialRefs) != 0 {
+		t.Fatalf("artifact values leaked into reference resolution: %s", payload)
+	}
+}

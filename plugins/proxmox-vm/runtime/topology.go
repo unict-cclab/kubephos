@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
@@ -27,7 +28,15 @@ import (
 
 const topologyPluginID = "io.kubephos.infrastructure.proxmox.topology"
 
-type TopologyPlugin struct{}
+type TopologyPlugin struct {
+	SSH sshAccess
+}
+
+type sshAccess interface {
+	Wait(context.Context, string, string, string, time.Duration) error
+}
+
+type networkSSHAccess struct{}
 
 type TopologySpec struct {
 	ConnectionRef    string `json:"connectionRef"`
@@ -50,13 +59,17 @@ type topologyStepInput struct {
 	Cores         int              `json:"cores"`
 	MemoryMiB     int              `json:"memoryMiB"`
 	SSHUser       string           `json:"sshUser"`
+	PrefixLength  int              `json:"prefixLength"`
+	Gateway       string           `json:"gateway"`
+	DNSServer     string           `json:"dnsServer"`
 	Marker        string           `json:"marker"`
 	Machines      []plannedMachine `json:"machines"`
 }
 
 type plannedMachine struct {
-	VMID int    `json:"vmid"`
-	Name string `json:"name"`
+	VMID    int    `json:"vmid"`
+	Name    string `json:"name"`
+	Address string `json:"address"`
 }
 
 type topologyResult struct {
@@ -125,7 +138,7 @@ func (TopologyPlugin) Manifest() plugins.Manifest {
 		Description:     "Creates a validated group of isolated machines from one Proxmox template.",
 		Schema:          json.RawMessage(`{"type":"object","additionalProperties":false,"required":["connectionRef","node","templateVMID","baseVMID","namePrefix","machineCount","cores","memoryMiB","sshUser","cleanupAfterTest"],"properties":{"connectionRef":{"type":"string","title":"Proxmox connection","format":"kubephos-connection-ref","x-kubephos-provider":"proxmox"},"node":{"type":"string","title":"Proxmox node","minLength":1,"maxLength":64},"templateVMID":{"type":"integer","title":"Template VMID","minimum":100,"maximum":999999999},"baseVMID":{"type":"integer","title":"First new VMID","minimum":100,"maximum":999999988},"namePrefix":{"type":"string","title":"Machine group name","pattern":"^[a-z0-9][a-z0-9-]{0,19}$","default":"cluster"},"machineCount":{"type":"integer","title":"Number of machines","minimum":1,"maximum":12,"default":3},"cores":{"type":"integer","title":"CPU cores per machine","minimum":1,"maximum":32,"default":2},"memoryMiB":{"type":"integer","title":"Memory MiB per machine","minimum":512,"maximum":131072,"default":4096},"sshUser":{"type":"string","title":"SSH user","pattern":"^[a-z_][a-z0-9_-]{0,31}$","default":"ubuntu"},"cleanupAfterTest":{"type":"boolean","title":"Remove machines after validation","default":false}}}`),
 		ArtifactOutputs: []domain.ArtifactContract{{Type: "MachineSet", Version: "v1alpha1"}, {Type: "MachineAccess", Version: "v1alpha1"}},
-		Capabilities:    []string{"infrastructure.provision", "infrastructure.deprovision", "infrastructure.preflight"},
+		Capabilities:    []string{"infrastructure.provision", "infrastructure.deprovision", "infrastructure.preflight", "lifecycle.cleanup"},
 		Permissions:     []string{"network.proxmox.read", "network.proxmox.write", "secrets.read:proxmox-api-token"},
 	}
 }
@@ -138,6 +151,9 @@ func (TopologyPlugin) Validate(ctx context.Context, invocation Invocation) domai
 	}
 	if issue := validateTopologyValues(spec); issue != nil {
 		return invalidReport(report, issue.Path, issue.Message)
+	}
+	if _, err := topologyAddresses(configuration, spec.MachineCount); err != nil {
+		return invalidReport(report, "connectionRef", err.Error())
 	}
 	resources, err := connection.resources(ctx)
 	if err != nil {
@@ -166,12 +182,20 @@ func (TopologyPlugin) Validate(ctx context.Context, invocation Invocation) domai
 	return report
 }
 
-func (TopologyPlugin) Plan(ctx context.Context, raw json.RawMessage) (domain.Plan, error) {
+func (TopologyPlugin) Plan(ctx context.Context, invocation Invocation) (domain.Plan, error) {
 	if err := ctx.Err(); err != nil {
 		return domain.Plan{}, err
 	}
 	var spec TopologySpec
-	if err := json.Unmarshal(raw, &spec); err != nil {
+	if err := json.Unmarshal(invocation.Input, &spec); err != nil {
+		return domain.Plan{}, err
+	}
+	configuration, err := resolveConnection(spec.ConnectionRef, invocation.Connections)
+	if err != nil {
+		return domain.Plan{}, err
+	}
+	addresses, err := topologyAddresses(configuration, spec.MachineCount)
+	if err != nil {
 		return domain.Plan{}, err
 	}
 	markerBytes := make([]byte, 8)
@@ -182,10 +206,10 @@ func (TopologyPlugin) Plan(ctx context.Context, raw json.RawMessage) (domain.Pla
 	machines := make([]plannedMachine, spec.MachineCount)
 	createEffects := make([]domain.ResourceEffect, spec.MachineCount)
 	for index := range machines {
-		machines[index] = plannedMachine{VMID: spec.BaseVMID + index, Name: fmt.Sprintf("kubephos-%s-%02d-%s", spec.NamePrefix, index+1, marker[:6])}
+		machines[index] = plannedMachine{VMID: spec.BaseVMID + index, Name: fmt.Sprintf("kubephos-%s-%02d-%s", spec.NamePrefix, index+1, marker[:6]), Address: addresses[index]}
 		createEffects[index] = domain.ResourceEffect{Action: "create", ExternalID: externalID(machines[index].VMID), Kind: "virtual-machine", Name: machines[index].Name}
 	}
-	base := topologyStepInput{ConnectionRef: spec.ConnectionRef, Node: spec.Node, TemplateVMID: spec.TemplateVMID, Cores: spec.Cores, MemoryMiB: spec.MemoryMiB, SSHUser: spec.SSHUser, Marker: marker, Machines: machines}
+	base := topologyStepInput{ConnectionRef: spec.ConnectionRef, Node: spec.Node, TemplateVMID: spec.TemplateVMID, Cores: spec.Cores, MemoryMiB: spec.MemoryMiB, SSHUser: spec.SSHUser, PrefixLength: configuration.PrefixLength, Gateway: configuration.Gateway, DNSServer: configuration.DNSServer, Marker: marker, Machines: machines}
 	create := base
 	create.Action = "provision"
 	createInput, err := json.Marshal(create)
@@ -232,6 +256,24 @@ func (TopologyPlugin) Precheck(ctx context.Context, step domain.PlanStep, secret
 	if err != nil {
 		return unhealthy("Proxmox inventory is unavailable", "api", "unreachable"), nil
 	}
+	if step.Cleanup {
+		present := 0
+		for _, planned := range input.Machines {
+			resource, found := findVM(resources, planned.VMID)
+			if !found {
+				continue
+			}
+			if resource.Node != input.Node {
+				return unhealthy(fmt.Sprintf("Managed VM %d was found on another node", planned.VMID), "target", "mismatch"), nil
+			}
+			present++
+			configuration, err := connection.config(ctx, input.Node, planned.VMID)
+			if err != nil || !cleanupOwnedTopology(configuration, input, planned) {
+				return unhealthy(fmt.Sprintf("VM %d ownership does not match the validated topology", planned.VMID), "ownership", "rejected"), nil
+			}
+		}
+		return domain.HealthReport{Status: domain.HealthHealthy, Summary: "Every present cleanup target has verified KubePhos ownership", Checks: map[string]string{"api": "healthy", "ownership": "verified", "present": strconv.Itoa(present), "absent": strconv.Itoa(len(input.Machines) - present)}}, nil
+	}
 	switch input.Action {
 	case "provision":
 		if err := validatePlannedInventory(resources, input); err != nil {
@@ -254,7 +296,7 @@ func (TopologyPlugin) Precheck(ctx context.Context, step domain.PlanStep, secret
 	return domain.HealthReport{Status: domain.HealthHealthy, Summary: "All topology preconditions are satisfied", Checks: map[string]string{"api": "healthy", "node": "online", "machines": strconv.Itoa(len(input.Machines))}}, nil
 }
 
-func (TopologyPlugin) Execute(ctx context.Context, step domain.PlanStep, secrets, connections map[string]json.RawMessage, log plugins.Logger) (json.RawMessage, error) {
+func (plugin TopologyPlugin) Execute(ctx context.Context, step domain.PlanStep, secrets, connections map[string]json.RawMessage, log plugins.Logger) (json.RawMessage, error) {
 	input, connection, err := parseTopologyStep(step, secrets, connections)
 	if err != nil {
 		return nil, err
@@ -281,19 +323,19 @@ func (TopologyPlugin) Execute(ctx context.Context, step domain.PlanStep, secrets
 		}
 		created = append(created, planned)
 	}
-	result, err := topologyExecutionResult(ctx, connection, input, privateKey, publicKey)
+	result, err := topologyExecutionResult(ctx, connection, input, privateKey, publicKey, plugin.sshAccess())
 	if err != nil {
 		return nil, errors.Join(err, cleanupTopology(context.WithoutCancel(ctx), connection, input, log))
 	}
 	return json.Marshal(result)
 }
 
-func (TopologyPlugin) Verify(ctx context.Context, step domain.PlanStep, raw json.RawMessage, secrets, connections map[string]json.RawMessage, log plugins.Logger) (domain.HealthReport, error) {
+func (plugin TopologyPlugin) Verify(ctx context.Context, step domain.PlanStep, raw json.RawMessage, secrets, connections map[string]json.RawMessage, log plugins.Logger) (domain.HealthReport, error) {
 	input, connection, err := parseTopologyStep(step, secrets, connections)
 	if err != nil {
 		return domain.HealthReport{}, err
 	}
-	if input.Action == "delete" {
+	if step.Cleanup || input.Action == "delete" {
 		for _, planned := range input.Machines {
 			_, err := connection.vm(ctx, planned.VMID)
 			if err == nil {
@@ -322,9 +364,12 @@ func (TopologyPlugin) Verify(ctx context.Context, step domain.PlanStep, raw json
 		if err != nil || !ownedTopology(configuration, input, planned) {
 			return unhealthy(fmt.Sprintf("VM %d ownership could not be verified", planned.VMID), "ownership", "rejected"), nil
 		}
-		if !configuredTopologyAccess(configuration, input, result.MachineAccess.Spec.PublicKey) {
+		if !configuredTopologyAccess(configuration, input, planned, result.MachineAccess.Spec.PublicKey) {
 			return unhealthy(fmt.Sprintf("VM %d SSH and network initialization is incomplete", planned.VMID), "access", "rejected"), nil
 		}
+	}
+	if err := verifyTopologySSH(ctx, input, result.MachineAccess.Spec.PrivateKey, 30*time.Second, plugin.sshAccess()); err != nil {
+		return unhealthy(err.Error(), "ssh", "unreachable"), nil
 	}
 	if err := log("info", "All machines, addresses, ownership markers and access artifacts are verified"); err != nil {
 		return domain.HealthReport{}, err
@@ -441,7 +486,8 @@ func createTopologyMachine(ctx context.Context, connection *client, input topolo
 	values := url.Values{
 		"cores": {strconv.Itoa(input.Cores)}, "memory": {strconv.Itoa(input.MemoryMiB)}, "tags": {managedTag},
 		"description": {topologyDescription(input.Marker)}, "onboot": {"1"}, "ciuser": {input.SSHUser},
-		"sshkeys": {strings.TrimSpace(publicKey)}, "ipconfig0": {"ip=dhcp"}, "agent": {"enabled=1"}, "ciupgrade": {"0"},
+		"sshkeys": {encodeProxmoxSSHKey(publicKey)}, "ipconfig0": {staticIPConfig(planned.Address, input.PrefixLength, input.Gateway)},
+		"nameserver": {input.DNSServer}, "agent": {"enabled=1"}, "ciupgrade": {"0"},
 	}
 	upid, err = connection.task(ctx, http.MethodPost, fmt.Sprintf("/api2/json/nodes/%s/qemu/%d/config", url.PathEscape(input.Node), planned.VMID), values)
 	if err != nil {
@@ -457,7 +503,10 @@ func createTopologyMachine(ctx context.Context, connection *client, input topolo
 	return connection.waitTask(ctx, input.Node, upid)
 }
 
-func topologyExecutionResult(ctx context.Context, connection *client, input topologyStepInput, privateKey, publicKey string) (topologyResult, error) {
+func topologyExecutionResult(ctx context.Context, connection *client, input topologyStepInput, privateKey, publicKey string, access sshAccess) (topologyResult, error) {
+	if err := verifyTopologySSH(ctx, input, privateKey, 5*time.Minute, access); err != nil {
+		return topologyResult{}, err
+	}
 	resources := make([]domain.DiscoveredResource, 0, len(input.Machines))
 	machines := make([]machine, 0, len(input.Machines))
 	for _, planned := range input.Machines {
@@ -465,13 +514,9 @@ func topologyExecutionResult(ctx context.Context, connection *client, input topo
 		if err != nil {
 			return topologyResult{}, err
 		}
-		address, err := connection.waitIPv4(ctx, input.Node, planned.VMID, 3*time.Minute)
-		if err != nil {
-			return topologyResult{}, fmt.Errorf("resolve address for VM %d: %w", planned.VMID, err)
-		}
-		metadata, _ := json.Marshal(map[string]any{"vmid": planned.VMID, "node": input.Node, "type": "qemu", "templateVMID": input.TemplateVMID, "address": address, "ownershipMarker": input.Marker})
+		metadata, _ := json.Marshal(map[string]any{"vmid": planned.VMID, "node": input.Node, "type": "qemu", "templateVMID": input.TemplateVMID, "address": planned.Address, "ownershipMarker": input.Marker})
 		resources = append(resources, domain.DiscoveredResource{ExternalID: externalID(planned.VMID), Kind: "virtual-machine", Name: planned.Name, State: resource.Status, Metadata: metadata})
-		machines = append(machines, machine{ID: externalID(planned.VMID), Name: planned.Name, Node: input.Node, Address: address, SSHPort: 22, SSHUser: input.SSHUser, State: resource.Status})
+		machines = append(machines, machine{ID: externalID(planned.VMID), Name: planned.Name, Node: input.Node, Address: planned.Address, SSHPort: 22, SSHUser: input.SSHUser, State: resource.Status})
 	}
 	name := strings.TrimPrefix(input.Machines[0].Name, "kubephos-")
 	return topologyResult{
@@ -507,7 +552,7 @@ func validateTopologyResult(input topologyStepInput, result topologyResult) erro
 	for _, value := range result.MachineSet.Spec.Machines {
 		planned, ok := plannedByID[value.ID]
 		address := net.ParseIP(value.Address)
-		if !ok || seen[value.ID] || value.Name != planned.Name || value.Node != input.Node || value.SSHUser != input.SSHUser || value.SSHPort != 22 || value.State != "running" || address == nil || address.To4() == nil || address.IsLoopback() || address.IsLinkLocalUnicast() {
+		if !ok || seen[value.ID] || value.Name != planned.Name || value.Node != input.Node || value.Address != planned.Address || value.SSHUser != input.SSHUser || value.SSHPort != 22 || value.State != "running" || address == nil || address.To4() == nil || address.IsLoopback() || address.IsLinkLocalUnicast() {
 			return fmt.Errorf("machine %q does not match the validated topology", value.ID)
 		}
 		seen[value.ID] = true
@@ -544,6 +589,14 @@ func cleanupTopology(ctx context.Context, connection *client, input topologyStep
 	sort.Slice(values, func(i, j int) bool { return values[i].VMID > values[j].VMID })
 	var failures []error
 	for _, planned := range values {
+		if _, err := connection.vm(ctx, planned.VMID); err != nil {
+			var responseError apiError
+			if errors.As(err, &responseError) && responseError.Status == http.StatusNotFound {
+				continue
+			}
+			failures = append(failures, fmt.Errorf("inspect VM %d before cleanup: %w", planned.VMID, err))
+			continue
+		}
 		configuration, err := connection.config(ctx, input.Node, planned.VMID)
 		if err != nil {
 			var responseError apiError
@@ -553,7 +606,7 @@ func cleanupTopology(ctx context.Context, connection *client, input topologyStep
 			failures = append(failures, fmt.Errorf("inspect VM %d before cleanup: %w", planned.VMID, err))
 			continue
 		}
-		if !ownedTopology(configuration, input, planned) {
+		if !cleanupOwnedTopology(configuration, input, planned) {
 			failures = append(failures, fmt.Errorf("cleanup refused for VM %d because ownership does not match", planned.VMID))
 			continue
 		}
@@ -573,12 +626,136 @@ func ownedTopology(configuration vmConfig, input topologyStepInput, planned plan
 	return configuration.Name == planned.Name && slices.Contains(tags, managedTag) && configuration.Description == topologyDescription(input.Marker) && input.Marker != ""
 }
 
-func configuredTopologyAccess(configuration vmConfig, input topologyStepInput, publicKey string) bool {
+func cleanupOwnedTopology(configuration vmConfig, input topologyStepInput, planned plannedMachine) bool {
+	if ownedTopology(configuration, input, planned) {
+		return true
+	}
+	if input.Marker == "" || configuration.Name != planned.Name {
+		return false
+	}
+	return configuration.Description == "" || configuration.Description == topologyDescription(input.Marker)
+}
+
+func configuredTopologyAccess(configuration vmConfig, input topologyStepInput, planned plannedMachine, publicKey string) bool {
 	storedKey := strings.TrimSpace(configuration.SSHKeys)
 	if decoded, err := url.QueryUnescape(storedKey); err == nil {
 		storedKey = strings.TrimSpace(decoded)
 	}
-	return configuration.CIUser == input.SSHUser && storedKey == strings.TrimSpace(publicKey) && strings.Contains(configuration.IPConfig0, "ip=dhcp")
+	return configuration.CIUser == input.SSHUser && storedKey == strings.TrimSpace(publicKey) && configuration.IPConfig0 == staticIPConfig(planned.Address, input.PrefixLength, input.Gateway) && configuration.NameServer == input.DNSServer
+}
+
+func (plugin TopologyPlugin) sshAccess() sshAccess {
+	if plugin.SSH != nil {
+		return plugin.SSH
+	}
+	return networkSSHAccess{}
+}
+
+func topologyAddresses(configuration connectionConfig, count int) ([]string, error) {
+	start := net.ParseIP(configuration.AddressStart).To4()
+	gateway := net.ParseIP(configuration.Gateway).To4()
+	dns := net.ParseIP(configuration.DNSServer).To4()
+	if start == nil || gateway == nil || dns == nil {
+		return nil, errors.New("managed network profile requires valid IPv4 addresses")
+	}
+	if configuration.PrefixLength < 8 || configuration.PrefixLength > 30 {
+		return nil, errors.New("managed network prefix must be between 8 and 30")
+	}
+	if count < 1 {
+		return nil, errors.New("managed network allocation must contain at least one address")
+	}
+	mask := binary.BigEndian.Uint32(net.CIDRMask(configuration.PrefixLength, 32))
+	startValue := binary.BigEndian.Uint32(start)
+	gatewayValue := binary.BigEndian.Uint32(gateway)
+	networkValue := startValue & mask
+	broadcastValue := networkValue | ^mask
+	if gatewayValue&mask != networkValue {
+		return nil, errors.New("managed network gateway is outside the address pool subnet")
+	}
+	addresses := make([]string, count)
+	for index := range count {
+		value := uint64(startValue) + uint64(index)
+		if value > uint64(^uint32(0)) || uint32(value) <= networkValue || uint32(value) >= broadcastValue || uint32(value) == gatewayValue {
+			return nil, errors.New("managed network address pool does not contain enough usable addresses")
+		}
+		address := make(net.IP, net.IPv4len)
+		binary.BigEndian.PutUint32(address, uint32(value))
+		addresses[index] = address.String()
+	}
+	return addresses, nil
+}
+
+func staticIPConfig(address string, prefixLength int, gateway string) string {
+	return fmt.Sprintf("ip=%s/%d,gw=%s", address, prefixLength, gateway)
+}
+
+func verifyTopologySSH(ctx context.Context, input topologyStepInput, privateKey string, timeout time.Duration, access sshAccess) error {
+	type result struct {
+		vmid int
+		err  error
+	}
+	results := make(chan result, len(input.Machines))
+	for _, planned := range input.Machines {
+		planned := planned
+		go func() {
+			results <- result{vmid: planned.VMID, err: access.Wait(ctx, planned.Address, input.SSHUser, privateKey, timeout)}
+		}()
+	}
+	var failures []error
+	for range input.Machines {
+		value := <-results
+		if value.err != nil {
+			failures = append(failures, fmt.Errorf("verify SSH access for VM %d: %w", value.vmid, value.err))
+		}
+	}
+	return errors.Join(failures...)
+}
+
+func (networkSSHAccess) Wait(ctx context.Context, address, user, privateKey string, timeout time.Duration) error {
+	signer, err := ssh.ParsePrivateKey([]byte(privateKey))
+	if err != nil {
+		return errors.New("machine access private key is invalid")
+	}
+	deadline := time.Now().Add(timeout)
+	var lastErr error
+	for {
+		dialer := net.Dialer{Timeout: 10 * time.Second}
+		connection, err := dialer.DialContext(ctx, "tcp", net.JoinHostPort(address, "22"))
+		if err == nil {
+			config := &ssh.ClientConfig{User: user, Auth: []ssh.AuthMethod{ssh.PublicKeys(signer)}, HostKeyCallback: ssh.InsecureIgnoreHostKey(), Timeout: 10 * time.Second}
+			sshConnection, channels, requests, handshakeErr := ssh.NewClientConn(connection, net.JoinHostPort(address, "22"), config)
+			if handshakeErr == nil {
+				client := ssh.NewClient(sshConnection, channels, requests)
+				session, sessionErr := client.NewSession()
+				if sessionErr == nil {
+					sessionErr = session.Run("true")
+					_ = session.Close()
+				}
+				_ = client.Close()
+				if sessionErr == nil {
+					return nil
+				}
+				lastErr = sessionErr
+			} else {
+				_ = connection.Close()
+				lastErr = handshakeErr
+			}
+		} else {
+			lastErr = err
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("SSH did not become ready at %s: %w", address, lastErr)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(5 * time.Second):
+		}
+	}
+}
+
+func encodeProxmoxSSHKey(value string) string {
+	return strings.ReplaceAll(url.QueryEscape(strings.TrimSpace(value)), "+", "%20")
 }
 
 func topologyDescription(marker string) string {

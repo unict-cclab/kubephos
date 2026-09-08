@@ -506,7 +506,7 @@ func (s *Store) SetOperationManagedResourcesState(ctx context.Context, operation
 		SET state = $2, updated_at = now(), last_seen_at = now()
 		WHERE created_by_operation_id = $1
 		  AND ownership = 'managed'
-		  AND ($2 <> 'failed' OR state <> 'cleaned')
+		  AND ($2 <> 'failed' OR state NOT IN ('cleaned', 'deleted'))
 	`, operationID, state)
 	return err
 }

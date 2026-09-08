@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -27,6 +28,10 @@ type Spec struct {
 	Endpoint      string `json:"endpoint"`
 	CredentialRef string `json:"credentialRef"`
 	VerifyTLS     bool   `json:"verifyTLS"`
+	AddressStart  string `json:"addressStart"`
+	PrefixLength  int    `json:"prefixLength"`
+	Gateway       string `json:"gateway"`
+	DNSServer     string `json:"dnsServer"`
 }
 
 type credential struct {
@@ -59,6 +64,11 @@ func (Plugin) Validate(ctx context.Context, invocation Invocation) domain.Valida
 		report.Issues = append(report.Issues, domain.ValidationIssue{Level: "error", Path: "$", Message: err.Error()})
 		return report
 	}
+	if err := validateNetworkProfile(spec); err != nil {
+		report.Valid = false
+		report.Issues = append(report.Issues, domain.ValidationIssue{Level: "error", Path: "addressStart", Message: err.Error()})
+		return report
+	}
 	version, err := connection.version(ctx)
 	if err != nil {
 		report.Valid = false
@@ -87,6 +97,27 @@ func (Plugin) Validate(ctx context.Context, invocation Invocation) domain.Valida
 	}
 	report.Issues = append(report.Issues, domain.ValidationIssue{Level: "info", Message: fmt.Sprintf("Proxmox %s is reachable and %d node(s) are online. Discovery is read-only.", version.Version, online)})
 	return report
+}
+
+func validateNetworkProfile(spec Spec) error {
+	address := net.ParseIP(spec.AddressStart)
+	gateway := net.ParseIP(spec.Gateway)
+	dns := net.ParseIP(spec.DNSServer)
+	if address == nil || address.To4() == nil || gateway == nil || gateway.To4() == nil || dns == nil || dns.To4() == nil {
+		return errors.New("the managed network profile requires valid IPv4 addresses")
+	}
+	if spec.PrefixLength < 8 || spec.PrefixLength > 30 {
+		return errors.New("the managed network prefix must be between 8 and 30")
+	}
+	network := &net.IPNet{IP: address.Mask(net.CIDRMask(spec.PrefixLength, 32)), Mask: net.CIDRMask(spec.PrefixLength, 32)}
+	broadcast := append(net.IP(nil), network.IP...)
+	for index := range broadcast {
+		broadcast[index] |= ^network.Mask[index]
+	}
+	if !network.Contains(gateway) || address.Equal(network.IP) || address.Equal(broadcast) || gateway.Equal(network.IP) || gateway.Equal(broadcast) || address.Equal(gateway) {
+		return errors.New("the address pool start and gateway must be distinct usable addresses in the managed subnet")
+	}
+	return nil
 }
 
 func (Plugin) Plan(ctx context.Context, raw json.RawMessage) (domain.Plan, error) {

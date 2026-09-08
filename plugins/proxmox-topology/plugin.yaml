@@ -98,6 +98,7 @@ spec:
     - infrastructure.provision
     - infrastructure.deprovision
     - infrastructure.preflight
+    - lifecycle.cleanup
   permissions:
     - network.proxmox.read
     - network.proxmox.write

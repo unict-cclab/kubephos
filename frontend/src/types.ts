@@ -91,6 +91,7 @@ export interface PlanStep {
   id: string
   name: string
   mutating?: boolean
+  cleanup?: boolean
   effects?: ResourceEffect[]
   artifactInputs?: Array<{name: string; type: string; version: string; artifactId?: string; fromStep?: string; fromOutput?: string}>
   outputs?: Array<{name: string; type: string; version: string; mediaType: string; source: string; sensitive?: boolean}>

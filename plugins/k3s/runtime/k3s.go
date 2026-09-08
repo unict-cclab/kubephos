@@ -147,7 +147,7 @@ func (Plugin) Manifest() plugins.Manifest {
 		Schema:          json.RawMessage(`{"type":"object","additionalProperties":false,"required":["machineSetRef","machineAccessRef","clusterName","controlPlanes"],"properties":{"machineSetRef":{"type":"string","title":"Machine topology","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"MachineSet","x-kubephos-artifact-version":"v1alpha1"},"machineAccessRef":{"type":"string","title":"Machine access","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"MachineAccess","x-kubephos-artifact-version":"v1alpha1"},"clusterName":{"type":"string","title":"Cluster name","pattern":"^[a-z0-9][a-z0-9-]{0,31}$","default":"development"},"controlPlanes":{"type":"integer","title":"Control plane nodes","enum":[1,3],"default":1}}}`),
 		ArtifactInputs:  []domain.ArtifactContract{{Type: "MachineSet", Version: "v1alpha1"}, {Type: "MachineAccess", Version: "v1alpha1"}},
 		ArtifactOutputs: []domain.ArtifactContract{{Type: "ClusterConnection", Version: "v1alpha1"}, {Type: "ClusterInventory", Version: "v1alpha1"}},
-		Capabilities:    []string{"cluster.bootstrap", "cluster.preflight", "cluster.cleanup"},
+		Capabilities:    []string{"cluster.bootstrap", "cluster.preflight", "cluster.cleanup", "lifecycle.cleanup"},
 		Permissions:     []string{"network.ssh", "cluster.admin"},
 	}
 }
@@ -213,8 +213,17 @@ func (p Plugin) Precheck(ctx context.Context, step domain.PlanStep, log plugins.
 		return domain.HealthReport{}, err
 	}
 	command := "sudo -n true && command -v curl >/dev/null && test ! -x /usr/local/bin/k3s"
+	if step.Cleanup {
+		command = "sudo -n true"
+	}
 	if err := runAll(ctx, p.runner(), machines.Spec.Machines, access, func(machine, int) string { return command }); err != nil {
+		if step.Cleanup {
+			return unhealthy("At least one machine failed cleanup access or installation validation: "+err.Error(), "cleanup", "blocked"), nil
+		}
 		return unhealthy("At least one machine failed SSH, sudo or clean-host validation: "+err.Error(), "ssh", "unhealthy"), nil
+	}
+	if step.Cleanup {
+		return domain.HealthReport{Status: domain.HealthHealthy, Summary: "Every cleanup target is reachable with non-interactive sudo", Checks: map[string]string{"machines": strconv.Itoa(len(machines.Spec.Machines)), "ssh": "verified", "sudo": "verified"}}, nil
 	}
 	return domain.HealthReport{Status: domain.HealthHealthy, Summary: "Every machine is reachable and ready for a clean K3s installation", Checks: map[string]string{"machines": strconv.Itoa(len(machines.Spec.Machines)), "ssh": "verified", "sudo": "verified", "existingInstallation": "absent"}}, nil
 }
@@ -283,6 +292,16 @@ func (p Plugin) Verify(ctx context.Context, step domain.PlanStep, raw json.RawMe
 	spec, machines, access, err := resolve(step)
 	if err != nil {
 		return domain.HealthReport{}, err
+	}
+	if step.Cleanup {
+		command := "test ! -x /usr/local/bin/k3s && test ! -e /etc/systemd/system/k3s.service && test ! -e /etc/systemd/system/k3s-agent.service"
+		if err := runAll(ctx, p.runner(), machines.Spec.Machines, access, func(machine, int) string { return command }); err != nil {
+			return unhealthy("K3s cleanup verification failed: "+err.Error(), "installation", "present"), nil
+		}
+		if err := log("info", "K3s binaries and services are absent from every machine"); err != nil {
+			return domain.HealthReport{}, err
+		}
+		return domain.HealthReport{Status: domain.HealthHealthy, Summary: "K3s was removed from every machine", Checks: map[string]string{"machines": strconv.Itoa(len(machines.Spec.Machines)), "installation": "absent"}}, nil
 	}
 	var result clusterResult
 	if err := json.Unmarshal(raw, &result); err != nil {

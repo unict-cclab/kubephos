@@ -154,3 +154,50 @@ func TestPlanEffectsRequireProviderIdentity(t *testing.T) {
 		t.Fatal("expected missing provider error")
 	}
 }
+
+func TestCleanupPlanReversesSuccessfulMutableStepsAndDeleteEffects(t *testing.T) {
+	source := domain.Operation{
+		PluginID: "test",
+		Plan: domain.Plan{PluginID: "test", Steps: []domain.PlanStep{
+			{ID: "machines", Name: "Create machines", Input: json.RawMessage(`{"one":1}`), Effects: []domain.ResourceEffect{{Action: "create", ExternalID: "vm/1", Kind: "machine", Name: "one"}}},
+			{ID: "cluster", Name: "Install cluster", Input: json.RawMessage(`{"two":2}`), Mutating: true, ArtifactInputs: []domain.ArtifactInput{{Name: "machines", Type: "MachineSet", Version: "v1", ArtifactID: "art_one"}}},
+			{ID: "read", Name: "Read only", Input: json.RawMessage(`{}`)},
+		}},
+		Steps: []domain.OperationStep{{Status: domain.StepSucceeded}, {Status: domain.StepSucceeded}, {Status: domain.StepSucceeded}},
+	}
+	plan, err := cleanupPlan(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.Steps) != 2 || plan.Steps[0].ID != "cleanup-cluster" || plan.Steps[1].ID != "cleanup-machines" {
+		t.Fatalf("unexpected cleanup order %#v", plan.Steps)
+	}
+	if !plan.Steps[0].Cleanup || !plan.Steps[1].Cleanup || plan.Steps[1].Effects[0].Action != "delete" {
+		t.Fatalf("unexpected cleanup plan %#v", plan)
+	}
+	if len(plan.Steps[0].Outputs) != 0 || len(plan.Steps[0].ArtifactInputs) != 1 {
+		t.Fatalf("cleanup must retain inputs but not outputs %#v", plan.Steps[0])
+	}
+}
+
+func TestCleanupPlanRejectsIncompleteHistory(t *testing.T) {
+	_, err := cleanupPlan(domain.Operation{Plan: domain.Plan{Steps: []domain.PlanStep{{ID: "one"}}}})
+	if err == nil {
+		t.Fatal("expected incomplete source history rejection")
+	}
+}
+
+func TestCleanupPlanIncludesFailedMutableStepForRecovery(t *testing.T) {
+	source := domain.Operation{
+		PluginID: "test",
+		Plan:     domain.Plan{PluginID: "test", Steps: []domain.PlanStep{{ID: "create", Name: "Create", Input: json.RawMessage(`{}`), Effects: []domain.ResourceEffect{{Action: "create", ExternalID: "vm/110", Kind: "machine", Name: "temporary"}}}}},
+		Steps:    []domain.OperationStep{{Status: domain.StepFailed}},
+	}
+	plan, err := cleanupPlan(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.Steps) != 1 || !plan.Steps[0].Cleanup || plan.Steps[0].Effects[0].Action != "delete" {
+		t.Fatalf("unexpected recovery plan %#v", plan)
+	}
+}

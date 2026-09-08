@@ -60,6 +60,10 @@ type connectionConfig struct {
 	Endpoint      string `json:"endpoint"`
 	CredentialRef string `json:"credentialRef"`
 	VerifyTLS     bool   `json:"verifyTLS"`
+	AddressStart  string `json:"addressStart"`
+	PrefixLength  int    `json:"prefixLength"`
+	Gateway       string `json:"gateway"`
+	DNSServer     string `json:"dnsServer"`
 }
 
 type credential struct {
@@ -106,6 +110,7 @@ type vmConfig struct {
 	CIUser      string `json:"ciuser"`
 	SSHKeys     string `json:"sshkeys"`
 	IPConfig0   string `json:"ipconfig0"`
+	NameServer  string `json:"nameserver"`
 }
 
 func (Plugin) Manifest() plugins.Manifest {

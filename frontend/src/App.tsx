@@ -149,7 +149,7 @@ export default function App() {
     <CredentialDialog {...common} open={modal === 'credential'} close={() => setModal(null)} plugins={data.plugins} />
     <ConnectionDialog {...common} open={modal === 'connection'} close={() => setModal(null)} plugins={data.plugins} />
     <ApplicationDialog {...common} open={modal === 'application'} close={() => setModal(null)} />
-    <OperationDrawer operationID={operationID} session={session} close={() => setOperationID(null)} changed={() => load(true)} notify={notify} />
+    <OperationDrawer operationID={operationID} session={session} plugins={data.plugins} close={() => setOperationID(null)} open={setOperationID} changed={() => load(true)} notify={notify} />
     <ToastRegion items={toasts} dismiss={dismiss} />
   </>
 }

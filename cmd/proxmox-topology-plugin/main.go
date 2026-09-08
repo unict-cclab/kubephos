@@ -43,7 +43,7 @@ func run() error {
 	case "validate":
 		output = plugin.Validate(context.Background(), invocation)
 	case "plan":
-		output, err = plugin.Plan(context.Background(), invocation.Input)
+		output, err = plugin.Plan(context.Background(), invocation)
 	case "precheck":
 		var request stepRequest
 		err = json.Unmarshal(invocation.Input, &request)

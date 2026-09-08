@@ -176,6 +176,7 @@ type PlanStep struct {
 	Name           string                      `json:"name"`
 	Input          json.RawMessage             `json:"input"`
 	Mutating       bool                        `json:"mutating,omitempty"`
+	Cleanup        bool                        `json:"cleanup,omitempty"`
 	ArtifactInputs []ArtifactInput             `json:"artifactInputs,omitempty"`
 	Outputs        []ArtifactOutput            `json:"outputs,omitempty"`
 	ResolvedInputs map[string]ResolvedArtifact `json:"resolvedInputs,omitempty"`

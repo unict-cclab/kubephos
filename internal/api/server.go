@@ -68,6 +68,7 @@ func NewServer(store *storage.Store, registry *plugins.Registry, artifactStore *
 	router.HandleFunc("GET /api/v1/operations/{id}", server.getOperation)
 	router.HandleFunc("POST /api/v1/operations/{id}/queue", server.queueOperation)
 	router.HandleFunc("POST /api/v1/operations/{id}/cancel", server.cancelOperation)
+	router.HandleFunc("POST /api/v1/operations/{id}/cleanup", server.createCleanupOperation)
 	router.HandleFunc("GET /api/v1/operations/{id}/logs", server.listLogs)
 	router.HandleFunc("GET /api/v1/operations/{id}/events", server.operationEvents)
 	router.HandleFunc("GET /api/v1/artifacts", server.listAvailableArtifacts)
@@ -521,6 +522,113 @@ func preflightPlan(ctx context.Context, plugin plugins.Plugin, plan domain.Plan)
 	return issues
 }
 
+func (s *Server) createCleanupOperation(response http.ResponseWriter, request *http.Request) {
+	source, err := s.store.GetOperation(request.Context(), request.PathValue("id"))
+	if errors.Is(err, storage.ErrNotFound) {
+		writeError(response, http.StatusNotFound, "not_found", "Operation not found.")
+		return
+	}
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, "database_error", "Could not read the source operation.")
+		return
+	}
+	if !terminal(source.Status) {
+		writeError(response, http.StatusConflict, "cleanup_unavailable", "Only a completed operation can be cleaned up explicitly.")
+		return
+	}
+	plugin, err := s.registry.Get(source.PluginID)
+	if err != nil {
+		writeError(response, http.StatusUnprocessableEntity, "invalid_plugin", err.Error())
+		return
+	}
+	manifest := plugin.Manifest()
+	if !manifest.HasCapability("lifecycle.cleanup") {
+		writeError(response, http.StatusConflict, "cleanup_unavailable", "This plugin does not expose explicit cleanup.")
+		return
+	}
+	plan, err := cleanupPlan(source)
+	if err != nil {
+		writeError(response, http.StatusConflict, "cleanup_unavailable", err.Error())
+		return
+	}
+	if err := validatePlanEffects(manifest, plan); err != nil {
+		writeError(response, http.StatusUnprocessableEntity, "invalid_plan_effects", err.Error())
+		return
+	}
+	if err := artifacts.ValidatePlan(plan, manifest.ArtifactInputs, manifest.ArtifactOutputs); err != nil {
+		writeError(response, http.StatusUnprocessableEntity, "invalid_artifact_graph", err.Error())
+		return
+	}
+	if err := s.validateExternalArtifactInputs(request.Context(), source.WorkspaceID, plan); err != nil {
+		writeError(response, http.StatusUnprocessableEntity, "invalid_artifact_reference", err.Error())
+		return
+	}
+	if err := s.validateResourceEffects(request.Context(), source.WorkspaceID, manifest, plan); err != nil {
+		writeError(response, http.StatusConflict, "resource_conflict", err.Error())
+		return
+	}
+	validation := domain.ValidationReport{Valid: true, CheckedAt: time.Now().UTC(), Issues: []domain.ValidationIssue{{Level: "info", Message: "Cleanup targets only resources owned by the source operation."}}}
+	preflight := preflightPlan(request.Context(), plugin, plan)
+	validation.Issues = append(validation.Issues, preflight...)
+	for _, issue := range preflight {
+		if issue.Level == "error" {
+			validation.Valid = false
+		}
+	}
+	if !validation.Valid {
+		writeJSON(response, http.StatusUnprocessableEntity, map[string]any{"code": "preflight_failed", "validation": validation})
+		return
+	}
+	spec, _ := json.Marshal(map[string]string{"sourceOperationId": source.ID, "sourcePlanHash": source.PlanHash})
+	planHash, err := resolvedPlanHash(manifest, spec, plan)
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, "planning_failed", "Could not fingerprint the cleanup plan.")
+		return
+	}
+	operation, err := s.store.CreateOperation(request.Context(), domain.Operation{
+		ID: id.New("op"), WorkspaceID: source.WorkspaceID, PluginID: source.PluginID,
+		Title: "Cleanup: " + source.Title, Status: domain.OperationReady, Spec: spec,
+		Plan: plan, Validation: validation, PlanHash: planHash,
+	})
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, "database_error", "Could not save the validated cleanup operation.")
+		return
+	}
+	writeJSON(response, http.StatusCreated, operation)
+}
+
+func cleanupPlan(source domain.Operation) (domain.Plan, error) {
+	if len(source.Plan.Steps) != len(source.Steps) {
+		return domain.Plan{}, errors.New("source operation step history is incomplete")
+	}
+	steps := make([]domain.PlanStep, 0, len(source.Plan.Steps))
+	for position := len(source.Plan.Steps) - 1; position >= 0; position-- {
+		planned := source.Plan.Steps[position]
+		status := source.Steps[position].Status
+		if planned.Cleanup || (status != domain.StepSucceeded && status != domain.StepFailed && status != domain.StepCanceled) {
+			continue
+		}
+		effects := make([]domain.ResourceEffect, 0, len(planned.Effects))
+		for _, effect := range planned.Effects {
+			if effect.Action == "create" {
+				effect.Action = "delete"
+				effects = append(effects, effect)
+			}
+		}
+		if !planned.Mutating && len(effects) == 0 {
+			continue
+		}
+		steps = append(steps, domain.PlanStep{
+			ID: "cleanup-" + planned.ID, Name: "Clean up " + planned.Name, Input: planned.Input,
+			Mutating: true, Cleanup: true, ArtifactInputs: planned.ArtifactInputs, Effects: effects,
+		})
+	}
+	if len(steps) == 0 {
+		return domain.Plan{}, errors.New("the source operation has no mutable steps eligible for cleanup")
+	}
+	return domain.Plan{PluginID: source.PluginID, Steps: steps}, nil
+}
+
 func (s *Server) validateExternalArtifactInputs(ctx context.Context, workspaceID string, plan domain.Plan) error {
 	verified := map[string]domain.Artifact{}
 	for _, step := range plan.Steps {
@@ -886,6 +994,8 @@ func auditTarget(request *http.Request) (string, string, string, bool) {
 			return "operation.queue", "operation", parts[1], true
 		case "cancel":
 			return "operation.cancel", "operation", parts[1], true
+		case "cleanup":
+			return "operation.cleanup.create", "operation", parts[1], true
 		}
 	}
 	return request.Method + " " + path, "api", "", true

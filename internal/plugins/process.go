@@ -245,15 +245,19 @@ func (p *Process) invoke(parent context.Context, command string, input, output a
 	if err != nil {
 		return err
 	}
-	connectionValues, err := p.resolveConnections(ctx, inputPayload)
+	referencePayload, err := referenceResolutionPayload(inputPayload)
 	if err != nil {
 		return err
 	}
-	catalogValues, err := p.resolveCatalog(ctx, inputPayload)
+	connectionValues, err := p.resolveConnections(ctx, referencePayload)
 	if err != nil {
 		return err
 	}
-	secretPayloads := []json.RawMessage{inputPayload}
+	catalogValues, err := p.resolveCatalog(ctx, referencePayload)
+	if err != nil {
+		return err
+	}
+	secretPayloads := []json.RawMessage{referencePayload}
 	for _, configuration := range connectionValues {
 		secretPayloads = append(secretPayloads, configuration)
 	}
@@ -298,6 +302,29 @@ func (p *Process) invoke(parent context.Context, command string, input, output a
 		return fmt.Errorf("plugin returned invalid JSON: %w", err)
 	}
 	return nil
+}
+
+func referenceResolutionPayload(payload []byte) ([]byte, error) {
+	var value any
+	if err := json.Unmarshal(payload, &value); err != nil {
+		return nil, err
+	}
+	removeResolvedInputs(value)
+	return json.Marshal(value)
+}
+
+func removeResolvedInputs(value any) {
+	switch current := value.(type) {
+	case map[string]any:
+		delete(current, "resolvedInputs")
+		for _, item := range current {
+			removeResolvedInputs(item)
+		}
+	case []any:
+		for _, item := range current {
+			removeResolvedInputs(item)
+		}
+	}
 }
 
 func (p *Process) resolveCatalog(ctx context.Context, payload []byte) (map[string]json.RawMessage, error) {
