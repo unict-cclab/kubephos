@@ -4,6 +4,7 @@ import {ApplicationDialog, AuthDialog, ConnectionDialog, CredentialDialog, Opera
 import {OperationDrawer} from './components/OperationDrawer'
 import {ToastRegion, type ToastMessage} from './components/ToastRegion'
 import {Views} from './components/Views'
+import {WorkspaceFlowDialog} from './components/WorkspaceFlowDialog'
 import type {PlatformData, Session, View, Workspace} from './types'
 
 const emptyData: PlatformData = {system: null, workspaces: [], operations: [], artifacts: [], plugins: [], applications: [], credentials: [], connections: [], resources: [], audit: []}
@@ -24,7 +25,7 @@ const navigation: Array<[View, string, string]> = [
   ['infrastructure', '▦', 'Infrastructure']
 ]
 
-type Modal = 'workspace' | 'operation' | 'credential' | 'connection' | 'application' | null
+type Modal = 'workspace' | 'workspaceFlow' | 'operation' | 'credential' | 'connection' | 'application' | null
 
 export default function App() {
   const [session, setSession] = useState<Session | null>(null)
@@ -35,6 +36,7 @@ export default function App() {
   const [view, setView] = useState<View>(initialView)
   const [modal, setModal] = useState<Modal>(null)
   const [workspace, setWorkspace] = useState<Workspace | null>(null)
+  const [operationPluginID, setOperationPluginID] = useState<string | undefined>()
   const [operationID, setOperationID] = useState<string | null>(null)
   const [toasts, setToasts] = useState<ToastMessage[]>([])
 
@@ -114,6 +116,17 @@ export default function App() {
       return
     }
     setWorkspace(selected)
+    setOperationPluginID(undefined)
+    setModal('operation')
+  }
+
+  const openWorkspace = (selected: Workspace) => {
+    setWorkspace(selected)
+    setModal('workspaceFlow')
+  }
+
+  const configureWorkspaceCapability = (pluginID: string) => {
+    setOperationPluginID(pluginID)
     setModal('operation')
   }
 
@@ -137,6 +150,7 @@ export default function App() {
           navigate={navigate}
           createWorkspace={() => setModal('workspace')}
           createOperation={openOperationForm}
+          openWorkspace={openWorkspace}
           openOperation={setOperationID}
           importApplication={() => setModal('application')}
           addCredential={() => setModal('credential')}
@@ -145,7 +159,8 @@ export default function App() {
       </main>
     </div>
     <WorkspaceDialog {...common} open={modal === 'workspace'} close={() => setModal(null)} />
-    <OperationDialog {...common} open={modal === 'operation'} close={() => setModal(null)} workspace={workspace} plugins={data.plugins} onCreated={async id => {await load(true); setOperationID(id)}} />
+    <WorkspaceFlowDialog open={modal === 'workspaceFlow'} close={() => setModal(null)} workspace={workspace} plugins={data.plugins} artifacts={data.artifacts} operations={data.operations} configure={configureWorkspaceCapability} />
+    <OperationDialog key={`${workspace?.id ?? ''}-${operationPluginID ?? 'advanced'}`} {...common} initialPluginID={operationPluginID} open={modal === 'operation'} close={() => setModal(null)} workspace={workspace} plugins={data.plugins} onCreated={async id => {await load(true); setOperationID(id)}} />
     <CredentialDialog {...common} open={modal === 'credential'} close={() => setModal(null)} plugins={data.plugins} />
     <ConnectionDialog {...common} open={modal === 'connection'} close={() => setModal(null)} plugins={data.plugins} />
     <ApplicationDialog {...common} open={modal === 'application'} close={() => setModal(null)} />

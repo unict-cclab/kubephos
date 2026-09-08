@@ -74,8 +74,8 @@ export function WorkspaceDialog({open, close, ...common}: CommonProps & {open: b
   </Dialog>
 }
 
-export function OperationDialog({workspace, plugins, open, close, onCreated, ...common}: CommonProps & {workspace: Workspace | null; plugins: Plugin[]; open: boolean; close: () => void; onCreated: (id: string) => Promise<void>}) {
-  const [pluginID, setPluginID] = useState('')
+export function OperationDialog({workspace, plugins, initialPluginID, open, close, onCreated, ...common}: CommonProps & {workspace: Workspace | null; plugins: Plugin[]; initialPluginID?: string; open: boolean; close: () => void; onCreated: (id: string) => Promise<void>}) {
+	const [pluginID, setPluginID] = useState(initialPluginID ?? '')
   const [error, setError] = useState('')
   const [pending, setPending] = useState(false)
   const selected = plugins.find(item => item.id === pluginID) ?? plugins[0]

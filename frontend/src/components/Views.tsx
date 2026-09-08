@@ -16,6 +16,7 @@ interface ViewProps {
   navigate: (view: View) => void
   createWorkspace: () => void
   createOperation: (workspace: Workspace) => void
+  openWorkspace: (workspace: Workspace) => void
   openOperation: (id: string) => void
   importApplication: () => void
   addCredential: () => void
@@ -29,7 +30,7 @@ export function Views(props: ViewProps) {
     </section>
     <section className={`view ${props.view === 'workspaces' ? 'active' : ''}`}>
       <Heading eyebrow="ENVIRONMENTS" title="Your workspaces" copy="Each workspace keeps its operations and resources independent." />
-      <WorkspaceGrid items={props.workspaces} createOperation={props.createOperation} />
+      <WorkspaceGrid items={props.workspaces} createOperation={props.createOperation} openWorkspace={props.openWorkspace} />
     </section>
     <section className={`view ${props.view === 'operations' ? 'active' : ''}`}>
       <Heading eyebrow="BACKGROUND WORK" title="Operation history" copy="Validated plans, live progress and diagnostic evidence." />
@@ -90,13 +91,13 @@ function OperationList({operations, workspaces, open}: {operations: Operation[];
   })}</div>
 }
 
-function WorkspaceGrid({items, createOperation}: {items: Workspace[]; createOperation: (workspace: Workspace) => void}) {
+function WorkspaceGrid({items, createOperation, openWorkspace}: {items: Workspace[]; createOperation: (workspace: Workspace) => void; openWorkspace: (workspace: Workspace) => void}) {
   if (!items.length) return <Empty title="No workspace created">Workspaces keep development and experiments independent.</Empty>
   return <div className="workspace-grid">{items.map(workspace => <article className="workspace-card" key={workspace.id}>
     <span className="workspace-icon">{workspace.name.slice(0, 1).toUpperCase()}</span>
     <h3>{workspace.name}</h3>
     <p>{workspace.description || 'An isolated environment ready for operations.'}</p>
-    <div className="card-footer"><time>{formatDate(workspace.createdAt)}</time><button className="button secondary compact" onClick={() => createOperation(workspace)}>New operation</button></div>
+    <div className="card-footer"><time>{formatDate(workspace.createdAt)}</time><div className="card-actions"><button className="text-button" onClick={() => createOperation(workspace)}>Advanced</button><button className="button primary compact" onClick={() => openWorkspace(workspace)}>Open workspace</button></div></div>
   </article>)}</div>
 }
 

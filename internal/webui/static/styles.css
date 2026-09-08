@@ -212,7 +212,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 }
 
 .status::before { width: 6px; height: 6px; border-radius: 50%; background: currentColor; content: ""; }
-.status.succeeded, .status.ready { background: #e8f5ee; color: var(--green); }
+.status.succeeded, .status.ready, .status.available { background: #e8f5ee; color: var(--green); }
 .status.failed, .status.canceled { background: #fae9e8; color: var(--red); }
 .status.queued, .status.prechecking, .status.running, .status.verifying { background: #e9f0f8; color: var(--blue); }
 
@@ -236,6 +236,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .workspace-card .workspace-icon { display: grid; width: 42px; height: 42px; place-items: center; margin-bottom: 22px; border-radius: 11px; background: #e6f1ea; color: var(--green); font-weight: 900; }
 .workspace-card .card-footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: auto; padding-top: 18px; }
 .workspace-card time { color: #909a93; font-size: 11px; }
+.card-actions { display: flex; align-items: center; gap: 10px; }
 .feature-card { display: flex; min-height: 150px; gap: 15px; }
 .feature-icon { display: grid; flex: 0 0 42px; height: 42px; place-items: center; border-radius: 11px; background: #edf1ed; color: var(--green); font-weight: 800; }
 .planned { position: absolute; right: 16px; bottom: 16px; border-radius: 999px; padding: 5px 8px; background: #f0f2ef; color: #7a857d; font-size: 9px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
@@ -271,6 +272,34 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .modal-content { padding: 28px; }
 .modal form { padding: 0; }
 .auth-modal { width: min(430px, calc(100vw - 28px)); }
+.flow-modal { width: min(920px, calc(100vw - 28px)); }
+.flow-intro { display: flex; align-items: flex-end; justify-content: space-between; gap: 24px; margin-bottom: 18px; }
+.flow-intro > p { max-width: 470px; margin: 0; color: var(--muted); font-size: 13px; line-height: 1.55; }
+.flow-stats { display: flex; gap: 8px; }
+.flow-stats div { min-width: 90px; border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; background: #fafbf9; }
+.flow-stats strong, .flow-stats span { display: block; }
+.flow-stats strong { font-size: 20px; letter-spacing: -.04em; }
+.flow-stats span { margin-top: 2px; color: var(--muted); font-size: 9px; font-weight: 750; text-transform: uppercase; }
+.flow-explainer { display: flex; gap: 10px; margin-bottom: 17px; border-radius: 10px; padding: 12px 14px; background: #eef5ef; color: #506058; }
+.flow-explainer span { color: var(--green); font-weight: 900; }
+.flow-explainer p { margin: 0; font-size: 11px; line-height: 1.5; }
+.flow-list { display: grid; max-height: min(620px, 62vh); overflow-y: auto; padding-right: 4px; }
+.flow-row { display: grid; grid-template-columns: 24px minmax(0, 1fr) auto; gap: 13px; border-top: 1px solid var(--line); padding: 17px 4px; }
+.flow-row:first-child { border-top: 0; }
+.flow-node { position: relative; display: flex; justify-content: center; }
+.flow-node::after { position: absolute; top: 20px; bottom: -18px; width: 1px; background: var(--line); content: ""; }
+.flow-row:last-child .flow-node::after { display: none; }
+.flow-node span { position: relative; z-index: 1; width: 11px; height: 11px; margin-top: 5px; border: 3px solid #c8d0ca; border-radius: 50%; background: var(--surface); }
+.flow-row.available .flow-node span { border-color: var(--green); }
+.flow-row.active .flow-node span { border-color: var(--blue); box-shadow: 0 0 0 4px #e9f0f8; }
+.flow-row.executed .flow-node span { border-color: var(--green); background: var(--green); }
+.flow-copy h3 { margin: 0; font-size: 14px; }
+.flow-title { display: flex; align-items: center; gap: 9px; }
+.flow-copy > p { max-width: 620px; margin: 5px 0 9px; color: var(--muted); font-size: 11px; line-height: 1.45; }
+.contract-line { display: inline-flex; align-items: center; margin: 2px 12px 2px 0; color: #657169; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 9px; }
+.contract-line span { margin-right: 6px; border-radius: 4px; padding: 3px 5px; background: #edf1ed; color: var(--green); font-family: Inter, ui-sans-serif, sans-serif; font-size: 8px; font-weight: 900; }
+.flow-copy > small { display: block; margin-top: 7px; color: #89938c; font-size: 9px; }
+.flow-row > .button { align-self: center; }
 .auth-modal::backdrop { background: #111814; }
 .auth-modal h2 { margin: 6px 0 8px; font-size: 28px; }
 .auth-brand { display: flex; align-items: center; gap: 11px; margin-bottom: 24px; }
@@ -374,6 +403,11 @@ summary { color: var(--muted); font-size: 12px; font-weight: 750; cursor: pointe
   .schema-fields { grid-template-columns: 1fr; }
   .schema-fields .wide { grid-column: auto; }
   .drawer-panel { padding: 22px 16px; }
+  .flow-intro { align-items: stretch; flex-direction: column; }
+  .flow-stats { width: 100%; }
+  .flow-stats div { flex: 1; min-width: 0; }
+  .flow-row { grid-template-columns: 18px 1fr; }
+  .flow-row > .button { grid-column: 2; justify-self: start; }
   .audit-row { grid-template-columns: 42px 1fr auto; }
   .audit-row time { display: none; }
 }
