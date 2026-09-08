@@ -17,7 +17,7 @@ import (
 )
 
 func TestTopologyPlanDeclaresAtomicMachineSet(t *testing.T) {
-	spec := json.RawMessage(`{"connectionRef":"conn_test","node":"pve","templateVMID":8000,"baseVMID":9000,"namePrefix":"dev","machineCount":3,"cores":2,"memoryMiB":4096,"sshUser":"ubuntu","cleanupAfterTest":false}`)
+	spec := json.RawMessage(`{"connectionRef":"conn_test","node":"pve","templateVMID":8000,"baseVMID":9000,"namePrefix":"dev","machineCount":3,"cores":2,"memoryMiB":4096,"diskGiB":32,"sshUser":"ubuntu","cleanupAfterTest":false}`)
 	invocation := Invocation{Input: spec, Connections: map[string]json.RawMessage{"conn_test": json.RawMessage(`{"endpoint":"https://proxmox.test","credentialRef":"cred_test","verifyTLS":false,"vmidStart":9000,"addressStart":"10.10.0.10","prefixLength":24,"gateway":"10.10.0.1","dnsServer":"1.1.1.1"}`)}}
 	plan, err := (TopologyPlugin{}).Plan(context.Background(), invocation)
 	if err != nil {
@@ -31,6 +31,10 @@ func TestTopologyPlanDeclaresAtomicMachineSet(t *testing.T) {
 	}
 	if !plan.Steps[0].Outputs[1].Sensitive || plan.Steps[0].Outputs[1].Type != "MachineAccess" {
 		t.Fatalf("machine access must be a sensitive typed output %#v", plan.Steps[0].Outputs[1])
+	}
+	var input topologyStepInput
+	if err := json.Unmarshal(plan.Steps[0].Input, &input); err != nil || input.DiskGiB != 32 {
+		t.Fatalf("disk capacity is missing from the plan: %#v %v", input, err)
 	}
 }
 
@@ -81,6 +85,9 @@ func TestTopologyCreatesVerifiesAndRemovesOnlyPlannedMachines(t *testing.T) {
 	for id := 9000; id <= 9002; id++ {
 		if state.machines[id].exists {
 			t.Fatalf("VM %d was not removed", id)
+		}
+		if state.machines[id].disk != "local-lvm:vm-disk,size=32G" {
+			t.Fatalf("VM %d disk was not resized: %q", id, state.machines[id].disk)
 		}
 	}
 	for _, write := range state.writes {
@@ -191,6 +198,21 @@ func TestTopologyAddressesAreDeterministicAndBounded(t *testing.T) {
 	}
 }
 
+func TestTopologyRootDiskAndCapacity(t *testing.T) {
+	configuration := vmConfig{Boot: "order=virtio0;ide2", SCSI0: "store:unused,size=8G", VirtIO0: "store:root,size=32768M"}
+	disk, err := topologyRootDisk(configuration)
+	if err != nil || disk != "virtio0" {
+		t.Fatalf("unexpected root disk %q: %v", disk, err)
+	}
+	size, err := topologyDiskSizeGiB(diskConfiguration(configuration, disk))
+	if err != nil || size != 32 {
+		t.Fatalf("unexpected disk size %v: %v", size, err)
+	}
+	if _, err := topologyRootDisk(vmConfig{}); err == nil {
+		t.Fatal("expected missing root disk rejection")
+	}
+}
+
 func TestTopologyCleanupIsIdempotent(t *testing.T) {
 	server, _ := newTopologyServer(t, 0)
 	defer server.Close()
@@ -235,6 +257,7 @@ type topologyServerMachine struct {
 	sshKeys     string
 	ipConfig0   string
 	nameServer  string
+	disk        string
 }
 
 type fakeSSHAccess struct{}
@@ -269,7 +292,9 @@ func newTopologyServer(t *testing.T, failVMID int) (*httptest.Server, *topologyS
 		case request.Method == http.MethodGet && request.URL.Path == "/api2/json/nodes":
 			_, _ = response.Write([]byte(`{"data":[{"node":"pve","status":"online"}]}`))
 		case request.Method == http.MethodGet && request.URL.Path == "/api2/json/access/permissions":
-			_, _ = response.Write([]byte(`{"data":{"/":{"Datastore.AllocateSpace":1,"VM.Allocate":1,"VM.Clone":1,"VM.Config.CPU":1,"VM.Config.Memory":1,"VM.Config.Options":1,"VM.PowerMgmt":1}}}`))
+			_, _ = response.Write([]byte(`{"data":{"/":{"Datastore.AllocateSpace":1,"VM.Allocate":1,"VM.Clone":1,"VM.Config.CPU":1,"VM.Config.Disk":1,"VM.Config.Memory":1,"VM.Config.Options":1,"VM.PowerMgmt":1}}}`))
+		case request.Method == http.MethodGet && request.URL.Path == "/api2/json/nodes/pve/qemu/8000/config":
+			_, _ = response.Write([]byte(`{"data":{"name":"template","boot":"order=scsi0;ide2","scsi0":"local-lvm:base-8000-disk-0,size=8G"}}`))
 		case request.Method == http.MethodPost && request.URL.Path == "/api2/json/nodes/pve/qemu/8000/clone":
 			_ = request.ParseForm()
 			id, _ := strconv.Atoi(request.Form.Get("newid"))
@@ -281,6 +306,7 @@ func newTopologyServer(t *testing.T, failVMID int) (*httptest.Server, *topologyS
 			machine.exists = true
 			machine.name = request.Form.Get("name")
 			machine.status = "stopped"
+			machine.disk = "local-lvm:vm-disk,size=8G"
 			_, _ = response.Write([]byte(`{"data":"UPID:pve:clone"}`))
 		case request.Method == http.MethodPost && strings.HasSuffix(request.URL.Path, "/config"):
 			id := topologyRequestVMID(request.URL.Path)
@@ -297,6 +323,15 @@ func newTopologyServer(t *testing.T, failVMID int) (*httptest.Server, *topologyS
 			machine.ipConfig0 = request.Form.Get("ipconfig0")
 			machine.nameServer = request.Form.Get("nameserver")
 			_, _ = response.Write([]byte(`{"data":"UPID:pve:config"}`))
+		case request.Method == http.MethodPut && strings.HasSuffix(request.URL.Path, "/resize"):
+			id := topologyRequestVMID(request.URL.Path)
+			_ = request.ParseForm()
+			if request.Form.Get("disk") != "scsi0" {
+				http.Error(response, "unexpected disk", http.StatusBadRequest)
+				return
+			}
+			state.machines[id].disk = "local-lvm:vm-disk,size=" + request.Form.Get("size")
+			_, _ = response.Write([]byte(`{"data":"UPID:pve:resize"}`))
 		case request.Method == http.MethodPost && strings.HasSuffix(request.URL.Path, "/status/start"):
 			id := topologyRequestVMID(request.URL.Path)
 			state.machines[id].status = "running"
@@ -314,7 +349,7 @@ func newTopologyServer(t *testing.T, failVMID int) (*httptest.Server, *topologyS
 				http.NotFound(response, request)
 				return
 			}
-			value, _ := json.Marshal(map[string]any{"data": map[string]string{"name": machine.name, "tags": machine.tags, "description": machine.description, "ciuser": machine.ciUser, "sshkeys": machine.sshKeys, "ipconfig0": machine.ipConfig0, "nameserver": machine.nameServer}})
+			value, _ := json.Marshal(map[string]any{"data": map[string]string{"name": machine.name, "tags": machine.tags, "description": machine.description, "ciuser": machine.ciUser, "sshkeys": machine.sshKeys, "ipconfig0": machine.ipConfig0, "nameserver": machine.nameServer, "boot": "order=scsi0;ide2", "scsi0": machine.disk}})
 			_, _ = response.Write(value)
 		case request.Method == http.MethodGet && strings.HasSuffix(request.URL.Path, "/agent/network-get-interfaces"):
 			id := topologyRequestVMID(request.URL.Path)
@@ -337,7 +372,7 @@ func newTopologyServer(t *testing.T, failVMID int) (*httptest.Server, *topologyS
 }
 
 func topologyInvocation(endpoint string, cleanup bool) (Invocation, json.RawMessage) {
-	spec := json.RawMessage(fmt.Sprintf(`{"connectionRef":"conn_test","node":"pve","templateVMID":8000,"baseVMID":9000,"namePrefix":"dev","machineCount":3,"cores":2,"memoryMiB":4096,"sshUser":"ubuntu","cleanupAfterTest":%t}`, cleanup))
+	spec := json.RawMessage(fmt.Sprintf(`{"connectionRef":"conn_test","node":"pve","templateVMID":8000,"baseVMID":9000,"namePrefix":"dev","machineCount":3,"cores":2,"memoryMiB":4096,"diskGiB":32,"sshUser":"ubuntu","cleanupAfterTest":%t}`, cleanup))
 	return Invocation{
 		Input:       spec,
 		Secrets:     map[string]json.RawMessage{"cred_test": json.RawMessage(`{"tokenId":"test@pam!kubephos","tokenSecret":"top-secret"}`)},

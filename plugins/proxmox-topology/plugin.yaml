@@ -3,7 +3,7 @@ kind: Plugin
 metadata:
   id: io.kubephos.infrastructure.proxmox.topology
   name: Proxmox machine topology
-  version: 0.1.0
+  version: 0.2.0
   description: Creates a validated group of isolated machines from one Proxmox template.
 spec:
   protocol: v1alpha1
@@ -30,6 +30,7 @@ spec:
       - machineCount
       - cores
       - memoryMiB
+      - diskGiB
       - sshUser
       - cleanupAfterTest
     properties:
@@ -76,6 +77,12 @@ spec:
         minimum: 512
         maximum: 131072
         default: 4096
+      diskGiB:
+        type: integer
+        title: Disk GiB per machine
+        minimum: 8
+        maximum: 2048
+        default: 32
       sshUser:
         type: string
         title: SSH user

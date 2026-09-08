@@ -112,6 +112,10 @@ type vmConfig struct {
 	SSHKeys     string `json:"sshkeys"`
 	IPConfig0   string `json:"ipconfig0"`
 	NameServer  string `json:"nameserver"`
+	Boot        string `json:"boot"`
+	SCSI0       string `json:"scsi0"`
+	VirtIO0     string `json:"virtio0"`
+	SATA0       string `json:"sata0"`
 }
 
 func (Plugin) Manifest() plugins.Manifest {
