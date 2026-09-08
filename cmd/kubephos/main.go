@@ -147,7 +147,7 @@ func status(configValue config.Config) error {
 
 func doctor(configValue config.Config) error {
 	client := &http.Client{Timeout: 5 * time.Second}
-	checks := []string{"/health/live", "/health/ready", "/api/v1/system"}
+	checks := []string{"/health/live", "/health/ready", "/api/v1/auth/status"}
 	failed := false
 	for _, path := range checks {
 		response, err := client.Get(configValue.PublicURL + path)

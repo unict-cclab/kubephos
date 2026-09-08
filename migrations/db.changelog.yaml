@@ -27,3 +27,10 @@ databaseChangeLog:
         - sqlFile:
             path: changes/004-resource-reservations.sql
             relativeToChangelogFile: true
+  - changeSet:
+      id: 005-authentication
+      author: kubephos
+      changes:
+        - sqlFile:
+            path: changes/005-authentication.sql
+            relativeToChangelogFile: true

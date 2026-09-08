@@ -1,4 +1,5 @@
 const state = {
+  auth: null,
   system: null,
   workspaces: [],
   operations: [],
@@ -22,15 +23,19 @@ const $ = selector => document.querySelector(selector)
 const $$ = selector => [...document.querySelectorAll(selector)]
 
 async function api(path, options = {}) {
+  const method = options.method || 'GET'
+  const headers = { 'Content-Type': 'application/json', ...(options.headers || {}) }
+  if (!['GET', 'HEAD', 'OPTIONS'].includes(method) && state.auth?.csrfToken) headers['X-CSRF-Token'] = state.auth.csrfToken
   const response = await fetch(`/api/v1${path}`, {
     ...options,
-    headers: { 'Content-Type': 'application/json', ...(options.headers || {}) }
+    headers
   })
   if (response.status === 204 || response.status === 202 && response.headers.get('content-length') === '0') return null
   const body = await response.json().catch(() => ({}))
   if (!response.ok) {
     const error = new Error(body.message || 'The request could not be completed.')
     error.body = body
+    error.status = response.status
     throw error
   }
   return body
@@ -53,6 +58,10 @@ async function loadAll(silent = false) {
     if (!silent) toast('Everything is up to date.')
   } catch (error) {
     setHealth(false)
+    if (error.status === 401) {
+      state.auth = null
+      showAuth(false)
+    }
     if (!silent) toast(error.message, true)
   }
 }
@@ -64,6 +73,7 @@ function render() {
   $('#stat-ready').textContent = stats.readyOperations ?? '—'
   $('#stat-failed').textContent = stats.failedOperations ?? '—'
   $('#sidebar-version').textContent = `Version ${state.system?.version || 'dev'}`
+  $('#signed-user').textContent = state.auth?.user ? `${state.auth.user.username} · ${state.auth.user.role}` : ''
   renderOperations('#overview-operations', state.operations.slice(0, 5))
   renderOperations('#operation-list', state.operations)
   renderWorkspaces()
@@ -71,6 +81,68 @@ function render() {
   renderCredentials()
   renderResources()
   renderAudit()
+}
+
+async function initialize() {
+  try {
+    const status = await api('/auth/status')
+    if (!status.authenticated) {
+      showAuth(status.setupRequired)
+      return
+    }
+    state.auth = status
+    await loadAll(true)
+  } catch (error) {
+    setHealth(false)
+    toast(error.message, true)
+  }
+}
+
+function showAuth(setupRequired) {
+  const dialog = $('#auth-dialog')
+  const form = $('#auth-form')
+  form.reset()
+  form.dataset.mode = setupRequired ? 'setup' : 'login'
+  form.password.autocomplete = setupRequired ? 'new-password' : 'current-password'
+  $('#auth-eyebrow').textContent = setupRequired ? 'FIRST RUN' : 'WELCOME BACK'
+  $('#auth-title').textContent = setupRequired ? 'Create administrator' : 'Sign in'
+  $('#auth-copy').textContent = setupRequired ? 'Create the only account needed to start. You can add roles later.' : 'Use your KubePhos account to continue.'
+  $('#auth-submit').textContent = setupRequired ? 'Create and continue' : 'Sign in'
+  $('#auth-error').textContent = ''
+  if (!dialog.open) dialog.showModal()
+}
+
+async function authenticate(event) {
+  event.preventDefault()
+  const form = event.currentTarget
+  const submit = $('#auth-submit')
+  submit.disabled = true
+  $('#auth-error').textContent = ''
+  try {
+    const mode = form.dataset.mode || 'login'
+    const result = await api(mode === 'setup' ? '/auth/setup' : '/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ username: form.username.value, password: form.password.value })
+    })
+    state.auth = result
+    $('#auth-dialog').close()
+    await loadAll(true)
+    toast(mode === 'setup' ? 'Administrator created.' : 'Signed in.')
+  } catch (error) {
+    $('#auth-error').textContent = error.message
+  } finally {
+    submit.disabled = false
+  }
+}
+
+async function logout() {
+  try {
+    await api('/auth/logout', { method: 'POST', body: '{}' })
+  } catch (error) {
+    toast(error.message, true)
+  }
+  state.auth = null
+  showAuth(false)
 }
 
 function renderOperations(selector, operations) {
@@ -522,6 +594,9 @@ $$('[data-close-dialog]').forEach(button => button.addEventListener('click', () 
 $('#new-workspace-button').addEventListener('click', openWorkspaceForm)
 $('#hero-workspace-button').addEventListener('click', openWorkspaceForm)
 $('#refresh-button').addEventListener('click', () => loadAll())
+$('#logout-button').addEventListener('click', logout)
+$('#auth-form').addEventListener('submit', authenticate)
+$('#auth-dialog').addEventListener('cancel', event => event.preventDefault())
 $('#workspace-form').addEventListener('submit', createWorkspace)
 $('#operation-form').addEventListener('submit', createOperation)
 $('#operation-plugin').addEventListener('change', event => renderPluginFields(event.target.value))
@@ -530,5 +605,5 @@ $('#credential-form').addEventListener('submit', createCredential)
 $('#credential-kind').addEventListener('change', event => renderCredentialFields(event.target.value))
 window.addEventListener('hashchange', () => switchView(location.hash.slice(1) || 'overview'))
 switchView(location.hash.slice(1) || 'overview')
-loadAll(true)
-setInterval(() => loadAll(true), 5000)
+initialize()
+setInterval(() => { if (state.auth?.authenticated) loadAll(true) }, 5000)

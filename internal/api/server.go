@@ -41,6 +41,10 @@ func NewServer(store *storage.Store, registry *plugins.Registry, artifactStore *
 	router := http.NewServeMux()
 	router.HandleFunc("GET /health/live", server.live)
 	router.HandleFunc("GET /health/ready", server.ready)
+	router.HandleFunc("GET /api/v1/auth/status", server.authStatus)
+	router.HandleFunc("POST /api/v1/auth/setup", server.authSetup)
+	router.HandleFunc("POST /api/v1/auth/login", server.authLogin)
+	router.HandleFunc("POST /api/v1/auth/logout", server.authLogout)
 	router.HandleFunc("GET /api/v1/system", server.system)
 	router.HandleFunc("GET /api/v1/plugins", server.listPlugins)
 	router.HandleFunc("GET /api/v1/credentials", server.listCredentials)
@@ -59,7 +63,7 @@ func NewServer(store *storage.Store, registry *plugins.Registry, artifactStore *
 	router.HandleFunc("GET /api/v1/operations/{id}/events", server.operationEvents)
 	router.HandleFunc("GET /api/v1/artifacts/{id}/download", server.downloadArtifact)
 	router.Handle("/", webui.Handler())
-	return securityHeaders(requestLog(auditMutations(store, recoverer(router))))
+	return securityHeaders(requestLog(server.authenticate(auditMutations(store, recoverer(router)))))
 }
 
 func (s *Server) live(response http.ResponseWriter, _ *http.Request) {
@@ -612,7 +616,7 @@ func auditMutations(store *storage.Store, next http.Handler) http.Handler {
 			outcome = "rejected"
 		}
 		details, _ := json.Marshal(map[string]any{"method": request.Method, "path": request.URL.Path, "status": buffered.status})
-		if err := store.AppendAuditEvent(request.Context(), domain.AuditEvent{Actor: "local-admin", Action: action, TargetType: targetType, TargetID: targetID, Outcome: outcome, Details: details}); err != nil {
+		if err := store.AppendAuditEvent(request.Context(), domain.AuditEvent{Actor: actorName(request), Action: action, TargetType: targetType, TargetID: targetID, Outcome: outcome, Details: details}); err != nil {
 			slog.Error("append audit event", "action", action, "error", err)
 		}
 		for key, values := range buffered.header {

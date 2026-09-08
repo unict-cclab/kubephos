@@ -92,6 +92,22 @@ type AuditEvent struct {
 	CreatedAt  time.Time       `json:"createdAt"`
 }
 
+type User struct {
+	ID           string    `json:"id"`
+	Username     string    `json:"username"`
+	PasswordHash string    `json:"-"`
+	Role         string    `json:"role"`
+	CreatedAt    time.Time `json:"createdAt"`
+	UpdatedAt    time.Time `json:"updatedAt"`
+}
+
+type Session struct {
+	TokenHash string
+	CSRFToken string
+	ExpiresAt time.Time
+	User      User
+}
+
 type Operation struct {
 	ID              string           `json:"id"`
 	WorkspaceID     string           `json:"workspaceId"`

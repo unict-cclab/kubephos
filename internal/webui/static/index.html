@@ -34,6 +34,8 @@
           <h1 id="page-title">Overview</h1>
         </div>
         <div class="topbar-actions">
+          <span class="signed-user" id="signed-user"></span>
+          <button class="button secondary" id="logout-button">Sign out</button>
           <button class="button secondary" id="refresh-button">Refresh</button>
           <button class="button primary" id="new-workspace-button">New workspace</button>
         </div>
@@ -117,6 +119,19 @@
       </section>
     </main>
   </div>
+
+  <dialog id="auth-dialog" class="modal auth-modal">
+    <form method="dialog" id="auth-form">
+      <div class="auth-brand"><span class="brand-mark">K</span><div><strong>KubePhos</strong><small>Secure control plane</small></div></div>
+      <p class="eyebrow" id="auth-eyebrow">WELCOME</p>
+      <h2 id="auth-title">Sign in</h2>
+      <p class="auth-copy" id="auth-copy">Use your administrator account to continue.</p>
+      <label>Username<input name="username" minlength="3" maxlength="40" autocomplete="username" required autofocus></label>
+      <label>Password<input name="password" type="password" minlength="12" maxlength="128" autocomplete="current-password" required></label>
+      <p class="form-error" id="auth-error"></p>
+      <button class="button primary auth-submit" type="submit" id="auth-submit">Sign in</button>
+    </form>
+  </dialog>
 
   <dialog id="workspace-dialog" class="modal">
     <form method="dialog" id="workspace-form">

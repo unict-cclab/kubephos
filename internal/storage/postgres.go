@@ -48,6 +48,90 @@ func (s *Store) Ready(ctx context.Context) error {
 	return nil
 }
 
+func (s *Store) UserCount(ctx context.Context) (int, error) {
+	var count int
+	err := s.pool.QueryRow(ctx, `SELECT count(*) FROM users`).Scan(&count)
+	return count, err
+}
+
+func (s *Store) CreateInitialUser(ctx context.Context, user domain.User) (domain.User, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return domain.User{}, err
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(457213684)`); err != nil {
+		return domain.User{}, err
+	}
+	var exists bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM users)`).Scan(&exists); err != nil {
+		return domain.User{}, err
+	}
+	if exists {
+		return domain.User{}, fmt.Errorf("%w: initial administrator already exists", ErrConflict)
+	}
+	if err := tx.QueryRow(ctx, `
+		INSERT INTO users (id, username, password_hash, role)
+		VALUES ($1, $2, $3, $4)
+		RETURNING created_at, updated_at
+	`, user.ID, user.Username, user.PasswordHash, user.Role).Scan(&user.CreatedAt, &user.UpdatedAt); err != nil {
+		return domain.User{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return domain.User{}, err
+	}
+	return user, nil
+}
+
+func (s *Store) GetUserByUsername(ctx context.Context, username string) (domain.User, error) {
+	var user domain.User
+	err := s.pool.QueryRow(ctx, `
+		SELECT id, username, password_hash, role, created_at, updated_at
+		FROM users
+		WHERE username = $1
+	`, username).Scan(&user.ID, &user.Username, &user.PasswordHash, &user.Role, &user.CreatedAt, &user.UpdatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.User{}, ErrNotFound
+	}
+	return user, err
+}
+
+func (s *Store) CreateSession(ctx context.Context, session domain.Session) error {
+	_, err := s.pool.Exec(ctx, `
+		INSERT INTO auth_sessions (token_hash, user_id, csrf_token, expires_at)
+		VALUES ($1, $2, $3, $4)
+	`, session.TokenHash, session.User.ID, session.CSRFToken, session.ExpiresAt)
+	return err
+}
+
+func (s *Store) GetSession(ctx context.Context, tokenHash string) (domain.Session, error) {
+	var session domain.Session
+	err := s.pool.QueryRow(ctx, `
+		SELECT s.token_hash, s.csrf_token, s.expires_at,
+		       u.id, u.username, u.role, u.created_at, u.updated_at
+		FROM auth_sessions s
+		JOIN users u ON u.id = s.user_id
+		WHERE s.token_hash = $1 AND s.expires_at > now()
+	`, tokenHash).Scan(&session.TokenHash, &session.CSRFToken, &session.ExpiresAt, &session.User.ID, &session.User.Username, &session.User.Role, &session.User.CreatedAt, &session.User.UpdatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.Session{}, ErrNotFound
+	}
+	if err == nil {
+		_, _ = s.pool.Exec(ctx, `UPDATE auth_sessions SET last_seen_at = now() WHERE token_hash = $1 AND last_seen_at < now() - interval '5 minutes'`, tokenHash)
+	}
+	return session, err
+}
+
+func (s *Store) DeleteSession(ctx context.Context, tokenHash string) error {
+	_, err := s.pool.Exec(ctx, `DELETE FROM auth_sessions WHERE token_hash = $1`)
+	return err
+}
+
+func (s *Store) DeleteExpiredSessions(ctx context.Context) error {
+	_, err := s.pool.Exec(ctx, `DELETE FROM auth_sessions WHERE expires_at <= now()`)
+	return err
+}
+
 func (s *Store) CreateWorkspace(ctx context.Context, workspace domain.Workspace) (domain.Workspace, error) {
 	err := s.pool.QueryRow(ctx, `
 		INSERT INTO workspaces (id, name, description, status)
