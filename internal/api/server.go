@@ -19,6 +19,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 
 	"kubephos.dev/kubephos/internal/artifacts"
+	"kubephos.dev/kubephos/internal/catalog"
 	"kubephos.dev/kubephos/internal/domain"
 	"kubephos.dev/kubephos/internal/id"
 	"kubephos.dev/kubephos/internal/plugins"
@@ -47,6 +48,8 @@ func NewServer(store *storage.Store, registry *plugins.Registry, artifactStore *
 	router.HandleFunc("POST /api/v1/auth/logout", server.authLogout)
 	router.HandleFunc("GET /api/v1/system", server.system)
 	router.HandleFunc("GET /api/v1/plugins", server.listPlugins)
+	router.HandleFunc("GET /api/v1/catalog/applications", server.listCatalogApplications)
+	router.HandleFunc("POST /api/v1/catalog/applications", server.importCatalogApplication)
 	router.HandleFunc("GET /api/v1/credentials", server.listCredentials)
 	router.HandleFunc("POST /api/v1/credentials", server.createCredential)
 	router.HandleFunc("GET /api/v1/connections", server.listConnections)
@@ -101,6 +104,40 @@ func (s *Server) system(response http.ResponseWriter, request *http.Request) {
 
 func (s *Server) listPlugins(response http.ResponseWriter, _ *http.Request) {
 	writeJSON(response, http.StatusOK, map[string]any{"items": s.registry.Manifests()})
+}
+
+func (s *Server) listCatalogApplications(response http.ResponseWriter, request *http.Request) {
+	items, err := s.store.ListCatalogApplications(request.Context())
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, "database_error", "Could not list catalog applications.")
+		return
+	}
+	writeJSON(response, http.StatusOK, map[string]any{"items": items})
+}
+
+func (s *Server) importCatalogApplication(response http.ResponseWriter, request *http.Request) {
+	var input struct {
+		Descriptor string `json:"descriptor"`
+	}
+	if err := decodeJSON(request, &input); err != nil {
+		writeError(response, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	application, err := catalog.Parse([]byte(input.Descriptor), "imported")
+	if err != nil {
+		writeError(response, http.StatusUnprocessableEntity, "invalid_application", err.Error())
+		return
+	}
+	application, err = s.store.CreateCatalogApplication(request.Context(), application)
+	if errors.Is(err, storage.ErrConflict) {
+		writeError(response, http.StatusConflict, "application_conflict", "This application version already exists. Use a new version for changed content.")
+		return
+	}
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, "database_error", "Could not store application.")
+		return
+	}
+	writeJSON(response, http.StatusCreated, application)
 }
 
 func (s *Server) listCredentials(response http.ResponseWriter, request *http.Request) {
@@ -707,6 +744,9 @@ func auditTarget(request *http.Request) (string, string, string, bool) {
 		case "operations":
 			return "operation.create", "operation", "", true
 		}
+	}
+	if len(parts) == 2 && parts[0] == "catalog" && parts[1] == "applications" {
+		return "application.import", "catalog-application", "", true
 	}
 	if len(parts) == 3 && parts[0] == "operations" {
 		switch parts[2] {

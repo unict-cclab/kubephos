@@ -4,6 +4,7 @@ const state = {
   workspaces: [],
   operations: [],
   plugins: [],
+  applications: [],
   credentials: [],
   connections: [],
   resources: [],
@@ -16,6 +17,7 @@ const views = {
   overview: ['CONTROL PLANE', 'Overview'],
   workspaces: ['ENVIRONMENTS', 'Workspaces'],
   operations: ['BACKGROUND WORK', 'Operations'],
+  catalog: ['APPLICATIONS', 'Catalog'],
   plugins: ['CAPABILITIES', 'Plugins'],
   infrastructure: ['MANAGED ACCESS', 'Infrastructure']
 }
@@ -44,13 +46,14 @@ async function api(path, options = {}) {
 
 async function loadAll(silent = false) {
   try {
-    const [system, workspaces, operations, plugins, credentials, connections, resources, audit] = await Promise.all([
-      api('/system'), api('/workspaces'), api('/operations'), api('/plugins'), api('/credentials'), api('/connections'), api('/infrastructure/resources'), api('/audit?limit=20')
+    const [system, workspaces, operations, plugins, applications, credentials, connections, resources, audit] = await Promise.all([
+      api('/system'), api('/workspaces'), api('/operations'), api('/plugins'), api('/catalog/applications'), api('/credentials'), api('/connections'), api('/infrastructure/resources'), api('/audit?limit=20')
     ])
     state.system = system
     state.workspaces = workspaces.items
     state.operations = operations.items
     state.plugins = plugins.items
+    state.applications = applications.items
     state.credentials = credentials.items
     state.connections = connections.items
     state.resources = resources.items
@@ -80,6 +83,7 @@ function render() {
   renderOperations('#operation-list', state.operations)
   renderWorkspaces()
   renderPlugins()
+  renderApplications()
   renderCredentials()
   renderConnections()
   renderResources()
@@ -189,6 +193,64 @@ function renderPlugins() {
     <div><h3>${escapeText(plugin.name)}</h3><p>${escapeText(plugin.description)}</p><p>${escapeText(plugin.id)} · ${escapeText(plugin.version)}</p></div>
     <span class="planned">Installed</span>
   </article>`).join('') || `<div class="empty-state"><div><strong>No plugins installed</strong>Add a conforming plugin to provide a capability.</div></div>`
+}
+
+function renderApplications() {
+  const root = $('#application-list')
+  $('#import-application-button').hidden = state.auth?.user?.role !== 'admin'
+  if (!state.applications.length) {
+    root.innerHTML = `<div class="empty-state"><div><strong>No applications available</strong>Import a versioned descriptor that implements the application contract.</div></div>`
+    return
+  }
+  root.innerHTML = state.applications.map(application => {
+    const descriptor = application.descriptor || {}
+    const specification = descriptor.spec || {}
+    const components = specification.interface?.components || []
+    const endpoints = specification.interface?.endpoints || []
+    const traits = [...new Set(components.flatMap(component => component.traits || []))].sort()
+    const source = specification.package || {}
+    return `<article class="application-card">
+      <div class="application-card-header"><span class="application-icon">${escapeText(application.name.slice(0, 1).toUpperCase())}</span><span class="status succeeded">${escapeText(application.origin)}</span></div>
+      <h3>${escapeText(application.name)}</h3>
+      <p>${escapeText(application.description || 'A contract-compatible application package.')}</p>
+      <div class="trait-list">${traits.map(trait => `<span>${escapeText(trait)}</span>`).join('')}</div>
+      <dl><div><dt>Version</dt><dd>${escapeText(application.version)}</dd></div><div><dt>Components</dt><dd>${components.length}</dd></div><div><dt>Endpoints</dt><dd>${endpoints.length}</dd></div><div><dt>Package</dt><dd>${escapeText(source.type || 'unknown')} · ${escapeText(source.format || 'unknown')}</dd></div></dl>
+      <small class="digest" title="${escapeText(application.digest)}">${escapeText(application.digest)}</small>
+    </article>`
+  }).join('')
+}
+
+function openApplicationForm() {
+  const dialog = $('#application-dialog')
+  const form = $('#application-form')
+  form.reset()
+  $('#application-error').textContent = ''
+  $('#application-file-summary').textContent = 'Select a descriptor that implements catalog.kubephos.dev/v1alpha1.'
+  dialog.showModal()
+}
+
+async function importApplication(event) {
+  event.preventDefault()
+  const file = $('#application-file').files[0]
+  if (!file) return
+  if (file.size > 512 * 1024) {
+    $('#application-error').textContent = 'The descriptor cannot exceed 512 KB.'
+    return
+  }
+  const submit = $('#application-submit')
+  submit.disabled = true
+  $('#application-error').textContent = ''
+  try {
+    await api('/catalog/applications', {method: 'POST', body: JSON.stringify({descriptor: await file.text()})})
+    $('#application-dialog').close()
+    await loadAll(true)
+    switchView('catalog')
+    toast('Application validated and imported.')
+  } catch (error) {
+    $('#application-error').textContent = error.message
+  } finally {
+    submit.disabled = false
+  }
 }
 
 function credentialTypes() {
@@ -676,6 +738,12 @@ $('#credential-form').addEventListener('submit', createCredential)
 $('#credential-kind').addEventListener('change', event => renderCredentialFields(event.target.value))
 $('#connection-form').addEventListener('submit', createConnection)
 $('#connection-plugin').addEventListener('change', event => renderConnectionFields(event.target.value))
+$('#import-application-button').addEventListener('click', openApplicationForm)
+$('#application-form').addEventListener('submit', importApplication)
+$('#application-file').addEventListener('change', event => {
+  const file = event.target.files[0]
+  $('#application-file-summary').textContent = file ? `${file.name} · ${formatBytes(file.size)}` : 'Select a descriptor that implements catalog.kubephos.dev/v1alpha1.'
+})
 window.addEventListener('hashchange', () => switchView(location.hash.slice(1) || 'overview'))
 switchView(location.hash.slice(1) || 'overview')
 initialize()

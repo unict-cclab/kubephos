@@ -20,6 +20,7 @@ COPY --from=build /out/proxmox-plugin /opt/kubephos/plugins/proxmox/proxmox-plug
 COPY plugins/proxmox/plugin.yaml /opt/kubephos/plugins/proxmox/plugin.yaml
 COPY --from=build /out/proxmox-vm-plugin /opt/kubephos/plugins/proxmox-vm/proxmox-vm-plugin
 COPY plugins/proxmox-vm/plugin.yaml /opt/kubephos/plugins/proxmox-vm/plugin.yaml
+COPY catalog/applications /opt/kubephos/catalog/applications
 USER 10001:10001
 EXPOSE 8080
 ENTRYPOINT ["/usr/local/bin/kubephos"]

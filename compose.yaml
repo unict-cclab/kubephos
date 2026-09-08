@@ -4,6 +4,7 @@ x-platform-environment: &platform-environment
   KUBEPHOS_DATABASE_URL: postgres://kubephos:${POSTGRES_PASSWORD:-kubephos-dev}@postgres:5432/kubephos?sslmode=disable
   KUBEPHOS_ARTIFACT_ENDPOINT: http://seaweedfs:8888
   KUBEPHOS_PLUGIN_DIRECTORY: /opt/kubephos/plugins
+  KUBEPHOS_CATALOG_DIRECTORY: /opt/kubephos/catalog/applications
   KUBEPHOS_CREDENTIAL_KEY_FILE: /var/lib/kubephos/master.key
 
 services:

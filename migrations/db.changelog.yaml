@@ -41,3 +41,10 @@ databaseChangeLog:
         - sqlFile:
             path: changes/006-provider-connections.sql
             relativeToChangelogFile: true
+  - changeSet:
+      id: 007-application-catalog
+      author: kubephos
+      changes:
+        - sqlFile:
+            path: changes/007-application-catalog.sql
+            relativeToChangelogFile: true

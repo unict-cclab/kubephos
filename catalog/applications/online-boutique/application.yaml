@@ -1,0 +1,77 @@
+apiVersion: catalog.kubephos.dev/v1alpha1
+kind: Application
+metadata:
+  id: dev.kubephos.online-boutique
+  name: Online Boutique
+  version: 0.10.5
+  description: Cloud-native microservices demo with declared workload targets and a public frontend.
+spec:
+  package:
+    type: git
+    format: plain-yaml
+    repository: https://github.com/GoogleCloudPlatform/microservices-demo.git
+    revision: 16a51f8dbabc4af2c4c82f81ca6d4813888c2c34
+    path: release
+    entrypoint: kubernetes-manifests.yaml
+  interface:
+    components:
+      - id: currencyservice
+        workload: {apiVersion: apps/v1, kind: Deployment, name: currencyservice}
+        selector: {app: currencyservice}
+        traits: [scalable, schedulable]
+      - id: productcatalogservice
+        workload: {apiVersion: apps/v1, kind: Deployment, name: productcatalogservice}
+        selector: {app: productcatalogservice}
+        traits: [scalable, schedulable]
+      - id: checkoutservice
+        workload: {apiVersion: apps/v1, kind: Deployment, name: checkoutservice}
+        selector: {app: checkoutservice}
+        traits: [scalable, schedulable]
+      - id: shippingservice
+        workload: {apiVersion: apps/v1, kind: Deployment, name: shippingservice}
+        selector: {app: shippingservice}
+        traits: [scalable, schedulable]
+      - id: cartservice
+        workload: {apiVersion: apps/v1, kind: Deployment, name: cartservice}
+        selector: {app: cartservice}
+        traits: [scalable, schedulable]
+      - id: redis-cart
+        workload: {apiVersion: apps/v1, kind: Deployment, name: redis-cart}
+        selector: {app: redis-cart}
+        traits: [schedulable, stateful]
+      - id: emailservice
+        workload: {apiVersion: apps/v1, kind: Deployment, name: emailservice}
+        selector: {app: emailservice}
+        traits: [scalable, schedulable]
+      - id: paymentservice
+        workload: {apiVersion: apps/v1, kind: Deployment, name: paymentservice}
+        selector: {app: paymentservice}
+        traits: [scalable, schedulable]
+      - id: frontend
+        workload: {apiVersion: apps/v1, kind: Deployment, name: frontend}
+        selector: {app: frontend}
+        traits: [scalable, schedulable]
+      - id: recommendationservice
+        workload: {apiVersion: apps/v1, kind: Deployment, name: recommendationservice}
+        selector: {app: recommendationservice}
+        traits: [scalable, schedulable]
+      - id: adservice
+        workload: {apiVersion: apps/v1, kind: Deployment, name: adservice}
+        selector: {app: adservice}
+        traits: [scalable, schedulable]
+      - id: loadgenerator
+        workload: {apiVersion: apps/v1, kind: Deployment, name: loadgenerator}
+        selector: {app: loadgenerator}
+        traits: [load-generator, schedulable]
+    endpoints:
+      - id: frontend-http
+        component: frontend
+        service: frontend
+        port: 80
+        protocol: http
+        path: /
+  valuesSchema:
+    type: object
+    additionalProperties: false
+    properties: {}
+  defaults: {}

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"kubephos.dev/kubephos/internal/domain"
@@ -259,6 +260,72 @@ func (s *Store) GetProviderConnectionConfiguration(ctx context.Context, connecti
 		return domain.ProviderConnection{}, ErrNotFound
 	}
 	return connection, err
+}
+
+func (s *Store) SyncCatalogApplications(ctx context.Context, applications []domain.CatalogApplication) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	for _, application := range applications {
+		command, err := tx.Exec(ctx, `
+			INSERT INTO catalog_applications (id, version, name, description, origin, descriptor, digest, enabled)
+			VALUES ($1, $2, $3, $4, 'built-in', $5, $6, true)
+			ON CONFLICT (id, version) DO NOTHING
+		`, application.ID, application.Version, application.Name, application.Description, application.Descriptor, application.Digest)
+		if err != nil {
+			return err
+		}
+		if command.RowsAffected() == 1 {
+			continue
+		}
+		var digest string
+		if err := tx.QueryRow(ctx, `SELECT digest FROM catalog_applications WHERE id = $1 AND version = $2`, application.ID, application.Version).Scan(&digest); err != nil {
+			return err
+		}
+		if digest != application.Digest {
+			return fmt.Errorf("%w: application %s version %s already has a different digest", ErrConflict, application.ID, application.Version)
+		}
+	}
+	return tx.Commit(ctx)
+}
+
+func (s *Store) CreateCatalogApplication(ctx context.Context, application domain.CatalogApplication) (domain.CatalogApplication, error) {
+	err := s.pool.QueryRow(ctx, `
+		INSERT INTO catalog_applications (id, version, name, description, origin, descriptor, digest, enabled)
+		VALUES ($1, $2, $3, $4, 'imported', $5, $6, true)
+		RETURNING created_at, updated_at
+	`, application.ID, application.Version, application.Name, application.Description, application.Descriptor, application.Digest).Scan(&application.CreatedAt, &application.UpdatedAt)
+	if err != nil {
+		var databaseError *pgconn.PgError
+		if errors.As(err, &databaseError) && databaseError.Code == "23505" {
+			return domain.CatalogApplication{}, ErrConflict
+		}
+	}
+	return application, err
+}
+
+func (s *Store) ListCatalogApplications(ctx context.Context) ([]domain.CatalogApplication, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, name, version, description, origin, descriptor, digest, enabled, created_at, updated_at
+		FROM catalog_applications
+		WHERE enabled = true
+		ORDER BY name, version DESC
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := []domain.CatalogApplication{}
+	for rows.Next() {
+		var application domain.CatalogApplication
+		if err := rows.Scan(&application.ID, &application.Name, &application.Version, &application.Description, &application.Origin, &application.Descriptor, &application.Digest, &application.Enabled, &application.CreatedAt, &application.UpdatedAt); err != nil {
+			return nil, err
+		}
+		result = append(result, application)
+	}
+	return result, rows.Err()
 }
 
 func (s *Store) SyncDiscoveredResources(ctx context.Context, resources []domain.InfrastructureResource) error {

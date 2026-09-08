@@ -1,0 +1,92 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kubephos.dev/contracts/v1alpha1/application.schema.json",
+  "type": "object",
+  "required": ["apiVersion", "kind", "metadata", "spec"],
+  "additionalProperties": false,
+  "properties": {
+    "apiVersion": {"const": "catalog.kubephos.dev/v1alpha1"},
+    "kind": {"const": "Application"},
+    "metadata": {
+      "type": "object",
+      "required": ["id", "name", "version"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9.-]{2,127}$"},
+        "name": {"type": "string", "minLength": 1, "maxLength": 80},
+        "version": {"type": "string", "pattern": "^[0-9A-Za-z][0-9A-Za-z.+_-]{0,63}$"},
+        "description": {"type": "string", "maxLength": 280}
+      }
+    },
+    "spec": {
+      "type": "object",
+      "required": ["package", "interface", "valuesSchema", "defaults"],
+      "additionalProperties": false,
+      "properties": {
+        "package": {
+          "type": "object",
+          "required": ["type", "format", "entrypoint"],
+          "additionalProperties": false,
+          "properties": {
+            "type": {"enum": ["git", "oci", "embedded"]},
+            "format": {"enum": ["plain-yaml", "kustomize", "helm"]},
+            "repository": {"type": "string", "format": "uri"},
+            "revision": {"type": "string"},
+            "path": {"type": "string"},
+            "reference": {"type": "string"},
+            "entrypoint": {"type": "string"}
+          }
+        },
+        "interface": {
+          "type": "object",
+          "required": ["components"],
+          "additionalProperties": false,
+          "properties": {
+            "components": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "object",
+                "required": ["id", "workload", "selector", "traits"],
+                "additionalProperties": false,
+                "properties": {
+                  "id": {"type": "string"},
+                  "workload": {
+                    "type": "object",
+                    "required": ["apiVersion", "kind", "name"],
+                    "additionalProperties": false,
+                    "properties": {
+                      "apiVersion": {"type": "string"},
+                      "kind": {"type": "string"},
+                      "name": {"type": "string"}
+                    }
+                  },
+                  "selector": {"type": "object"},
+                  "traits": {"type": "array", "items": {"type": "string"}}
+                }
+              }
+            },
+            "endpoints": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["id", "component", "service", "port", "protocol"],
+                "additionalProperties": false,
+                "properties": {
+                  "id": {"type": "string"},
+                  "component": {"type": "string"},
+                  "service": {"type": "string"},
+                  "port": {"type": "integer", "minimum": 1, "maximum": 65535},
+                  "protocol": {"type": "string"},
+                  "path": {"type": "string"}
+                }
+              }
+            }
+          }
+        },
+        "valuesSchema": {"type": "object"},
+        "defaults": {"type": "object"}
+      }
+    }
+  }
+}

@@ -11,6 +11,7 @@ type Config struct {
 	DatabaseURL       string
 	ArtifactEndpoint  string
 	PluginDirectory   string
+	CatalogDirectory  string
 	CredentialKeyFile string
 	PublicURL         string
 	WorkerConcurrency int
@@ -24,6 +25,7 @@ func Load() Config {
 		DatabaseURL:       value("KUBEPHOS_DATABASE_URL", "postgres://kubephos:kubephos@localhost:5432/kubephos?sslmode=disable"),
 		ArtifactEndpoint:  value("KUBEPHOS_ARTIFACT_ENDPOINT", "http://localhost:8888"),
 		PluginDirectory:   value("KUBEPHOS_PLUGIN_DIRECTORY", "./plugins-dist"),
+		CatalogDirectory:  value("KUBEPHOS_CATALOG_DIRECTORY", "./catalog/applications"),
 		CredentialKeyFile: value("KUBEPHOS_CREDENTIAL_KEY_FILE", "./.kubephos/master.key"),
 		PublicURL:         value("KUBEPHOS_URL", "http://localhost:8080"),
 		WorkerConcurrency: integer("KUBEPHOS_WORKER_CONCURRENCY", 4),

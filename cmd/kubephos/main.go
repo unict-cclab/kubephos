@@ -14,6 +14,7 @@ import (
 
 	"kubephos.dev/kubephos/internal/api"
 	"kubephos.dev/kubephos/internal/artifacts"
+	"kubephos.dev/kubephos/internal/catalog"
 	"kubephos.dev/kubephos/internal/config"
 	"kubephos.dev/kubephos/internal/engine"
 	"kubephos.dev/kubephos/internal/plugins"
@@ -45,12 +46,26 @@ func run() error {
 		return status(configValue)
 	case "doctor":
 		return doctor(configValue)
+	case "catalog":
+		return catalogMaintenance(configValue)
 	case "version":
 		fmt.Println(version)
 		return nil
 	default:
 		return fmt.Errorf("unknown command %q", command)
 	}
+}
+
+func catalogMaintenance(configValue config.Config) error {
+	if len(os.Args) != 3 || os.Args[2] != "validate" {
+		return errors.New("usage: kubephos catalog validate")
+	}
+	applications, err := catalog.LoadDirectory(configValue.CatalogDirectory)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("PASS %d application versions\n", len(applications))
+	return nil
 }
 
 func serve(configValue config.Config) error {
@@ -62,6 +77,13 @@ func serve(configValue config.Config) error {
 	}
 	defer store.Close()
 	if err := store.Ready(ctx); err != nil {
+		return err
+	}
+	applications, err := catalog.LoadDirectory(configValue.CatalogDirectory)
+	if err != nil {
+		return err
+	}
+	if err := store.SyncCatalogApplications(ctx, applications); err != nil {
 		return err
 	}
 	vault, resolver, err := credentialRuntime(store, configValue.CredentialKeyFile)

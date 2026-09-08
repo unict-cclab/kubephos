@@ -18,6 +18,7 @@
         <button class="nav-item active" data-view="overview"><span>⌂</span>Overview</button>
         <button class="nav-item" data-view="workspaces"><span>◇</span>Workspaces</button>
         <button class="nav-item" data-view="operations"><span>↻</span>Operations</button>
+        <button class="nav-item" data-view="catalog"><span>◫</span>Catalog</button>
         <button class="nav-item" data-view="plugins"><span>⌘</span>Plugins</button>
         <button class="nav-item" data-view="infrastructure"><span>▦</span>Infrastructure</button>
       </nav>
@@ -87,6 +88,15 @@
           <p class="section-copy">Every external capability follows the same versioned contract.</p>
         </div>
         <div id="plugin-list" class="workspace-grid"></div>
+      </section>
+
+      <section class="view" id="view-catalog">
+        <div class="section-heading">
+          <div><p class="eyebrow">APPLICATION INTERFACE</p><h2>Application catalog</h2></div>
+          <button class="button primary" id="import-application-button">Import application</button>
+        </div>
+        <p class="section-copy catalog-copy">Versioned packages expose workloads and endpoints through one validated contract.</p>
+        <div id="application-list" class="catalog-grid"></div>
       </section>
 
       <section class="view" id="view-infrastructure">
@@ -183,6 +193,17 @@
       <div class="validation-callout"><span>✓</span><p><strong>Validated before storage.</strong> Credentials remain encrypted and operations receive only this connection reference.</p></div>
       <p class="form-error" id="connection-error"></p>
       <div class="modal-actions"><button class="button secondary" type="button" data-close-dialog="connection-dialog">Cancel</button><button class="button primary" type="submit" id="connection-submit">Validate and save</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="application-dialog" class="modal">
+    <form method="dialog" id="application-form">
+      <div class="modal-header"><div><p class="eyebrow">VALIDATED CATALOG</p><h2>Import application</h2></div><button class="icon-button" type="button" data-close-dialog="application-dialog" aria-label="Close">×</button></div>
+      <label>Application descriptor<input id="application-file" name="file" type="file" accept=".yaml,.yml,.json,application/yaml,application/json" required></label>
+      <p class="field-description" id="application-file-summary">Select a descriptor that implements catalog.kubephos.dev/v1alpha1.</p>
+      <div class="validation-callout"><span>✓</span><p><strong>Validated before import.</strong> Versions are immutable and remote packages must use a Git commit or OCI digest.</p></div>
+      <p class="form-error" id="application-error"></p>
+      <div class="modal-actions"><button class="button secondary" type="button" data-close-dialog="application-dialog">Cancel</button><button class="button primary" type="submit" id="application-submit">Validate and import</button></div>
     </form>
   </dialog>
 
