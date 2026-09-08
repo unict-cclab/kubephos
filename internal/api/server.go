@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -44,6 +45,8 @@ func NewServer(store *storage.Store, registry *plugins.Registry, artifactStore *
 	router.HandleFunc("GET /api/v1/plugins", server.listPlugins)
 	router.HandleFunc("GET /api/v1/credentials", server.listCredentials)
 	router.HandleFunc("POST /api/v1/credentials", server.createCredential)
+	router.HandleFunc("GET /api/v1/infrastructure/resources", server.listInfrastructureResources)
+	router.HandleFunc("GET /api/v1/audit", server.listAuditEvents)
 	router.HandleFunc("GET /api/v1/workspaces", server.listWorkspaces)
 	router.HandleFunc("POST /api/v1/workspaces", server.createWorkspace)
 	router.HandleFunc("GET /api/v1/workspaces/{id}", server.getWorkspace)
@@ -56,7 +59,7 @@ func NewServer(store *storage.Store, registry *plugins.Registry, artifactStore *
 	router.HandleFunc("GET /api/v1/operations/{id}/events", server.operationEvents)
 	router.HandleFunc("GET /api/v1/artifacts/{id}/download", server.downloadArtifact)
 	router.Handle("/", webui.Handler())
-	return securityHeaders(requestLog(recoverer(router)))
+	return securityHeaders(requestLog(auditMutations(store, recoverer(router))))
 }
 
 func (s *Server) live(response http.ResponseWriter, _ *http.Request) {
@@ -167,6 +170,31 @@ func (s *Server) credentialSchema(kind string) (json.RawMessage, bool) {
 		}
 	}
 	return nil, false
+}
+
+func (s *Server) listInfrastructureResources(response http.ResponseWriter, request *http.Request) {
+	items, err := s.store.ListInfrastructureResources(request.Context())
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, "database_error", "Could not list infrastructure resources.")
+		return
+	}
+	writeJSON(response, http.StatusOK, map[string]any{"items": items})
+}
+
+func (s *Server) listAuditEvents(response http.ResponseWriter, request *http.Request) {
+	limit := 50
+	if raw := request.URL.Query().Get("limit"); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err == nil && parsed >= 1 && parsed <= 200 {
+			limit = parsed
+		}
+	}
+	items, err := s.store.ListAuditEvents(request.Context(), limit)
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, "database_error", "Could not list audit events.")
+		return
+	}
+	writeJSON(response, http.StatusOK, map[string]any{"items": items})
 }
 
 func (s *Server) listWorkspaces(response http.ResponseWriter, request *http.Request) {
@@ -458,6 +486,98 @@ func resolvedPlanHash(manifest plugins.Manifest, spec json.RawMessage, plan doma
 
 func terminal(status string) bool {
 	return status == domain.OperationSucceeded || status == domain.OperationFailed || status == domain.OperationCanceled
+}
+
+type bufferedResponse struct {
+	header http.Header
+	status int
+	body   bytes.Buffer
+}
+
+func newBufferedResponse() *bufferedResponse {
+	return &bufferedResponse{header: make(http.Header)}
+}
+
+func (r *bufferedResponse) Header() http.Header {
+	return r.header
+}
+
+func (r *bufferedResponse) WriteHeader(status int) {
+	if r.status == 0 {
+		r.status = status
+	}
+}
+
+func (r *bufferedResponse) Write(value []byte) (int, error) {
+	if r.status == 0 {
+		r.status = http.StatusOK
+	}
+	return r.body.Write(value)
+}
+
+func auditMutations(store *storage.Store, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		action, targetType, targetID, audited := auditTarget(request)
+		if !audited {
+			next.ServeHTTP(response, request)
+			return
+		}
+		buffered := newBufferedResponse()
+		next.ServeHTTP(buffered, request)
+		if buffered.status == 0 {
+			buffered.status = http.StatusOK
+		}
+		if targetID == "" && buffered.status < 300 {
+			var created struct {
+				ID string `json:"id"`
+			}
+			if json.Unmarshal(buffered.body.Bytes(), &created) == nil {
+				targetID = created.ID
+			}
+		}
+		outcome := "succeeded"
+		if buffered.status >= 500 {
+			outcome = "failed"
+		} else if buffered.status >= 400 {
+			outcome = "rejected"
+		}
+		details, _ := json.Marshal(map[string]any{"method": request.Method, "path": request.URL.Path, "status": buffered.status})
+		if err := store.AppendAuditEvent(request.Context(), domain.AuditEvent{Actor: "local-admin", Action: action, TargetType: targetType, TargetID: targetID, Outcome: outcome, Details: details}); err != nil {
+			slog.Error("append audit event", "action", action, "error", err)
+		}
+		for key, values := range buffered.header {
+			response.Header()[key] = values
+		}
+		response.WriteHeader(buffered.status)
+		_, _ = response.Write(buffered.body.Bytes())
+	})
+}
+
+func auditTarget(request *http.Request) (string, string, string, bool) {
+	if request.Method != http.MethodPost && request.Method != http.MethodPut && request.Method != http.MethodPatch && request.Method != http.MethodDelete {
+		return "", "", "", false
+	}
+	path := strings.Trim(strings.TrimPrefix(request.URL.Path, "/api/v1/"), "/")
+	parts := strings.Split(path, "/")
+	if len(parts) == 1 {
+		switch parts[0] {
+		case "workspaces":
+			return "workspace.create", "workspace", "", true
+		case "credentials":
+			return "credential.create", "credential", "", true
+		case "operations":
+			return "operation.create", "operation", "", true
+		}
+	}
+	if len(parts) == 3 && parts[0] == "operations" {
+		switch parts[2] {
+		case "queue":
+			return "operation.queue", "operation", parts[1], true
+		case "cancel":
+			return "operation.cancel", "operation", parts[1], true
+		}
+	}
+	return request.Method + " " + path, "api", "", true
 }
 
 func decodeJSON(request *http.Request, target any) error {

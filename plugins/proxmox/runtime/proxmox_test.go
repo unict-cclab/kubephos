@@ -55,15 +55,15 @@ func TestDiscoveryUsesOnlyGetAndProtectsResources(t *testing.T) {
 	}
 	var inventory struct {
 		Resources []struct {
-			Ownership  string `json:"ownership"`
-			Protection string `json:"protection"`
+			ExternalID string `json:"externalId"`
+			Kind       string `json:"kind"`
 		} `json:"resources"`
 	}
 	if err := json.Unmarshal(result, &inventory); err != nil {
 		t.Fatal(err)
 	}
-	if len(inventory.Resources) != 1 || inventory.Resources[0].Ownership != "imported" || inventory.Resources[0].Protection != "read-only" {
-		t.Fatalf("resource is not protected: %s", result)
+	if len(inventory.Resources) != 1 || inventory.Resources[0].ExternalID != "qemu/100" || inventory.Resources[0].Kind != "virtual-machine" {
+		t.Fatalf("resource identity is invalid: %s", result)
 	}
 	lock.Lock()
 	defer lock.Unlock()

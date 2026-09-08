@@ -152,7 +152,15 @@ func (Plugin) Execute(ctx context.Context, step domain.PlanStep, secrets map[str
 		}
 		protected := make([]map[string]any, 0, len(resources))
 		for _, resource := range resources {
-			protected = append(protected, map[string]any{"vmid": resource.VMID, "name": resource.Name, "node": resource.Node, "status": resource.Status, "type": resource.Type, "template": resource.Template == 1, "ownership": "imported", "protection": "read-only"})
+			protected = append(protected, map[string]any{
+				"externalId": fmt.Sprintf("%s/%d", resource.Type, resource.VMID),
+				"kind":       "virtual-machine",
+				"name":       resource.Name,
+				"state":      resource.Status,
+				"metadata": map[string]any{
+					"vmid": resource.VMID, "node": resource.Node, "type": resource.Type, "template": resource.Template == 1,
+				},
+			})
 		}
 		if err := log("info", fmt.Sprintf("Discovered %d existing resource(s); all marked imported and read-only", len(protected))); err != nil {
 			return nil, err

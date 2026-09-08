@@ -4,6 +4,8 @@ const state = {
   operations: [],
   plugins: [],
   credentials: [],
+  resources: [],
+  audit: [],
   selectedOperation: null,
   eventSource: null
 }
@@ -36,14 +38,16 @@ async function api(path, options = {}) {
 
 async function loadAll(silent = false) {
   try {
-    const [system, workspaces, operations, plugins, credentials] = await Promise.all([
-      api('/system'), api('/workspaces'), api('/operations'), api('/plugins'), api('/credentials')
+    const [system, workspaces, operations, plugins, credentials, resources, audit] = await Promise.all([
+      api('/system'), api('/workspaces'), api('/operations'), api('/plugins'), api('/credentials'), api('/infrastructure/resources'), api('/audit?limit=20')
     ])
     state.system = system
     state.workspaces = workspaces.items
     state.operations = operations.items
     state.plugins = plugins.items
     state.credentials = credentials.items
+    state.resources = resources.items
+    state.audit = audit.items
     render()
     setHealth(true)
     if (!silent) toast('Everything is up to date.')
@@ -65,6 +69,8 @@ function render() {
   renderWorkspaces()
   renderPlugins()
   renderCredentials()
+  renderResources()
+  renderAudit()
 }
 
 function renderOperations(selector, operations) {
@@ -126,6 +132,33 @@ function renderCredentials() {
     <span class="feature-icon">⌁</span>
     <div><h3>${escapeText(credential.name)}</h3><p>${escapeText(credential.kind)} · fingerprint ${escapeText(credential.fingerprint)}</p></div>
     <span class="status ready">Encrypted</span>
+  </article>`).join('')
+}
+
+function renderResources() {
+  const root = $('#resource-list')
+  if (!state.resources.length) {
+    root.innerHTML = `<div class="empty-state"><div><strong>No resources discovered</strong>Run an infrastructure discovery operation to populate the ledger.</div></div>`
+    return
+  }
+  root.innerHTML = state.resources.map(resource => `<article class="resource-row">
+    <span class="feature-icon">□</span>
+    <div><h3>${escapeText(resource.name)}</h3><p>${escapeText(resource.kind)} · ${escapeText(resource.externalId)} · ${escapeText(resource.state)}</p></div>
+    <div class="resource-badges"><span class="status ${resource.ownership === 'managed' ? 'succeeded' : ''}">${escapeText(resource.ownership)}</span><span class="protection">${escapeText(resource.protection)}</span></div>
+  </article>`).join('')
+}
+
+function renderAudit() {
+  const root = $('#audit-list')
+  if (!state.audit.length) {
+    root.innerHTML = `<div class="empty-state"><div><strong>No audit events</strong>Mutating actions will appear here.</div></div>`
+    return
+  }
+  root.innerHTML = state.audit.map(event => `<article class="audit-row">
+    <span class="audit-sequence">#${event.sequence}</span>
+    <div><h3>${escapeText(event.action)}</h3><p>${escapeText(event.actor)} · ${escapeText(event.targetType)}${event.targetId ? ` · ${escapeText(shortID(event.targetId))}` : ''}</p></div>
+    <span class="status ${event.outcome === 'succeeded' ? 'succeeded' : event.outcome === 'rejected' ? 'canceled' : 'failed'}">${escapeText(event.outcome)}</span>
+    <time>${formatDate(event.createdAt)}</time>
   </article>`).join('')
 }
 

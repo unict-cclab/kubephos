@@ -134,6 +134,98 @@ func (s *Store) GetEncryptedCredential(ctx context.Context, credentialID string)
 	return credential, err
 }
 
+func (s *Store) SyncDiscoveredResources(ctx context.Context, resources []domain.InfrastructureResource) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	for _, resource := range resources {
+		var workspaceID any
+		if resource.WorkspaceID != "" {
+			workspaceID = resource.WorkspaceID
+		}
+		metadata := resource.Metadata
+		if len(metadata) == 0 {
+			metadata = json.RawMessage(`{}`)
+		}
+		_, err := tx.Exec(ctx, `
+			INSERT INTO infrastructure_resources (
+				id, provider_plugin_id, external_id, workspace_id, kind, name, state,
+				ownership, protection, metadata, last_seen_at
+			)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, 'imported', 'read-only', $8, now())
+			ON CONFLICT (provider_plugin_id, external_id) DO UPDATE
+			SET kind = EXCLUDED.kind,
+			    name = EXCLUDED.name,
+			    state = EXCLUDED.state,
+			    metadata = EXCLUDED.metadata,
+			    last_seen_at = now(),
+			    updated_at = now()
+		`, resource.ID, resource.ProviderPluginID, resource.ExternalID, workspaceID, resource.Kind, resource.Name, resource.State, metadata)
+		if err != nil {
+			return err
+		}
+	}
+	return tx.Commit(ctx)
+}
+
+func (s *Store) ListInfrastructureResources(ctx context.Context) ([]domain.InfrastructureResource, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, provider_plugin_id, external_id, COALESCE(workspace_id, ''), kind, name, state,
+		       ownership, protection, metadata, last_seen_at, created_at, updated_at
+		FROM infrastructure_resources
+		ORDER BY ownership, kind, name
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := []domain.InfrastructureResource{}
+	for rows.Next() {
+		var resource domain.InfrastructureResource
+		if err := rows.Scan(&resource.ID, &resource.ProviderPluginID, &resource.ExternalID, &resource.WorkspaceID, &resource.Kind, &resource.Name, &resource.State, &resource.Ownership, &resource.Protection, &resource.Metadata, &resource.LastSeenAt, &resource.CreatedAt, &resource.UpdatedAt); err != nil {
+			return nil, err
+		}
+		result = append(result, resource)
+	}
+	return result, rows.Err()
+}
+
+func (s *Store) AppendAuditEvent(ctx context.Context, event domain.AuditEvent) error {
+	details := event.Details
+	if len(details) == 0 {
+		details = json.RawMessage(`{}`)
+	}
+	_, err := s.pool.Exec(ctx, `
+		INSERT INTO audit_events (actor, action, target_type, target_id, outcome, details)
+		VALUES ($1, $2, $3, $4, $5, $6)
+	`, event.Actor, event.Action, event.TargetType, event.TargetID, event.Outcome, details)
+	return err
+}
+
+func (s *Store) ListAuditEvents(ctx context.Context, limit int) ([]domain.AuditEvent, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT sequence, actor, action, target_type, target_id, outcome, details, created_at
+		FROM audit_events
+		ORDER BY sequence DESC
+		LIMIT $1
+	`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := []domain.AuditEvent{}
+	for rows.Next() {
+		var event domain.AuditEvent
+		if err := rows.Scan(&event.Sequence, &event.Actor, &event.Action, &event.TargetType, &event.TargetID, &event.Outcome, &event.Details, &event.CreatedAt); err != nil {
+			return nil, err
+		}
+		result = append(result, event)
+	}
+	return result, rows.Err()
+}
+
 func (s *Store) CreateOperation(ctx context.Context, operation domain.Operation) (domain.Operation, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {

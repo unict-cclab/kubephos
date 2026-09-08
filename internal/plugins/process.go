@@ -38,8 +38,9 @@ type descriptor struct {
 			Description string         `yaml:"description"`
 			Schema      map[string]any `yaml:"schema"`
 		} `yaml:"credentialSchemas"`
-		Permissions []string `yaml:"permissions"`
-		Runtime     struct {
+		Permissions  []string `yaml:"permissions"`
+		Capabilities []string `yaml:"capabilities"`
+		Runtime      struct {
 			Executable string `yaml:"executable"`
 			Timeout    string `yaml:"timeout"`
 		} `yaml:"runtime"`
@@ -157,6 +158,7 @@ func LoadProcess(path string, resolver SecretResolver) (*Process, error) {
 			Description:       definition.Metadata.Description,
 			Schema:            schema,
 			CredentialSchemas: credentialSchemas,
+			Capabilities:      definition.Spec.Capabilities,
 			Permissions:       definition.Spec.Permissions,
 		},
 		executable:  executable,

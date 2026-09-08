@@ -16,7 +16,17 @@ type Manifest struct {
 	Description       string             `json:"description"`
 	Schema            json.RawMessage    `json:"schema"`
 	CredentialSchemas []CredentialSchema `json:"credentialSchemas"`
+	Capabilities      []string           `json:"capabilities"`
 	Permissions       []string           `json:"permissions"`
+}
+
+func (m Manifest) HasCapability(capability string) bool {
+	for _, value := range m.Capabilities {
+		if value == capability {
+			return true
+		}
+	}
+	return false
 }
 
 type CredentialSchema struct {

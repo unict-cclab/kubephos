@@ -147,6 +147,12 @@ func (w *Worker) process(parent context.Context, owner string, operation domain.
 			w.failWithHealth(parent, operation.ID, step.ID, healthRaw, fmt.Errorf("health gate failed: %s", health.Summary))
 			return
 		}
+		if plugin.Manifest().HasCapability("infrastructure.discovery") {
+			if err := w.captureDiscovery(runCtx, operation, result, log); err != nil {
+				w.fail(parent, operation.ID, step.ID, err)
+				return
+			}
+		}
 		if err := w.store.SetStepState(runCtx, operation.ID, step.ID, domain.StepSucceeded, result, healthRaw, ""); err != nil {
 			w.fail(parent, operation.ID, step.ID, err)
 			return
@@ -193,6 +199,41 @@ func (w *Worker) process(parent context.Context, owner string, operation domain.
 	if err := w.store.CompleteOperation(runCtx, operation.ID); err != nil {
 		slog.Error("complete operation", "operation", operation.ID, "error", err)
 	}
+}
+
+func (w *Worker) captureDiscovery(ctx context.Context, operation domain.Operation, raw json.RawMessage, log plugins.Logger) error {
+	var discovery domain.DiscoveryResult
+	if err := json.Unmarshal(raw, &discovery); err != nil {
+		return fmt.Errorf("decode discovery result: %w", err)
+	}
+	if len(discovery.Resources) == 0 {
+		return nil
+	}
+	resources := make([]domain.InfrastructureResource, 0, len(discovery.Resources))
+	for _, discovered := range discovery.Resources {
+		if discovered.ExternalID == "" || discovered.Kind == "" || discovered.Name == "" {
+			return errors.New("discovery result contains an incomplete resource identity")
+		}
+		resources = append(resources, domain.InfrastructureResource{
+			ID:               id.New("res"),
+			ProviderPluginID: operation.PluginID,
+			ExternalID:       discovered.ExternalID,
+			Kind:             discovered.Kind,
+			Name:             discovered.Name,
+			State:            discovered.State,
+			Ownership:        "imported",
+			Protection:       "read-only",
+			Metadata:         discovered.Metadata,
+		})
+	}
+	if err := w.store.SyncDiscoveredResources(ctx, resources); err != nil {
+		return fmt.Errorf("persist discovered resources: %w", err)
+	}
+	details, _ := json.Marshal(map[string]any{"operationId": operation.ID, "count": len(resources), "ownership": "imported", "protection": "read-only"})
+	if err := w.store.AppendAuditEvent(ctx, domain.AuditEvent{Actor: "worker", Action: "infrastructure.discovery", TargetType: "provider", TargetID: operation.PluginID, Outcome: "succeeded", Details: details}); err != nil {
+		return fmt.Errorf("audit discovery: %w", err)
+	}
+	return log("info", fmt.Sprintf("Inventory ledger updated with %d imported read-only resource(s)", len(resources)))
 }
 
 func (w *Worker) monitor(ctx context.Context, cancel context.CancelFunc, done <-chan struct{}, owner, operationID string) {

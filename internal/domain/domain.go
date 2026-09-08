@@ -53,6 +53,45 @@ type EncryptedCredential struct {
 	Ciphertext []byte
 }
 
+type DiscoveredResource struct {
+	ExternalID string          `json:"externalId"`
+	Kind       string          `json:"kind"`
+	Name       string          `json:"name"`
+	State      string          `json:"state"`
+	Metadata   json.RawMessage `json:"metadata,omitempty"`
+}
+
+type DiscoveryResult struct {
+	Resources []DiscoveredResource `json:"resources"`
+}
+
+type InfrastructureResource struct {
+	ID               string          `json:"id"`
+	ProviderPluginID string          `json:"providerPluginId"`
+	ExternalID       string          `json:"externalId"`
+	WorkspaceID      string          `json:"workspaceId,omitempty"`
+	Kind             string          `json:"kind"`
+	Name             string          `json:"name"`
+	State            string          `json:"state"`
+	Ownership        string          `json:"ownership"`
+	Protection       string          `json:"protection"`
+	Metadata         json.RawMessage `json:"metadata"`
+	LastSeenAt       time.Time       `json:"lastSeenAt"`
+	CreatedAt        time.Time       `json:"createdAt"`
+	UpdatedAt        time.Time       `json:"updatedAt"`
+}
+
+type AuditEvent struct {
+	Sequence   int64           `json:"sequence"`
+	Actor      string          `json:"actor"`
+	Action     string          `json:"action"`
+	TargetType string          `json:"targetType"`
+	TargetID   string          `json:"targetId,omitempty"`
+	Outcome    string          `json:"outcome"`
+	Details    json.RawMessage `json:"details"`
+	CreatedAt  time.Time       `json:"createdAt"`
+}
+
 type Operation struct {
 	ID              string           `json:"id"`
 	WorkspaceID     string           `json:"workspaceId"`

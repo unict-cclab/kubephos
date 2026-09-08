@@ -13,3 +13,10 @@ databaseChangeLog:
         - sqlFile:
             path: changes/002-credentials.sql
             relativeToChangelogFile: true
+  - changeSet:
+      id: 003-infrastructure-ledger
+      author: kubephos
+      changes:
+        - sqlFile:
+            path: changes/003-infrastructure-ledger.sql
+            relativeToChangelogFile: true

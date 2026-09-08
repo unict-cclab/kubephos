@@ -99,10 +99,20 @@
           <article class="feature-card"><span class="feature-icon">›_</span><div><h3>Secure Shell</h3><p>Open audited, short-lived SSH sessions directly in the browser.</p></div><span class="planned">Planned</span></article>
         </div>
         <div class="section-heading credential-heading">
+          <div><p class="eyebrow">OWNERSHIP BOUNDARY</p><h2>Resource inventory</h2></div>
+          <p class="section-copy">Discovered resources remain protected until KubePhos can prove ownership.</p>
+        </div>
+        <div id="resource-list" class="credential-list"></div>
+        <div class="section-heading credential-heading">
           <div><p class="eyebrow">SERVER-SIDE VAULT</p><h2>Credentials</h2></div>
           <p class="section-copy">Values are encrypted and never returned to the browser.</p>
         </div>
         <div id="credential-list" class="credential-list"></div>
+        <div class="section-heading credential-heading">
+          <div><p class="eyebrow">TRACEABILITY</p><h2>Audit trail</h2></div>
+          <p class="section-copy">Every API mutation is recorded without request payloads.</p>
+        </div>
+        <div id="audit-list" class="audit-list"></div>
         <div class="notice"><strong>Safety boundary</strong><p>Imported infrastructure is read-only by default. Credentials remain server-side and every write produces an audit event.</p></div>
       </section>
     </main>
