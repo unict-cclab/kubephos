@@ -26,3 +26,14 @@ func TestValidateAcceptsMatchingObject(t *testing.T) {
 		t.Fatalf("unexpected issues: %#v", issues)
 	}
 }
+
+func TestValidatePatternsAndOpaqueReferences(t *testing.T) {
+	definition := json.RawMessage(`{"type":"object","properties":{"name":{"type":"string","pattern":"^[a-z]+$"},"credential":{"type":"string","format":"kubephos-secret-ref"},"connection":{"type":"string","format":"kubephos-connection-ref"}}}`)
+	issues, err := Validate(definition, json.RawMessage(`{"name":"Invalid-1","credential":"plain","connection":"cred_wrong"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(issues) != 3 {
+		t.Fatalf("expected 3 issues, got %#v", issues)
+	}
+}

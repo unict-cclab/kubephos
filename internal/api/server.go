@@ -49,6 +49,8 @@ func NewServer(store *storage.Store, registry *plugins.Registry, artifactStore *
 	router.HandleFunc("GET /api/v1/plugins", server.listPlugins)
 	router.HandleFunc("GET /api/v1/credentials", server.listCredentials)
 	router.HandleFunc("POST /api/v1/credentials", server.createCredential)
+	router.HandleFunc("GET /api/v1/connections", server.listConnections)
+	router.HandleFunc("POST /api/v1/connections", server.createConnection)
 	router.HandleFunc("GET /api/v1/infrastructure/resources", server.listInfrastructureResources)
 	router.HandleFunc("GET /api/v1/audit", server.listAuditEvents)
 	router.HandleFunc("GET /api/v1/workspaces", server.listWorkspaces)
@@ -174,6 +176,67 @@ func (s *Server) credentialSchema(kind string) (json.RawMessage, bool) {
 		}
 	}
 	return nil, false
+}
+
+func (s *Server) listConnections(response http.ResponseWriter, request *http.Request) {
+	items, err := s.store.ListProviderConnections(request.Context())
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, "database_error", "Could not list provider connections.")
+		return
+	}
+	writeJSON(response, http.StatusOK, map[string]any{"items": items})
+}
+
+func (s *Server) createConnection(response http.ResponseWriter, request *http.Request) {
+	var input struct {
+		Name          string          `json:"name"`
+		PluginID      string          `json:"pluginId"`
+		Configuration json.RawMessage `json:"configuration"`
+	}
+	if err := decodeJSON(request, &input); err != nil {
+		writeError(response, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	input.Name = strings.TrimSpace(input.Name)
+	if input.Name == "" || len(input.Name) > 80 {
+		writeError(response, http.StatusUnprocessableEntity, "invalid_name", "Name must contain between 1 and 80 characters.")
+		return
+	}
+	plugin, err := s.registry.Get(input.PluginID)
+	if err != nil {
+		writeError(response, http.StatusUnprocessableEntity, "invalid_plugin", err.Error())
+		return
+	}
+	manifest := plugin.Manifest()
+	if manifest.Provider == "" || !manifest.HasCapability("infrastructure.discovery") {
+		writeError(response, http.StatusUnprocessableEntity, "invalid_plugin", "Select an infrastructure discovery plugin.")
+		return
+	}
+	issues, err := schema.Validate(manifest.Schema, input.Configuration)
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, "invalid_schema", err.Error())
+		return
+	}
+	if len(issues) > 0 {
+		writeJSON(response, http.StatusUnprocessableEntity, map[string]any{"code": "validation_failed", "issues": issues})
+		return
+	}
+	report := plugin.Validate(request.Context(), input.Configuration)
+	if !report.Valid {
+		writeJSON(response, http.StatusUnprocessableEntity, map[string]any{"code": "validation_failed", "validation": report})
+		return
+	}
+	connection, err := s.store.CreateProviderConnection(request.Context(), domain.ProviderConnection{ID: id.New("conn"), Name: input.Name, Provider: manifest.Provider, PluginID: manifest.ID, Configuration: input.Configuration})
+	if err != nil {
+		var databaseError *pgconn.PgError
+		if errors.As(err, &databaseError) && databaseError.Code == "23505" {
+			writeError(response, http.StatusConflict, "connection_conflict", "A connection with this name already exists for the provider.")
+			return
+		}
+		writeError(response, http.StatusInternalServerError, "database_error", "Could not store provider connection.")
+		return
+	}
+	writeJSON(response, http.StatusCreated, connection)
 }
 
 func (s *Server) listInfrastructureResources(response http.ResponseWriter, request *http.Request) {
@@ -639,6 +702,8 @@ func auditTarget(request *http.Request) (string, string, string, bool) {
 			return "workspace.create", "workspace", "", true
 		case "credentials":
 			return "credential.create", "credential", "", true
+		case "connections":
+			return "connection.create", "connection", "", true
 		case "operations":
 			return "operation.create", "operation", "", true
 		}

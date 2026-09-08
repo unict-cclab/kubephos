@@ -68,7 +68,7 @@ func serve(configValue config.Config) error {
 	if err != nil {
 		return err
 	}
-	registry, err := plugins.LoadDirectory(configValue.PluginDirectory, resolver)
+	registry, err := plugins.LoadDirectory(configValue.PluginDirectory, resolver, connectionRuntime(store))
 	if err != nil {
 		return err
 	}
@@ -92,7 +92,7 @@ func work(configValue config.Config) error {
 	if err != nil {
 		return err
 	}
-	registry, err := plugins.LoadDirectory(configValue.PluginDirectory, resolver)
+	registry, err := plugins.LoadDirectory(configValue.PluginDirectory, resolver, connectionRuntime(store))
 	if err != nil {
 		return err
 	}
@@ -121,6 +121,16 @@ func credentialRuntime(store *storage.Store, keyFile string) (*secrets.Vault, pl
 		return credential.Kind, value, nil
 	}
 	return vault, resolver, nil
+}
+
+func connectionRuntime(store *storage.Store) plugins.ConnectionResolver {
+	return func(ctx context.Context, connectionID string) (string, json.RawMessage, error) {
+		connection, err := store.GetProviderConnectionConfiguration(ctx, connectionID)
+		if err != nil {
+			return "", nil, err
+		}
+		return connection.Provider, connection.Configuration, nil
+	}
 }
 
 func status(configValue config.Config) error {

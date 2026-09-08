@@ -218,6 +218,49 @@ func (s *Store) GetEncryptedCredential(ctx context.Context, credentialID string)
 	return credential, err
 }
 
+func (s *Store) CreateProviderConnection(ctx context.Context, connection domain.ProviderConnection) (domain.ProviderConnection, error) {
+	err := s.pool.QueryRow(ctx, `
+		INSERT INTO provider_connections (id, name, provider, plugin_id, configuration)
+		VALUES ($1, $2, $3, $4, $5)
+		RETURNING created_at, updated_at
+	`, connection.ID, connection.Name, connection.Provider, connection.PluginID, connection.Configuration).Scan(&connection.CreatedAt, &connection.UpdatedAt)
+	return connection, err
+}
+
+func (s *Store) ListProviderConnections(ctx context.Context) ([]domain.ProviderConnection, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, name, provider, plugin_id, created_at, updated_at
+		FROM provider_connections
+		ORDER BY provider, name
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := []domain.ProviderConnection{}
+	for rows.Next() {
+		var connection domain.ProviderConnection
+		if err := rows.Scan(&connection.ID, &connection.Name, &connection.Provider, &connection.PluginID, &connection.CreatedAt, &connection.UpdatedAt); err != nil {
+			return nil, err
+		}
+		result = append(result, connection)
+	}
+	return result, rows.Err()
+}
+
+func (s *Store) GetProviderConnectionConfiguration(ctx context.Context, connectionID string) (domain.ProviderConnection, error) {
+	var connection domain.ProviderConnection
+	err := s.pool.QueryRow(ctx, `
+		SELECT id, name, provider, plugin_id, configuration, created_at, updated_at
+		FROM provider_connections
+		WHERE id = $1
+	`, connectionID).Scan(&connection.ID, &connection.Name, &connection.Provider, &connection.PluginID, &connection.Configuration, &connection.CreatedAt, &connection.UpdatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.ProviderConnection{}, ErrNotFound
+	}
+	return connection, err
+}
+
 func (s *Store) SyncDiscoveredResources(ctx context.Context, resources []domain.InfrastructureResource) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {

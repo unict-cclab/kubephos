@@ -33,3 +33,31 @@ func TestResolveSecretsRejectsUndeclaredKinds(t *testing.T) {
 		t.Fatal("expected permission error")
 	}
 }
+
+func TestResolveConnectionsHonorsProviderBoundary(t *testing.T) {
+	process := &Process{
+		manifest: Manifest{Provider: "proxmox"},
+		connections: func(context.Context, string) (string, json.RawMessage, error) {
+			return "proxmox", json.RawMessage(`{"endpoint":"https://pve.test"}`), nil
+		},
+	}
+	result, err := process.resolveConnections(context.Background(), []byte(`{"connectionRef":"conn_one"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(result["conn_one"]) != `{"endpoint":"https://pve.test"}` {
+		t.Fatalf("unexpected connection: %#v", result)
+	}
+}
+
+func TestResolveConnectionsRejectsAnotherProvider(t *testing.T) {
+	process := &Process{
+		manifest: Manifest{Provider: "proxmox"},
+		connections: func(context.Context, string) (string, json.RawMessage, error) {
+			return "vmware", json.RawMessage(`{}`), nil
+		},
+	}
+	if _, err := process.resolveConnections(context.Background(), []byte(`{"connectionRef":"conn_one"}`)); err == nil {
+		t.Fatal("expected provider boundary error")
+	}
+}

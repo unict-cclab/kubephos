@@ -34,3 +34,10 @@ databaseChangeLog:
         - sqlFile:
             path: changes/005-authentication.sql
             relativeToChangelogFile: true
+  - changeSet:
+      id: 006-provider-connections
+      author: kubephos
+      changes:
+        - sqlFile:
+            path: changes/006-provider-connections.sql
+            relativeToChangelogFile: true

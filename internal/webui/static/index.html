@@ -92,7 +92,7 @@
       <section class="view" id="view-infrastructure">
         <div class="section-heading">
           <div><p class="eyebrow">ONE ACCESS POINT</p><h2>Infrastructure Console</h2></div>
-          <button class="button primary" id="add-credential-button">Add credential</button>
+          <div class="topbar-actions"><button class="button secondary" id="add-credential-button">Add credential</button><button class="button primary" id="add-connection-button">Add connection</button></div>
         </div>
         <p class="section-copy infrastructure-copy">Managed access without remembering addresses or opening another terminal.</p>
         <div class="workspace-grid">
@@ -100,6 +100,11 @@
           <article class="feature-card"><span class="feature-icon">▤</span><div><h3>Shared Storage</h3><p>Explore NFS shares, upload data and protect destructive actions.</p></div><span class="planned">Planned</span></article>
           <article class="feature-card"><span class="feature-icon">›_</span><div><h3>Secure Shell</h3><p>Open audited, short-lived SSH sessions directly in the browser.</p></div><span class="planned">Planned</span></article>
         </div>
+        <div class="section-heading credential-heading">
+          <div><p class="eyebrow">REUSABLE ACCESS</p><h2>Provider connections</h2></div>
+          <p class="section-copy">Validate infrastructure access once, then select it in every compatible operation.</p>
+        </div>
+        <div id="connection-list" class="credential-list"></div>
         <div class="section-heading credential-heading">
           <div><p class="eyebrow">OWNERSHIP BOUNDARY</p><h2>Resource inventory</h2></div>
           <p class="section-copy">Discovered resources remain protected until KubePhos can prove ownership.</p>
@@ -166,6 +171,18 @@
       <div class="validation-callout"><span>✓</span><p><strong>Server-side only.</strong> The plaintext is encrypted before storage and is never returned by the API.</p></div>
       <p class="form-error" id="credential-error"></p>
       <div class="modal-actions"><button class="button secondary" type="button" data-close-dialog="credential-dialog">Cancel</button><button class="button primary" type="submit" id="credential-submit">Encrypt and save</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="connection-dialog" class="modal">
+    <form method="dialog" id="connection-form">
+      <div class="modal-header"><div><p class="eyebrow">VALIDATE ONCE</p><h2>Add provider connection</h2></div><button class="icon-button" type="button" data-close-dialog="connection-dialog" aria-label="Close">×</button></div>
+      <label>Provider capability<select name="pluginId" id="connection-plugin" required></select></label>
+      <label>Name<input name="name" maxlength="80" placeholder="Development Proxmox" required></label>
+      <div id="connection-fields" class="schema-fields"></div>
+      <div class="validation-callout"><span>✓</span><p><strong>Validated before storage.</strong> Credentials remain encrypted and operations receive only this connection reference.</p></div>
+      <p class="form-error" id="connection-error"></p>
+      <div class="modal-actions"><button class="button secondary" type="button" data-close-dialog="connection-dialog">Cancel</button><button class="button primary" type="submit" id="connection-submit">Validate and save</button></div>
     </form>
   </dialog>
 

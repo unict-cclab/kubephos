@@ -3,7 +3,7 @@ kind: Plugin
 metadata:
   id: io.kubephos.infrastructure.proxmox.vm
   name: Proxmox VM lifecycle
-  version: 0.1.0
+  version: 0.2.0
   description: Creates an isolated KubePhos VM from a template and optionally removes it after verification.
 spec:
   protocol: v1alpha1
@@ -22,9 +22,7 @@ spec:
     type: object
     additionalProperties: false
     required:
-      - endpoint
-      - credentialRef
-      - verifyTLS
+      - connectionRef
       - node
       - templateVMID
       - targetVMID
@@ -34,21 +32,12 @@ spec:
       - start
       - cleanupAfterTest
     properties:
-      endpoint:
+      connectionRef:
         type: string
-        title: Proxmox endpoint
-        description: Base URL of the Proxmox API, including port 8006.
-        format: uri
-      credentialRef:
-        type: string
-        title: API credential
-        description: Server-side Proxmox API token.
-        format: kubephos-secret-ref
-        x-kubephos-secret-kind: proxmox-api-token
-      verifyTLS:
-        type: boolean
-        title: Verify TLS certificate
-        default: true
+        title: Proxmox connection
+        description: Reusable infrastructure connection validated from the Infrastructure Console.
+        format: kubephos-connection-ref
+        x-kubephos-provider: proxmox
       node:
         type: string
         title: Proxmox node

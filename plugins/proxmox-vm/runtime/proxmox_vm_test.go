@@ -14,7 +14,7 @@ import (
 )
 
 func TestPlanDeclaresCreateAndDeleteEffects(t *testing.T) {
-	spec := json.RawMessage(`{"endpoint":"https://pve.test:8006","credentialRef":"cred_test","verifyTLS":true,"node":"pve","templateVMID":8000,"targetVMID":9000,"name":"lifecycle","cores":2,"memoryMiB":2048,"start":false,"cleanupAfterTest":true}`)
+	spec := json.RawMessage(`{"connectionRef":"conn_test","node":"pve","templateVMID":8000,"targetVMID":9000,"name":"lifecycle","cores":2,"memoryMiB":2048,"start":false,"cleanupAfterTest":true}`)
 	plan, err := (Plugin{}).Plan(context.Background(), spec)
 	if err != nil {
 		t.Fatal(err)
@@ -83,8 +83,9 @@ func TestLifecycleCreatesOnlyTargetAndRemovesIt(t *testing.T) {
 	}))
 	defer server.Close()
 	secret := json.RawMessage(`{"tokenId":"test@pam!kubephos","tokenSecret":"top-secret"}`)
-	spec := json.RawMessage(fmt.Sprintf(`{"endpoint":%q,"credentialRef":"cred_test","verifyTLS":false,"node":"pve","templateVMID":8000,"targetVMID":9000,"name":"lifecycle","cores":2,"memoryMiB":2048,"start":false,"cleanupAfterTest":true}`, server.URL))
-	invocation := Invocation{Input: spec, Secrets: map[string]json.RawMessage{"cred_test": secret}}
+	spec := json.RawMessage(`{"connectionRef":"conn_test","node":"pve","templateVMID":8000,"targetVMID":9000,"name":"lifecycle","cores":2,"memoryMiB":2048,"start":false,"cleanupAfterTest":true}`)
+	connection := json.RawMessage(fmt.Sprintf(`{"endpoint":%q,"credentialRef":"cred_test","verifyTLS":false}`, server.URL))
+	invocation := Invocation{Input: spec, Secrets: map[string]json.RawMessage{"cred_test": secret}, Connections: map[string]json.RawMessage{"conn_test": connection}}
 	report := (Plugin{}).Validate(context.Background(), invocation)
 	if !report.Valid {
 		t.Fatalf("unexpected validation failure: %#v", report.Issues)
@@ -95,15 +96,15 @@ func TestLifecycleCreatesOnlyTargetAndRemovesIt(t *testing.T) {
 	}
 	log := func(string, string) error { return nil }
 	for _, step := range plan.Steps {
-		health, err := (Plugin{}).Precheck(context.Background(), step, invocation.Secrets, log)
+		health, err := (Plugin{}).Precheck(context.Background(), step, invocation.Secrets, invocation.Connections, log)
 		if err != nil || health.Status != domain.HealthHealthy {
 			t.Fatalf("precheck failed: %#v %v", health, err)
 		}
-		result, err := (Plugin{}).Execute(context.Background(), step, invocation.Secrets, log)
+		result, err := (Plugin{}).Execute(context.Background(), step, invocation.Secrets, invocation.Connections, log)
 		if err != nil {
 			t.Fatal(err)
 		}
-		health, err = (Plugin{}).Verify(context.Background(), step, result, invocation.Secrets, log)
+		health, err = (Plugin{}).Verify(context.Background(), step, result, invocation.Secrets, invocation.Connections, log)
 		if err != nil || health.Status != domain.HealthHealthy {
 			t.Fatalf("verify failed: %#v %v", health, err)
 		}
@@ -135,10 +136,11 @@ func TestCleanupRejectsUnownedVM(t *testing.T) {
 		}
 	}))
 	defer server.Close()
-	input, _ := json.Marshal(stepInput{Action: "create", Endpoint: server.URL, CredentialRef: "cred_test", Node: "pve", TemplateVMID: 8000, TargetVMID: 9000, Name: "kubephos-test-12345678", Marker: "1234567890abcdef"})
+	input, _ := json.Marshal(stepInput{Action: "create", ConnectionRef: "conn_test", Node: "pve", TemplateVMID: 8000, TargetVMID: 9000, Name: "kubephos-test-12345678", Marker: "1234567890abcdef"})
 	step := domain.PlanStep{Input: input, Effects: []domain.ResourceEffect{{Action: "create", ExternalID: "qemu/9000", Kind: "virtual-machine", Name: "kubephos-test-12345678"}}}
 	secrets := map[string]json.RawMessage{"cred_test": json.RawMessage(`{"tokenId":"test","tokenSecret":"secret"}`)}
-	err := (Plugin{}).Cleanup(context.Background(), step, nil, secrets, func(string, string) error { return nil })
+	connections := map[string]json.RawMessage{"conn_test": json.RawMessage(fmt.Sprintf(`{"endpoint":%q,"credentialRef":"cred_test","verifyTLS":false}`, server.URL))}
+	err := (Plugin{}).Cleanup(context.Background(), step, nil, secrets, connections, func(string, string) error { return nil })
 	if err == nil || deleteCalled {
 		t.Fatalf("cleanup should refuse unowned VM: %v", err)
 	}

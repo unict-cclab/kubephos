@@ -39,6 +39,8 @@ type CredentialSchema struct {
 
 type SecretResolver func(context.Context, string) (string, json.RawMessage, error)
 
+type ConnectionResolver func(context.Context, string) (string, json.RawMessage, error)
+
 type Logger func(level, message string) error
 
 type Plugin interface {

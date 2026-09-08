@@ -53,10 +53,11 @@ type Process struct {
 	executable  string
 	timeout     time.Duration
 	resolver    SecretResolver
+	connections ConnectionResolver
 	secretKinds map[string]bool
 }
 
-func LoadDirectory(directory string, resolver SecretResolver) (*Registry, error) {
+func LoadDirectory(directory string, resolver SecretResolver, connections ConnectionResolver) (*Registry, error) {
 	entries, err := os.ReadDir(directory)
 	if err != nil {
 		return nil, err
@@ -68,7 +69,7 @@ func LoadDirectory(directory string, resolver SecretResolver) (*Registry, error)
 			continue
 		}
 		path := filepath.Join(directory, entry.Name(), "plugin.yaml")
-		value, err := LoadProcess(path, resolver)
+		value, err := LoadProcess(path, resolver, connections)
 		if errors.Is(err, os.ErrNotExist) {
 			continue
 		}
@@ -88,7 +89,7 @@ func LoadDirectory(directory string, resolver SecretResolver) (*Registry, error)
 	return NewRegistry(values...), nil
 }
 
-func LoadProcess(path string, resolver SecretResolver) (*Process, error) {
+func LoadProcess(path string, resolver SecretResolver, connections ConnectionResolver) (*Process, error) {
 	value, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
@@ -171,6 +172,7 @@ func LoadProcess(path string, resolver SecretResolver) (*Process, error) {
 		executable:  executable,
 		timeout:     timeout,
 		resolver:    resolver,
+		connections: connections,
 		secretKinds: secretKinds,
 	}
 	describeContext, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -233,11 +235,23 @@ func (p *Process) invoke(parent context.Context, command string, input, output a
 	if err != nil {
 		return err
 	}
-	resolved, err := p.resolveSecrets(ctx, inputPayload)
+	connectionValues, err := p.resolveConnections(ctx, inputPayload)
 	if err != nil {
 		return err
 	}
-	payload, err := json.Marshal(map[string]any{"input": json.RawMessage(inputPayload), "secrets": resolved})
+	secretPayloads := []json.RawMessage{inputPayload}
+	for _, configuration := range connectionValues {
+		secretPayloads = append(secretPayloads, configuration)
+	}
+	secretInput, err := json.Marshal(secretPayloads)
+	if err != nil {
+		return err
+	}
+	resolved, err := p.resolveSecrets(ctx, secretInput)
+	if err != nil {
+		return err
+	}
+	payload, err := json.Marshal(map[string]any{"input": json.RawMessage(inputPayload), "secrets": resolved, "connections": connectionValues})
 	if err != nil {
 		return err
 	}
@@ -272,6 +286,30 @@ func (p *Process) invoke(parent context.Context, command string, input, output a
 	return nil
 }
 
+func (p *Process) resolveConnections(ctx context.Context, payload []byte) (map[string]json.RawMessage, error) {
+	result := map[string]json.RawMessage{}
+	var value any
+	if err := json.Unmarshal(payload, &value); err != nil {
+		return nil, err
+	}
+	refs := map[string]bool{}
+	collectRefs(value, "conn_", refs)
+	for connectionID := range refs {
+		if p.connections == nil {
+			return nil, errors.New("connection resolver is unavailable")
+		}
+		provider, configuration, err := p.connections(ctx, connectionID)
+		if err != nil {
+			return nil, fmt.Errorf("resolve connection %s: %w", connectionID, err)
+		}
+		if provider != p.manifest.Provider && !contains(p.manifest.Permissions, "connections.read:"+provider) {
+			return nil, fmt.Errorf("plugin is not permitted to read provider connection %q", provider)
+		}
+		result[connectionID] = configuration
+	}
+	return result, nil
+}
+
 func (p *Process) resolveSecrets(ctx context.Context, payload []byte) (map[string]json.RawMessage, error) {
 	result := map[string]json.RawMessage{}
 	if len(p.secretKinds) == 0 {
@@ -282,7 +320,7 @@ func (p *Process) resolveSecrets(ctx context.Context, payload []byte) (map[strin
 		return nil, err
 	}
 	refs := map[string]bool{}
-	collectCredentialRefs(value, refs)
+	collectRefs(value, "cred_", refs)
 	for credentialID := range refs {
 		if p.resolver == nil {
 			return nil, errors.New("credential resolver is unavailable")
@@ -299,18 +337,18 @@ func (p *Process) resolveSecrets(ctx context.Context, payload []byte) (map[strin
 	return result, nil
 }
 
-func collectCredentialRefs(value any, result map[string]bool) {
+func collectRefs(value any, prefix string, result map[string]bool) {
 	switch current := value.(type) {
 	case map[string]any:
 		for _, item := range current {
-			collectCredentialRefs(item, result)
+			collectRefs(item, prefix, result)
 		}
 	case []any:
 		for _, item := range current {
-			collectCredentialRefs(item, result)
+			collectRefs(item, prefix, result)
 		}
 	case string:
-		if strings.HasPrefix(current, "cred_") {
+		if strings.HasPrefix(current, prefix) {
 			result[current] = true
 		}
 	}

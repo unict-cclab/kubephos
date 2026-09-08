@@ -7,6 +7,7 @@ import (
 	"math"
 	"net/url"
 	"reflect"
+	"regexp"
 	"strings"
 )
 
@@ -87,10 +88,27 @@ func validateValue(rule map[string]any, value any, path string) []Issue {
 		if maximum, ok := number(rule["maxLength"]); ok && float64(len([]rune(current))) > maximum {
 			issues = append(issues, Issue{Path: path, Message: fmt.Sprintf("Value cannot exceed %d characters.", int(maximum))})
 		}
-		if format, _ := rule["format"].(string); format == "uri" {
+		if pattern, ok := rule["pattern"].(string); ok {
+			compiled, err := regexp.Compile(pattern)
+			if err != nil {
+				issues = append(issues, Issue{Path: path, Message: "Schema contains an invalid pattern."})
+			} else if !compiled.MatchString(current) {
+				issues = append(issues, Issue{Path: path, Message: "Value does not match the required pattern."})
+			}
+		}
+		switch format, _ := rule["format"].(string); format {
+		case "uri":
 			parsed, err := url.Parse(current)
 			if err != nil || parsed.Scheme == "" || parsed.Host == "" {
 				issues = append(issues, Issue{Path: path, Message: "Value must be an absolute URI."})
+			}
+		case "kubephos-secret-ref":
+			if !strings.HasPrefix(current, "cred_") {
+				issues = append(issues, Issue{Path: path, Message: "Value must reference a stored credential."})
+			}
+		case "kubephos-connection-ref":
+			if !strings.HasPrefix(current, "conn_") {
+				issues = append(issues, Issue{Path: path, Message: "Value must reference a stored provider connection."})
 			}
 		}
 	case json.Number:

@@ -47,6 +47,16 @@ type Credential struct {
 	UpdatedAt   time.Time `json:"updatedAt"`
 }
 
+type ProviderConnection struct {
+	ID            string          `json:"id"`
+	Name          string          `json:"name"`
+	Provider      string          `json:"provider"`
+	PluginID      string          `json:"pluginId"`
+	Configuration json.RawMessage `json:"-"`
+	CreatedAt     time.Time       `json:"createdAt"`
+	UpdatedAt     time.Time       `json:"updatedAt"`
+}
+
 type EncryptedCredential struct {
 	Credential
 	Nonce      []byte

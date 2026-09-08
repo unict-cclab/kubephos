@@ -5,6 +5,7 @@ const state = {
   operations: [],
   plugins: [],
   credentials: [],
+  connections: [],
   resources: [],
   audit: [],
   selectedOperation: null,
@@ -43,14 +44,15 @@ async function api(path, options = {}) {
 
 async function loadAll(silent = false) {
   try {
-    const [system, workspaces, operations, plugins, credentials, resources, audit] = await Promise.all([
-      api('/system'), api('/workspaces'), api('/operations'), api('/plugins'), api('/credentials'), api('/infrastructure/resources'), api('/audit?limit=20')
+    const [system, workspaces, operations, plugins, credentials, connections, resources, audit] = await Promise.all([
+      api('/system'), api('/workspaces'), api('/operations'), api('/plugins'), api('/credentials'), api('/connections'), api('/infrastructure/resources'), api('/audit?limit=20')
     ])
     state.system = system
     state.workspaces = workspaces.items
     state.operations = operations.items
     state.plugins = plugins.items
     state.credentials = credentials.items
+    state.connections = connections.items
     state.resources = resources.items
     state.audit = audit.items
     render()
@@ -79,6 +81,7 @@ function render() {
   renderWorkspaces()
   renderPlugins()
   renderCredentials()
+  renderConnections()
   renderResources()
   renderAudit()
 }
@@ -207,6 +210,19 @@ function renderCredentials() {
   </article>`).join('')
 }
 
+function renderConnections() {
+  const root = $('#connection-list')
+  if (!state.connections.length) {
+    root.innerHTML = `<div class="empty-state"><div><strong>No provider connections</strong>Add and validate a reusable infrastructure connection.</div></div>`
+    return
+  }
+  root.innerHTML = state.connections.map(connection => `<article class="credential-row">
+    <span class="feature-icon">↗</span>
+    <div><h3>${escapeText(connection.name)}</h3><p>${escapeText(connection.provider)} · ${escapeText(connection.pluginId)}</p></div>
+    <span class="status succeeded">Validated</span>
+  </article>`).join('')
+}
+
 function renderResources() {
   const root = $('#resource-list')
   if (!state.resources.length) {
@@ -281,6 +297,12 @@ function schemaField(name, property, required, scope = 'schema') {
   const value = property.default ?? (property.type === 'boolean' ? false : '')
   const width = property.type === 'string' || property.type === 'object' || property.type === 'array' ? ' wide' : ''
   const fieldAttribute = `data-${scope}-property="${escapeText(name)}" data-${scope}-type="${escapeText(property.type || 'string')}"`
+  if (property.format === 'kubephos-connection-ref') {
+    const provider = property['x-kubephos-provider'] || ''
+    const connections = state.connections.filter(item => !provider || item.provider === provider)
+    const options = connections.map(item => `<option value="${escapeText(item.id)}">${escapeText(item.name)} · ${escapeText(item.provider)}</option>`).join('')
+    return `<label class="${width}">${escapeText(title)}<select ${fieldAttribute}${requiredAttribute}${connections.length ? '' : ' disabled'}>${options || '<option value="">Add a compatible connection first</option>'}</select>${hint}</label>`
+  }
   if (property.format === 'kubephos-secret-ref') {
     const kind = property['x-kubephos-secret-kind'] || ''
     const credentials = state.credentials.filter(item => item.kind === kind)
@@ -301,6 +323,54 @@ function schemaField(name, property, required, scope = 'schema') {
   const bounds = `${property.minimum !== undefined ? ` min="${Number(property.minimum)}"` : ''}${property.maximum !== undefined ? ` max="${Number(property.maximum)}"` : ''}`
   const length = `${property.minLength !== undefined ? ` minlength="${Number(property.minLength)}"` : ''}${property.maxLength !== undefined ? ` maxlength="${Number(property.maxLength)}"` : ''}`
   return `<label class="${width}">${escapeText(title)}<input type="${numeric ? 'number' : property.writeOnly ? 'password' : 'text'}" value="${escapeText(value)}" ${fieldAttribute}${bounds}${length}${requiredAttribute}>${hint}</label>`
+}
+
+function connectionPlugins() {
+  return state.plugins.filter(plugin => plugin.provider && (plugin.capabilities || []).includes('infrastructure.discovery'))
+}
+
+function openConnectionForm() {
+  const plugins = connectionPlugins()
+  if (!plugins.length) {
+    toast('No infrastructure discovery plugin is installed.', true)
+    return
+  }
+  const dialog = $('#connection-dialog')
+  const form = $('#connection-form')
+  form.reset()
+  $('#connection-plugin').innerHTML = plugins.map(plugin => `<option value="${escapeText(plugin.id)}">${escapeText(plugin.name)} · ${escapeText(plugin.provider)}</option>`).join('')
+  renderConnectionFields(plugins[0].id)
+  $('#connection-error').textContent = ''
+  dialog.showModal()
+}
+
+function renderConnectionFields(pluginID) {
+  const plugin = state.plugins.find(item => item.id === pluginID)
+  const schema = plugin?.schema || {}
+  const required = new Set(schema.required || [])
+  $('#connection-fields').innerHTML = Object.entries(schema.properties || {}).map(([name, property]) => schemaField(name, property, required.has(name), 'connection')).join('')
+}
+
+async function createConnection(event) {
+  event.preventDefault()
+  const form = event.currentTarget
+  const submit = $('#connection-submit')
+  submit.disabled = true
+  $('#connection-error').textContent = ''
+  try {
+    await api('/connections', {
+      method: 'POST',
+      body: JSON.stringify({ name: form.name.value, pluginId: form.pluginId.value, configuration: readValues('#connection-fields', 'connection') })
+    })
+    $('#connection-dialog').close()
+    await loadAll(true)
+    toast('Provider connection validated and saved.')
+  } catch (error) {
+    const issues = error.body?.validation?.issues || error.body?.issues || []
+    $('#connection-error').textContent = issues.map(issue => issue.message).join(' ') || error.message
+  } finally {
+    submit.disabled = false
+  }
 }
 
 function openCredentialForm() {
@@ -601,8 +671,11 @@ $('#workspace-form').addEventListener('submit', createWorkspace)
 $('#operation-form').addEventListener('submit', createOperation)
 $('#operation-plugin').addEventListener('change', event => renderPluginFields(event.target.value))
 $('#add-credential-button').addEventListener('click', openCredentialForm)
+$('#add-connection-button').addEventListener('click', openConnectionForm)
 $('#credential-form').addEventListener('submit', createCredential)
 $('#credential-kind').addEventListener('change', event => renderCredentialFields(event.target.value))
+$('#connection-form').addEventListener('submit', createConnection)
+$('#connection-plugin').addEventListener('change', event => renderConnectionFields(event.target.value))
 window.addEventListener('hashchange', () => switchView(location.hash.slice(1) || 'overview'))
 switchView(location.hash.slice(1) || 'overview')
 initialize()

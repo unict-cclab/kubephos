@@ -26,14 +26,13 @@ const managedTag = "kubephos-managed"
 type Plugin struct{}
 
 type Invocation struct {
-	Input   json.RawMessage            `json:"input"`
-	Secrets map[string]json.RawMessage `json:"secrets"`
+	Input       json.RawMessage            `json:"input"`
+	Secrets     map[string]json.RawMessage `json:"secrets"`
+	Connections map[string]json.RawMessage `json:"connections"`
 }
 
 type Spec struct {
-	Endpoint         string `json:"endpoint"`
-	CredentialRef    string `json:"credentialRef"`
-	VerifyTLS        bool   `json:"verifyTLS"`
+	ConnectionRef    string `json:"connectionRef"`
 	Node             string `json:"node"`
 	TemplateVMID     int    `json:"templateVMID"`
 	TargetVMID       int    `json:"targetVMID"`
@@ -46,9 +45,7 @@ type Spec struct {
 
 type stepInput struct {
 	Action        string `json:"action"`
-	Endpoint      string `json:"endpoint"`
-	CredentialRef string `json:"credentialRef"`
-	VerifyTLS     bool   `json:"verifyTLS"`
+	ConnectionRef string `json:"connectionRef"`
 	Node          string `json:"node"`
 	TemplateVMID  int    `json:"templateVMID"`
 	TargetVMID    int    `json:"targetVMID"`
@@ -57,6 +54,12 @@ type stepInput struct {
 	MemoryMiB     int    `json:"memoryMiB"`
 	Start         bool   `json:"start"`
 	Marker        string `json:"marker"`
+}
+
+type connectionConfig struct {
+	Endpoint      string `json:"endpoint"`
+	CredentialRef string `json:"credentialRef"`
+	VerifyTLS     bool   `json:"verifyTLS"`
 }
 
 type credential struct {
@@ -103,12 +106,12 @@ type vmConfig struct {
 }
 
 func (Plugin) Manifest() plugins.Manifest {
-	return plugins.Manifest{ID: "io.kubephos.infrastructure.proxmox.vm", Provider: "proxmox", Name: "Proxmox VM lifecycle", Version: "0.1.0", Description: "Creates an isolated KubePhos VM from a template and optionally removes it after verification."}
+	return plugins.Manifest{ID: "io.kubephos.infrastructure.proxmox.vm", Provider: "proxmox", Name: "Proxmox VM lifecycle", Version: "0.2.0", Description: "Creates an isolated KubePhos VM from a template and optionally removes it after verification."}
 }
 
 func (Plugin) Validate(ctx context.Context, invocation Invocation) domain.ValidationReport {
 	report := domain.ValidationReport{Valid: true, Issues: []domain.ValidationIssue{}, CheckedAt: time.Now().UTC()}
-	spec, connection, err := parseSpec(invocation)
+	spec, configuration, connection, err := parseSpec(invocation)
 	if err != nil {
 		return invalidReport(report, "$", err.Error())
 	}
@@ -136,8 +139,8 @@ func (Plugin) Validate(ctx context.Context, invocation Invocation) domain.Valida
 			return invalidReport(report, "credentialRef", fmt.Sprintf("Token is missing required privilege %s.", privilege))
 		}
 	}
-	if !spec.VerifyTLS {
-		report.Issues = append(report.Issues, domain.ValidationIssue{Level: "warning", Path: "verifyTLS", Message: "TLS certificate verification is disabled for this connection."})
+	if !configuration.VerifyTLS {
+		report.Issues = append(report.Issues, domain.ValidationIssue{Level: "warning", Path: "connectionRef", Message: "TLS certificate verification is disabled for this connection."})
 	}
 	if spec.CleanupAfterTest {
 		report.Issues = append(report.Issues, domain.ValidationIssue{Level: "info", Message: "The new VM will be removed after its creation is verified."})
@@ -160,7 +163,7 @@ func (Plugin) Plan(ctx context.Context, raw json.RawMessage) (domain.Plan, error
 	}
 	marker := hex.EncodeToString(markerBytes)
 	resolvedName := fmt.Sprintf("kubephos-%s-%s", spec.Name, marker[:8])
-	base := stepInput{Endpoint: normalizeEndpoint(spec.Endpoint), CredentialRef: spec.CredentialRef, VerifyTLS: spec.VerifyTLS, Node: spec.Node, TemplateVMID: spec.TemplateVMID, TargetVMID: spec.TargetVMID, Name: resolvedName, Cores: spec.Cores, MemoryMiB: spec.MemoryMiB, Start: spec.Start, Marker: marker}
+	base := stepInput{ConnectionRef: spec.ConnectionRef, Node: spec.Node, TemplateVMID: spec.TemplateVMID, TargetVMID: spec.TargetVMID, Name: resolvedName, Cores: spec.Cores, MemoryMiB: spec.MemoryMiB, Start: spec.Start, Marker: marker}
 	create := base
 	create.Action = "create"
 	createInput, err := json.Marshal(create)
@@ -182,8 +185,8 @@ func (Plugin) Plan(ctx context.Context, raw json.RawMessage) (domain.Plan, error
 	return domain.Plan{PluginID: Plugin{}.Manifest().ID, Steps: steps}, nil
 }
 
-func (Plugin) Precheck(ctx context.Context, step domain.PlanStep, secrets map[string]json.RawMessage, log plugins.Logger) (domain.HealthReport, error) {
-	input, connection, err := parseStep(step, secrets)
+func (Plugin) Precheck(ctx context.Context, step domain.PlanStep, secrets, connections map[string]json.RawMessage, log plugins.Logger) (domain.HealthReport, error) {
+	input, connection, err := parseStep(step, secrets, connections)
 	if err != nil {
 		return domain.HealthReport{}, err
 	}
@@ -218,8 +221,8 @@ func (Plugin) Precheck(ctx context.Context, step domain.PlanStep, secrets map[st
 	return domain.HealthReport{Status: domain.HealthHealthy, Summary: "All Proxmox preconditions are satisfied", Checks: map[string]string{"api": "healthy", "ownership": "validated", "target": externalID(input.TargetVMID)}}, nil
 }
 
-func (Plugin) Execute(ctx context.Context, step domain.PlanStep, secrets map[string]json.RawMessage, log plugins.Logger) (json.RawMessage, error) {
-	input, connection, err := parseStep(step, secrets)
+func (Plugin) Execute(ctx context.Context, step domain.PlanStep, secrets, connections map[string]json.RawMessage, log plugins.Logger) (json.RawMessage, error) {
+	input, connection, err := parseStep(step, secrets, connections)
 	if err != nil {
 		return nil, err
 	}
@@ -275,8 +278,8 @@ func (Plugin) Execute(ctx context.Context, step domain.PlanStep, secrets map[str
 	}
 }
 
-func (Plugin) Verify(ctx context.Context, step domain.PlanStep, _ json.RawMessage, secrets map[string]json.RawMessage, log plugins.Logger) (domain.HealthReport, error) {
-	input, connection, err := parseStep(step, secrets)
+func (Plugin) Verify(ctx context.Context, step domain.PlanStep, _ json.RawMessage, secrets, connections map[string]json.RawMessage, log plugins.Logger) (domain.HealthReport, error) {
+	input, connection, err := parseStep(step, secrets, connections)
 	if err != nil {
 		return domain.HealthReport{}, err
 	}
@@ -314,8 +317,8 @@ func (Plugin) Verify(ctx context.Context, step domain.PlanStep, _ json.RawMessag
 	}
 }
 
-func (Plugin) Cleanup(ctx context.Context, step domain.PlanStep, _ json.RawMessage, secrets map[string]json.RawMessage, log plugins.Logger) error {
-	input, connection, err := parseStep(step, secrets)
+func (Plugin) Cleanup(ctx context.Context, step domain.PlanStep, _ json.RawMessage, secrets, connections map[string]json.RawMessage, log plugins.Logger) error {
+	input, connection, err := parseStep(step, secrets, connections)
 	if err != nil {
 		return err
 	}
@@ -378,32 +381,55 @@ func removeVM(ctx context.Context, connection *client, input stepInput, log plug
 	return connection.waitTask(ctx, input.Node, upid)
 }
 
-func parseSpec(invocation Invocation) (Spec, *client, error) {
+func parseSpec(invocation Invocation) (Spec, connectionConfig, *client, error) {
 	var spec Spec
 	if err := json.Unmarshal(invocation.Input, &spec); err != nil {
-		return Spec{}, nil, errors.New("configuration must be valid JSON")
+		return Spec{}, connectionConfig{}, nil, errors.New("configuration must be valid JSON")
 	}
-	connection, err := newClient(spec.Endpoint, spec.VerifyTLS, spec.CredentialRef, invocation.Secrets)
-	return spec, connection, err
+	configuration, err := resolveConnection(spec.ConnectionRef, invocation.Connections)
+	if err != nil {
+		return Spec{}, connectionConfig{}, nil, err
+	}
+	connection, err := newClient(configuration.Endpoint, configuration.VerifyTLS, configuration.CredentialRef, invocation.Secrets)
+	return spec, configuration, connection, err
 }
 
-func parseStep(step domain.PlanStep, secrets map[string]json.RawMessage) (stepInput, *client, error) {
+func parseStep(step domain.PlanStep, secrets, connections map[string]json.RawMessage) (stepInput, *client, error) {
 	var input stepInput
 	if err := json.Unmarshal(step.Input, &input); err != nil {
 		return stepInput{}, nil, err
 	}
-	connection, err := newClient(input.Endpoint, input.VerifyTLS, input.CredentialRef, secrets)
+	configuration, err := resolveConnection(input.ConnectionRef, connections)
+	if err != nil {
+		return stepInput{}, nil, err
+	}
+	connection, err := newClient(configuration.Endpoint, configuration.VerifyTLS, configuration.CredentialRef, secrets)
 	return input, connection, err
 }
 
 func (input stepInput) spec() Spec {
-	return Spec{Endpoint: input.Endpoint, CredentialRef: input.CredentialRef, VerifyTLS: input.VerifyTLS, Node: input.Node, TemplateVMID: input.TemplateVMID, TargetVMID: input.TargetVMID, Name: input.Name, Cores: input.Cores, MemoryMiB: input.MemoryMiB, Start: input.Start}
+	return Spec{ConnectionRef: input.ConnectionRef, Node: input.Node, TemplateVMID: input.TemplateVMID, TargetVMID: input.TargetVMID, Name: input.Name, Cores: input.Cores, MemoryMiB: input.MemoryMiB, Start: input.Start}
+}
+
+func resolveConnection(connectionRef string, connections map[string]json.RawMessage) (connectionConfig, error) {
+	if connectionRef == "" {
+		return connectionConfig{}, errors.New("provider connection is required")
+	}
+	raw, ok := connections[connectionRef]
+	if !ok {
+		return connectionConfig{}, errors.New("provider connection is unavailable")
+	}
+	var configuration connectionConfig
+	if err := json.Unmarshal(raw, &configuration); err != nil || configuration.Endpoint == "" || configuration.CredentialRef == "" {
+		return connectionConfig{}, errors.New("provider connection is invalid")
+	}
+	return configuration, nil
 }
 
 func validateValues(spec Spec) *domain.ValidationIssue {
 	switch {
-	case spec.Endpoint == "" || spec.CredentialRef == "":
-		return &domain.ValidationIssue{Path: "$", Message: "Endpoint and API credential are required."}
+	case spec.ConnectionRef == "":
+		return &domain.ValidationIssue{Path: "connectionRef", Message: "Provider connection is required."}
 	case !regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}$`).MatchString(spec.Node):
 		return &domain.ValidationIssue{Path: "node", Message: "Proxmox node name is invalid."}
 	case spec.TemplateVMID < 100 || spec.TargetVMID < 100 || spec.TemplateVMID == spec.TargetVMID:

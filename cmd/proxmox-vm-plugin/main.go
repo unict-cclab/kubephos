@@ -48,25 +48,25 @@ func run() error {
 		var request stepRequest
 		err = json.Unmarshal(invocation.Input, &request)
 		if err == nil {
-			output, err = plugin.Precheck(context.Background(), request.Step, invocation.Secrets, log)
+			output, err = plugin.Precheck(context.Background(), request.Step, invocation.Secrets, invocation.Connections, log)
 		}
 	case "execute":
 		var request stepRequest
 		err = json.Unmarshal(invocation.Input, &request)
 		if err == nil {
-			output, err = plugin.Execute(context.Background(), request.Step, invocation.Secrets, log)
+			output, err = plugin.Execute(context.Background(), request.Step, invocation.Secrets, invocation.Connections, log)
 		}
 	case "verify":
 		var request verifyRequest
 		err = json.Unmarshal(invocation.Input, &request)
 		if err == nil {
-			output, err = plugin.Verify(context.Background(), request.Step, request.Result, invocation.Secrets, log)
+			output, err = plugin.Verify(context.Background(), request.Step, request.Result, invocation.Secrets, invocation.Connections, log)
 		}
 	case "cleanup":
 		var request verifyRequest
 		err = json.Unmarshal(invocation.Input, &request)
 		if err == nil {
-			err = plugin.Cleanup(context.Background(), request.Step, request.Result, invocation.Secrets, log)
+			err = plugin.Cleanup(context.Background(), request.Step, request.Result, invocation.Secrets, invocation.Connections, log)
 			output = map[string]string{"status": "completed"}
 		}
 	case "status":
