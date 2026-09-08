@@ -81,6 +81,13 @@ func TestParseAcceptsRepositoryRoot(t *testing.T) {
 	}
 }
 
+func TestParseValidatesLoadDriverEndpoint(t *testing.T) {
+	raw := strings.Replace(validDescriptor, "  valuesSchema:", "    loadDrivers:\n      - id: default-load\n        workload: {apiVersion: apps/v1, kind: Deployment, name: loadgenerator}\n        selector: {app: loadgenerator}\n        targetEndpoint: missing\n        replicas: 1\n  valuesSchema:", 1)
+	if _, err := Parse([]byte(raw), "imported"); err == nil {
+		t.Fatal("expected unknown load target endpoint to be rejected")
+	}
+}
+
 func TestApplicationReferenceRoundTrip(t *testing.T) {
 	value := Reference("dev.kubephos.test-app", "1.0.0")
 	applicationID, version, err := ParseReference(value)

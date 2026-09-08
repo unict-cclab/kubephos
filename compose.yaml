@@ -54,6 +54,7 @@ services:
 
   app:
     image: kubephos:${KUBEPHOS_VERSION:-dev}
+    init: true
     build:
       context: .
       args:
@@ -79,6 +80,7 @@ services:
 
   worker:
     image: kubephos:${KUBEPHOS_VERSION:-dev}
+    init: true
     command: worker
     environment:
       <<: *platform-environment

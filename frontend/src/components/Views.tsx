@@ -118,13 +118,14 @@ function ApplicationGrid({items}: {items: Application[]}) {
     const specification = application.descriptor.spec ?? {}
     const components = specification.interface?.components ?? []
     const endpoints = specification.interface?.endpoints ?? []
+    const loadDrivers = specification.interface?.loadDrivers ?? []
     const traits = [...new Set(components.flatMap(component => component.traits ?? []))].sort()
     const source = specification.package ?? {}
     return <article className="application-card" key={application.reference}>
       <div className="application-card-header"><span className="application-icon">{application.name.slice(0, 1).toUpperCase()}</span><Status value={application.origin} /></div>
       <h3>{application.name}</h3><p>{application.description || 'A contract-compatible application package.'}</p>
       <div className="trait-list">{traits.map(trait => <span key={trait}>{trait}</span>)}</div>
-      <dl><div><dt>Version</dt><dd>{application.version}</dd></div><div><dt>Components</dt><dd>{components.length}</dd></div><div><dt>Endpoints</dt><dd>{endpoints.length}</dd></div><div><dt>Package</dt><dd>{source.type ?? 'unknown'} · {source.format ?? 'unknown'}</dd></div></dl>
+      <dl><div><dt>Version</dt><dd>{application.version}</dd></div><div><dt>Components</dt><dd>{components.length}</dd></div><div><dt>Endpoints</dt><dd>{endpoints.length}</dd></div><div><dt>Load profiles</dt><dd>{loadDrivers.length}</dd></div><div><dt>Package</dt><dd>{source.type ?? 'unknown'} · {source.format ?? 'unknown'}</dd></div></dl>
       <small className="digest" title={application.digest}>{application.digest}</small>
     </article>
   })}</div>

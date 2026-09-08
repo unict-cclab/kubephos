@@ -113,8 +113,9 @@ type applicationDeployment struct {
 }
 
 type applicationDeploymentMetadata struct {
-	Name    string `json:"name"`
-	Version string `json:"version"`
+	Name            string `json:"name"`
+	Version         string `json:"version"`
+	OwnershipMarker string `json:"ownershipMarker"`
 }
 
 type applicationDeploymentSpec struct {
@@ -136,7 +137,7 @@ type commandRunner interface {
 
 func (Plugin) Manifest() plugins.Manifest {
 	return plugins.Manifest{
-		ID: pluginID, Name: "Kubernetes application deployer", Version: "0.1.0",
+		ID: pluginID, Name: "Kubernetes application deployer", Version: "0.2.0",
 		Description:     "Deploys any validated application package into an isolated Kubernetes namespace.",
 		Schema:          json.RawMessage(`{"type":"object","additionalProperties":false,"required":["clusterConnectionRef","manifestSetRef","workloadTargetsRef","serviceEndpointsRef"],"properties":{"clusterConnectionRef":{"type":"string","title":"Kubernetes cluster","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ClusterConnection","x-kubephos-artifact-version":"v1alpha1"},"manifestSetRef":{"type":"string","title":"Application manifests","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ManifestSet","x-kubephos-artifact-version":"v1alpha1"},"workloadTargetsRef":{"type":"string","title":"Application workloads","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"WorkloadTargets","x-kubephos-artifact-version":"v1alpha1"},"serviceEndpointsRef":{"type":"string","title":"Application endpoints","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ServiceEndpoints","x-kubephos-artifact-version":"v1alpha1"}}}`),
 		ArtifactInputs:  []domain.ArtifactContract{{Type: "ClusterConnection", Version: "v1alpha1"}, {Type: "ManifestSet", Version: "v1alpha1"}, {Type: "WorkloadTargets", Version: "v1alpha1"}, {Type: "ServiceEndpoints", Version: "v1alpha1"}},
@@ -269,7 +270,7 @@ func (plugin Plugin) Execute(ctx context.Context, step domain.PlanStep, log plug
 	}
 	value := result{ApplicationDeployment: applicationDeployment{
 		APIVersion: artifactAPI, Kind: "ApplicationDeployment",
-		Metadata: applicationDeploymentMetadata{Name: input.Namespace, Version: "v1alpha1"},
+		Metadata: applicationDeploymentMetadata{Name: input.Namespace, Version: "v1alpha1", OwnershipMarker: input.Marker},
 		Spec:     applicationDeploymentSpec{ApplicationRef: manifests.Metadata.ApplicationRef, ClusterServer: cluster.Spec.Server, Namespace: input.Namespace, ManifestDigest: manifests.Metadata.Digest, Workloads: workloads, Endpoints: endpoints},
 	}}
 	return json.Marshal(value)
@@ -646,7 +647,7 @@ func selectorValue(selector map[string]string) string {
 
 func validateResult(value result, input stepInput, cluster clusterConnection, manifests manifestSet, workloads []workloadTarget, endpoints []serviceEndpoint) error {
 	deployment := value.ApplicationDeployment
-	if deployment.APIVersion != artifactAPI || deployment.Kind != "ApplicationDeployment" || deployment.Metadata.Name != input.Namespace || deployment.Metadata.Version != "v1alpha1" || deployment.Spec.ApplicationRef != manifests.Metadata.ApplicationRef || deployment.Spec.ClusterServer != cluster.Spec.Server || deployment.Spec.Namespace != input.Namespace || deployment.Spec.ManifestDigest != manifests.Metadata.Digest || len(deployment.Spec.Workloads) != len(workloads) || len(deployment.Spec.Endpoints) != len(endpoints) {
+	if deployment.APIVersion != artifactAPI || deployment.Kind != "ApplicationDeployment" || deployment.Metadata.Name != input.Namespace || deployment.Metadata.Version != "v1alpha1" || deployment.Metadata.OwnershipMarker != input.Marker || deployment.Spec.ApplicationRef != manifests.Metadata.ApplicationRef || deployment.Spec.ClusterServer != cluster.Spec.Server || deployment.Spec.Namespace != input.Namespace || deployment.Spec.ManifestDigest != manifests.Metadata.Digest || len(deployment.Spec.Workloads) != len(workloads) || len(deployment.Spec.Endpoints) != len(endpoints) {
 		return errors.New("application deployment artifact does not match the validated plan")
 	}
 	return nil

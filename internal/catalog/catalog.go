@@ -64,8 +64,9 @@ type Package struct {
 }
 
 type Interface struct {
-	Components []Component `json:"components" yaml:"components"`
-	Endpoints  []Endpoint  `json:"endpoints,omitempty" yaml:"endpoints,omitempty"`
+	Components  []Component  `json:"components" yaml:"components"`
+	Endpoints   []Endpoint   `json:"endpoints,omitempty" yaml:"endpoints,omitempty"`
+	LoadDrivers []LoadDriver `json:"loadDrivers,omitempty" yaml:"loadDrivers,omitempty"`
 }
 
 type Component struct {
@@ -88,6 +89,14 @@ type Endpoint struct {
 	Port      int    `json:"port" yaml:"port"`
 	Protocol  string `json:"protocol" yaml:"protocol"`
 	Path      string `json:"path,omitempty" yaml:"path,omitempty"`
+}
+
+type LoadDriver struct {
+	ID             string            `json:"id" yaml:"id"`
+	Workload       Workload          `json:"workload" yaml:"workload"`
+	Selector       map[string]string `json:"selector" yaml:"selector"`
+	TargetEndpoint string            `json:"targetEndpoint" yaml:"targetEndpoint"`
+	Replicas       int               `json:"replicas" yaml:"replicas"`
 }
 
 func LoadDirectory(root string) ([]domain.CatalogApplication, error) {
@@ -253,6 +262,31 @@ func validate(descriptor Descriptor, origin string) error {
 		}
 		if endpoint.Path != "" && !strings.HasPrefix(endpoint.Path, "/") {
 			return fmt.Errorf("%s.path must start with /", path)
+		}
+	}
+	loadDriverIDs := map[string]bool{}
+	for position, driver := range descriptor.Spec.Interface.LoadDrivers {
+		path := fmt.Sprintf("spec.interface.loadDrivers[%d]", position)
+		if !namePattern.MatchString(driver.ID) || loadDriverIDs[driver.ID] {
+			return fmt.Errorf("%s.id is invalid or duplicated", path)
+		}
+		loadDriverIDs[driver.ID] = true
+		if strings.TrimSpace(driver.Workload.APIVersion) == "" || strings.TrimSpace(driver.Workload.Kind) == "" || !namePattern.MatchString(driver.Workload.Name) {
+			return fmt.Errorf("%s.workload is invalid", path)
+		}
+		if len(driver.Selector) == 0 {
+			return fmt.Errorf("%s.selector cannot be empty", path)
+		}
+		for key, value := range driver.Selector {
+			if strings.TrimSpace(key) == "" || strings.TrimSpace(value) == "" || strings.ContainsAny(key+value, "\n\r,=") {
+				return fmt.Errorf("%s.selector is invalid", path)
+			}
+		}
+		if !endpointIDs[driver.TargetEndpoint] {
+			return fmt.Errorf("%s.targetEndpoint is invalid", path)
+		}
+		if driver.Replicas < 1 || driver.Replicas > 1000 {
+			return fmt.Errorf("%s.replicas must be between 1 and 1000", path)
 		}
 	}
 	if descriptor.Spec.ValuesSchema == nil || descriptor.Spec.ValuesSchema["type"] != "object" {

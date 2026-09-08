@@ -3,7 +3,7 @@ kind: Plugin
 metadata:
   id: io.kubephos.applications.kubernetes.deploy
   name: Kubernetes application deployer
-  version: 0.1.0
+  version: 0.2.0
   description: Deploys any validated application package into an isolated Kubernetes namespace.
 spec:
   protocol: v1alpha1

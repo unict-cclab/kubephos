@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -48,6 +49,7 @@ type Result struct {
 	ManifestSet      ManifestSet       `json:"manifestSet"`
 	WorkloadTargets  []WorkloadTarget  `json:"workloadTargets"`
 	ServiceEndpoints []ServiceEndpoint `json:"serviceEndpoints"`
+	LoadProfileSet   LoadProfileSet    `json:"loadProfileSet"`
 }
 
 type ManifestSet struct {
@@ -94,6 +96,31 @@ type ServiceEndpoint struct {
 	Path      string `json:"path,omitempty"`
 }
 
+type LoadProfileSet struct {
+	APIVersion string                 `json:"apiVersion"`
+	Kind       string                 `json:"kind"`
+	Metadata   LoadProfileSetMetadata `json:"metadata"`
+	Spec       LoadProfileSetSpec     `json:"spec"`
+}
+
+type LoadProfileSetMetadata struct {
+	ApplicationRef string `json:"applicationRef"`
+	Digest         string `json:"digest"`
+}
+
+type LoadProfileSetSpec struct {
+	Profiles []LoadProfile `json:"profiles"`
+}
+
+type LoadProfile struct {
+	ID             string         `json:"id"`
+	TargetEndpoint string         `json:"targetEndpoint"`
+	Replicas       int            `json:"replicas"`
+	Workload       WorkloadTarget `json:"workload"`
+	Manifest       string         `json:"manifest"`
+	ManifestDigest string         `json:"manifestDigest"`
+}
+
 type manifestResource struct {
 	APIVersion string `yaml:"apiVersion"`
 	Kind       string `yaml:"kind"`
@@ -117,13 +144,14 @@ func (Plugin) Manifest() plugins.Manifest {
 	return plugins.Manifest{
 		ID:          "io.kubephos.applications.inspect",
 		Name:        "Application package materializer",
-		Version:     "0.1.0",
+		Version:     "0.2.0",
 		Description: "Resolves, materializes and verifies a pinned application package and its declared interface.",
 		Schema:      json.RawMessage(`{"type":"object","required":["applicationRef"],"additionalProperties":false,"properties":{"applicationRef":{"type":"string","title":"Application","description":"Immutable application version from the catalog.","format":"kubephos-application-ref"}}}`),
 		ArtifactOutputs: []domain.ArtifactContract{
 			{Type: "ManifestSet", Version: "v1alpha1"},
 			{Type: "WorkloadTargets", Version: "v1alpha1"},
 			{Type: "ServiceEndpoints", Version: "v1alpha1"},
+			{Type: "LoadProfileSet", Version: "v1alpha1"},
 		},
 		Capabilities: []string{"applications.inspect", "applications.materialize"},
 		Permissions:  []string{"catalog.read:applications"},
@@ -161,6 +189,7 @@ func (Plugin) Plan(ctx context.Context, invocation Invocation) (domain.Plan, err
 			{Name: "manifest-set", Type: "ManifestSet", Version: "v1alpha1", MediaType: "application/json", Source: "/manifestSet"},
 			{Name: "workload-targets", Type: "WorkloadTargets", Version: "v1alpha1", MediaType: "application/json", Source: "/workloadTargets"},
 			{Name: "service-endpoints", Type: "ServiceEndpoints", Version: "v1alpha1", MediaType: "application/json", Source: "/serviceEndpoints"},
+			{Name: "load-profile-set", Type: "LoadProfileSet", Version: "v1alpha1", MediaType: "application/json", Source: "/loadProfileSet"},
 		},
 	}}}, nil
 }
@@ -201,12 +230,20 @@ func (Plugin) Execute(ctx context.Context, step domain.PlanStep, log plugins.Log
 	if !utf8.Valid(manifest) {
 		return nil, errors.New("manifest entrypoint is not valid UTF-8")
 	}
-	workloads, endpoints, err := inspectManifest(manifest, input.Descriptor)
+	applicationManifest, loadProfiles, err := partitionManifest(manifest, input.Descriptor)
 	if err != nil {
 		return nil, err
 	}
-	digest := sha256.Sum256(manifest)
+	workloads, endpoints, err := inspectManifest(applicationManifest, input.Descriptor)
+	if err != nil {
+		return nil, err
+	}
+	digest := sha256.Sum256(applicationManifest)
 	digestValue := "sha256:" + hex.EncodeToString(digest[:])
+	loadDigest, err := digestJSON(loadProfiles)
+	if err != nil {
+		return nil, err
+	}
 	result := Result{
 		ApplicationRef: input.ApplicationRef,
 		SourceRevision: input.Descriptor.Spec.Package.Revision,
@@ -217,7 +254,7 @@ func (Plugin) Execute(ctx context.Context, step domain.PlanStep, log plugins.Log
 			Metadata:   ManifestSetMetadata{ApplicationRef: input.ApplicationRef, Digest: digestValue},
 			Spec: ManifestSetSpec{
 				Renderer: input.Descriptor.Spec.Package.Format,
-				Content:  string(manifest),
+				Content:  string(applicationManifest),
 				Source: ManifestSource{
 					Type: input.Descriptor.Spec.Package.Type, Repository: input.Descriptor.Spec.Package.Repository,
 					Revision: input.Descriptor.Spec.Package.Revision, Path: input.Descriptor.Spec.Package.Path, Entrypoint: input.Descriptor.Spec.Package.Entrypoint,
@@ -226,8 +263,14 @@ func (Plugin) Execute(ctx context.Context, step domain.PlanStep, log plugins.Log
 		},
 		WorkloadTargets:  workloads,
 		ServiceEndpoints: endpoints,
+		LoadProfileSet: LoadProfileSet{
+			APIVersion: "artifacts.kubephos.dev/v1alpha1",
+			Kind:       "LoadProfileSet",
+			Metadata:   LoadProfileSetMetadata{ApplicationRef: input.ApplicationRef, Digest: loadDigest},
+			Spec:       LoadProfileSetSpec{Profiles: loadProfiles},
+		},
 	}
-	if err := log("info", fmt.Sprintf("Verified %d workloads and %d endpoints", len(workloads), len(endpoints))); err != nil {
+	if err := log("info", fmt.Sprintf("Verified %d application workloads, %d endpoints and %d separate load profiles", len(workloads), len(endpoints), len(loadProfiles))); err != nil {
 		return nil, err
 	}
 	return json.Marshal(result)
@@ -259,6 +302,23 @@ func (Plugin) Verify(ctx context.Context, step domain.PlanStep, raw json.RawMess
 		result.ManifestSet.Spec.Source.Entrypoint != input.Descriptor.Spec.Package.Entrypoint {
 		return domain.HealthReport{Status: domain.HealthUnhealthy, Summary: "Materialized manifest identity or digest is invalid", Checks: map[string]string{"manifestSet": "invalid"}}, nil
 	}
+	loadDigest, err := digestJSON(result.LoadProfileSet.Spec.Profiles)
+	if err != nil || result.LoadProfileSet.APIVersion != "artifacts.kubephos.dev/v1alpha1" || result.LoadProfileSet.Kind != "LoadProfileSet" || result.LoadProfileSet.Metadata.ApplicationRef != input.ApplicationRef || result.LoadProfileSet.Metadata.Digest != loadDigest || len(result.LoadProfileSet.Spec.Profiles) != len(input.Descriptor.Spec.Interface.LoadDrivers) {
+		return domain.HealthReport{Status: domain.HealthUnhealthy, Summary: "Load profile set identity or digest is invalid", Checks: map[string]string{"loadProfileSet": "invalid"}}, nil
+	}
+	combined := []byte(result.ManifestSet.Spec.Content)
+	for _, profile := range result.LoadProfileSet.Spec.Profiles {
+		combined = appendManifestDocument(combined, []byte(profile.Manifest))
+	}
+	verifiedManifest, verifiedProfiles, err := partitionManifest(combined, input.Descriptor)
+	storedManifestIdentity, storedIdentityErr := canonicalManifestDigest([]byte(result.ManifestSet.Spec.Content))
+	verifiedManifestIdentity, verifiedIdentityErr := canonicalManifestDigest(verifiedManifest)
+	if err != nil || storedIdentityErr != nil || verifiedIdentityErr != nil || storedManifestIdentity != verifiedManifestIdentity {
+		return domain.HealthReport{Status: domain.HealthUnhealthy, Summary: "Separated application and load manifests are inconsistent", Checks: map[string]string{"partition": "invalid"}}, nil
+	}
+	if !equivalentLoadProfiles(result.LoadProfileSet.Spec.Profiles, verifiedProfiles) {
+		return domain.HealthReport{Status: domain.HealthUnhealthy, Summary: "Separated load profiles are inconsistent", Checks: map[string]string{"loadProfileSet": "inconsistent"}}, nil
+	}
 	verifiedWorkloads, verifiedEndpoints, err := inspectManifest([]byte(result.ManifestSet.Spec.Content), input.Descriptor)
 	if err != nil || len(verifiedWorkloads) != len(result.WorkloadTargets) || len(verifiedEndpoints) != len(result.ServiceEndpoints) {
 		return domain.HealthReport{Status: domain.HealthUnhealthy, Summary: "Materialized manifest no longer matches the declared interface", Checks: map[string]string{"manifestSet": "inconsistent"}}, nil
@@ -266,7 +326,7 @@ func (Plugin) Verify(ctx context.Context, step domain.PlanStep, raw json.RawMess
 	if err := log("info", "Application package identity and declared interface are consistent"); err != nil {
 		return domain.HealthReport{}, err
 	}
-	return domain.HealthReport{Status: domain.HealthHealthy, Summary: "Application package is materialized and ready for deployment", Checks: map[string]string{"identity": "verified", "manifest": "verified", "manifestSet": "verified", "interface": "verified"}}, nil
+	return domain.HealthReport{Status: domain.HealthHealthy, Summary: "Application package and load profiles are materialized independently", Checks: map[string]string{"identity": "verified", "manifest": "verified", "manifestSet": "verified", "interface": "verified", "loadProfiles": fmt.Sprintf("%d verified", len(verifiedProfiles))}}, nil
 }
 
 func resolve(invocation Invocation) (specification, catalog.Descriptor, error) {
@@ -326,6 +386,142 @@ func fetchManifest(ctx context.Context, source catalog.Package) ([]byte, error) 
 		return nil, fmt.Errorf("manifest exceeds %d bytes", maxManifestBytes)
 	}
 	return manifest, nil
+}
+
+func partitionManifest(manifest []byte, descriptor catalog.Descriptor) ([]byte, []LoadProfile, error) {
+	drivers := map[string]catalog.LoadDriver{}
+	for _, driver := range descriptor.Spec.Interface.LoadDrivers {
+		key := driver.Workload.APIVersion + "|" + driver.Workload.Kind + "|" + driver.Workload.Name
+		if _, exists := drivers[key]; exists {
+			return nil, nil, fmt.Errorf("load workload %s is declared more than once", driver.Workload.Name)
+		}
+		drivers[key] = driver
+	}
+	base := []byte{}
+	found := map[string]LoadProfile{}
+	decoder := yaml.NewDecoder(bytes.NewReader(manifest))
+	for {
+		var document yaml.Node
+		err := decoder.Decode(&document)
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return nil, nil, fmt.Errorf("decode Kubernetes manifest: %w", err)
+		}
+		if len(document.Content) == 0 {
+			continue
+		}
+		var resource manifestResource
+		if err := document.Decode(&resource); err != nil {
+			return nil, nil, fmt.Errorf("decode Kubernetes resource: %w", err)
+		}
+		encoded, err := yaml.Marshal(&document)
+		if err != nil {
+			return nil, nil, fmt.Errorf("encode Kubernetes resource: %w", err)
+		}
+		key := resource.APIVersion + "|" + resource.Kind + "|" + resource.Metadata.Name
+		driver, isLoadDriver := drivers[key]
+		if !isLoadDriver {
+			base = appendManifestDocument(base, encoded)
+			continue
+		}
+		if _, exists := found[driver.ID]; exists {
+			return nil, nil, fmt.Errorf("manifest contains duplicate load workload %s", driver.ID)
+		}
+		for label, expected := range driver.Selector {
+			if resource.Spec.Template.Metadata.Labels[label] != expected {
+				return nil, nil, fmt.Errorf("declared selector for load driver %s does not match its Pod template", driver.ID)
+			}
+		}
+		manifestDigest := sha256.Sum256(encoded)
+		found[driver.ID] = LoadProfile{
+			ID:             driver.ID,
+			TargetEndpoint: driver.TargetEndpoint,
+			Replicas:       driver.Replicas,
+			Workload:       WorkloadTarget{ID: driver.ID, APIVersion: driver.Workload.APIVersion, Kind: driver.Workload.Kind, Name: driver.Workload.Name, Selector: driver.Selector},
+			Manifest:       string(encoded),
+			ManifestDigest: "sha256:" + hex.EncodeToString(manifestDigest[:]),
+		}
+	}
+	profiles := make([]LoadProfile, 0, len(descriptor.Spec.Interface.LoadDrivers))
+	for _, driver := range descriptor.Spec.Interface.LoadDrivers {
+		profile, exists := found[driver.ID]
+		if !exists {
+			return nil, nil, fmt.Errorf("declared load workload %s is missing from the manifest", driver.ID)
+		}
+		profiles = append(profiles, profile)
+	}
+	return base, profiles, nil
+}
+
+func appendManifestDocument(manifest, document []byte) []byte {
+	value := bytes.TrimSpace(document)
+	if len(value) == 0 {
+		return manifest
+	}
+	if len(manifest) > 0 {
+		manifest = append(manifest, []byte("---\n")...)
+	}
+	manifest = append(manifest, value...)
+	return append(manifest, '\n')
+}
+
+func digestJSON(value any) (string, error) {
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return "", err
+	}
+	digest := sha256.Sum256(encoded)
+	return "sha256:" + hex.EncodeToString(digest[:]), nil
+}
+
+func canonicalManifestDigest(value []byte) (string, error) {
+	documents := []any{}
+	decoder := yaml.NewDecoder(bytes.NewReader(value))
+	for {
+		var document any
+		err := decoder.Decode(&document)
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return "", err
+		}
+		if document != nil {
+			documents = append(documents, document)
+		}
+	}
+	return digestJSON(documents)
+}
+
+func equivalentLoadProfiles(expected, actual []LoadProfile) bool {
+	if len(expected) != len(actual) {
+		return false
+	}
+	for index := range expected {
+		left := expected[index]
+		right := actual[index]
+		leftManifest, leftErr := canonicalManifestDigest([]byte(left.Manifest))
+		rightManifest, rightErr := canonicalManifestDigest([]byte(right.Manifest))
+		if leftErr != nil || rightErr != nil || leftManifest != rightManifest || left.ID != right.ID || left.TargetEndpoint != right.TargetEndpoint || left.Replicas != right.Replicas || left.Workload.ID != right.Workload.ID || left.Workload.APIVersion != right.Workload.APIVersion || left.Workload.Kind != right.Workload.Kind || left.Workload.Name != right.Workload.Name || selectorValue(left.Workload.Selector) != selectorValue(right.Workload.Selector) {
+			return false
+		}
+	}
+	return true
+}
+
+func selectorValue(selector map[string]string) string {
+	keys := make([]string, 0, len(selector))
+	for key := range selector {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	values := make([]string, 0, len(keys))
+	for _, key := range keys {
+		values = append(values, key+"="+selector[key])
+	}
+	return strings.Join(values, ",")
 }
 
 func inspectManifest(manifest []byte, descriptor catalog.Descriptor) ([]WorkloadTarget, []ServiceEndpoint, error) {
