@@ -309,6 +309,9 @@ func referenceResolutionPayload(payload []byte) ([]byte, error) {
 	if err := json.Unmarshal(payload, &value); err != nil {
 		return nil, err
 	}
+	if root, ok := value.(map[string]any); ok {
+		delete(root, "result")
+	}
 	removeResolvedInputs(value)
 	return json.Marshal(value)
 }

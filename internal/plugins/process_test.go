@@ -98,3 +98,21 @@ func TestReferenceResolutionExcludesVerifiedArtifactContents(t *testing.T) {
 		t.Fatalf("artifact values leaked into reference resolution: %s", payload)
 	}
 }
+
+func TestReferenceResolutionExcludesPluginResult(t *testing.T) {
+	payload, err := referenceResolutionPayload([]byte(`{"step":{"input":{"applicationRef":"app:dev.example.input@1.0.0"}},"result":{"applicationRef":"app:dev.example.output@1.0.0","credentialRef":"cred_output"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	applicationRefs := map[string]bool{}
+	credentialRefs := map[string]bool{}
+	var value any
+	if err := json.Unmarshal(payload, &value); err != nil {
+		t.Fatal(err)
+	}
+	collectRefs(value, "app:", applicationRefs)
+	collectRefs(value, "cred_", credentialRefs)
+	if !applicationRefs["app:dev.example.input@1.0.0"] || applicationRefs["app:dev.example.output@1.0.0"] || len(credentialRefs) != 0 {
+		t.Fatalf("plugin result leaked into reference resolution: %s", payload)
+	}
+}
