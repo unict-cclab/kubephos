@@ -28,6 +28,7 @@ type Spec struct {
 	Endpoint      string `json:"endpoint"`
 	CredentialRef string `json:"credentialRef"`
 	VerifyTLS     bool   `json:"verifyTLS"`
+	VMIDStart     int    `json:"vmidStart"`
 	AddressStart  string `json:"addressStart"`
 	PrefixLength  int    `json:"prefixLength"`
 	Gateway       string `json:"gateway"`
@@ -100,6 +101,9 @@ func (Plugin) Validate(ctx context.Context, invocation Invocation) domain.Valida
 }
 
 func validateNetworkProfile(spec Spec) error {
+	if spec.VMIDStart < 100 || spec.VMIDStart > 999999999 {
+		return errors.New("the managed VMID range start must be between 100 and 999999999")
+	}
 	address := net.ParseIP(spec.AddressStart)
 	gateway := net.ParseIP(spec.Gateway)
 	dns := net.ParseIP(spec.DNSServer)

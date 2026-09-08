@@ -25,6 +25,7 @@ spec:
       - endpoint
       - credentialRef
       - verifyTLS
+      - vmidStart
       - addressStart
       - prefixLength
       - gateway
@@ -46,6 +47,13 @@ spec:
         title: Verify TLS certificate
         description: Disable only for a development server using a private certificate.
         default: true
+      vmidStart:
+        type: integer
+        title: First managed VMID
+        description: VMID mapped to the first managed VM address.
+        minimum: 100
+        maximum: 999999999
+        default: 110
       addressStart:
         type: string
         title: First managed VM address

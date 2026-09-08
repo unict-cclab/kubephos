@@ -60,6 +60,7 @@ type connectionConfig struct {
 	Endpoint      string `json:"endpoint"`
 	CredentialRef string `json:"credentialRef"`
 	VerifyTLS     bool   `json:"verifyTLS"`
+	VMIDStart     int    `json:"vmidStart"`
 	AddressStart  string `json:"addressStart"`
 	PrefixLength  int    `json:"prefixLength"`
 	Gateway       string `json:"gateway"`

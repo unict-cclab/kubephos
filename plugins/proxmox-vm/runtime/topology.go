@@ -92,6 +92,7 @@ type machineSetMetadata struct {
 type machineSetSpec struct {
 	Provider      string    `json:"provider"`
 	ConnectionRef string    `json:"connectionRef"`
+	NetworkCIDR   string    `json:"networkCIDR"`
 	Machines      []machine `json:"machines"`
 }
 
@@ -152,7 +153,7 @@ func (TopologyPlugin) Validate(ctx context.Context, invocation Invocation) domai
 	if issue := validateTopologyValues(spec); issue != nil {
 		return invalidReport(report, issue.Path, issue.Message)
 	}
-	if _, err := topologyAddresses(configuration, spec.MachineCount); err != nil {
+	if _, err := topologyAddresses(configuration, spec.BaseVMID, spec.MachineCount); err != nil {
 		return invalidReport(report, "connectionRef", err.Error())
 	}
 	resources, err := connection.resources(ctx)
@@ -194,7 +195,7 @@ func (TopologyPlugin) Plan(ctx context.Context, invocation Invocation) (domain.P
 	if err != nil {
 		return domain.Plan{}, err
 	}
-	addresses, err := topologyAddresses(configuration, spec.MachineCount)
+	addresses, err := topologyAddresses(configuration, spec.BaseVMID, spec.MachineCount)
 	if err != nil {
 		return domain.Plan{}, err
 	}
@@ -521,13 +522,13 @@ func topologyExecutionResult(ctx context.Context, connection *client, input topo
 	name := strings.TrimPrefix(input.Machines[0].Name, "kubephos-")
 	return topologyResult{
 		Resources:     resources,
-		MachineSet:    machineSet{APIVersion: "artifacts.kubephos.dev/v1alpha1", Kind: "MachineSet", Metadata: machineSetMetadata{Name: name}, Spec: machineSetSpec{Provider: "proxmox", ConnectionRef: input.ConnectionRef, Machines: machines}},
+		MachineSet:    machineSet{APIVersion: "artifacts.kubephos.dev/v1alpha1", Kind: "MachineSet", Metadata: machineSetMetadata{Name: name}, Spec: machineSetSpec{Provider: "proxmox", ConnectionRef: input.ConnectionRef, NetworkCIDR: networkCIDR(input.Machines[0].Address, input.PrefixLength), Machines: machines}},
 		MachineAccess: machineAccess{APIVersion: "artifacts.kubephos.dev/v1alpha1", Kind: "MachineAccess", Metadata: machineAccessMetadata{Name: name}, Spec: machineAccessSpec{Algorithm: "ssh-ed25519", PublicKey: publicKey, PrivateKey: privateKey}},
 	}, nil
 }
 
 func validateTopologyResult(input topologyStepInput, result topologyResult) error {
-	if result.MachineSet.APIVersion != "artifacts.kubephos.dev/v1alpha1" || result.MachineSet.Kind != "MachineSet" || result.MachineSet.Spec.Provider != "proxmox" || result.MachineSet.Spec.ConnectionRef != input.ConnectionRef {
+	if result.MachineSet.APIVersion != "artifacts.kubephos.dev/v1alpha1" || result.MachineSet.Kind != "MachineSet" || result.MachineSet.Spec.Provider != "proxmox" || result.MachineSet.Spec.ConnectionRef != input.ConnectionRef || result.MachineSet.Spec.NetworkCIDR != networkCIDR(input.Machines[0].Address, input.PrefixLength) {
 		return errors.New("machine set identity is invalid")
 	}
 	if result.MachineAccess.APIVersion != "artifacts.kubephos.dev/v1alpha1" || result.MachineAccess.Kind != "MachineAccess" || result.MachineAccess.Spec.Algorithm != "ssh-ed25519" {
@@ -651,7 +652,7 @@ func (plugin TopologyPlugin) sshAccess() sshAccess {
 	return networkSSHAccess{}
 }
 
-func topologyAddresses(configuration connectionConfig, count int) ([]string, error) {
+func topologyAddresses(configuration connectionConfig, baseVMID, count int) ([]string, error) {
 	start := net.ParseIP(configuration.AddressStart).To4()
 	gateway := net.ParseIP(configuration.Gateway).To4()
 	dns := net.ParseIP(configuration.DNSServer).To4()
@@ -664,8 +665,15 @@ func topologyAddresses(configuration connectionConfig, count int) ([]string, err
 	if count < 1 {
 		return nil, errors.New("managed network allocation must contain at least one address")
 	}
+	if configuration.VMIDStart < 100 || baseVMID < configuration.VMIDStart {
+		return nil, errors.New("managed VMID range starts before the network profile")
+	}
 	mask := binary.BigEndian.Uint32(net.CIDRMask(configuration.PrefixLength, 32))
-	startValue := binary.BigEndian.Uint32(start)
+	mappedStart := uint64(binary.BigEndian.Uint32(start)) + uint64(baseVMID-configuration.VMIDStart)
+	if mappedStart > uint64(^uint32(0)) {
+		return nil, errors.New("managed network address mapping exceeds IPv4")
+	}
+	startValue := uint32(mappedStart)
 	gatewayValue := binary.BigEndian.Uint32(gateway)
 	networkValue := startValue & mask
 	broadcastValue := networkValue | ^mask
@@ -687,6 +695,14 @@ func topologyAddresses(configuration connectionConfig, count int) ([]string, err
 
 func staticIPConfig(address string, prefixLength int, gateway string) string {
 	return fmt.Sprintf("ip=%s/%d,gw=%s", address, prefixLength, gateway)
+}
+
+func networkCIDR(address string, prefixLength int) string {
+	value := net.ParseIP(address).To4()
+	if value == nil || prefixLength < 0 || prefixLength > 32 {
+		return ""
+	}
+	return (&net.IPNet{IP: value.Mask(net.CIDRMask(prefixLength, 32)), Mask: net.CIDRMask(prefixLength, 32)}).String()
 }
 
 func verifyTopologySSH(ctx context.Context, input topologyStepInput, privateKey string, timeout time.Duration, access sshAccess) error {

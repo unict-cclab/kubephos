@@ -20,6 +20,7 @@ import (
 
 	"kubephos.dev/kubephos/internal/domain"
 	"kubephos.dev/kubephos/internal/plugins"
+	"kubephos.dev/kubephos/internal/pluginssh"
 )
 
 const (
@@ -572,72 +573,13 @@ func validateKubeconfig(value, server string) error {
 }
 
 type sshRunner struct {
-	lock         sync.Mutex
-	fingerprints map[string]string
+	client *pluginssh.Client
 }
 
 func newSSHRunner() *sshRunner {
-	return &sshRunner{fingerprints: map[string]string{}}
+	return &sshRunner{client: pluginssh.New()}
 }
 
 func (r *sshRunner) Run(ctx context.Context, target machine, access machineAccess, command string) (string, error) {
-	signer, err := ssh.ParsePrivateKey([]byte(access.Spec.PrivateKey))
-	if err != nil {
-		return "", errors.New("invalid SSH private key")
-	}
-	address := net.JoinHostPort(target.Address, strconv.Itoa(target.SSHPort))
-	configuration := &ssh.ClientConfig{
-		User: target.SSHUser, Auth: []ssh.AuthMethod{ssh.PublicKeys(signer)}, Timeout: 20 * time.Second,
-		HostKeyCallback: func(hostname string, remote net.Addr, key ssh.PublicKey) error {
-			fingerprint := ssh.FingerprintSHA256(key)
-			r.lock.Lock()
-			defer r.lock.Unlock()
-			if known, ok := r.fingerprints[address]; ok && known != fingerprint {
-				return errors.New("SSH host key changed during operation")
-			}
-			r.fingerprints[address] = fingerprint
-			return nil
-		},
-	}
-	connection, err := (&net.Dialer{Timeout: 20 * time.Second}).DialContext(ctx, "tcp", address)
-	if err != nil {
-		return "", err
-	}
-	defer connection.Close()
-	_ = connection.SetDeadline(time.Now().Add(20 * time.Second))
-	clientConnection, channels, requests, err := ssh.NewClientConn(connection, address, configuration)
-	if err != nil {
-		return "", err
-	}
-	_ = connection.SetDeadline(time.Time{})
-	client := ssh.NewClient(clientConnection, channels, requests)
-	defer client.Close()
-	session, err := client.NewSession()
-	if err != nil {
-		return "", err
-	}
-	defer session.Close()
-	type commandResult struct {
-		value []byte
-		err   error
-	}
-	completed := make(chan commandResult, 1)
-	go func() {
-		value, err := session.CombinedOutput(command)
-		completed <- commandResult{value: value, err: err}
-	}()
-	select {
-	case <-ctx.Done():
-		_ = client.Close()
-		return "", ctx.Err()
-	case result := <-completed:
-		value := strings.TrimSpace(string(result.value))
-		if result.err != nil {
-			if len(value) > 1024 {
-				value = value[len(value)-1024:]
-			}
-			return value, fmt.Errorf("remote command failed: %s", value)
-		}
-		return value, nil
-	}
+	return r.client.Run(ctx, pluginssh.Target{Address: target.Address, Port: target.SSHPort, User: target.SSHUser}, access.Spec.PrivateKey, command)
 }

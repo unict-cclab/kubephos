@@ -21,6 +21,7 @@ RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/proxmox-vm-plugin 
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/proxmox-topology-plugin ./cmd/proxmox-topology-plugin
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/application-inspector-plugin ./cmd/application-inspector-plugin
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/k3s-plugin ./cmd/k3s-plugin
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/nfs-plugin ./cmd/nfs-plugin
 
 FROM alpine:3.23
 
@@ -38,6 +39,8 @@ COPY --from=build /out/application-inspector-plugin /opt/kubephos/plugins/applic
 COPY plugins/application-inspector/plugin.yaml /opt/kubephos/plugins/application-inspector/plugin.yaml
 COPY --from=build /out/k3s-plugin /opt/kubephos/plugins/k3s/k3s-plugin
 COPY plugins/k3s/plugin.yaml /opt/kubephos/plugins/k3s/plugin.yaml
+COPY --from=build /out/nfs-plugin /opt/kubephos/plugins/nfs/nfs-plugin
+COPY plugins/nfs/plugin.yaml /opt/kubephos/plugins/nfs/plugin.yaml
 COPY catalog/applications /opt/kubephos/catalog/applications
 COPY --from=web /src/frontend/dist /opt/kubephos/web
 USER 10001:10001
