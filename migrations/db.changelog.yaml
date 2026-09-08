@@ -1,0 +1,8 @@
+databaseChangeLog:
+  - changeSet:
+      id: 001-initial-schema
+      author: kubephos
+      changes:
+        - sqlFile:
+            path: changes/001-initial-schema.sql
+            relativeToChangelogFile: true

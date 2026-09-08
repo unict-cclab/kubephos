@@ -1,0 +1,450 @@
+package api
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"log/slog"
+	"net/http"
+	"strconv"
+	"strings"
+	"time"
+
+	"kubephos.dev/kubephos/internal/artifacts"
+	"kubephos.dev/kubephos/internal/domain"
+	"kubephos.dev/kubephos/internal/id"
+	"kubephos.dev/kubephos/internal/plugins"
+	"kubephos.dev/kubephos/internal/storage"
+	"kubephos.dev/kubephos/internal/webui"
+)
+
+type Server struct {
+	store     *storage.Store
+	registry  *plugins.Registry
+	artifacts *artifacts.Client
+	version   string
+}
+
+func NewServer(store *storage.Store, registry *plugins.Registry, artifactStore *artifacts.Client, version string) http.Handler {
+	server := &Server{store: store, registry: registry, artifacts: artifactStore, version: version}
+	router := http.NewServeMux()
+	router.HandleFunc("GET /health/live", server.live)
+	router.HandleFunc("GET /health/ready", server.ready)
+	router.HandleFunc("GET /api/v1/system", server.system)
+	router.HandleFunc("GET /api/v1/plugins", server.listPlugins)
+	router.HandleFunc("GET /api/v1/workspaces", server.listWorkspaces)
+	router.HandleFunc("POST /api/v1/workspaces", server.createWorkspace)
+	router.HandleFunc("GET /api/v1/workspaces/{id}", server.getWorkspace)
+	router.HandleFunc("GET /api/v1/operations", server.listOperations)
+	router.HandleFunc("POST /api/v1/operations", server.createOperation)
+	router.HandleFunc("GET /api/v1/operations/{id}", server.getOperation)
+	router.HandleFunc("POST /api/v1/operations/{id}/queue", server.queueOperation)
+	router.HandleFunc("POST /api/v1/operations/{id}/cancel", server.cancelOperation)
+	router.HandleFunc("GET /api/v1/operations/{id}/logs", server.listLogs)
+	router.HandleFunc("GET /api/v1/operations/{id}/events", server.operationEvents)
+	router.HandleFunc("GET /api/v1/artifacts/{id}/download", server.downloadArtifact)
+	router.Handle("/", webui.Handler())
+	return securityHeaders(requestLog(recoverer(router)))
+}
+
+func (s *Server) live(response http.ResponseWriter, _ *http.Request) {
+	writeJSON(response, http.StatusOK, map[string]string{"status": "healthy"})
+}
+
+func (s *Server) ready(response http.ResponseWriter, request *http.Request) {
+	if err := s.store.Ready(request.Context()); err != nil {
+		writeError(response, http.StatusServiceUnavailable, "not_ready", err.Error())
+		return
+	}
+	if err := s.artifacts.Health(request.Context()); err != nil {
+		writeError(response, http.StatusServiceUnavailable, "not_ready", err.Error())
+		return
+	}
+	writeJSON(response, http.StatusOK, map[string]string{"status": "healthy"})
+}
+
+func (s *Server) system(response http.ResponseWriter, request *http.Request) {
+	stats, err := s.store.Stats(request.Context())
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, "database_error", "Could not read platform status.")
+		return
+	}
+	writeJSON(response, http.StatusOK, map[string]any{
+		"name":      "KubePhos",
+		"version":   s.version,
+		"status":    "healthy",
+		"stats":     stats,
+		"checkedAt": time.Now().UTC(),
+	})
+}
+
+func (s *Server) listPlugins(response http.ResponseWriter, _ *http.Request) {
+	writeJSON(response, http.StatusOK, map[string]any{"items": s.registry.Manifests()})
+}
+
+func (s *Server) listWorkspaces(response http.ResponseWriter, request *http.Request) {
+	items, err := s.store.ListWorkspaces(request.Context())
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, "database_error", "Could not list workspaces.")
+		return
+	}
+	writeJSON(response, http.StatusOK, map[string]any{"items": items})
+}
+
+func (s *Server) getWorkspace(response http.ResponseWriter, request *http.Request) {
+	workspace, err := s.store.GetWorkspace(request.Context(), request.PathValue("id"))
+	if errors.Is(err, storage.ErrNotFound) {
+		writeError(response, http.StatusNotFound, "not_found", "Workspace not found.")
+		return
+	}
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, "database_error", "Could not read workspace.")
+		return
+	}
+	writeJSON(response, http.StatusOK, workspace)
+}
+
+func (s *Server) createWorkspace(response http.ResponseWriter, request *http.Request) {
+	var input struct {
+		Name        string `json:"name"`
+		Description string `json:"description"`
+	}
+	if err := decodeJSON(request, &input); err != nil {
+		writeError(response, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	input.Name = strings.TrimSpace(input.Name)
+	input.Description = strings.TrimSpace(input.Description)
+	if input.Name == "" || len(input.Name) > 80 {
+		writeError(response, http.StatusUnprocessableEntity, "invalid_name", "Name must contain between 1 and 80 characters.")
+		return
+	}
+	if len(input.Description) > 280 {
+		writeError(response, http.StatusUnprocessableEntity, "invalid_description", "Description cannot exceed 280 characters.")
+		return
+	}
+	workspace, err := s.store.CreateWorkspace(request.Context(), domain.Workspace{
+		ID:          id.New("ws"),
+		Name:        input.Name,
+		Description: input.Description,
+		Status:      "ready",
+	})
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, "database_error", "Could not create workspace.")
+		return
+	}
+	writeJSON(response, http.StatusCreated, workspace)
+}
+
+func (s *Server) listOperations(response http.ResponseWriter, request *http.Request) {
+	limit := 50
+	if raw := request.URL.Query().Get("limit"); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err == nil && parsed >= 1 && parsed <= 200 {
+			limit = parsed
+		}
+	}
+	items, err := s.store.ListOperations(request.Context(), limit)
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, "database_error", "Could not list operations.")
+		return
+	}
+	writeJSON(response, http.StatusOK, map[string]any{"items": items})
+}
+
+func (s *Server) getOperation(response http.ResponseWriter, request *http.Request) {
+	operation, err := s.store.GetOperation(request.Context(), request.PathValue("id"))
+	if errors.Is(err, storage.ErrNotFound) {
+		writeError(response, http.StatusNotFound, "not_found", "Operation not found.")
+		return
+	}
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, "database_error", "Could not read operation.")
+		return
+	}
+	writeJSON(response, http.StatusOK, operation)
+}
+
+func (s *Server) createOperation(response http.ResponseWriter, request *http.Request) {
+	var input struct {
+		WorkspaceID string          `json:"workspaceId"`
+		PluginID    string          `json:"pluginId"`
+		Title       string          `json:"title"`
+		Spec        json.RawMessage `json:"spec"`
+	}
+	if err := decodeJSON(request, &input); err != nil {
+		writeError(response, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	input.Title = strings.TrimSpace(input.Title)
+	if input.Title == "" || len(input.Title) > 120 {
+		writeError(response, http.StatusUnprocessableEntity, "invalid_title", "Title must contain between 1 and 120 characters.")
+		return
+	}
+	if _, err := s.store.GetWorkspace(request.Context(), input.WorkspaceID); errors.Is(err, storage.ErrNotFound) {
+		writeError(response, http.StatusUnprocessableEntity, "invalid_workspace", "Select an existing workspace.")
+		return
+	} else if err != nil {
+		writeError(response, http.StatusInternalServerError, "database_error", "Could not validate workspace.")
+		return
+	}
+	plugin, err := s.registry.Get(input.PluginID)
+	if err != nil {
+		writeError(response, http.StatusUnprocessableEntity, "invalid_plugin", err.Error())
+		return
+	}
+	validation := plugin.Validate(request.Context(), input.Spec)
+	if !validation.Valid {
+		writeJSON(response, http.StatusUnprocessableEntity, map[string]any{"code": "validation_failed", "validation": validation})
+		return
+	}
+	plan, err := plugin.Plan(request.Context(), input.Spec)
+	if err != nil {
+		writeError(response, http.StatusUnprocessableEntity, "planning_failed", err.Error())
+		return
+	}
+	if len(plan.Steps) == 0 {
+		writeError(response, http.StatusUnprocessableEntity, "empty_plan", "The plugin produced an empty plan.")
+		return
+	}
+	manifest := plugin.Manifest()
+	planHash, err := resolvedPlanHash(manifest, input.Spec, plan)
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, "planning_failed", "Could not fingerprint the validated plan.")
+		return
+	}
+	operation, err := s.store.CreateOperation(request.Context(), domain.Operation{
+		ID:          id.New("op"),
+		WorkspaceID: input.WorkspaceID,
+		PluginID:    input.PluginID,
+		Title:       input.Title,
+		Status:      domain.OperationReady,
+		Spec:        input.Spec,
+		Plan:        plan,
+		Validation:  validation,
+		PlanHash:    planHash,
+	})
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, "database_error", "Could not save the validated operation.")
+		return
+	}
+	writeJSON(response, http.StatusCreated, operation)
+}
+
+func (s *Server) queueOperation(response http.ResponseWriter, request *http.Request) {
+	var input struct {
+		PlanHash       string `json:"planHash"`
+		AcceptWarnings bool   `json:"acceptWarnings"`
+	}
+	if err := decodeJSON(request, &input); err != nil {
+		writeError(response, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	operation, err := s.store.QueueOperation(request.Context(), request.PathValue("id"), input.PlanHash, input.AcceptWarnings)
+	if errors.Is(err, storage.ErrConflict) {
+		writeError(response, http.StatusConflict, "invalid_transition", err.Error())
+		return
+	}
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, "database_error", "Could not queue operation.")
+		return
+	}
+	writeJSON(response, http.StatusAccepted, operation)
+}
+
+func (s *Server) cancelOperation(response http.ResponseWriter, request *http.Request) {
+	if err := s.store.RequestCancel(request.Context(), request.PathValue("id")); errors.Is(err, storage.ErrConflict) {
+		writeError(response, http.StatusConflict, "invalid_transition", "Operation cannot be canceled in its current state.")
+		return
+	} else if err != nil {
+		writeError(response, http.StatusInternalServerError, "database_error", "Could not request cancellation.")
+		return
+	}
+	response.WriteHeader(http.StatusAccepted)
+}
+
+func (s *Server) listLogs(response http.ResponseWriter, request *http.Request) {
+	after, _ := strconv.ParseInt(request.URL.Query().Get("after"), 10, 64)
+	items, err := s.store.ListLogs(request.Context(), request.PathValue("id"), after, 1000)
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, "database_error", "Could not read operation logs.")
+		return
+	}
+	writeJSON(response, http.StatusOK, map[string]any{"items": items})
+}
+
+func (s *Server) operationEvents(response http.ResponseWriter, request *http.Request) {
+	flusher, ok := response.(http.Flusher)
+	if !ok {
+		writeError(response, http.StatusInternalServerError, "stream_unavailable", "Streaming is unavailable.")
+		return
+	}
+	response.Header().Set("Content-Type", "text/event-stream")
+	response.Header().Set("Cache-Control", "no-cache")
+	response.Header().Set("Connection", "keep-alive")
+	after, _ := strconv.ParseInt(request.URL.Query().Get("after"), 10, 64)
+	ticker := time.NewTicker(700 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		logs, err := s.store.ListLogs(request.Context(), request.PathValue("id"), after, 200)
+		if err != nil {
+			writeSSE(response, "error", map[string]string{"message": "Could not read logs."})
+			flusher.Flush()
+			return
+		}
+		for _, entry := range logs {
+			writeSSE(response, "log", entry)
+			after = entry.Sequence
+		}
+		operation, err := s.store.GetOperation(request.Context(), request.PathValue("id"))
+		if err != nil {
+			writeSSE(response, "error", map[string]string{"message": "Operation no longer exists."})
+			flusher.Flush()
+			return
+		}
+		writeSSE(response, "status", operation)
+		flusher.Flush()
+		if terminal(operation.Status) {
+			return
+		}
+		select {
+		case <-request.Context().Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
+func (s *Server) downloadArtifact(response http.ResponseWriter, request *http.Request) {
+	artifact, err := s.store.GetArtifact(request.Context(), request.PathValue("id"))
+	if errors.Is(err, storage.ErrNotFound) {
+		writeError(response, http.StatusNotFound, "not_found", "Artifact not found.")
+		return
+	}
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, "database_error", "Could not read artifact metadata.")
+		return
+	}
+	reader, contentType, err := s.artifacts.Get(request.Context(), artifact.StorageKey)
+	if err != nil {
+		writeError(response, http.StatusBadGateway, "storage_error", "Could not read artifact data.")
+		return
+	}
+	defer reader.Close()
+	if contentType == "" {
+		contentType = artifact.MediaType
+	}
+	response.Header().Set("Content-Type", contentType)
+	response.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", artifact.Name+".json"))
+	response.Header().Set("X-Content-Type-Options", "nosniff")
+	if _, err := io.Copy(response, reader); err != nil {
+		slog.Error("stream artifact", "artifact", artifact.ID, "error", err)
+	}
+}
+
+func resolvedPlanHash(manifest plugins.Manifest, spec json.RawMessage, plan domain.Plan) (string, error) {
+	value, err := json.Marshal(struct {
+		PluginID      string          `json:"pluginId"`
+		PluginVersion string          `json:"pluginVersion"`
+		Spec          json.RawMessage `json:"spec"`
+		Plan          domain.Plan     `json:"plan"`
+	}{manifest.ID, manifest.Version, spec, plan})
+	if err != nil {
+		return "", err
+	}
+	digest := sha256.Sum256(value)
+	return hex.EncodeToString(digest[:]), nil
+}
+
+func terminal(status string) bool {
+	return status == domain.OperationSucceeded || status == domain.OperationFailed || status == domain.OperationCanceled
+}
+
+func decodeJSON(request *http.Request, target any) error {
+	reader := io.LimitReader(request.Body, 1<<20)
+	decoder := json.NewDecoder(reader)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(target); err != nil {
+		return fmt.Errorf("invalid JSON: %w", err)
+	}
+	if decoder.Decode(&struct{}{}) != io.EOF {
+		return errors.New("request body must contain one JSON object")
+	}
+	return nil
+}
+
+func writeJSON(response http.ResponseWriter, status int, value any) {
+	response.Header().Set("Content-Type", "application/json")
+	response.WriteHeader(status)
+	if err := json.NewEncoder(response).Encode(value); err != nil {
+		slog.Error("write response", "error", err)
+	}
+}
+
+func writeError(response http.ResponseWriter, status int, code, message string) {
+	writeJSON(response, status, map[string]string{"code": code, "message": message})
+}
+
+func writeSSE(response io.Writer, event string, value any) {
+	payload, err := json.Marshal(value)
+	if err != nil {
+		return
+	}
+	fmt.Fprintf(response, "event: %s\ndata: %s\n\n", event, payload)
+}
+
+func requestLog(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		started := time.Now()
+		next.ServeHTTP(response, request)
+		if strings.HasPrefix(request.URL.Path, "/api/") {
+			slog.Info("request", "method", request.Method, "path", request.URL.Path, "duration", time.Since(started))
+		}
+	})
+}
+
+func securityHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		response.Header().Set("Content-Security-Policy", "default-src 'self'; connect-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'")
+		response.Header().Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+		response.Header().Set("Referrer-Policy", "no-referrer")
+		response.Header().Set("X-Content-Type-Options", "nosniff")
+		response.Header().Set("X-Frame-Options", "DENY")
+		next.ServeHTTP(response, request)
+	})
+}
+
+func recoverer(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				slog.Error("request panic", "error", recovered)
+				writeError(response, http.StatusInternalServerError, "internal_error", "Unexpected server error.")
+			}
+		}()
+		next.ServeHTTP(response, request)
+	})
+}
+
+func Serve(ctx context.Context, address string, handler http.Handler) error {
+	server := &http.Server{Addr: address, Handler: handler, ReadHeaderTimeout: 10 * time.Second}
+	result := make(chan error, 1)
+	go func() {
+		result <- server.ListenAndServe()
+	}()
+	select {
+	case <-ctx.Done():
+		shutdown, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		return server.Shutdown(shutdown)
+	case err := <-result:
+		if errors.Is(err, http.ErrServerClosed) {
+			return nil
+		}
+		return err
+	}
+}

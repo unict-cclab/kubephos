@@ -1,0 +1,18 @@
+apiVersion: stack.kubephos.io/v1alpha1
+kind: ManagedStack
+metadata:
+  version: 0.1.0
+spec:
+  build:
+    go: 1.25.5
+    baseImage: alpine:3.23
+  platform:
+    postgres:
+      version: 18.6-alpine3.23
+      image: postgres@sha256:697c180dbf244d3ce4a8f4cbc0156cde840af055c1bf8b76aebe422a4822086f
+    liquibase:
+      version: 4.32.0
+      image: liquibase/liquibase@sha256:fbee3db36feece76da4207e9cca12873efecc057aba074232338bff600c19246
+    seaweedfs:
+      version: "4.29"
+      image: chrislusf/seaweedfs@sha256:d47c7ee99fcb951351d7194915f4e3a5ea604a8e8871183d713907dec4fb9bf5

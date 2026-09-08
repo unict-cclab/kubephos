@@ -1,0 +1,5 @@
+.git
+.env
+tmp
+dist
+coverage.out

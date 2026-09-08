@@ -1,0 +1,96 @@
+name: kubephos
+
+x-platform-environment: &platform-environment
+  KUBEPHOS_DATABASE_URL: postgres://kubephos:${POSTGRES_PASSWORD:-kubephos-dev}@postgres:5432/kubephos?sslmode=disable
+  KUBEPHOS_ARTIFACT_ENDPOINT: http://seaweedfs:8888
+  KUBEPHOS_PLUGIN_DIRECTORY: /opt/kubephos/plugins
+
+services:
+  postgres:
+    image: postgres@sha256:697c180dbf244d3ce4a8f4cbc0156cde840af055c1bf8b76aebe422a4822086f
+    environment:
+      POSTGRES_DB: kubephos
+      POSTGRES_USER: kubephos
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-kubephos-dev}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U kubephos -d kubephos"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    volumes:
+      - postgres-data:/var/lib/postgresql
+    restart: unless-stopped
+
+  migrate:
+    image: liquibase/liquibase@sha256:fbee3db36feece76da4207e9cca12873efecc057aba074232338bff600c19246
+    environment:
+      LIQUIBASE_COMMAND_URL: jdbc:postgresql://postgres:5432/kubephos
+      LIQUIBASE_COMMAND_USERNAME: kubephos
+      LIQUIBASE_COMMAND_PASSWORD: ${POSTGRES_PASSWORD:-kubephos-dev}
+      LIQUIBASE_COMMAND_CHANGELOG_FILE: db.changelog.yaml
+      LIQUIBASE_SEARCH_PATH: /liquibase/changelog
+    command: update
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./migrations:/liquibase/changelog:ro
+    restart: "no"
+
+  seaweedfs:
+    image: chrislusf/seaweedfs@sha256:d47c7ee99fcb951351d7194915f4e3a5ea604a8e8871183d713907dec4fb9bf5
+    command: server -dir=/data -filer -s3 -ip=seaweedfs
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://seaweedfs:9333/cluster/status"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    volumes:
+      - seaweed-data:/data
+    restart: unless-stopped
+
+  app:
+    image: kubephos:${KUBEPHOS_VERSION:-dev}
+    build:
+      context: .
+      args:
+        VERSION: ${KUBEPHOS_VERSION:-dev}
+    environment:
+      <<: *platform-environment
+      KUBEPHOS_HTTP_ADDRESS: :8080
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      seaweedfs:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/kubephos", "doctor"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    ports:
+      - "${KUBEPHOS_BIND_ADDRESS:-127.0.0.1}:${KUBEPHOS_PORT:-8080}:8080"
+    restart: unless-stopped
+
+  worker:
+    image: kubephos:${KUBEPHOS_VERSION:-dev}
+    build:
+      context: .
+      args:
+        VERSION: ${KUBEPHOS_VERSION:-dev}
+    command: worker
+    environment:
+      <<: *platform-environment
+      KUBEPHOS_INSTANCE_ID: ${HOSTNAME:-compose}
+      KUBEPHOS_WORKER_CONCURRENCY: ${KUBEPHOS_WORKER_CONCURRENCY:-4}
+      KUBEPHOS_WORKER_POLL_INTERVAL: ${KUBEPHOS_WORKER_POLL_INTERVAL:-500ms}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      seaweedfs:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  postgres-data:
+  seaweed-data:

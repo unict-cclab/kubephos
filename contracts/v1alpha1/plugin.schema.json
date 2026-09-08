@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kubephos.dev/contracts/v1alpha1/plugin.schema.json",
+  "title": "KubePhos Plugin",
+  "type": "object",
+  "required": ["apiVersion", "kind", "metadata", "spec"],
+  "properties": {
+    "apiVersion": { "const": "plugins.kubephos.io/v1alpha1" },
+    "kind": { "const": "Plugin" },
+    "metadata": {
+      "type": "object",
+      "required": ["id", "name", "version"],
+      "properties": {
+        "id": { "type": "string", "minLength": 3 },
+        "name": { "type": "string", "minLength": 1 },
+        "version": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": false
+    },
+    "spec": {
+      "type": "object",
+      "required": ["protocol", "commands", "configurationSchema", "runtime"],
+      "properties": {
+        "protocol": { "const": "v1alpha1" },
+        "commands": {
+          "type": "array",
+          "items": { "enum": ["describe", "validate", "plan", "precheck", "execute", "verify", "status", "pause", "resume", "cancel", "cleanup"] },
+          "minItems": 7,
+          "uniqueItems": true
+        },
+        "configurationSchema": { "type": "object" },
+        "runtime": {
+          "type": "object",
+          "required": ["executable"],
+          "properties": {
+            "executable": { "type": "string", "minLength": 1 },
+            "timeout": { "type": "string", "minLength": 2 }
+          },
+          "additionalProperties": false
+        },
+        "capabilities": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+        "permissions": { "type": "array", "items": { "type": "string" }, "uniqueItems": true }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,60 @@
+apiVersion: plugins.kubephos.io/v1alpha1
+kind: Plugin
+metadata:
+  id: io.kubephos.reference.workflow
+  name: System verification
+  version: 0.1.0
+  description: Verifies validation, workers, health gates, external execution and live logs.
+spec:
+  protocol: v1alpha1
+  commands:
+    - describe
+    - validate
+    - plan
+    - precheck
+    - execute
+    - verify
+    - status
+    - cancel
+    - cleanup
+  configurationSchema:
+    type: object
+    required:
+      - message
+      - steps
+      - delayMillis
+    properties:
+      message:
+        type: string
+        title: Log message
+        description: Message written by each verification step.
+        minLength: 1
+        maxLength: 120
+        default: KubePhos is ready
+      steps:
+        type: integer
+        title: Steps
+        description: Number of independently health-gated steps.
+        minimum: 1
+        maximum: 8
+        default: 3
+      delayMillis:
+        type: integer
+        title: Delay per step
+        description: Simulated execution time in milliseconds.
+        minimum: 100
+        maximum: 10000
+        default: 700
+      failureStep:
+        type: integer
+        title: Failure step
+        description: Use zero for no intentional failure.
+        minimum: 0
+        maximum: 8
+        default: 0
+  runtime:
+    executable: reference-plugin
+    timeout: 15m
+  capabilities:
+    - system.verification
+  permissions: []

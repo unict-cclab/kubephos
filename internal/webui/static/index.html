@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#111814">
+  <title>KubePhos</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <a class="brand" href="#overview" aria-label="KubePhos home">
+        <span class="brand-mark">K</span>
+        <span><strong>KubePhos</strong><small>Kubernetes workspace</small></span>
+      </a>
+      <nav class="navigation" aria-label="Main navigation">
+        <button class="nav-item active" data-view="overview"><span>⌂</span>Overview</button>
+        <button class="nav-item" data-view="workspaces"><span>◇</span>Workspaces</button>
+        <button class="nav-item" data-view="operations"><span>↻</span>Operations</button>
+        <button class="nav-item" data-view="plugins"><span>⌘</span>Plugins</button>
+        <button class="nav-item" data-view="infrastructure"><span>▦</span>Infrastructure</button>
+      </nav>
+      <div class="sidebar-footer">
+        <div class="health-dot" id="sidebar-health"></div>
+        <span><strong id="sidebar-status">Connecting</strong><small id="sidebar-version">KubePhos</small></span>
+      </div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow" id="page-eyebrow">CONTROL PLANE</p>
+          <h1 id="page-title">Overview</h1>
+        </div>
+        <div class="topbar-actions">
+          <button class="button secondary" id="refresh-button">Refresh</button>
+          <button class="button primary" id="new-workspace-button">New workspace</button>
+        </div>
+      </header>
+
+      <section class="view active" id="view-overview">
+        <div class="hero">
+          <div>
+            <span class="hero-kicker">READY WHEN YOU ARE</span>
+            <h2>Build, inspect and repeat.</h2>
+            <p>Create an isolated workspace, validate the complete plan and follow every health gate from one place.</p>
+          </div>
+          <button class="button light" id="hero-workspace-button">Create your workspace <span>→</span></button>
+        </div>
+
+        <div class="stats-grid">
+          <article class="stat-card"><span>Workspaces</span><strong id="stat-workspaces">—</strong><small>isolated environments</small></article>
+          <article class="stat-card"><span>Active</span><strong id="stat-active">—</strong><small>background operations</small></article>
+          <article class="stat-card"><span>Awaiting approval</span><strong id="stat-ready">—</strong><small>validated plans</small></article>
+          <article class="stat-card"><span>Needs attention</span><strong id="stat-failed">—</strong><small>failed operations</small></article>
+        </div>
+
+        <div class="section-heading">
+          <div><p class="eyebrow">RECENT ACTIVITY</p><h2>Operations</h2></div>
+          <button class="text-button" data-go="operations">View all →</button>
+        </div>
+        <div id="overview-operations" class="operation-list"></div>
+      </section>
+
+      <section class="view" id="view-workspaces">
+        <div class="section-heading">
+          <div><p class="eyebrow">ENVIRONMENTS</p><h2>Your workspaces</h2></div>
+          <p class="section-copy">Each workspace keeps its operations and resources independent.</p>
+        </div>
+        <div id="workspace-list" class="workspace-grid"></div>
+      </section>
+
+      <section class="view" id="view-operations">
+        <div class="section-heading">
+          <div><p class="eyebrow">BACKGROUND WORK</p><h2>Operation history</h2></div>
+          <p class="section-copy">Validated plans, live progress and diagnostic evidence.</p>
+        </div>
+        <div id="operation-list" class="operation-list"></div>
+      </section>
+
+      <section class="view" id="view-plugins">
+        <div class="section-heading">
+          <div><p class="eyebrow">CAPABILITIES</p><h2>Installed plugins</h2></div>
+          <p class="section-copy">Every external capability follows the same versioned contract.</p>
+        </div>
+        <div id="plugin-list" class="workspace-grid"></div>
+      </section>
+
+      <section class="view" id="view-infrastructure">
+        <div class="section-heading">
+          <div><p class="eyebrow">ONE ACCESS POINT</p><h2>Infrastructure Console</h2></div>
+          <p class="section-copy">Managed access without remembering addresses or opening another terminal.</p>
+        </div>
+        <div class="workspace-grid">
+          <article class="feature-card"><span class="feature-icon">▣</span><div><h3>Container Registry</h3><p>Browse Harbor projects, images, tags and immutable digests.</p></div><span class="planned">Planned</span></article>
+          <article class="feature-card"><span class="feature-icon">▤</span><div><h3>Shared Storage</h3><p>Explore NFS shares, upload data and protect destructive actions.</p></div><span class="planned">Planned</span></article>
+          <article class="feature-card"><span class="feature-icon">›_</span><div><h3>Secure Shell</h3><p>Open audited, short-lived SSH sessions directly in the browser.</p></div><span class="planned">Planned</span></article>
+        </div>
+        <div class="notice"><strong>Safety boundary</strong><p>Imported infrastructure is read-only by default. Credentials remain server-side and every write produces an audit event.</p></div>
+      </section>
+    </main>
+  </div>
+
+  <dialog id="workspace-dialog" class="modal">
+    <form method="dialog" id="workspace-form">
+      <div class="modal-header"><div><p class="eyebrow">NEW ENVIRONMENT</p><h2>Create workspace</h2></div><button class="icon-button" type="button" data-close-dialog="workspace-dialog" aria-label="Close">×</button></div>
+      <label>Name<input name="name" maxlength="80" placeholder="Scheduler development" required autofocus></label>
+      <label>Description<textarea name="description" maxlength="280" rows="3" placeholder="What will this workspace be used for?"></textarea></label>
+      <p class="form-error" id="workspace-error"></p>
+      <div class="modal-actions"><button class="button secondary" type="button" data-close-dialog="workspace-dialog">Cancel</button><button class="button primary" type="submit" id="workspace-submit">Create workspace</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="operation-dialog" class="modal">
+    <form method="dialog" id="operation-form">
+      <div class="modal-header"><div><p class="eyebrow">VALIDATE FIRST</p><h2>Configure operation</h2></div><button class="icon-button" type="button" data-close-dialog="operation-dialog" aria-label="Close">×</button></div>
+      <input type="hidden" name="workspaceId">
+      <label>Capability<select name="pluginId" id="operation-plugin" required></select></label>
+      <label>Operation name<input name="title" maxlength="120" required></label>
+      <div id="plugin-fields" class="schema-fields"></div>
+      <div class="validation-callout"><span>✓</span><p><strong>No operation starts yet.</strong> KubePhos validates every input and shows the resolved plan before it can be queued.</p></div>
+      <p class="form-error" id="operation-error"></p>
+      <div class="modal-actions"><button class="button secondary" type="button" data-close-dialog="operation-dialog">Cancel</button><button class="button primary" type="submit" id="operation-submit">Validate plan</button></div>
+    </form>
+  </dialog>
+
+  <aside class="drawer" id="operation-drawer" aria-hidden="true">
+    <div class="drawer-backdrop" data-close-drawer></div>
+    <div class="drawer-panel">
+      <div class="drawer-header">
+        <div><p class="eyebrow">OPERATION</p><h2 id="drawer-title">Details</h2></div>
+        <button class="icon-button" data-close-drawer aria-label="Close">×</button>
+      </div>
+      <div id="drawer-content"></div>
+    </div>
+  </aside>
+
+  <div id="toast-region" class="toast-region" aria-live="polite"></div>
+  <script src="/app.js" type="module"></script>
+</body>
+</html>

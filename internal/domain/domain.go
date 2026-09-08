@@ -1,0 +1,132 @@
+package domain
+
+import (
+	"encoding/json"
+	"time"
+)
+
+const (
+	OperationReady       = "ready"
+	OperationQueued      = "queued"
+	OperationPrechecking = "prechecking"
+	OperationRunning     = "running"
+	OperationVerifying   = "verifying"
+	OperationSucceeded   = "succeeded"
+	OperationFailed      = "failed"
+	OperationCanceled    = "canceled"
+
+	StepPending     = "pending"
+	StepPrechecking = "prechecking"
+	StepRunning     = "running"
+	StepVerifying   = "verifying"
+	StepSucceeded   = "succeeded"
+	StepFailed      = "failed"
+	StepCanceled    = "canceled"
+
+	HealthUnknown   = "unknown"
+	HealthHealthy   = "healthy"
+	HealthDegraded  = "degraded"
+	HealthUnhealthy = "unhealthy"
+)
+
+type Workspace struct {
+	ID          string    `json:"id"`
+	Name        string    `json:"name"`
+	Description string    `json:"description"`
+	Status      string    `json:"status"`
+	CreatedAt   time.Time `json:"createdAt"`
+	UpdatedAt   time.Time `json:"updatedAt"`
+}
+
+type Operation struct {
+	ID              string           `json:"id"`
+	WorkspaceID     string           `json:"workspaceId"`
+	PluginID        string           `json:"pluginId"`
+	Title           string           `json:"title"`
+	Status          string           `json:"status"`
+	Spec            json.RawMessage  `json:"spec"`
+	Plan            Plan             `json:"plan"`
+	Validation      ValidationReport `json:"validation"`
+	PlanHash        string           `json:"planHash"`
+	CancelRequested bool             `json:"cancelRequested"`
+	Error           string           `json:"error,omitempty"`
+	CreatedAt       time.Time        `json:"createdAt"`
+	QueuedAt        *time.Time       `json:"queuedAt,omitempty"`
+	StartedAt       *time.Time       `json:"startedAt,omitempty"`
+	CompletedAt     *time.Time       `json:"completedAt,omitempty"`
+	Steps           []OperationStep  `json:"steps,omitempty"`
+	Artifacts       []Artifact       `json:"artifacts,omitempty"`
+}
+
+type OperationStep struct {
+	ID          string          `json:"id"`
+	OperationID string          `json:"operationId"`
+	Position    int             `json:"position"`
+	Name        string          `json:"name"`
+	Status      string          `json:"status"`
+	Input       json.RawMessage `json:"input"`
+	Result      json.RawMessage `json:"result,omitempty"`
+	Health      json.RawMessage `json:"health,omitempty"`
+	Error       string          `json:"error,omitempty"`
+	StartedAt   *time.Time      `json:"startedAt,omitempty"`
+	CompletedAt *time.Time      `json:"completedAt,omitempty"`
+}
+
+type Plan struct {
+	PluginID string     `json:"pluginId"`
+	Steps    []PlanStep `json:"steps"`
+}
+
+type PlanStep struct {
+	ID    string          `json:"id"`
+	Name  string          `json:"name"`
+	Input json.RawMessage `json:"input"`
+}
+
+type ValidationReport struct {
+	Valid     bool              `json:"valid"`
+	Issues    []ValidationIssue `json:"issues"`
+	CheckedAt time.Time         `json:"checkedAt"`
+}
+
+type ValidationIssue struct {
+	Level   string `json:"level"`
+	Path    string `json:"path,omitempty"`
+	Message string `json:"message"`
+}
+
+type HealthReport struct {
+	Status  string            `json:"status"`
+	Summary string            `json:"summary"`
+	Checks  map[string]string `json:"checks"`
+}
+
+type LogEntry struct {
+	Sequence    int64     `json:"sequence"`
+	OperationID string    `json:"operationId"`
+	StepID      string    `json:"stepId,omitempty"`
+	Level       string    `json:"level"`
+	Source      string    `json:"source"`
+	Message     string    `json:"message"`
+	CreatedAt   time.Time `json:"createdAt"`
+}
+
+type Artifact struct {
+	ID          string    `json:"id"`
+	OperationID string    `json:"operationId"`
+	StepID      string    `json:"stepId,omitempty"`
+	Name        string    `json:"name"`
+	MediaType   string    `json:"mediaType"`
+	StorageKey  string    `json:"-"`
+	Digest      string    `json:"digest"`
+	SizeBytes   int64     `json:"sizeBytes"`
+	Sensitive   bool      `json:"sensitive"`
+	CreatedAt   time.Time `json:"createdAt"`
+}
+
+type DashboardStats struct {
+	Workspaces       int `json:"workspaces"`
+	ActiveOperations int `json:"activeOperations"`
+	ReadyOperations  int `json:"readyOperations"`
+	FailedOperations int `json:"failedOperations"`
+}
