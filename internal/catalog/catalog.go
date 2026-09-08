@@ -166,6 +166,7 @@ func Parse(raw []byte, origin string) (domain.CatalogApplication, error) {
 	digest := sha256.Sum256(canonical)
 	return domain.CatalogApplication{
 		ID:          descriptor.Metadata.ID,
+		Reference:   Reference(descriptor.Metadata.ID, descriptor.Metadata.Version),
 		Name:        descriptor.Metadata.Name,
 		Version:     descriptor.Metadata.Version,
 		Description: descriptor.Metadata.Description,
@@ -174,6 +175,26 @@ func Parse(raw []byte, origin string) (domain.CatalogApplication, error) {
 		Digest:      "sha256:" + hex.EncodeToString(digest[:]),
 		Enabled:     true,
 	}, nil
+}
+
+func Reference(applicationID, version string) string {
+	return "app:" + applicationID + "@" + version
+}
+
+func ParseReference(value string) (string, string, error) {
+	if !strings.HasPrefix(value, "app:") {
+		return "", "", errors.New("application reference must start with app:")
+	}
+	identity := strings.TrimPrefix(value, "app:")
+	separator := strings.LastIndex(identity, "@")
+	if separator < 1 || separator == len(identity)-1 {
+		return "", "", errors.New("application reference must include ID and version")
+	}
+	applicationID, version := identity[:separator], identity[separator+1:]
+	if !idPattern.MatchString(applicationID) || !versionPattern.MatchString(version) {
+		return "", "", errors.New("application reference is invalid")
+	}
+	return applicationID, version, nil
 }
 
 func validate(descriptor Descriptor, origin string) error {

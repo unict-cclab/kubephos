@@ -37,8 +37,12 @@ type Server struct {
 	version   string
 }
 
-func NewServer(store *storage.Store, registry *plugins.Registry, artifactStore *artifacts.Client, vault *secrets.Vault, version string) http.Handler {
+func NewServer(store *storage.Store, registry *plugins.Registry, artifactStore *artifacts.Client, vault *secrets.Vault, version, webDirectory string) (http.Handler, error) {
 	server := &Server{store: store, registry: registry, artifacts: artifactStore, vault: vault, version: version}
+	webHandler, err := webui.Handler(webDirectory)
+	if err != nil {
+		return nil, err
+	}
 	router := http.NewServeMux()
 	router.HandleFunc("GET /health/live", server.live)
 	router.HandleFunc("GET /health/ready", server.ready)
@@ -67,8 +71,8 @@ func NewServer(store *storage.Store, registry *plugins.Registry, artifactStore *
 	router.HandleFunc("GET /api/v1/operations/{id}/logs", server.listLogs)
 	router.HandleFunc("GET /api/v1/operations/{id}/events", server.operationEvents)
 	router.HandleFunc("GET /api/v1/artifacts/{id}/download", server.downloadArtifact)
-	router.Handle("/", webui.Handler())
-	return securityHeaders(requestLog(server.authenticate(auditMutations(store, recoverer(router)))))
+	router.Handle("/", webHandler)
+	return securityHeaders(requestLog(server.authenticate(auditMutations(store, recoverer(router))))), nil
 }
 
 func (s *Server) live(response http.ResponseWriter, _ *http.Request) {

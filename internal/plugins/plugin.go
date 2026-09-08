@@ -41,6 +41,8 @@ type SecretResolver func(context.Context, string) (string, json.RawMessage, erro
 
 type ConnectionResolver func(context.Context, string) (string, json.RawMessage, error)
 
+type CatalogResolver func(context.Context, string) (json.RawMessage, error)
+
 type Logger func(level, message string) error
 
 type Plugin interface {

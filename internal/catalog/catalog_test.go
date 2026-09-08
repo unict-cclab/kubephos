@@ -81,6 +81,17 @@ func TestParseAcceptsRepositoryRoot(t *testing.T) {
 	}
 }
 
+func TestApplicationReferenceRoundTrip(t *testing.T) {
+	value := Reference("dev.kubephos.test-app", "1.0.0")
+	applicationID, version, err := ParseReference(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if applicationID != "dev.kubephos.test-app" || version != "1.0.0" {
+		t.Fatalf("unexpected reference values: %s %s", applicationID, version)
+	}
+}
+
 func TestLoadDirectoryRejectsDuplicateVersion(t *testing.T) {
 	root := t.TempDir()
 	for _, directory := range []string{"one", "two"} {

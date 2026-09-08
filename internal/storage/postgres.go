@@ -306,6 +306,19 @@ func (s *Store) CreateCatalogApplication(ctx context.Context, application domain
 	return application, err
 }
 
+func (s *Store) GetCatalogApplicationDescriptor(ctx context.Context, applicationID, version string) (json.RawMessage, error) {
+	var descriptor json.RawMessage
+	err := s.pool.QueryRow(ctx, `
+		SELECT descriptor
+		FROM catalog_applications
+		WHERE id = $1 AND version = $2 AND enabled = true
+	`, applicationID, version).Scan(&descriptor)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	return descriptor, err
+}
+
 func (s *Store) ListCatalogApplications(ctx context.Context) ([]domain.CatalogApplication, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT id, name, version, description, origin, descriptor, digest, enabled, created_at, updated_at
@@ -323,6 +336,7 @@ func (s *Store) ListCatalogApplications(ctx context.Context) ([]domain.CatalogAp
 		if err := rows.Scan(&application.ID, &application.Name, &application.Version, &application.Description, &application.Origin, &application.Descriptor, &application.Digest, &application.Enabled, &application.CreatedAt, &application.UpdatedAt); err != nil {
 			return nil, err
 		}
+		application.Reference = "app:" + application.ID + "@" + application.Version
 		result = append(result, application)
 	}
 	return result, rows.Err()

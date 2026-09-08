@@ -61,3 +61,22 @@ func TestResolveConnectionsRejectsAnotherProvider(t *testing.T) {
 		t.Fatal("expected provider boundary error")
 	}
 }
+
+func TestResolveCatalogRequiresPermission(t *testing.T) {
+	process := &Process{
+		catalog: func(context.Context, string) (json.RawMessage, error) {
+			return json.RawMessage(`{"kind":"Application"}`), nil
+		},
+	}
+	if _, err := process.resolveCatalog(context.Background(), []byte(`{"applicationRef":"app:dev.example.app@1.0.0"}`)); err == nil {
+		t.Fatal("expected catalog permission error")
+	}
+	process.manifest.Permissions = []string{"catalog.read:applications"}
+	result, err := process.resolveCatalog(context.Background(), []byte(`{"applicationRef":"app:dev.example.app@1.0.0"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result) != 1 {
+		t.Fatalf("unexpected catalog result: %#v", result)
+	}
+}

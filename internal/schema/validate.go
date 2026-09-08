@@ -110,6 +110,10 @@ func validateValue(rule map[string]any, value any, path string) []Issue {
 			if !strings.HasPrefix(current, "conn_") {
 				issues = append(issues, Issue{Path: path, Message: "Value must reference a stored provider connection."})
 			}
+		case "kubephos-application-ref":
+			if !strings.HasPrefix(current, "app:") || !strings.Contains(strings.TrimPrefix(current, "app:"), "@") {
+				issues = append(issues, Issue{Path: path, Message: "Value must reference a catalog application version."})
+			}
 		}
 	case json.Number:
 		value, err := current.Float64()

@@ -54,10 +54,11 @@ type Process struct {
 	timeout     time.Duration
 	resolver    SecretResolver
 	connections ConnectionResolver
+	catalog     CatalogResolver
 	secretKinds map[string]bool
 }
 
-func LoadDirectory(directory string, resolver SecretResolver, connections ConnectionResolver) (*Registry, error) {
+func LoadDirectory(directory string, resolver SecretResolver, connections ConnectionResolver, catalogResolver CatalogResolver) (*Registry, error) {
 	entries, err := os.ReadDir(directory)
 	if err != nil {
 		return nil, err
@@ -69,7 +70,7 @@ func LoadDirectory(directory string, resolver SecretResolver, connections Connec
 			continue
 		}
 		path := filepath.Join(directory, entry.Name(), "plugin.yaml")
-		value, err := LoadProcess(path, resolver, connections)
+		value, err := LoadProcess(path, resolver, connections, catalogResolver)
 		if errors.Is(err, os.ErrNotExist) {
 			continue
 		}
@@ -89,7 +90,7 @@ func LoadDirectory(directory string, resolver SecretResolver, connections Connec
 	return NewRegistry(values...), nil
 }
 
-func LoadProcess(path string, resolver SecretResolver, connections ConnectionResolver) (*Process, error) {
+func LoadProcess(path string, resolver SecretResolver, connections ConnectionResolver, catalogResolver CatalogResolver) (*Process, error) {
 	value, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
@@ -173,6 +174,7 @@ func LoadProcess(path string, resolver SecretResolver, connections ConnectionRes
 		timeout:     timeout,
 		resolver:    resolver,
 		connections: connections,
+		catalog:     catalogResolver,
 		secretKinds: secretKinds,
 	}
 	describeContext, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -239,6 +241,10 @@ func (p *Process) invoke(parent context.Context, command string, input, output a
 	if err != nil {
 		return err
 	}
+	catalogValues, err := p.resolveCatalog(ctx, inputPayload)
+	if err != nil {
+		return err
+	}
 	secretPayloads := []json.RawMessage{inputPayload}
 	for _, configuration := range connectionValues {
 		secretPayloads = append(secretPayloads, configuration)
@@ -251,7 +257,7 @@ func (p *Process) invoke(parent context.Context, command string, input, output a
 	if err != nil {
 		return err
 	}
-	payload, err := json.Marshal(map[string]any{"input": json.RawMessage(inputPayload), "secrets": resolved, "connections": connectionValues})
+	payload, err := json.Marshal(map[string]any{"input": json.RawMessage(inputPayload), "secrets": resolved, "connections": connectionValues, "catalog": catalogValues})
 	if err != nil {
 		return err
 	}
@@ -284,6 +290,30 @@ func (p *Process) invoke(parent context.Context, command string, input, output a
 		return fmt.Errorf("plugin returned invalid JSON: %w", err)
 	}
 	return nil
+}
+
+func (p *Process) resolveCatalog(ctx context.Context, payload []byte) (map[string]json.RawMessage, error) {
+	result := map[string]json.RawMessage{}
+	var value any
+	if err := json.Unmarshal(payload, &value); err != nil {
+		return nil, err
+	}
+	refs := map[string]bool{}
+	collectRefs(value, "app:", refs)
+	if len(refs) > 0 && !contains(p.manifest.Permissions, "catalog.read:applications") {
+		return nil, errors.New("plugin is not permitted to read catalog applications")
+	}
+	for applicationRef := range refs {
+		if p.catalog == nil {
+			return nil, errors.New("catalog resolver is unavailable")
+		}
+		descriptor, err := p.catalog(ctx, applicationRef)
+		if err != nil {
+			return nil, fmt.Errorf("resolve catalog application %s: %w", applicationRef, err)
+		}
+		result[applicationRef] = descriptor
+	}
+	return result, nil
 }
 
 func (p *Process) resolveConnections(ctx context.Context, payload []byte) (map[string]json.RawMessage, error) {

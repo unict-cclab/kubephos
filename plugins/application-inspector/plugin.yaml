@@ -1,0 +1,37 @@
+apiVersion: plugins.kubephos.io/v1alpha1
+kind: Plugin
+metadata:
+  id: io.kubephos.applications.inspect
+  name: Application package check
+  version: 0.1.0
+  description: Resolves a catalog package and verifies its pinned source, workloads and endpoints.
+spec:
+  protocol: v1alpha1
+  commands:
+    - describe
+    - validate
+    - plan
+    - precheck
+    - execute
+    - verify
+    - status
+    - cancel
+    - cleanup
+  configurationSchema:
+    type: object
+    required:
+      - applicationRef
+    additionalProperties: false
+    properties:
+      applicationRef:
+        type: string
+        title: Application
+        description: Immutable application version from the catalog.
+        format: kubephos-application-ref
+  runtime:
+    executable: application-inspector-plugin
+    timeout: 10m
+  capabilities:
+    - applications.inspect
+  permissions:
+    - catalog.read:applications

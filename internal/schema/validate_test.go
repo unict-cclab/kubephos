@@ -28,12 +28,12 @@ func TestValidateAcceptsMatchingObject(t *testing.T) {
 }
 
 func TestValidatePatternsAndOpaqueReferences(t *testing.T) {
-	definition := json.RawMessage(`{"type":"object","properties":{"name":{"type":"string","pattern":"^[a-z]+$"},"credential":{"type":"string","format":"kubephos-secret-ref"},"connection":{"type":"string","format":"kubephos-connection-ref"}}}`)
-	issues, err := Validate(definition, json.RawMessage(`{"name":"Invalid-1","credential":"plain","connection":"cred_wrong"}`))
+	definition := json.RawMessage(`{"type":"object","properties":{"name":{"type":"string","pattern":"^[a-z]+$"},"credential":{"type":"string","format":"kubephos-secret-ref"},"connection":{"type":"string","format":"kubephos-connection-ref"},"application":{"type":"string","format":"kubephos-application-ref"}}}`)
+	issues, err := Validate(definition, json.RawMessage(`{"name":"Invalid-1","credential":"plain","connection":"cred_wrong","application":"not-an-app"}`))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(issues) != 3 {
-		t.Fatalf("expected 3 issues, got %#v", issues)
+	if len(issues) != 4 {
+		t.Fatalf("expected 4 issues, got %#v", issues)
 	}
 }

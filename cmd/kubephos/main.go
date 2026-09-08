@@ -90,13 +90,17 @@ func serve(configValue config.Config) error {
 	if err != nil {
 		return err
 	}
-	registry, err := plugins.LoadDirectory(configValue.PluginDirectory, resolver, connectionRuntime(store))
+	registry, err := plugins.LoadDirectory(configValue.PluginDirectory, resolver, connectionRuntime(store), catalogRuntime(store))
 	if err != nil {
 		return err
 	}
 	artifactStore := artifacts.New(configValue.ArtifactEndpoint)
+	handler, err := api.NewServer(store, registry, artifactStore, vault, version, configValue.WebDirectory)
+	if err != nil {
+		return err
+	}
 	slog.Info("starting api", "address", configValue.HTTPAddress, "version", version)
-	return api.Serve(ctx, configValue.HTTPAddress, api.NewServer(store, registry, artifactStore, vault, version))
+	return api.Serve(ctx, configValue.HTTPAddress, handler)
 }
 
 func work(configValue config.Config) error {
@@ -114,7 +118,7 @@ func work(configValue config.Config) error {
 	if err != nil {
 		return err
 	}
-	registry, err := plugins.LoadDirectory(configValue.PluginDirectory, resolver, connectionRuntime(store))
+	registry, err := plugins.LoadDirectory(configValue.PluginDirectory, resolver, connectionRuntime(store), catalogRuntime(store))
 	if err != nil {
 		return err
 	}
@@ -152,6 +156,16 @@ func connectionRuntime(store *storage.Store) plugins.ConnectionResolver {
 			return "", nil, err
 		}
 		return connection.Provider, connection.Configuration, nil
+	}
+}
+
+func catalogRuntime(store *storage.Store) plugins.CatalogResolver {
+	return func(ctx context.Context, reference string) (json.RawMessage, error) {
+		applicationID, version, err := catalog.ParseReference(reference)
+		if err != nil {
+			return nil, err
+		}
+		return store.GetCatalogApplicationDescriptor(ctx, applicationID, version)
 	}
 }
 

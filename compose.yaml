@@ -5,6 +5,7 @@ x-platform-environment: &platform-environment
   KUBEPHOS_ARTIFACT_ENDPOINT: http://seaweedfs:8888
   KUBEPHOS_PLUGIN_DIRECTORY: /opt/kubephos/plugins
   KUBEPHOS_CATALOG_DIRECTORY: /opt/kubephos/catalog/applications
+  KUBEPHOS_WEB_DIRECTORY: /opt/kubephos/web
   KUBEPHOS_CREDENTIAL_KEY_FILE: /var/lib/kubephos/master.key
 
 services:
