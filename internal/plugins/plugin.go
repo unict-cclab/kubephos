@@ -10,15 +10,17 @@ import (
 )
 
 type Manifest struct {
-	ID                string             `json:"id"`
-	Provider          string             `json:"provider,omitempty"`
-	Name              string             `json:"name"`
-	Version           string             `json:"version"`
-	Description       string             `json:"description"`
-	Schema            json.RawMessage    `json:"schema"`
-	CredentialSchemas []CredentialSchema `json:"credentialSchemas"`
-	Capabilities      []string           `json:"capabilities"`
-	Permissions       []string           `json:"permissions"`
+	ID                string                    `json:"id"`
+	Provider          string                    `json:"provider,omitempty"`
+	Name              string                    `json:"name"`
+	Version           string                    `json:"version"`
+	Description       string                    `json:"description"`
+	Schema            json.RawMessage           `json:"schema"`
+	CredentialSchemas []CredentialSchema        `json:"credentialSchemas"`
+	ArtifactInputs    []domain.ArtifactContract `json:"artifactInputs"`
+	ArtifactOutputs   []domain.ArtifactContract `json:"artifactOutputs"`
+	Capabilities      []string                  `json:"capabilities"`
+	Permissions       []string                  `json:"permissions"`
 }
 
 func (m Manifest) HasCapability(capability string) bool {

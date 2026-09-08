@@ -21,11 +21,13 @@ type referenceSpec struct {
 
 func (Plugin) Manifest() plugins.Manifest {
 	return plugins.Manifest{
-		ID:          "io.kubephos.reference.workflow",
-		Name:        "System verification",
-		Version:     "0.1.0",
-		Description: "Verifies validation, workers, health gates and live logs.",
-		Schema:      json.RawMessage(`{"type":"object","required":["message","steps","delayMillis"],"properties":{"message":{"type":"string","minLength":1,"maxLength":120,"title":"Message"},"steps":{"type":"integer","minimum":1,"maximum":8,"default":3,"title":"Steps"},"delayMillis":{"type":"integer","minimum":100,"maximum":10000,"default":700,"title":"Delay per step"},"failureStep":{"type":"integer","minimum":0,"maximum":8,"default":0,"title":"Failure step"}}}`),
+		ID:              "io.kubephos.reference.workflow",
+		Name:            "System verification",
+		Version:         "0.1.0",
+		Description:     "Verifies validation, workers, health gates and live logs.",
+		Schema:          json.RawMessage(`{"type":"object","required":["message","steps","delayMillis"],"properties":{"message":{"type":"string","minLength":1,"maxLength":120,"title":"Message"},"steps":{"type":"integer","minimum":1,"maximum":8,"default":3,"title":"Steps"},"delayMillis":{"type":"integer","minimum":100,"maximum":10000,"default":700,"title":"Delay per step"},"failureStep":{"type":"integer","minimum":0,"maximum":8,"default":0,"title":"Failure step"}}}`),
+		ArtifactInputs:  []domain.ArtifactContract{{Type: "CheckResult", Version: "v1alpha1"}},
+		ArtifactOutputs: []domain.ArtifactContract{{Type: "CheckResult", Version: "v1alpha1"}},
 	}
 }
 
@@ -83,7 +85,14 @@ func (Plugin) Plan(ctx context.Context, raw json.RawMessage) (domain.Plan, error
 		if err != nil {
 			return domain.Plan{}, err
 		}
-		steps = append(steps, domain.PlanStep{ID: fmt.Sprintf("check-%d", position), Name: fmt.Sprintf("Verification %d", position), Input: input})
+		step := domain.PlanStep{
+			ID: fmt.Sprintf("check-%d", position), Name: fmt.Sprintf("Verification %d", position), Input: input,
+			Outputs: []domain.ArtifactOutput{{Name: "result", Type: "CheckResult", Version: "v1alpha1", MediaType: "application/json"}},
+		}
+		if position > 1 {
+			step.ArtifactInputs = []domain.ArtifactInput{{Name: "previous-result", Type: "CheckResult", Version: "v1alpha1", FromStep: fmt.Sprintf("check-%d", position-1), FromOutput: "result"}}
+		}
+		steps = append(steps, step)
 	}
 	return domain.Plan{PluginID: Plugin{}.Manifest().ID, Steps: steps}, nil
 }
@@ -96,6 +105,12 @@ func (Plugin) Precheck(ctx context.Context, step domain.PlanStep, log plugins.Lo
 	case <-ctx.Done():
 		return domain.HealthReport{}, ctx.Err()
 	default:
+	}
+	for _, input := range step.ArtifactInputs {
+		resolved, exists := step.ResolvedInputs[input.Name]
+		if !exists || len(resolved.Value) == 0 || !json.Valid(resolved.Value) {
+			return domain.HealthReport{Status: domain.HealthUnhealthy, Summary: "A required typed input is unavailable", Checks: map[string]string{"artifacts": "invalid"}}, nil
+		}
 	}
 	return domain.HealthReport{Status: domain.HealthHealthy, Summary: "Inputs and dependencies are healthy", Checks: map[string]string{"configuration": "valid", "dependencies": "healthy"}}, nil
 }

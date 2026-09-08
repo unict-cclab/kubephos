@@ -106,7 +106,18 @@ func (w *Worker) process(parent context.Context, owner string, operation domain.
 			w.fail(parent, operation.ID, step.ID, err)
 			return
 		}
-		health, err := plugin.Precheck(runCtx, planned, log)
+		runtimeStep, err := w.resolveArtifactInputs(runCtx, operation, position, planned)
+		if err != nil {
+			w.fail(parent, operation.ID, step.ID, fmt.Errorf("validate artifact inputs: %w", err))
+			return
+		}
+		if len(runtimeStep.ResolvedInputs) > 0 {
+			if err := log("info", fmt.Sprintf("Verified %d typed artifact input(s) before execution", len(runtimeStep.ResolvedInputs))); err != nil {
+				w.fail(parent, operation.ID, step.ID, err)
+				return
+			}
+		}
+		health, err := plugin.Precheck(runCtx, runtimeStep, log)
 		if err != nil {
 			w.stopOrFail(parent, operation.ID, step.ID, err)
 			return
@@ -128,32 +139,37 @@ func (w *Worker) process(parent context.Context, owner string, operation domain.
 			w.fail(parent, operation.ID, step.ID, err)
 			return
 		}
-		result, err := plugin.Execute(runCtx, planned, log)
+		result, err := plugin.Execute(runCtx, runtimeStep, log)
 		if err != nil {
-			err = w.cleanup(operation, planned, result, plugin, err)
+			err = w.cleanup(operation, runtimeStep, result, plugin, err)
 			w.stopOrFail(parent, operation.ID, step.ID, err)
 			return
 		}
 		if err := w.store.SetStepState(runCtx, operation.ID, step.ID, domain.StepVerifying, result, nil, ""); err != nil {
-			err = w.cleanup(operation, planned, result, plugin, err)
+			err = w.cleanup(operation, runtimeStep, result, plugin, err)
 			w.fail(parent, operation.ID, step.ID, err)
 			return
 		}
 		if err := w.store.SetOperationStatus(runCtx, operation.ID, domain.OperationVerifying, fmt.Sprintf("Verifying %s.", step.Name)); err != nil {
-			err = w.cleanup(operation, planned, result, plugin, err)
+			err = w.cleanup(operation, runtimeStep, result, plugin, err)
 			w.fail(parent, operation.ID, step.ID, err)
 			return
 		}
-		health, err = plugin.Verify(runCtx, planned, result, log)
+		health, err = plugin.Verify(runCtx, runtimeStep, result, log)
 		if err != nil {
-			err = w.cleanup(operation, planned, result, plugin, err)
+			err = w.cleanup(operation, runtimeStep, result, plugin, err)
 			w.stopOrFail(parent, operation.ID, step.ID, err)
 			return
 		}
 		healthRaw, _ = json.Marshal(health)
 		if health.Status != domain.HealthHealthy {
-			failure := w.cleanup(operation, planned, result, plugin, fmt.Errorf("health gate failed: %s", health.Summary))
+			failure := w.cleanup(operation, runtimeStep, result, plugin, fmt.Errorf("health gate failed: %s", health.Summary))
 			w.failWithHealth(parent, operation.ID, step.ID, healthRaw, failure)
+			return
+		}
+		if err := w.persistStepOutputs(runCtx, operation, step, planned, result, log); err != nil {
+			err = w.cleanup(operation, runtimeStep, result, plugin, fmt.Errorf("persist typed outputs: %w", err))
+			w.fail(parent, operation.ID, step.ID, err)
 			return
 		}
 		if plugin.Manifest().HasCapability("infrastructure.discovery") {
@@ -164,13 +180,13 @@ func (w *Worker) process(parent context.Context, owner string, operation domain.
 		}
 		if len(planned.Effects) > 0 {
 			if err := w.completeEffects(runCtx, operation, planned, result); err != nil {
-				err = w.cleanup(operation, planned, result, plugin, err)
+				err = w.cleanup(operation, runtimeStep, result, plugin, err)
 				w.fail(parent, operation.ID, step.ID, err)
 				return
 			}
 		}
 		if err := w.store.SetStepState(runCtx, operation.ID, step.ID, domain.StepSucceeded, result, healthRaw, ""); err != nil {
-			err = w.cleanup(operation, planned, result, plugin, err)
+			err = w.cleanup(operation, runtimeStep, result, plugin, err)
 			w.fail(parent, operation.ID, step.ID, err)
 			return
 		}
@@ -201,6 +217,8 @@ func (w *Worker) process(parent context.Context, owner string, operation domain.
 		ID:          id.New("art"),
 		OperationID: operation.ID,
 		Name:        "Result",
+		Type:        "RunResult",
+		Version:     "v1alpha1",
 		MediaType:   "application/json",
 		StorageKey:  stored.Key,
 		Digest:      stored.Digest,
@@ -216,6 +234,73 @@ func (w *Worker) process(parent context.Context, owner string, operation domain.
 	if err := w.store.CompleteOperation(runCtx, operation.ID); err != nil {
 		slog.Error("complete operation", "operation", operation.ID, "error", err)
 	}
+}
+
+func (w *Worker) resolveArtifactInputs(ctx context.Context, operation domain.Operation, position int, step domain.PlanStep) (domain.PlanStep, error) {
+	if len(step.ArtifactInputs) == 0 {
+		return step, nil
+	}
+	stepIDs := map[string]string{}
+	for index := 0; index < position; index++ {
+		stepIDs[operation.Plan.Steps[index].ID] = operation.Steps[index].ID
+	}
+	step.ResolvedInputs = make(map[string]domain.ResolvedArtifact, len(step.ArtifactInputs))
+	for _, input := range step.ArtifactInputs {
+		producerStepID, exists := stepIDs[input.FromStep]
+		if !exists {
+			return domain.PlanStep{}, fmt.Errorf("input %q references unavailable step %q", input.Name, input.FromStep)
+		}
+		artifact, err := w.store.GetArtifactByOutput(ctx, operation.ID, producerStepID, input.FromOutput)
+		if err != nil {
+			return domain.PlanStep{}, fmt.Errorf("resolve input %q: %w", input.Name, err)
+		}
+		if artifact.Type != input.Type || artifact.Version != input.Version {
+			return domain.PlanStep{}, fmt.Errorf("input %q expected %s/%s, received %s/%s", input.Name, input.Type, input.Version, artifact.Type, artifact.Version)
+		}
+		if artifact.Sensitive {
+			return domain.PlanStep{}, fmt.Errorf("input %q requires encrypted artifact materialization", input.Name)
+		}
+		value, err := w.artifacts.ReadVerified(ctx, artifact.StorageKey, artifact.Digest, artifact.SizeBytes)
+		if err != nil {
+			return domain.PlanStep{}, fmt.Errorf("verify input %q: %w", input.Name, err)
+		}
+		if artifact.MediaType == "application/json" && !json.Valid(value) {
+			return domain.PlanStep{}, fmt.Errorf("input %q contains invalid JSON", input.Name)
+		}
+		step.ResolvedInputs[input.Name] = domain.ResolvedArtifact{
+			ID: artifact.ID, Type: artifact.Type, Version: artifact.Version, MediaType: artifact.MediaType,
+			Digest: artifact.Digest, SizeBytes: artifact.SizeBytes, Sensitive: artifact.Sensitive, Value: value,
+		}
+	}
+	return step, nil
+}
+
+func (w *Worker) persistStepOutputs(ctx context.Context, operation domain.Operation, step domain.OperationStep, planned domain.PlanStep, result json.RawMessage, log plugins.Logger) error {
+	for _, output := range planned.Outputs {
+		value, err := artifacts.ExtractJSON(result, output.Source)
+		if err != nil {
+			return fmt.Errorf("extract output %q: %w", output.Name, err)
+		}
+		stored, err := w.artifacts.Put(ctx, artifacts.StepOutputKey(operation.ID, step.ID, output.Name), output.Name+".json", output.MediaType, value)
+		if err != nil {
+			return fmt.Errorf("store output %q: %w", output.Name, err)
+		}
+		if _, err := w.artifacts.ReadVerified(ctx, stored.Key, stored.Digest, stored.Size); err != nil {
+			return fmt.Errorf("verify stored output %q: %w", output.Name, err)
+		}
+		_, err = w.store.CreateArtifact(ctx, domain.Artifact{
+			ID: id.New("art"), OperationID: operation.ID, StepID: step.ID, OutputName: output.Name,
+			Name: output.Name, Type: output.Type, Version: output.Version, MediaType: output.MediaType,
+			StorageKey: stored.Key, Digest: stored.Digest, SizeBytes: stored.Size, Sensitive: output.Sensitive,
+		})
+		if err != nil {
+			return fmt.Errorf("save output %q metadata: %w", output.Name, err)
+		}
+		if err := log("info", fmt.Sprintf("Stored and verified %s/%s output %s", output.Type, output.Version, output.Name)); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (w *Worker) cleanup(operation domain.Operation, step domain.PlanStep, result json.RawMessage, plugin plugins.Plugin, cause error) error {

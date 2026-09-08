@@ -1,6 +1,7 @@
 package applicationinspector
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 
@@ -45,5 +46,23 @@ func TestValidateRequiresResolvedCatalogEntry(t *testing.T) {
 	report := (Plugin{}).Validate(t.Context(), Invocation{Input: input, Catalog: map[string]json.RawMessage{}})
 	if report.Valid {
 		t.Fatal("expected unresolved application to fail")
+	}
+}
+
+func TestPlanDeclaresTypedInterfaceArtifacts(t *testing.T) {
+	descriptor := catalog.Descriptor{}
+	descriptor.Metadata.ID = "dev.example.app"
+	descriptor.Metadata.Version = "1.0.0"
+	raw, _ := json.Marshal(descriptor)
+	input, _ := json.Marshal(specification{ApplicationRef: "app:dev.example.app@1.0.0"})
+	plan, err := (Plugin{}).Plan(context.Background(), Invocation{Input: input, Catalog: map[string]json.RawMessage{"app:dev.example.app@1.0.0": raw}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.Steps) != 1 || len(plan.Steps[0].Outputs) != 2 {
+		t.Fatalf("unexpected typed outputs: %#v", plan.Steps)
+	}
+	if plan.Steps[0].Outputs[0].Type != "WorkloadTargets" || plan.Steps[0].Outputs[1].Type != "ServiceEndpoints" {
+		t.Fatalf("unexpected artifact types: %#v", plan.Steps[0].Outputs)
 	}
 }

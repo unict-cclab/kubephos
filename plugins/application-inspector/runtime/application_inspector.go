@@ -87,11 +87,15 @@ type manifestResource struct {
 
 func (Plugin) Manifest() plugins.Manifest {
 	return plugins.Manifest{
-		ID:           "io.kubephos.applications.inspect",
-		Name:         "Application package check",
-		Version:      "0.1.0",
-		Description:  "Resolves a catalog package and verifies its pinned source, workloads and endpoints.",
-		Schema:       json.RawMessage(`{"type":"object","required":["applicationRef"],"additionalProperties":false,"properties":{"applicationRef":{"type":"string","title":"Application","description":"Immutable application version from the catalog.","format":"kubephos-application-ref"}}}`),
+		ID:          "io.kubephos.applications.inspect",
+		Name:        "Application package check",
+		Version:     "0.1.0",
+		Description: "Resolves a catalog package and verifies its pinned source, workloads and endpoints.",
+		Schema:      json.RawMessage(`{"type":"object","required":["applicationRef"],"additionalProperties":false,"properties":{"applicationRef":{"type":"string","title":"Application","description":"Immutable application version from the catalog.","format":"kubephos-application-ref"}}}`),
+		ArtifactOutputs: []domain.ArtifactContract{
+			{Type: "WorkloadTargets", Version: "v1alpha1"},
+			{Type: "ServiceEndpoints", Version: "v1alpha1"},
+		},
 		Capabilities: []string{"applications.inspect"},
 		Permissions:  []string{"catalog.read:applications"},
 	}
@@ -122,7 +126,13 @@ func (Plugin) Plan(ctx context.Context, invocation Invocation) (domain.Plan, err
 	if err != nil {
 		return domain.Plan{}, err
 	}
-	return domain.Plan{PluginID: Plugin{}.Manifest().ID, Steps: []domain.PlanStep{{ID: "inspect-package", Name: "Verify application package", Input: input}}}, nil
+	return domain.Plan{PluginID: Plugin{}.Manifest().ID, Steps: []domain.PlanStep{{
+		ID: "inspect-package", Name: "Verify application package", Input: input,
+		Outputs: []domain.ArtifactOutput{
+			{Name: "workload-targets", Type: "WorkloadTargets", Version: "v1alpha1", MediaType: "application/json", Source: "/workloadTargets"},
+			{Name: "service-endpoints", Type: "ServiceEndpoints", Version: "v1alpha1", MediaType: "application/json", Source: "/serviceEndpoints"},
+		},
+	}}}, nil
 }
 
 func (Plugin) Precheck(ctx context.Context, step domain.PlanStep, log plugins.Logger) (domain.HealthReport, error) {

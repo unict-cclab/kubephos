@@ -54,10 +54,33 @@
           },
           "additionalProperties": false
         },
+        "artifacts": {
+          "type": "object",
+          "properties": {
+            "inputs": { "$ref": "#/$defs/artifactContracts" },
+            "outputs": { "$ref": "#/$defs/artifactContracts" }
+          },
+          "additionalProperties": false
+        },
         "capabilities": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
         "permissions": { "type": "array", "items": { "type": "string" }, "uniqueItems": true }
       },
       "additionalProperties": false
+    }
+  },
+  "$defs": {
+    "artifactContracts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["type", "version"],
+        "properties": {
+          "type": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9.-]{0,127}$" },
+          "version": { "type": "string", "pattern": "^v[0-9]+(alpha[0-9]+|beta[0-9]+)?$" }
+        },
+        "additionalProperties": false
+      },
+      "uniqueItems": true
     }
   },
   "additionalProperties": false

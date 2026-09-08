@@ -48,3 +48,10 @@ databaseChangeLog:
         - sqlFile:
             path: changes/007-application-catalog.sql
             relativeToChangelogFile: true
+  - changeSet:
+      id: 008-typed-artifacts
+      author: kubephos
+      changes:
+        - sqlFile:
+            path: changes/008-typed-artifacts.sql
+            relativeToChangelogFile: true

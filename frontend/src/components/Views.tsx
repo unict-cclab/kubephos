@@ -102,9 +102,13 @@ function WorkspaceGrid({items, createOperation}: {items: Workspace[]; createOper
 
 function PluginGrid({items}: {items: Plugin[]}) {
   if (!items.length) return <Empty title="No plugins installed">Add a conforming plugin to provide a capability.</Empty>
-  return <div className="workspace-grid">{items.map(plugin => <article className="feature-card" key={plugin.id}>
-    <span className="feature-icon">⌘</span><div><h3>{plugin.name}</h3><p>{plugin.description}</p><p>{plugin.id} · {plugin.version}</p></div><span className="planned">Installed</span>
-  </article>)}</div>
+  return <div className="workspace-grid">{items.map(plugin => {
+    const inputs = plugin.artifactInputs ?? []
+    const outputs = plugin.artifactOutputs ?? []
+    return <article className="feature-card" key={plugin.id}>
+      <span className="feature-icon">⌘</span><div><h3>{plugin.name}</h3><p>{plugin.description}</p><p>{plugin.id} · {plugin.version}</p>{!!(inputs.length || outputs.length) && <small>{inputs.length} typed inputs · {outputs.length} typed outputs</small>}</div><span className="planned">Installed</span>
+    </article>
+  })}</div>
 }
 
 function ApplicationGrid({items}: {items: Application[]}) {

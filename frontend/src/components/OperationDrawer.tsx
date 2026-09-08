@@ -97,7 +97,9 @@ export function OperationDrawer({operationID, session, close, changed, notify}: 
         <div className="validation-list">{operation.validation.issues.map((issue, index) => <div className={`validation-item ${issue.level}`} key={`${issue.path ?? ''}-${index}`}><strong>{issue.level.toUpperCase()}</strong> {issue.message}</div>)}</div>
         <p className="eyebrow">HEALTH-GATED STEPS</p>
         <div className="step-list">{operation.steps.map((step, index) => <div className="step-row" key={step.id}><span className="step-index">{step.position}</span><div><h4>{step.name}</h4><p>{step.error || step.health?.summary || effectSummary(operation, index)}</p></div><Status value={step.status} /></div>)}</div>
-        {!!operation.artifacts?.length && <><p className="eyebrow">ARTIFACTS</p><div className="artifact-list">{operation.artifacts.map(artifact => <a className="artifact-row" href={`/api/v1/artifacts/${artifact.id}/download`} key={artifact.id}><span>↓</span><div><strong>{artifact.name}</strong><small>{formatBytes(artifact.sizeBytes)} · {artifact.digest.slice(0, 24)}…</small></div></a>)}</div></>}
+        {!!operation.artifacts?.length && <><p className="eyebrow">VERIFIED ARTIFACTS</p><div className="artifact-list">{operation.artifacts.map(artifact => artifact.sensitive
+          ? <div className="artifact-row" key={artifact.id}><span>⌁</span><div><strong>{artifact.name}</strong><small>{artifact.type}/{artifact.version} · protected</small></div></div>
+          : <a className="artifact-row" href={`/api/v1/artifacts/${artifact.id}/download`} key={artifact.id}><span>↓</span><div><strong>{artifact.name}</strong><small>{artifact.type}/{artifact.version} · {formatBytes(artifact.sizeBytes)} · {artifact.digest.slice(0, 20)}…</small></div></a>)}</div></>}
         <p className="eyebrow">LIVE LOGS</p>
         <div className="log-console">{logs.length ? logs.map(log => <div className={`log-line ${log.level}`} key={log.sequence}><span className="time">{new Date(log.createdAt).toLocaleTimeString()}</span><span className="source">{log.source}</span><span className="message">{log.message}</span></div>) : <div className="log-empty">Waiting for logs…</div>}</div>
       </>}
@@ -111,5 +113,8 @@ function terminal(status: string): boolean {
 
 function effectSummary(operation: Operation, index: number): string {
   const effects = operation.plan.steps[index]?.effects ?? []
-  return effects.length ? effects.map(effect => `${effect.action} ${effect.kind} ${effect.name}`).join(', ') : 'Waiting for precheck'
+  if (effects.length) return effects.map(effect => `${effect.action} ${effect.kind} ${effect.name}`).join(', ')
+  const step = operation.plan.steps[index]
+  if (step?.artifactInputs?.length || step?.outputs?.length) return `${step.artifactInputs?.length ?? 0} typed inputs · ${step.outputs?.length ?? 0} typed outputs`
+  return 'Waiting for precheck'
 }

@@ -31,6 +31,12 @@ spec:
   runtime:
     executable: application-inspector-plugin
     timeout: 10m
+  artifacts:
+    outputs:
+      - type: WorkloadTargets
+        version: v1alpha1
+      - type: ServiceEndpoints
+        version: v1alpha1
   capabilities:
     - applications.inspect
   permissions:

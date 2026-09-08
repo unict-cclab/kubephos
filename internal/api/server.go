@@ -448,6 +448,10 @@ func (s *Server) createOperation(response http.ResponseWriter, request *http.Req
 		writeError(response, http.StatusUnprocessableEntity, "invalid_plan_effects", err.Error())
 		return
 	}
+	if err := artifacts.ValidatePlan(plan, manifest.ArtifactInputs, manifest.ArtifactOutputs); err != nil {
+		writeError(response, http.StatusUnprocessableEntity, "invalid_artifact_graph", err.Error())
+		return
+	}
 	if err := s.validateResourceEffects(request.Context(), input.WorkspaceID, manifest, plan); err != nil {
 		writeError(response, http.StatusConflict, "resource_conflict", err.Error())
 		return
@@ -567,6 +571,10 @@ func (s *Server) downloadArtifact(response http.ResponseWriter, request *http.Re
 	}
 	if err != nil {
 		writeError(response, http.StatusInternalServerError, "database_error", "Could not read artifact metadata.")
+		return
+	}
+	if artifact.Sensitive {
+		writeError(response, http.StatusForbidden, "sensitive_artifact", "Sensitive artifacts cannot be downloaded from the browser.")
 		return
 	}
 	reader, contentType, err := s.artifacts.Get(request.Context(), artifact.StorageKey)

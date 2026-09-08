@@ -95,8 +95,36 @@ func (c *Client) Get(ctx context.Context, key string) (io.ReadCloser, string, er
 	return response.Body, response.Header.Get("Content-Type"), nil
 }
 
+func (c *Client) ReadVerified(ctx context.Context, key, expectedDigest string, expectedSize int64) ([]byte, error) {
+	reader, _, err := c.Get(ctx, key)
+	if err != nil {
+		return nil, err
+	}
+	defer reader.Close()
+	value, err := io.ReadAll(io.LimitReader(reader, MaxArtifactBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(value) > MaxArtifactBytes {
+		return nil, fmt.Errorf("artifact exceeds %d bytes", MaxArtifactBytes)
+	}
+	if int64(len(value)) != expectedSize {
+		return nil, fmt.Errorf("artifact size mismatch: expected %d, received %d", expectedSize, len(value))
+	}
+	digest := sha256.Sum256(value)
+	actual := "sha256:" + hex.EncodeToString(digest[:])
+	if actual != expectedDigest {
+		return nil, fmt.Errorf("artifact digest mismatch: expected %s, received %s", expectedDigest, actual)
+	}
+	return value, nil
+}
+
 func OperationKey(operationID, filename string) string {
 	return "/kubephos/operations/" + url.PathEscape(operationID) + "/" + url.PathEscape(filename)
+}
+
+func StepOutputKey(operationID, stepID, outputName string) string {
+	return "/kubephos/operations/" + url.PathEscape(operationID) + "/steps/" + url.PathEscape(stepID) + "/" + url.PathEscape(outputName) + ".json"
 }
 
 func normalizeKey(key string) string {

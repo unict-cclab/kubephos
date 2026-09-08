@@ -172,10 +172,46 @@ type Plan struct {
 }
 
 type PlanStep struct {
-	ID      string           `json:"id"`
-	Name    string           `json:"name"`
-	Input   json.RawMessage  `json:"input"`
-	Effects []ResourceEffect `json:"effects,omitempty"`
+	ID             string                      `json:"id"`
+	Name           string                      `json:"name"`
+	Input          json.RawMessage             `json:"input"`
+	ArtifactInputs []ArtifactInput             `json:"artifactInputs,omitempty"`
+	Outputs        []ArtifactOutput            `json:"outputs,omitempty"`
+	ResolvedInputs map[string]ResolvedArtifact `json:"resolvedInputs,omitempty"`
+	Effects        []ResourceEffect            `json:"effects,omitempty"`
+}
+
+type ArtifactInput struct {
+	Name       string `json:"name"`
+	Type       string `json:"type"`
+	Version    string `json:"version"`
+	FromStep   string `json:"fromStep"`
+	FromOutput string `json:"fromOutput"`
+}
+
+type ArtifactContract struct {
+	Type    string `json:"type"`
+	Version string `json:"version"`
+}
+
+type ArtifactOutput struct {
+	Name      string `json:"name"`
+	Type      string `json:"type"`
+	Version   string `json:"version"`
+	MediaType string `json:"mediaType"`
+	Source    string `json:"source"`
+	Sensitive bool   `json:"sensitive,omitempty"`
+}
+
+type ResolvedArtifact struct {
+	ID        string          `json:"id"`
+	Type      string          `json:"type"`
+	Version   string          `json:"version"`
+	MediaType string          `json:"mediaType"`
+	Digest    string          `json:"digest"`
+	SizeBytes int64           `json:"sizeBytes"`
+	Sensitive bool            `json:"sensitive"`
+	Value     json.RawMessage `json:"value,omitempty"`
 }
 
 type ResourceEffect struct {
@@ -217,12 +253,16 @@ type Artifact struct {
 	ID          string    `json:"id"`
 	OperationID string    `json:"operationId"`
 	StepID      string    `json:"stepId,omitempty"`
+	OutputName  string    `json:"outputName,omitempty"`
 	Name        string    `json:"name"`
+	Type        string    `json:"type"`
+	Version     string    `json:"version"`
 	MediaType   string    `json:"mediaType"`
 	StorageKey  string    `json:"-"`
 	Digest      string    `json:"digest"`
 	SizeBytes   int64     `json:"sizeBytes"`
 	Sensitive   bool      `json:"sensitive"`
+	VerifiedAt  time.Time `json:"verifiedAt"`
 	CreatedAt   time.Time `json:"createdAt"`
 }
 

@@ -46,6 +46,8 @@ export interface Plugin {
   schema: JsonSchema
   capabilities?: string[]
   permissions?: string[]
+  artifactInputs?: Array<{type: string; version: string}>
+  artifactOutputs?: Array<{type: string; version: string}>
   credentialSchemas?: CredentialDefinition[]
 }
 
@@ -87,6 +89,8 @@ export interface PlanStep {
   id: string
   name: string
   effects?: ResourceEffect[]
+  artifactInputs?: Array<{name: string; type: string; version: string; fromStep: string; fromOutput: string}>
+  outputs?: Array<{name: string; type: string; version: string; mediaType: string; source: string; sensitive?: boolean}>
 }
 
 export interface OperationStep {
@@ -101,10 +105,16 @@ export interface OperationStep {
 
 export interface Artifact {
   id: string
+  stepId?: string
+  outputName?: string
   name: string
+  type: string
+  version: string
   mediaType: string
   digest: string
   sizeBytes: number
+  sensitive: boolean
+  verifiedAt: string
 }
 
 export interface Operation {

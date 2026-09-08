@@ -55,6 +55,13 @@ spec:
   runtime:
     executable: reference-plugin
     timeout: 15m
+  artifacts:
+    inputs:
+      - type: CheckResult
+        version: v1alpha1
+    outputs:
+      - type: CheckResult
+        version: v1alpha1
   capabilities:
     - system.verification
   permissions: []

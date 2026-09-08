@@ -24,6 +24,9 @@ func TestReferenceValidationAndPlan(t *testing.T) {
 	if len(plan.Steps) != 3 {
 		t.Fatalf("expected 3 steps, got %d", len(plan.Steps))
 	}
+	if len(plan.Steps[0].Outputs) != 1 || len(plan.Steps[1].ArtifactInputs) != 1 {
+		t.Fatal("expected typed output chaining between steps")
+	}
 }
 
 func TestReferenceRejectsInvalidConfiguration(t *testing.T) {

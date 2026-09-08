@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"time"
 
@@ -39,6 +40,10 @@ type descriptor struct {
 			Description string         `yaml:"description"`
 			Schema      map[string]any `yaml:"schema"`
 		} `yaml:"credentialSchemas"`
+		Artifacts struct {
+			Inputs  []domain.ArtifactContract `yaml:"inputs"`
+			Outputs []domain.ArtifactContract `yaml:"outputs"`
+		} `yaml:"artifacts"`
 		Permissions  []string `yaml:"permissions"`
 		Capabilities []string `yaml:"capabilities"`
 		Runtime      struct {
@@ -167,6 +172,8 @@ func LoadProcess(path string, resolver SecretResolver, connections ConnectionRes
 			Description:       definition.Metadata.Description,
 			Schema:            schema,
 			CredentialSchemas: credentialSchemas,
+			ArtifactInputs:    definition.Spec.Artifacts.Inputs,
+			ArtifactOutputs:   definition.Spec.Artifacts.Outputs,
 			Capabilities:      definition.Spec.Capabilities,
 			Permissions:       definition.Spec.Permissions,
 		},
@@ -183,7 +190,8 @@ func LoadProcess(path string, resolver SecretResolver, connections ConnectionRes
 	if err := plugin.invoke(describeContext, "describe", map[string]any{}, &described, nil); err != nil {
 		return nil, fmt.Errorf("describe plugin: %w", err)
 	}
-	if described.ID != plugin.manifest.ID || described.Version != plugin.manifest.Version || described.Provider != plugin.manifest.Provider {
+	if described.ID != plugin.manifest.ID || described.Version != plugin.manifest.Version || described.Provider != plugin.manifest.Provider ||
+		!reflect.DeepEqual(described.ArtifactInputs, plugin.manifest.ArtifactInputs) || !reflect.DeepEqual(described.ArtifactOutputs, plugin.manifest.ArtifactOutputs) {
 		return nil, errors.New("plugin executable identity does not match its descriptor")
 	}
 	return plugin, nil
