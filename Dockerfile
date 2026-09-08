@@ -23,10 +23,12 @@ RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/application-inspec
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/k3s-plugin ./cmd/k3s-plugin
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/nfs-plugin ./cmd/nfs-plugin
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/harbor-plugin ./cmd/harbor-plugin
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/nfs-csi-plugin ./cmd/nfs-csi-plugin
 
 FROM alpine:3.23
 
-RUN apk add --no-cache ca-certificates git tzdata && addgroup -S -g 10001 kubephos && adduser -S -D -H -u 10001 -G kubephos kubephos && mkdir -p /var/lib/kubephos && chown 10001:10001 /var/lib/kubephos
+ARG TARGETARCH
+RUN apk add --no-cache ca-certificates curl git tzdata && case "${TARGETARCH}" in amd64) KUBECTL_SHA256=123d8c8844f46b1244c547fffb3c17180c0c26dac9890589fe7e67763298748e ;; arm64) KUBECTL_SHA256=9f9d9c44a7b5264515ac9da5991584e2395bd50662e651132337e7b4d0c56f8f ;; *) exit 1 ;; esac && curl -fsSLo /tmp/kubectl "https://dl.k8s.io/release/v1.36.0/bin/linux/${TARGETARCH}/kubectl" && printf '%s  %s\n' "${KUBECTL_SHA256}" /tmp/kubectl | sha256sum -c - && install -m 0755 /tmp/kubectl /usr/local/bin/kubectl && rm /tmp/kubectl && addgroup -S -g 10001 kubephos && adduser -S -D -H -u 10001 -G kubephos kubephos && mkdir -p /var/lib/kubephos && chown 10001:10001 /var/lib/kubephos
 COPY --from=build /out/kubephos /usr/local/bin/kubephos
 COPY --from=build /out/reference-plugin /opt/kubephos/plugins/reference/reference-plugin
 COPY plugins/reference/plugin.yaml /opt/kubephos/plugins/reference/plugin.yaml
@@ -44,6 +46,8 @@ COPY --from=build /out/nfs-plugin /opt/kubephos/plugins/nfs/nfs-plugin
 COPY plugins/nfs/plugin.yaml /opt/kubephos/plugins/nfs/plugin.yaml
 COPY --from=build /out/harbor-plugin /opt/kubephos/plugins/harbor/harbor-plugin
 COPY plugins/harbor/plugin.yaml /opt/kubephos/plugins/harbor/plugin.yaml
+COPY --from=build /out/nfs-csi-plugin /opt/kubephos/plugins/nfs-csi/nfs-csi-plugin
+COPY plugins/nfs-csi/plugin.yaml /opt/kubephos/plugins/nfs-csi/plugin.yaml
 COPY catalog/applications /opt/kubephos/catalog/applications
 COPY --from=web /src/frontend/dist /opt/kubephos/web
 USER 10001:10001

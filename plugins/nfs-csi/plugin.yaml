@@ -1,0 +1,66 @@
+apiVersion: plugins.kubephos.io/v1alpha1
+kind: Plugin
+metadata:
+  id: io.kubephos.storage.kubernetes.nfs-csi
+  name: Kubernetes shared storage
+  version: 0.1.0
+  description: Attaches validated shared storage to a Kubernetes cluster.
+spec:
+  protocol: v1alpha1
+  commands:
+    - describe
+    - validate
+    - plan
+    - precheck
+    - execute
+    - verify
+    - status
+    - cancel
+    - cleanup
+  configurationSchema:
+    type: object
+    additionalProperties: false
+    required:
+      - clusterConnectionRef
+      - sharedStorageEndpointRef
+      - storageClassName
+    properties:
+      clusterConnectionRef:
+        type: string
+        title: Kubernetes cluster
+        format: kubephos-artifact-ref
+        x-kubephos-artifact-type: ClusterConnection
+        x-kubephos-artifact-version: v1alpha1
+      sharedStorageEndpointRef:
+        type: string
+        title: Shared storage
+        format: kubephos-artifact-ref
+        x-kubephos-artifact-type: SharedStorageEndpoint
+        x-kubephos-artifact-version: v1alpha1
+      storageClassName:
+        type: string
+        title: Storage class name
+        pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+        maxLength: 63
+        default: shared-storage
+  runtime:
+    executable: nfs-csi-plugin
+    timeout: 20m
+  artifacts:
+    inputs:
+      - type: ClusterConnection
+        version: v1alpha1
+      - type: SharedStorageEndpoint
+        version: v1alpha1
+    outputs:
+      - type: StorageClassCapability
+        version: v1alpha1
+  capabilities:
+    - storage.kubernetes.attach
+    - storage.kubernetes.preflight
+    - storage.kubernetes.cleanup
+    - lifecycle.cleanup
+  permissions:
+    - cluster.admin
+    - network.http
+    - network.tcp
