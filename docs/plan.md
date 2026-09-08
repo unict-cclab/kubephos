@@ -951,7 +951,7 @@ Ultimo aggiornamento: 8 settembre 2026.
 |---|---|---|
 | 1. Fondazioni | Completata | `docker compose up -d` avvia piattaforma, migrazioni e worker; un job validato termina con log live |
 | 2. Vertical slice | In corso | Una pipeline composta da plug-in di riferimento produce e visualizza artifact |
-| 3. Motore degli esperimenti | Non iniziata | Le esecuzioni sono recuperabili, cancellabili e protette da lease e health gate |
+| 3. Motore degli esperimenti | In corso | Le esecuzioni sono recuperabili, cancellabili e protette da lease e health gate |
 | 4. Confronti e storico | Non iniziata | Due strategie con più ripetizioni sono confrontabili dalla UI |
 | 5. Ecosistema dei plug-in | In corso | Un plug-in OCI esterno viene aggiunto senza ricompilare il core |
 | 6. Migrazione e consolidamento | Non iniziata | Le integrazioni esistenti usano esclusivamente i contratti pubblici |
@@ -1001,6 +1001,8 @@ Verifiche completate nella prima iterazione:
 - cancellazione di un'operazione in corso;
 - quattro operazioni contemporanee eseguite dal worker pool;
 - rendering reale del frontend tramite browser headless.
+- accesso API a Proxmox verificato in sola lettura, con il nodo online e tutte le risorse preesistenti classificate come importate e protette;
+- arresto controllato e arresto forzato del worker verificati end-to-end: lease scadute e interruzioni terminano in uno stato fallito ispezionabile, senza rieseguire automaticamente step dall'esito incerto.
 
 Vincolo operativo corrente: le tre macchine virtuali già presenti sul server Proxmox devono essere ignorate. Nessun test della prima iterazione può modificarle. Le future integrazioni Proxmox dovranno iniziare con discovery e preflight in sola lettura, distinguere esplicitamente risorse gestite e importate e rifiutare modifiche a risorse non marcate come appartenenti a KubePhos.
 
@@ -1092,6 +1094,7 @@ Vincolo operativo corrente: le tre macchine virtuali già presenti sul server Pr
 - Configurazioni risolte e versioni sempre conservate.
 - Ogni release deve completare almeno un esperimento end-to-end.
 - Le operazioni devono essere idempotenti e riprendibili.
+- I retry automatici sono consentiti soltanto per step che dichiarano e dimostrano idempotenza; un esito incerto deve richiedere ispezione.
 - Il `README.md` deve contenere soltanto prerequisiti, configurazione, avvio, test e comandi principali.
 - Architettura, decisioni e specifiche devono stare sotto `docs/`.
 

@@ -393,51 +393,31 @@ func (s *Store) RenewLease(ctx context.Context, operationID, owner string) error
 	return nil
 }
 
-func (s *Store) RequeueExpiredOperations(ctx context.Context) error {
+func (s *Store) FailExpiredOperations(ctx context.Context) error {
 	_, err := s.pool.Exec(ctx, `
 		WITH expired AS (
 			UPDATE operations
-			SET status = 'queued', lease_owner = NULL, lease_until = NULL, error = ''
+			SET status = 'failed',
+			    error = 'Worker lease expired. Review logs and state before retrying.',
+			    completed_at = now(),
+			    lease_owner = NULL,
+			    lease_until = NULL
 			WHERE status IN ('prechecking', 'running', 'verifying') AND lease_until < now()
 			RETURNING id
+		), interrupted_steps AS (
+			UPDATE operation_steps
+			SET status = 'failed',
+			    completed_at = now(),
+			    error = 'Worker lease expired before the step completed.'
+			WHERE operation_id IN (SELECT id FROM expired)
+			  AND status IN ('prechecking', 'running', 'verifying')
+			RETURNING operation_id
 		)
-		UPDATE operation_steps
-		SET status = 'pending', started_at = NULL, completed_at = NULL, error = ''
-		WHERE operation_id IN (SELECT id FROM expired) AND status IN ('prechecking', 'running', 'verifying')
+		INSERT INTO operation_logs (operation_id, level, source, message)
+		SELECT id, 'error', 'worker', 'Worker lease expired. Automatic retry was blocked because the step outcome is unknown.'
+		FROM expired
 	`)
 	return err
-}
-
-func (s *Store) RequeueOperation(ctx context.Context, operationID string) error {
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback(ctx)
-	_, err = tx.Exec(ctx, `
-		UPDATE operations
-		SET status = 'queued', lease_owner = NULL, lease_until = NULL
-		WHERE id = $1 AND cancel_requested = false
-	`, operationID)
-	if err != nil {
-		return err
-	}
-	_, err = tx.Exec(ctx, `
-		UPDATE operation_steps
-		SET status = 'pending', started_at = NULL, completed_at = NULL, error = ''
-		WHERE operation_id = $1 AND status IN ('prechecking', 'running', 'verifying')
-	`, operationID)
-	if err != nil {
-		return err
-	}
-	_, err = tx.Exec(ctx, `
-		INSERT INTO operation_logs (operation_id, level, source, message)
-		VALUES ($1, 'warning', 'worker', 'Worker stopped; operation returned to the queue.')
-	`, operationID)
-	if err != nil {
-		return err
-	}
-	return tx.Commit(ctx)
 }
 
 func (s *Store) AppendLog(ctx context.Context, operationID, stepID, level, source, message string) error {

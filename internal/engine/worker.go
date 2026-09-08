@@ -30,10 +30,15 @@ func NewWorker(store *storage.Store, registry *plugins.Registry, artifactStore *
 }
 
 func (w *Worker) Run(ctx context.Context) error {
-	if err := w.store.RequeueExpiredOperations(ctx); err != nil {
+	if err := w.store.FailExpiredOperations(ctx); err != nil {
 		return err
 	}
 	var group sync.WaitGroup
+	group.Add(1)
+	go func() {
+		defer group.Done()
+		w.expireLeases(ctx)
+	}()
 	for slot := 1; slot <= w.concurrency; slot++ {
 		group.Add(1)
 		go func(slot int) {
@@ -240,21 +245,36 @@ func (w *Worker) stopOrFail(ctx context.Context, operationID, stepID string, err
 }
 
 func (w *Worker) stop(ctx context.Context, operationID, stepID string, cause error) {
-	requested, err := w.store.OperationCancelRequested(ctx, operationID)
+	stateCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	requested, err := w.store.OperationCancelRequested(stateCtx, operationID)
 	if err == nil && requested {
 		if stepID != "" {
-			_ = w.store.SetStepState(ctx, operationID, stepID, domain.StepCanceled, nil, nil, "Canceled by user.")
+			_ = w.store.SetStepState(stateCtx, operationID, stepID, domain.StepCanceled, nil, nil, "Canceled by user.")
 		}
-		_ = w.store.FailOperation(ctx, operationID, domain.OperationCanceled, "Operation canceled by user.")
+		_ = w.store.FailOperation(stateCtx, operationID, domain.OperationCanceled, "Operation canceled by user.")
 		return
 	}
 	if errors.Is(cause, context.Canceled) {
-		if err := w.store.RequeueOperation(ctx, operationID); err != nil {
-			slog.Error("requeue interrupted operation", "operation", operationID, "error", err)
-		}
+		w.fail(stateCtx, operationID, stepID, errors.New("worker stopped before the current step completed; review logs and state before retrying"))
 		return
 	}
-	w.fail(ctx, operationID, stepID, cause)
+	w.fail(stateCtx, operationID, stepID, cause)
+}
+
+func (w *Worker) expireLeases(ctx context.Context) {
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if err := w.store.FailExpiredOperations(ctx); err != nil {
+				slog.Error("expire worker leases", "error", err)
+			}
+		}
+	}
 }
 
 func (w *Worker) wait(ctx context.Context) {
