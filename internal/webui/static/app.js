@@ -369,7 +369,7 @@ function renderDrawer(operation) {
     <div class="plan-hash" title="${escapeText(operation.planHash)}">SHA-256 ${escapeText(operation.planHash)}</div>
     <div class="validation-list">${operation.validation.issues.map(issue => `<div class="validation-item ${escapeText(issue.level)}"><strong>${escapeText(issue.level.toUpperCase())}</strong> ${escapeText(issue.message)}</div>`).join('')}</div>
     <p class="eyebrow">HEALTH-GATED STEPS</p>
-    <div class="step-list">${operation.steps.map(step => `<div class="step-row"><span class="step-index">${step.position}</span><div><h4>${escapeText(step.name)}</h4><p>${step.error ? escapeText(step.error) : step.health ? healthSummary(step.health) : 'Waiting for precheck'}</p></div><span class="status ${escapeText(step.status)}">${escapeText(step.status)}</span></div>`).join('')}</div>
+    <div class="step-list">${operation.steps.map((step, index) => `<div class="step-row"><span class="step-index">${step.position}</span><div><h4>${escapeText(step.name)}</h4><p>${step.error ? escapeText(step.error) : step.health ? healthSummary(step.health) : effectSummary(operation.plan.steps[index])}</p></div><span class="status ${escapeText(step.status)}">${escapeText(step.status)}</span></div>`).join('')}</div>
     ${operation.artifacts?.length ? `<p class="eyebrow">ARTIFACTS</p><div class="artifact-list">${operation.artifacts.map(artifact => `<a class="artifact-row" href="/api/v1/artifacts/${escapeText(artifact.id)}/download"><span>↓</span><div><strong>${escapeText(artifact.name)}</strong><small>${formatBytes(artifact.sizeBytes)} · ${escapeText(artifact.digest.slice(0, 24))}…</small></div></a>`).join('')}</div>` : ''}
     <p class="eyebrow">LIVE LOGS</p>
     <div class="log-console" id="log-console"><div class="log-empty">Waiting for logs…</div></div>`
@@ -478,6 +478,12 @@ function healthSummary(raw) {
   } catch {
     return 'Health gate completed'
   }
+}
+
+function effectSummary(step) {
+  const effects = step?.effects || []
+  if (!effects.length) return 'Waiting for precheck'
+  return effects.map(effect => `${effect.action} ${effect.kind} ${effect.name}`).join(', ')
 }
 
 function formatDate(value) {

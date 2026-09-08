@@ -7,6 +7,7 @@ metadata:
   description: Validates a Proxmox connection and inventories existing resources without modifying them.
 spec:
   protocol: v1alpha1
+  provider: proxmox
   commands:
     - describe
     - validate

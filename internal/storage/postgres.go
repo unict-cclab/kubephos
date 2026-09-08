@@ -151,18 +151,18 @@ func (s *Store) SyncDiscoveredResources(ctx context.Context, resources []domain.
 		}
 		_, err := tx.Exec(ctx, `
 			INSERT INTO infrastructure_resources (
-				id, provider_plugin_id, external_id, workspace_id, kind, name, state,
+				id, provider, external_id, workspace_id, kind, name, state,
 				ownership, protection, metadata, last_seen_at
 			)
 			VALUES ($1, $2, $3, $4, $5, $6, $7, 'imported', 'read-only', $8, now())
-			ON CONFLICT (provider_plugin_id, external_id) DO UPDATE
+			ON CONFLICT (provider, external_id) DO UPDATE
 			SET kind = EXCLUDED.kind,
 			    name = EXCLUDED.name,
 			    state = EXCLUDED.state,
 			    metadata = EXCLUDED.metadata,
 			    last_seen_at = now(),
 			    updated_at = now()
-		`, resource.ID, resource.ProviderPluginID, resource.ExternalID, workspaceID, resource.Kind, resource.Name, resource.State, metadata)
+		`, resource.ID, resource.Provider, resource.ExternalID, workspaceID, resource.Kind, resource.Name, resource.State, metadata)
 		if err != nil {
 			return err
 		}
@@ -172,7 +172,7 @@ func (s *Store) SyncDiscoveredResources(ctx context.Context, resources []domain.
 
 func (s *Store) ListInfrastructureResources(ctx context.Context) ([]domain.InfrastructureResource, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT id, provider_plugin_id, external_id, COALESCE(workspace_id, ''), kind, name, state,
+		SELECT id, provider, external_id, COALESCE(workspace_id, ''), kind, name, state,
 		       ownership, protection, metadata, last_seen_at, created_at, updated_at
 		FROM infrastructure_resources
 		ORDER BY ownership, kind, name
@@ -184,12 +184,148 @@ func (s *Store) ListInfrastructureResources(ctx context.Context) ([]domain.Infra
 	result := []domain.InfrastructureResource{}
 	for rows.Next() {
 		var resource domain.InfrastructureResource
-		if err := rows.Scan(&resource.ID, &resource.ProviderPluginID, &resource.ExternalID, &resource.WorkspaceID, &resource.Kind, &resource.Name, &resource.State, &resource.Ownership, &resource.Protection, &resource.Metadata, &resource.LastSeenAt, &resource.CreatedAt, &resource.UpdatedAt); err != nil {
+		if err := rows.Scan(&resource.ID, &resource.Provider, &resource.ExternalID, &resource.WorkspaceID, &resource.Kind, &resource.Name, &resource.State, &resource.Ownership, &resource.Protection, &resource.Metadata, &resource.LastSeenAt, &resource.CreatedAt, &resource.UpdatedAt); err != nil {
 			return nil, err
 		}
 		result = append(result, resource)
 	}
 	return result, rows.Err()
+}
+
+func (s *Store) ReserveManagedResource(ctx context.Context, resource domain.InfrastructureResource, operationID string) error {
+	command, err := s.pool.Exec(ctx, `
+		INSERT INTO infrastructure_resources (
+			id, provider, external_id, workspace_id, kind, name, state,
+			ownership, protection, metadata, created_by_operation_id, last_seen_at
+		)
+		VALUES ($1, $2, $3, $4, $5, $6, 'reserved', 'managed', 'managed', '{}', $7, now())
+		ON CONFLICT (provider, external_id) DO UPDATE
+		SET workspace_id = EXCLUDED.workspace_id,
+		    kind = EXCLUDED.kind,
+		    name = EXCLUDED.name,
+		    state = 'reserved',
+		    metadata = '{}',
+		    created_by_operation_id = EXCLUDED.created_by_operation_id,
+		    last_seen_at = now(),
+		    updated_at = now()
+		WHERE infrastructure_resources.ownership = 'managed'
+		  AND infrastructure_resources.protection = 'managed'
+		  AND infrastructure_resources.state IN ('deleted', 'cleaned')
+	`, resource.ID, resource.Provider, resource.ExternalID, resource.WorkspaceID, resource.Kind, resource.Name, operationID)
+	if err != nil {
+		return err
+	}
+	if command.RowsAffected() == 1 {
+		return nil
+	}
+	var owner string
+	err = s.pool.QueryRow(ctx, `
+		SELECT COALESCE(created_by_operation_id, '')
+		FROM infrastructure_resources
+		WHERE provider = $1 AND external_id = $2
+	`, resource.Provider, resource.ExternalID).Scan(&owner)
+	if err != nil {
+		return err
+	}
+	if owner == operationID {
+		return nil
+	}
+	return fmt.Errorf("%w: resource %s already exists or is protected", ErrConflict, resource.ExternalID)
+}
+
+func (s *Store) EnsureResourceAvailable(ctx context.Context, provider, externalID string) error {
+	var ownership string
+	var protection string
+	var state string
+	err := s.pool.QueryRow(ctx, `
+		SELECT ownership, protection, state
+		FROM infrastructure_resources
+		WHERE provider = $1 AND external_id = $2
+	`, provider, externalID).Scan(&ownership, &protection, &state)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if ownership == "managed" && protection == "managed" && (state == "deleted" || state == "cleaned") {
+		return nil
+	}
+	return fmt.Errorf("%w: resource %s already exists or is protected", ErrConflict, externalID)
+}
+
+func (s *Store) SetOperationManagedResourcesState(ctx context.Context, operationID, state string) error {
+	_, err := s.pool.Exec(ctx, `
+		UPDATE infrastructure_resources
+		SET state = $2, updated_at = now(), last_seen_at = now()
+		WHERE created_by_operation_id = $1
+		  AND ownership = 'managed'
+		  AND ($2 <> 'failed' OR state <> 'cleaned')
+	`, operationID, state)
+	return err
+}
+
+func (s *Store) AuthorizeManagedResource(ctx context.Context, provider, externalID, workspaceID string) error {
+	var ownership string
+	var protection string
+	var storedWorkspace string
+	err := s.pool.QueryRow(ctx, `
+		SELECT ownership, protection, COALESCE(workspace_id, '')
+		FROM infrastructure_resources
+		WHERE provider = $1 AND external_id = $2 AND state <> 'deleted'
+	`, provider, externalID).Scan(&ownership, &protection, &storedWorkspace)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return fmt.Errorf("%w: managed resource %s was not found", ErrConflict, externalID)
+	}
+	if err != nil {
+		return err
+	}
+	if ownership != "managed" || protection != "managed" || storedWorkspace != workspaceID {
+		return fmt.Errorf("%w: resource %s is imported, protected or belongs to another workspace", ErrConflict, externalID)
+	}
+	return nil
+}
+
+func (s *Store) CompleteManagedResource(ctx context.Context, operationID, provider string, resource domain.DiscoveredResource) error {
+	metadata := resource.Metadata
+	if len(metadata) == 0 {
+		metadata = json.RawMessage(`{}`)
+	}
+	command, err := s.pool.Exec(ctx, `
+		UPDATE infrastructure_resources
+		SET name = $4, kind = $5, state = $6, metadata = $7, updated_at = now(), last_seen_at = now()
+		WHERE created_by_operation_id = $1
+		  AND provider = $2
+		  AND external_id = $3
+		  AND ownership = 'managed'
+		  AND protection = 'managed'
+	`, operationID, provider, resource.ExternalID, resource.Name, resource.Kind, resource.State, metadata)
+	if err != nil {
+		return err
+	}
+	if command.RowsAffected() != 1 {
+		return fmt.Errorf("%w: managed resource %s is not reserved by this operation", ErrConflict, resource.ExternalID)
+	}
+	return nil
+}
+
+func (s *Store) SetManagedResourceState(ctx context.Context, provider, externalID, workspaceID, state string) error {
+	command, err := s.pool.Exec(ctx, `
+		UPDATE infrastructure_resources
+		SET state = $4, updated_at = now(), last_seen_at = now()
+		WHERE provider = $1
+		  AND external_id = $2
+		  AND workspace_id = $3
+		  AND ownership = 'managed'
+		  AND protection = 'managed'
+	`, provider, externalID, workspaceID, state)
+	if err != nil {
+		return err
+	}
+	if command.RowsAffected() != 1 {
+		return fmt.Errorf("%w: managed resource %s cannot change state", ErrConflict, externalID)
+	}
+	return nil
 }
 
 func (s *Store) AppendAuditEvent(ctx context.Context, event domain.AuditEvent) error {

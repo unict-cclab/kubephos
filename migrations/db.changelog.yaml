@@ -20,3 +20,10 @@ databaseChangeLog:
         - sqlFile:
             path: changes/003-infrastructure-ledger.sql
             relativeToChangelogFile: true
+  - changeSet:
+      id: 004-resource-reservations
+      author: kubephos
+      changes:
+        - sqlFile:
+            path: changes/004-resource-reservations.sql
+            relativeToChangelogFile: true

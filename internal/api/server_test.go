@@ -27,3 +27,39 @@ func TestResolvedPlanHashIsDeterministic(t *testing.T) {
 		t.Fatalf("expected SHA-256 hex, got %d characters", len(first))
 	}
 }
+
+func TestPlanEffectsRequireProvisionCapability(t *testing.T) {
+	plan := domain.Plan{PluginID: "test", Steps: []domain.PlanStep{{ID: "create", Name: "Create", Input: json.RawMessage(`{}`), Effects: []domain.ResourceEffect{{Action: "create", ExternalID: "qemu/9000", Kind: "virtual-machine", Name: "kubephos-test"}}}}}
+	if err := validatePlanEffects(plugins.Manifest{ID: "test"}, plan); err == nil {
+		t.Fatal("expected missing capability error")
+	}
+	manifest := plugins.Manifest{ID: "test", Provider: "proxmox", Capabilities: []string{"infrastructure.provision"}}
+	if err := validatePlanEffects(manifest, plan); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPlanEffectsRejectIncompleteIdentity(t *testing.T) {
+	manifest := plugins.Manifest{ID: "test", Provider: "proxmox", Capabilities: []string{"infrastructure.provision"}}
+	plan := domain.Plan{PluginID: "test", Steps: []domain.PlanStep{{ID: "create", Name: "Create", Input: json.RawMessage(`{}`), Effects: []domain.ResourceEffect{{Action: "create", ExternalID: "qemu/9000"}}}}}
+	if err := validatePlanEffects(manifest, plan); err == nil {
+		t.Fatal("expected incomplete identity error")
+	}
+}
+
+func TestDeleteEffectsRequireDeprovisionCapability(t *testing.T) {
+	plan := domain.Plan{PluginID: "test", Steps: []domain.PlanStep{{ID: "delete", Name: "Delete", Input: json.RawMessage(`{}`), Effects: []domain.ResourceEffect{{Action: "delete", ExternalID: "qemu/9000", Kind: "virtual-machine", Name: "kubephos-test"}}}}}
+	if err := validatePlanEffects(plugins.Manifest{ID: "test", Provider: "proxmox", Capabilities: []string{"infrastructure.provision"}}, plan); err == nil {
+		t.Fatal("expected missing deprovision capability error")
+	}
+	if err := validatePlanEffects(plugins.Manifest{ID: "test", Provider: "proxmox", Capabilities: []string{"infrastructure.deprovision"}}, plan); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPlanEffectsRequireProviderIdentity(t *testing.T) {
+	plan := domain.Plan{PluginID: "test", Steps: []domain.PlanStep{{ID: "create", Name: "Create", Input: json.RawMessage(`{}`), Effects: []domain.ResourceEffect{{Action: "create", ExternalID: "qemu/9000", Kind: "virtual-machine", Name: "kubephos-test"}}}}}
+	if err := validatePlanEffects(plugins.Manifest{ID: "test", Capabilities: []string{"infrastructure.provision"}}, plan); err == nil {
+		t.Fatal("expected missing provider error")
+	}
+}

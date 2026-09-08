@@ -48,7 +48,7 @@ type client struct {
 }
 
 func (Plugin) Manifest() plugins.Manifest {
-	return plugins.Manifest{ID: "io.kubephos.infrastructure.proxmox.discovery", Name: "Proxmox discovery", Version: "0.1.0", Description: "Validates a Proxmox connection and inventories existing resources without modifying them."}
+	return plugins.Manifest{ID: "io.kubephos.infrastructure.proxmox.discovery", Provider: "proxmox", Name: "Proxmox discovery", Version: "0.1.0", Description: "Validates a Proxmox connection and inventories existing resources without modifying them."}
 }
 
 func (Plugin) Validate(ctx context.Context, invocation Invocation) domain.ValidationReport {

@@ -66,19 +66,19 @@ type DiscoveryResult struct {
 }
 
 type InfrastructureResource struct {
-	ID               string          `json:"id"`
-	ProviderPluginID string          `json:"providerPluginId"`
-	ExternalID       string          `json:"externalId"`
-	WorkspaceID      string          `json:"workspaceId,omitempty"`
-	Kind             string          `json:"kind"`
-	Name             string          `json:"name"`
-	State            string          `json:"state"`
-	Ownership        string          `json:"ownership"`
-	Protection       string          `json:"protection"`
-	Metadata         json.RawMessage `json:"metadata"`
-	LastSeenAt       time.Time       `json:"lastSeenAt"`
-	CreatedAt        time.Time       `json:"createdAt"`
-	UpdatedAt        time.Time       `json:"updatedAt"`
+	ID          string          `json:"id"`
+	Provider    string          `json:"provider"`
+	ExternalID  string          `json:"externalId"`
+	WorkspaceID string          `json:"workspaceId,omitempty"`
+	Kind        string          `json:"kind"`
+	Name        string          `json:"name"`
+	State       string          `json:"state"`
+	Ownership   string          `json:"ownership"`
+	Protection  string          `json:"protection"`
+	Metadata    json.RawMessage `json:"metadata"`
+	LastSeenAt  time.Time       `json:"lastSeenAt"`
+	CreatedAt   time.Time       `json:"createdAt"`
+	UpdatedAt   time.Time       `json:"updatedAt"`
 }
 
 type AuditEvent struct {
@@ -132,9 +132,17 @@ type Plan struct {
 }
 
 type PlanStep struct {
-	ID    string          `json:"id"`
-	Name  string          `json:"name"`
-	Input json.RawMessage `json:"input"`
+	ID      string           `json:"id"`
+	Name    string           `json:"name"`
+	Input   json.RawMessage  `json:"input"`
+	Effects []ResourceEffect `json:"effects,omitempty"`
+}
+
+type ResourceEffect struct {
+	Action     string `json:"action"`
+	ExternalID string `json:"externalId"`
+	Kind       string `json:"kind"`
+	Name       string `json:"name"`
 }
 
 type ValidationReport struct {

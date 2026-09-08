@@ -336,6 +336,14 @@ func (s *Server) createOperation(response http.ResponseWriter, request *http.Req
 		writeError(response, http.StatusUnprocessableEntity, "empty_plan", "The plugin produced an empty plan.")
 		return
 	}
+	if err := validatePlanEffects(manifest, plan); err != nil {
+		writeError(response, http.StatusUnprocessableEntity, "invalid_plan_effects", err.Error())
+		return
+	}
+	if err := s.validateResourceEffects(request.Context(), input.WorkspaceID, manifest, plan); err != nil {
+		writeError(response, http.StatusConflict, "resource_conflict", err.Error())
+		return
+	}
 	planHash, err := resolvedPlanHash(manifest, input.Spec, plan)
 	if err != nil {
 		writeError(response, http.StatusInternalServerError, "planning_failed", "Could not fingerprint the validated plan.")
@@ -482,6 +490,68 @@ func resolvedPlanHash(manifest plugins.Manifest, spec json.RawMessage, plan doma
 	}
 	digest := sha256.Sum256(value)
 	return hex.EncodeToString(digest[:]), nil
+}
+
+func validatePlanEffects(manifest plugins.Manifest, plan domain.Plan) error {
+	if plan.PluginID != manifest.ID {
+		return fmt.Errorf("plan plugin identity does not match the selected plugin")
+	}
+	if len(plan.Steps) > 100 {
+		return fmt.Errorf("plan exceeds the maximum number of steps")
+	}
+	stepIDs := map[string]bool{}
+	for _, step := range plan.Steps {
+		if step.ID == "" || step.Name == "" || stepIDs[step.ID] || !json.Valid(step.Input) {
+			return fmt.Errorf("plan contains an invalid or duplicate step identity")
+		}
+		stepIDs[step.ID] = true
+		for _, effect := range step.Effects {
+			if manifest.Provider == "" {
+				return fmt.Errorf("resource effects require a provider identity")
+			}
+			if effect.Action != "create" && effect.Action != "delete" {
+				return fmt.Errorf("step %q declares unsupported effect %q", step.ID, effect.Action)
+			}
+			if effect.Action == "create" && !manifest.HasCapability("infrastructure.provision") {
+				return fmt.Errorf("plugin is not allowed to provision infrastructure")
+			}
+			if effect.Action == "delete" && !manifest.HasCapability("infrastructure.deprovision") {
+				return fmt.Errorf("plugin is not allowed to deprovision infrastructure")
+			}
+			if effect.ExternalID == "" || effect.Kind == "" || effect.Name == "" {
+				return fmt.Errorf("step %q declares an incomplete resource effect", step.ID)
+			}
+		}
+	}
+	return nil
+}
+
+func (s *Server) validateResourceEffects(ctx context.Context, workspaceID string, manifest plugins.Manifest, plan domain.Plan) error {
+	for position, step := range plan.Steps {
+		for _, effect := range step.Effects {
+			switch effect.Action {
+			case "create":
+				if err := s.store.EnsureResourceAvailable(ctx, manifest.Provider, effect.ExternalID); err != nil {
+					return err
+				}
+			case "delete":
+				createdInPlan := false
+				for _, previous := range plan.Steps[:position] {
+					for _, candidate := range previous.Effects {
+						if candidate.Action == "create" && candidate.ExternalID == effect.ExternalID {
+							createdInPlan = true
+						}
+					}
+				}
+				if !createdInPlan {
+					if err := s.store.AuthorizeManagedResource(ctx, manifest.Provider, effect.ExternalID, workspaceID); err != nil {
+						return err
+					}
+				}
+			}
+		}
+	}
+	return nil
 }
 
 func terminal(status string) bool {

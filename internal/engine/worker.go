@@ -124,27 +124,36 @@ func (w *Worker) process(parent context.Context, owner string, operation domain.
 			w.fail(parent, operation.ID, step.ID, err)
 			return
 		}
+		if err := w.reserveEffects(runCtx, operation, planned, log); err != nil {
+			w.fail(parent, operation.ID, step.ID, err)
+			return
+		}
 		result, err := plugin.Execute(runCtx, planned, log)
 		if err != nil {
+			err = w.cleanup(operation, planned, result, plugin, err)
 			w.stopOrFail(parent, operation.ID, step.ID, err)
 			return
 		}
 		if err := w.store.SetStepState(runCtx, operation.ID, step.ID, domain.StepVerifying, result, nil, ""); err != nil {
+			err = w.cleanup(operation, planned, result, plugin, err)
 			w.fail(parent, operation.ID, step.ID, err)
 			return
 		}
 		if err := w.store.SetOperationStatus(runCtx, operation.ID, domain.OperationVerifying, fmt.Sprintf("Verifying %s.", step.Name)); err != nil {
+			err = w.cleanup(operation, planned, result, plugin, err)
 			w.fail(parent, operation.ID, step.ID, err)
 			return
 		}
 		health, err = plugin.Verify(runCtx, planned, result, log)
 		if err != nil {
+			err = w.cleanup(operation, planned, result, plugin, err)
 			w.stopOrFail(parent, operation.ID, step.ID, err)
 			return
 		}
 		healthRaw, _ = json.Marshal(health)
 		if health.Status != domain.HealthHealthy {
-			w.failWithHealth(parent, operation.ID, step.ID, healthRaw, fmt.Errorf("health gate failed: %s", health.Summary))
+			failure := w.cleanup(operation, planned, result, plugin, fmt.Errorf("health gate failed: %s", health.Summary))
+			w.failWithHealth(parent, operation.ID, step.ID, healthRaw, failure)
 			return
 		}
 		if plugin.Manifest().HasCapability("infrastructure.discovery") {
@@ -153,7 +162,15 @@ func (w *Worker) process(parent context.Context, owner string, operation domain.
 				return
 			}
 		}
+		if len(planned.Effects) > 0 {
+			if err := w.completeEffects(runCtx, operation, planned, result); err != nil {
+				err = w.cleanup(operation, planned, result, plugin, err)
+				w.fail(parent, operation.ID, step.ID, err)
+				return
+			}
+		}
 		if err := w.store.SetStepState(runCtx, operation.ID, step.ID, domain.StepSucceeded, result, healthRaw, ""); err != nil {
+			err = w.cleanup(operation, planned, result, plugin, err)
 			w.fail(parent, operation.ID, step.ID, err)
 			return
 		}
@@ -201,7 +218,109 @@ func (w *Worker) process(parent context.Context, owner string, operation domain.
 	}
 }
 
+func (w *Worker) cleanup(operation domain.Operation, step domain.PlanStep, result json.RawMessage, plugin plugins.Plugin, cause error) error {
+	if len(step.Effects) == 0 {
+		return cause
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	log := func(level, message string) error {
+		return w.store.AppendLog(ctx, operation.ID, "", level, operation.PluginID, message)
+	}
+	if err := plugin.Cleanup(ctx, step, result, log); err != nil {
+		return errors.Join(cause, fmt.Errorf("cleanup failed: %w", err))
+	}
+	_ = w.store.SetOperationManagedResourcesState(ctx, operation.ID, "cleaned")
+	return cause
+}
+
+func (w *Worker) reserveEffects(ctx context.Context, operation domain.Operation, step domain.PlanStep, log plugins.Logger) error {
+	plugin, err := w.registry.Get(operation.PluginID)
+	if err != nil {
+		return err
+	}
+	provider := plugin.Manifest().Provider
+	if provider == "" && len(step.Effects) > 0 {
+		return errors.New("resource effects require a provider identity")
+	}
+	for _, effect := range step.Effects {
+		switch effect.Action {
+		case "create":
+			resource := domain.InfrastructureResource{ID: id.New("res"), Provider: provider, ExternalID: effect.ExternalID, WorkspaceID: operation.WorkspaceID, Kind: effect.Kind, Name: effect.Name, Ownership: "managed", Protection: "managed"}
+			if err := w.store.ReserveManagedResource(ctx, resource, operation.ID); err != nil {
+				return err
+			}
+			details, _ := json.Marshal(map[string]any{"operationId": operation.ID, "externalId": effect.ExternalID, "state": "reserved"})
+			if err := w.store.AppendAuditEvent(ctx, domain.AuditEvent{Actor: "worker", Action: "infrastructure.reserve", TargetType: effect.Kind, TargetID: resource.ID, Outcome: "succeeded", Details: details}); err != nil {
+				return err
+			}
+			if err := log("info", fmt.Sprintf("Reserved managed resource %s before execution", effect.ExternalID)); err != nil {
+				return err
+			}
+		case "delete":
+			if err := w.store.AuthorizeManagedResource(ctx, provider, effect.ExternalID, operation.WorkspaceID); err != nil {
+				return err
+			}
+			if err := log("warning", fmt.Sprintf("Authorized deletion of managed resource %s", effect.ExternalID)); err != nil {
+				return err
+			}
+		default:
+			return fmt.Errorf("unsupported resource effect %q", effect.Action)
+		}
+	}
+	return nil
+}
+
+func (w *Worker) completeEffects(ctx context.Context, operation domain.Operation, step domain.PlanStep, raw json.RawMessage) error {
+	plugin, err := w.registry.Get(operation.PluginID)
+	if err != nil {
+		return err
+	}
+	provider := plugin.Manifest().Provider
+	var result domain.DiscoveryResult
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return fmt.Errorf("decode managed resource result: %w", err)
+	}
+	resources := map[string]domain.DiscoveredResource{}
+	for _, resource := range result.Resources {
+		resources[resource.ExternalID] = resource
+	}
+	for _, effect := range step.Effects {
+		switch effect.Action {
+		case "create":
+			resource, ok := resources[effect.ExternalID]
+			if !ok {
+				return fmt.Errorf("managed resource result is missing %s", effect.ExternalID)
+			}
+			if err := w.store.CompleteManagedResource(ctx, operation.ID, provider, resource); err != nil {
+				return err
+			}
+			details, _ := json.Marshal(map[string]any{"operationId": operation.ID, "externalId": effect.ExternalID, "state": resource.State})
+			if err := w.store.AppendAuditEvent(ctx, domain.AuditEvent{Actor: "worker", Action: "infrastructure.create", TargetType: effect.Kind, TargetID: effect.ExternalID, Outcome: "succeeded", Details: details}); err != nil {
+				return err
+			}
+		case "delete":
+			if err := w.store.SetManagedResourceState(ctx, provider, effect.ExternalID, operation.WorkspaceID, "deleted"); err != nil {
+				return err
+			}
+			details, _ := json.Marshal(map[string]any{"operationId": operation.ID, "externalId": effect.ExternalID, "state": "deleted"})
+			if err := w.store.AppendAuditEvent(ctx, domain.AuditEvent{Actor: "worker", Action: "infrastructure.delete", TargetType: effect.Kind, TargetID: effect.ExternalID, Outcome: "succeeded", Details: details}); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 func (w *Worker) captureDiscovery(ctx context.Context, operation domain.Operation, raw json.RawMessage, log plugins.Logger) error {
+	plugin, err := w.registry.Get(operation.PluginID)
+	if err != nil {
+		return err
+	}
+	provider := plugin.Manifest().Provider
+	if provider == "" {
+		return errors.New("infrastructure discovery requires a provider identity")
+	}
 	var discovery domain.DiscoveryResult
 	if err := json.Unmarshal(raw, &discovery); err != nil {
 		return fmt.Errorf("decode discovery result: %w", err)
@@ -215,15 +334,15 @@ func (w *Worker) captureDiscovery(ctx context.Context, operation domain.Operatio
 			return errors.New("discovery result contains an incomplete resource identity")
 		}
 		resources = append(resources, domain.InfrastructureResource{
-			ID:               id.New("res"),
-			ProviderPluginID: operation.PluginID,
-			ExternalID:       discovered.ExternalID,
-			Kind:             discovered.Kind,
-			Name:             discovered.Name,
-			State:            discovered.State,
-			Ownership:        "imported",
-			Protection:       "read-only",
-			Metadata:         discovered.Metadata,
+			ID:         id.New("res"),
+			Provider:   provider,
+			ExternalID: discovered.ExternalID,
+			Kind:       discovered.Kind,
+			Name:       discovered.Name,
+			State:      discovered.State,
+			Ownership:  "imported",
+			Protection: "read-only",
+			Metadata:   discovered.Metadata,
 		})
 	}
 	if err := w.store.SyncDiscoveredResources(ctx, resources); err != nil {
@@ -267,6 +386,9 @@ func (w *Worker) fail(ctx context.Context, operationID, stepID string, err error
 }
 
 func (w *Worker) failWithHealth(ctx context.Context, operationID, stepID string, health json.RawMessage, err error) {
+	if stateErr := w.store.SetOperationManagedResourcesState(ctx, operationID, "failed"); stateErr != nil {
+		slog.Error("fail managed resources", "operation", operationID, "error", stateErr)
+	}
 	if stepID != "" {
 		if stateErr := w.store.SetStepState(ctx, operationID, stepID, domain.StepFailed, nil, health, err.Error()); stateErr != nil {
 			slog.Error("fail step", "operation", operationID, "step", stepID, "error", stateErr)

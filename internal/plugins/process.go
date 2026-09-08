@@ -30,6 +30,7 @@ type descriptor struct {
 	} `yaml:"metadata"`
 	Spec struct {
 		Protocol            string         `yaml:"protocol"`
+		Provider            string         `yaml:"provider"`
 		Commands            []string       `yaml:"commands"`
 		ConfigurationSchema map[string]any `yaml:"configurationSchema"`
 		CredentialSchemas   []struct {
@@ -102,6 +103,11 @@ func LoadProcess(path string, resolver SecretResolver) (*Process, error) {
 	if definition.Metadata.ID == "" || definition.Metadata.Name == "" || definition.Metadata.Version == "" {
 		return nil, errors.New("plugin identity is incomplete")
 	}
+	for _, capability := range definition.Spec.Capabilities {
+		if strings.HasPrefix(capability, "infrastructure.") && definition.Spec.Provider == "" {
+			return nil, errors.New("infrastructure plugins must declare a provider")
+		}
+	}
 	required := []string{"validate", "plan", "precheck", "execute", "verify", "status", "cancel", "cleanup"}
 	for _, command := range required {
 		if !contains(definition.Spec.Commands, command) {
@@ -153,6 +159,7 @@ func LoadProcess(path string, resolver SecretResolver) (*Process, error) {
 	plugin := &Process{
 		manifest: Manifest{
 			ID:                definition.Metadata.ID,
+			Provider:          definition.Spec.Provider,
 			Name:              definition.Metadata.Name,
 			Version:           definition.Metadata.Version,
 			Description:       definition.Metadata.Description,
@@ -172,7 +179,7 @@ func LoadProcess(path string, resolver SecretResolver) (*Process, error) {
 	if err := plugin.invoke(describeContext, "describe", map[string]any{}, &described, nil); err != nil {
 		return nil, fmt.Errorf("describe plugin: %w", err)
 	}
-	if described.ID != plugin.manifest.ID || described.Version != plugin.manifest.Version {
+	if described.ID != plugin.manifest.ID || described.Version != plugin.manifest.Version || described.Provider != plugin.manifest.Provider {
 		return nil, errors.New("plugin executable identity does not match its descriptor")
 	}
 	return plugin, nil
@@ -212,6 +219,11 @@ func (p *Process) Verify(ctx context.Context, step domain.PlanStep, result json.
 	var health domain.HealthReport
 	err := p.invoke(ctx, "verify", map[string]any{"step": step, "result": result}, &health, log)
 	return health, err
+}
+
+func (p *Process) Cleanup(ctx context.Context, step domain.PlanStep, result json.RawMessage, log Logger) error {
+	var response map[string]any
+	return p.invoke(ctx, "cleanup", map[string]any{"step": step, "result": result}, &response, log)
 }
 
 func (p *Process) invoke(parent context.Context, command string, input, output any, log Logger) error {

@@ -11,6 +11,7 @@ import (
 
 type Manifest struct {
 	ID                string             `json:"id"`
+	Provider          string             `json:"provider,omitempty"`
 	Name              string             `json:"name"`
 	Version           string             `json:"version"`
 	Description       string             `json:"description"`
@@ -47,6 +48,7 @@ type Plugin interface {
 	Precheck(context.Context, domain.PlanStep, Logger) (domain.HealthReport, error)
 	Execute(context.Context, domain.PlanStep, Logger) (json.RawMessage, error)
 	Verify(context.Context, domain.PlanStep, json.RawMessage, Logger) (domain.HealthReport, error)
+	Cleanup(context.Context, domain.PlanStep, json.RawMessage, Logger) error
 }
 
 type Registry struct {

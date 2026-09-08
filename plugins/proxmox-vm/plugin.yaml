@@ -1,0 +1,127 @@
+apiVersion: plugins.kubephos.io/v1alpha1
+kind: Plugin
+metadata:
+  id: io.kubephos.infrastructure.proxmox.vm
+  name: Proxmox VM lifecycle
+  version: 0.1.0
+  description: Creates an isolated KubePhos VM from a template and optionally removes it after verification.
+spec:
+  protocol: v1alpha1
+  provider: proxmox
+  commands:
+    - describe
+    - validate
+    - plan
+    - precheck
+    - execute
+    - verify
+    - status
+    - cancel
+    - cleanup
+  configurationSchema:
+    type: object
+    additionalProperties: false
+    required:
+      - endpoint
+      - credentialRef
+      - verifyTLS
+      - node
+      - templateVMID
+      - targetVMID
+      - name
+      - cores
+      - memoryMiB
+      - start
+      - cleanupAfterTest
+    properties:
+      endpoint:
+        type: string
+        title: Proxmox endpoint
+        description: Base URL of the Proxmox API, including port 8006.
+        format: uri
+      credentialRef:
+        type: string
+        title: API credential
+        description: Server-side Proxmox API token.
+        format: kubephos-secret-ref
+        x-kubephos-secret-kind: proxmox-api-token
+      verifyTLS:
+        type: boolean
+        title: Verify TLS certificate
+        default: true
+      node:
+        type: string
+        title: Proxmox node
+        minLength: 1
+        maxLength: 64
+      templateVMID:
+        type: integer
+        title: Source template VMID
+        minimum: 100
+        maximum: 999999999
+      targetVMID:
+        type: integer
+        title: New VMID
+        minimum: 100
+        maximum: 999999999
+      name:
+        type: string
+        title: VM name
+        description: A short label; KubePhos adds an ownership suffix.
+        pattern: "^[a-z0-9][a-z0-9-]{0,31}$"
+        minLength: 1
+        maxLength: 32
+        default: lifecycle-test
+      cores:
+        type: integer
+        title: CPU cores
+        minimum: 1
+        maximum: 32
+        default: 2
+      memoryMiB:
+        type: integer
+        title: Memory MiB
+        minimum: 512
+        maximum: 131072
+        default: 2048
+      start:
+        type: boolean
+        title: Start after creation
+        default: false
+      cleanupAfterTest:
+        type: boolean
+        title: Remove after verification
+        default: true
+  credentialSchemas:
+    - kind: proxmox-api-token
+      name: Proxmox API token
+      description: Token ID and secret generated in Proxmox.
+      schema:
+        type: object
+        additionalProperties: false
+        required:
+          - tokenId
+          - tokenSecret
+        properties:
+          tokenId:
+            type: string
+            title: Token ID
+            minLength: 3
+            maxLength: 240
+          tokenSecret:
+            type: string
+            title: Token secret
+            writeOnly: true
+            minLength: 8
+            maxLength: 512
+  runtime:
+    executable: proxmox-vm-plugin
+    timeout: 20m
+  capabilities:
+    - infrastructure.provision
+    - infrastructure.deprovision
+    - infrastructure.preflight
+  permissions:
+    - network.proxmox.read
+    - network.proxmox.write
+    - secrets.read:proxmox-api-token

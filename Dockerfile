@@ -8,6 +8,7 @@ ARG VERSION=dev
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -X main.version=${VERSION}" -o /out/kubephos ./cmd/kubephos
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/reference-plugin ./cmd/reference-plugin
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/proxmox-plugin ./cmd/proxmox-plugin
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/proxmox-vm-plugin ./cmd/proxmox-vm-plugin
 
 FROM alpine:3.23
 
@@ -17,6 +18,8 @@ COPY --from=build /out/reference-plugin /opt/kubephos/plugins/reference/referenc
 COPY plugins/reference/plugin.yaml /opt/kubephos/plugins/reference/plugin.yaml
 COPY --from=build /out/proxmox-plugin /opt/kubephos/plugins/proxmox/proxmox-plugin
 COPY plugins/proxmox/plugin.yaml /opt/kubephos/plugins/proxmox/plugin.yaml
+COPY --from=build /out/proxmox-vm-plugin /opt/kubephos/plugins/proxmox-vm/proxmox-vm-plugin
+COPY plugins/proxmox-vm/plugin.yaml /opt/kubephos/plugins/proxmox-vm/plugin.yaml
 USER 10001:10001
 EXPOSE 8080
 ENTRYPOINT ["/usr/local/bin/kubephos"]
