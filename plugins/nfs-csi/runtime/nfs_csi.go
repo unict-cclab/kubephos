@@ -105,16 +105,17 @@ type storageClassCapabilityMetadata struct {
 }
 
 type storageClassCapabilitySpec struct {
-	ClusterServer string   `json:"clusterServer"`
-	Provisioner   string   `json:"provisioner"`
-	Protocol      string   `json:"protocol"`
-	Server        string   `json:"server"`
-	ExportPath    string   `json:"exportPath"`
-	ReclaimPolicy string   `json:"reclaimPolicy"`
-	BindingMode   string   `json:"bindingMode"`
-	Expansion     bool     `json:"expansion"`
-	AccessModes   []string `json:"accessModes"`
-	MountOptions  []string `json:"mountOptions"`
+	ClusterServer        string   `json:"clusterServer"`
+	Provisioner          string   `json:"provisioner"`
+	Protocol             string   `json:"protocol"`
+	Server               string   `json:"server"`
+	ExportPath           string   `json:"exportPath"`
+	DirectoryPermissions string   `json:"directoryPermissions"`
+	ReclaimPolicy        string   `json:"reclaimPolicy"`
+	BindingMode          string   `json:"bindingMode"`
+	Expansion            bool     `json:"expansion"`
+	AccessModes          []string `json:"accessModes"`
+	MountOptions         []string `json:"mountOptions"`
 }
 
 type result struct {
@@ -266,7 +267,7 @@ func (plugin Plugin) Execute(ctx context.Context, step domain.PlanStep, log plug
 	value := result{StorageClassCapability: storageClassCapability{
 		APIVersion: artifactAPI, Kind: "StorageClassCapability",
 		Metadata: storageClassCapabilityMetadata{Name: input.StorageClassName, Version: driverVersion},
-		Spec:     storageClassCapabilitySpec{ClusterServer: cluster.Spec.Server, Provisioner: provisioner, Protocol: storage.Spec.Protocol, Server: storage.Spec.Server, ExportPath: storage.Spec.ExportPath, ReclaimPolicy: "Delete", BindingMode: "Immediate", Expansion: true, AccessModes: []string{"ReadWriteOnce", "ReadWriteMany"}, MountOptions: append([]string(nil), storage.Spec.MountOptions...)},
+		Spec:     storageClassCapabilitySpec{ClusterServer: cluster.Spec.Server, Provisioner: provisioner, Protocol: storage.Spec.Protocol, Server: storage.Spec.Server, ExportPath: storage.Spec.ExportPath, DirectoryPermissions: "0777", ReclaimPolicy: "Delete", BindingMode: "Immediate", Expansion: true, AccessModes: []string{"ReadWriteOnce", "ReadWriteMany"}, MountOptions: append([]string(nil), storage.Spec.MountOptions...)},
 	}}
 	return json.Marshal(value)
 }
@@ -467,7 +468,7 @@ func storageClassManifest(input stepInput, storage sharedStorageEndpoint) ([]byt
 		"apiVersion": "storage.k8s.io/v1", "kind": "StorageClass",
 		"metadata":      map[string]any{"name": input.StorageClassName, "annotations": map[string]string{"kubephos.dev/ownership-marker": input.Marker}},
 		"provisioner":   provisioner,
-		"parameters":    map[string]string{"server": storage.Spec.Server, "share": storage.Spec.ExportPath},
+		"parameters":    map[string]string{"server": storage.Spec.Server, "share": storage.Spec.ExportPath, "mountPermissions": "0777", "subDir": "${pvc.metadata.namespace}/${pvc.metadata.name}"},
 		"reclaimPolicy": "Delete", "volumeBindingMode": "Immediate", "allowVolumeExpansion": true,
 		"mountOptions": storage.Spec.MountOptions,
 	}
@@ -476,7 +477,7 @@ func storageClassManifest(input stepInput, storage sharedStorageEndpoint) ([]byt
 
 func validateResult(value result, input stepInput, cluster clusterConnection, storage sharedStorageEndpoint) error {
 	capability := value.StorageClassCapability
-	if capability.APIVersion != artifactAPI || capability.Kind != "StorageClassCapability" || capability.Metadata.Name != input.StorageClassName || capability.Metadata.Version != driverVersion || capability.Spec.ClusterServer != cluster.Spec.Server || capability.Spec.Provisioner != provisioner || capability.Spec.Protocol != "nfs" || capability.Spec.Server != storage.Spec.Server || capability.Spec.ExportPath != storage.Spec.ExportPath || capability.Spec.ReclaimPolicy != "Delete" || capability.Spec.BindingMode != "Immediate" || !capability.Spec.Expansion || len(capability.Spec.AccessModes) != 2 {
+	if capability.APIVersion != artifactAPI || capability.Kind != "StorageClassCapability" || capability.Metadata.Name != input.StorageClassName || capability.Metadata.Version != driverVersion || capability.Spec.ClusterServer != cluster.Spec.Server || capability.Spec.Provisioner != provisioner || capability.Spec.Protocol != "nfs" || capability.Spec.Server != storage.Spec.Server || capability.Spec.ExportPath != storage.Spec.ExportPath || capability.Spec.DirectoryPermissions != "0777" || capability.Spec.ReclaimPolicy != "Delete" || capability.Spec.BindingMode != "Immediate" || !capability.Spec.Expansion || len(capability.Spec.AccessModes) != 2 {
 		return errors.New("storage class capability does not match the validated plan")
 	}
 	return nil
@@ -519,6 +520,7 @@ func verifyManagedResources(ctx context.Context, runner commandRunner, kubeconfi
 		{[]string{"get", "storageclass", input.StorageClassName, "-o", "jsonpath={.provisioner}"}, provisioner},
 		{[]string{"get", "storageclass", input.StorageClassName, "-o", "jsonpath={.parameters.server}"}, storage.Spec.Server},
 		{[]string{"get", "storageclass", input.StorageClassName, "-o", "jsonpath={.parameters.share}"}, storage.Spec.ExportPath},
+		{[]string{"get", "storageclass", input.StorageClassName, "-o", "jsonpath={.parameters.mountPermissions}"}, "0777"},
 	}
 	for _, check := range checks {
 		value, err := runner.Run(ctx, kubeconfig, nil, check.args...)

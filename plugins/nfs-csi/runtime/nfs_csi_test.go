@@ -50,7 +50,7 @@ func TestKubernetesSharedStorageLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	capability := decoded.StorageClassCapability
-	if capability.Metadata.Version != driverVersion || capability.Spec.Provisioner != provisioner || capability.Spec.Server != "10.10.0.12" || capability.Spec.ExportPath != "/srv/kubephos" || !capability.Spec.Expansion {
+	if capability.Metadata.Version != driverVersion || capability.Spec.Provisioner != provisioner || capability.Spec.Server != "10.10.0.12" || capability.Spec.ExportPath != "/srv/kubephos" || capability.Spec.DirectoryPermissions != "0777" || !capability.Spec.Expansion {
 		t.Fatalf("unexpected capability %#v", capability)
 	}
 	step.Cleanup = true
@@ -256,6 +256,9 @@ func (runner *fakeRunner) Run(_ context.Context, _ string, stdin []byte, args ..
 	}
 	if strings.Contains(command, "jsonpath={.parameters.share}") {
 		return "/srv/kubephos", nil
+	}
+	if strings.Contains(command, "jsonpath={.parameters.mountPermissions}") {
+		return "0777", nil
 	}
 	if strings.HasPrefix(command, "get ") {
 		if runner.installed {

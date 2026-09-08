@@ -1,0 +1,80 @@
+apiVersion: plugins.kubephos.io/v1alpha1
+kind: Plugin
+metadata:
+  id: io.kubephos.observability.managed
+  name: Managed observability
+  version: 0.1.0
+  description: Installs the release-managed metrics and dashboard profile on a Kubernetes cluster.
+spec:
+  protocol: v1alpha1
+  commands:
+    - describe
+    - validate
+    - plan
+    - precheck
+    - execute
+    - verify
+    - status
+    - cancel
+    - cleanup
+  configurationSchema:
+    type: object
+    additionalProperties: false
+    required:
+      - clusterConnectionRef
+      - storageClassCapabilityRef
+      - scrapeInterval
+      - retention
+    properties:
+      clusterConnectionRef:
+        type: string
+        title: Kubernetes cluster
+        format: kubephos-artifact-ref
+        x-kubephos-artifact-type: ClusterConnection
+        x-kubephos-artifact-version: v1alpha1
+      storageClassCapabilityRef:
+        type: string
+        title: Persistent storage
+        format: kubephos-artifact-ref
+        x-kubephos-artifact-type: StorageClassCapability
+        x-kubephos-artifact-version: v1alpha1
+      scrapeInterval:
+        type: string
+        title: Metrics interval
+        enum:
+          - 5s
+          - 10s
+          - 15s
+          - 30s
+        default: 15s
+      retention:
+        type: string
+        title: Metrics retention
+        enum:
+          - 1d
+          - 7d
+          - 15d
+        default: 7d
+  runtime:
+    executable: managed-observability-plugin
+    timeout: 25m
+  artifacts:
+    inputs:
+      - type: ClusterConnection
+        version: v1alpha1
+      - type: StorageClassCapability
+        version: v1alpha1
+    outputs:
+      - type: ObservabilityCapability
+        version: v1alpha1
+      - type: ServiceCredential
+        version: v1alpha1
+  capabilities:
+    - observability.metrics.install
+    - observability.dashboards.install
+    - observability.preflight
+    - observability.cleanup
+    - lifecycle.cleanup
+  permissions:
+    - cluster.admin
+    - network.http

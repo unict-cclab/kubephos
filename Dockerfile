@@ -24,11 +24,12 @@ RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/k3s-plugin ./cmd/k
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/nfs-plugin ./cmd/nfs-plugin
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/harbor-plugin ./cmd/harbor-plugin
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/nfs-csi-plugin ./cmd/nfs-csi-plugin
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/managed-observability-plugin ./cmd/managed-observability-plugin
 
 FROM alpine:3.23
 
 ARG TARGETARCH
-RUN apk add --no-cache ca-certificates curl git tzdata && case "${TARGETARCH}" in amd64) KUBECTL_SHA256=123d8c8844f46b1244c547fffb3c17180c0c26dac9890589fe7e67763298748e ;; arm64) KUBECTL_SHA256=9f9d9c44a7b5264515ac9da5991584e2395bd50662e651132337e7b4d0c56f8f ;; *) exit 1 ;; esac && curl -fsSLo /tmp/kubectl "https://dl.k8s.io/release/v1.36.0/bin/linux/${TARGETARCH}/kubectl" && printf '%s  %s\n' "${KUBECTL_SHA256}" /tmp/kubectl | sha256sum -c - && install -m 0755 /tmp/kubectl /usr/local/bin/kubectl && rm /tmp/kubectl && addgroup -S -g 10001 kubephos && adduser -S -D -H -u 10001 -G kubephos kubephos && mkdir -p /var/lib/kubephos && chown 10001:10001 /var/lib/kubephos
+RUN apk add --no-cache ca-certificates curl git tzdata && case "${TARGETARCH}" in amd64) KUBECTL_SHA256=123d8c8844f46b1244c547fffb3c17180c0c26dac9890589fe7e67763298748e; HELM_SHA256=15e041a93a590dce8100f39385cd98c84a765c9e36aeeb9e2dc6ff9e4769e2e0 ;; arm64) KUBECTL_SHA256=9f9d9c44a7b5264515ac9da5991584e2395bd50662e651132337e7b4d0c56f8f; HELM_SHA256=67f58155079ff9ffab98ba5c88daff0ed9b542f3a4732f5dd426dde7dd0f5244 ;; *) exit 1 ;; esac && curl -fsSLo /tmp/kubectl "https://dl.k8s.io/release/v1.36.0/bin/linux/${TARGETARCH}/kubectl" && printf '%s  %s\n' "${KUBECTL_SHA256}" /tmp/kubectl | sha256sum -c - && install -m 0755 /tmp/kubectl /usr/local/bin/kubectl && curl -fsSLo /tmp/helm.tgz "https://get.helm.sh/helm-v3.21.3-linux-${TARGETARCH}.tar.gz" && printf '%s  %s\n' "${HELM_SHA256}" /tmp/helm.tgz | sha256sum -c - && tar -xzf /tmp/helm.tgz -C /tmp && install -m 0755 "/tmp/linux-${TARGETARCH}/helm" /usr/local/bin/helm && rm -rf /tmp/kubectl /tmp/helm.tgz "/tmp/linux-${TARGETARCH}" && addgroup -S -g 10001 kubephos && adduser -S -D -H -u 10001 -G kubephos kubephos && mkdir -p /var/lib/kubephos && chown 10001:10001 /var/lib/kubephos
 COPY --from=build /out/kubephos /usr/local/bin/kubephos
 COPY --from=build /out/reference-plugin /opt/kubephos/plugins/reference/reference-plugin
 COPY plugins/reference/plugin.yaml /opt/kubephos/plugins/reference/plugin.yaml
@@ -48,6 +49,8 @@ COPY --from=build /out/harbor-plugin /opt/kubephos/plugins/harbor/harbor-plugin
 COPY plugins/harbor/plugin.yaml /opt/kubephos/plugins/harbor/plugin.yaml
 COPY --from=build /out/nfs-csi-plugin /opt/kubephos/plugins/nfs-csi/nfs-csi-plugin
 COPY plugins/nfs-csi/plugin.yaml /opt/kubephos/plugins/nfs-csi/plugin.yaml
+COPY --from=build /out/managed-observability-plugin /opt/kubephos/plugins/managed-observability/managed-observability-plugin
+COPY plugins/managed-observability/plugin.yaml /opt/kubephos/plugins/managed-observability/plugin.yaml
 COPY catalog/applications /opt/kubephos/catalog/applications
 COPY --from=web /src/frontend/dist /opt/kubephos/web
 USER 10001:10001
