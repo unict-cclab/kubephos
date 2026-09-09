@@ -12,6 +12,7 @@ const viewMetadata: Record<View, [string, string]> = {
   overview: ['CONTROL PLANE', 'Overview'],
   workspaces: ['ENVIRONMENTS', 'Workspaces'],
   operations: ['BACKGROUND WORK', 'Operations'],
+  results: ['OBSERVATIONS', 'Results'],
   catalog: ['APPLICATIONS', 'Catalog'],
   plugins: ['CAPABILITIES', 'Plugins'],
   infrastructure: ['MANAGED ACCESS', 'Infrastructure']
@@ -20,6 +21,7 @@ const navigation: Array<[View, string, string]> = [
   ['overview', '⌂', 'Overview'],
   ['workspaces', '◇', 'Workspaces'],
   ['operations', '↻', 'Operations'],
+  ['results', '⌁', 'Results'],
   ['catalog', '◫', 'Catalog'],
   ['plugins', '⌘', 'Plugins'],
   ['infrastructure', '▦', 'Infrastructure']

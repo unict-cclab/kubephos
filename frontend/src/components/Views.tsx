@@ -1,11 +1,13 @@
 import {formatDate, shortID} from '../lib'
-import type {Application, AuditEvent, Connection, Credential, InfrastructureResource, Operation, Plugin, SystemStatus, View, Workspace} from '../types'
+import type {Application, Artifact, AuditEvent, Connection, Credential, InfrastructureResource, Operation, Plugin, SystemStatus, View, Workspace} from '../types'
+import {ResultsView} from './ResultsView'
 
 interface ViewProps {
   view: View
   system: SystemStatus | null
   workspaces: Workspace[]
   operations: Operation[]
+  artifacts: Artifact[]
   plugins: Plugin[]
   applications: Application[]
   credentials: Credential[]
@@ -35,6 +37,9 @@ export function Views(props: ViewProps) {
     <section className={`view ${props.view === 'operations' ? 'active' : ''}`}>
       <Heading eyebrow="BACKGROUND WORK" title="Operation history" copy="Validated plans, live progress and diagnostic evidence." />
       <OperationList operations={props.operations} workspaces={props.workspaces} open={props.openOperation} />
+    </section>
+    <section className={`view ${props.view === 'results' ? 'active' : ''}`}>
+      <ResultsView artifacts={props.artifacts} operations={props.operations} workspaces={props.workspaces} />
     </section>
     <section className={`view ${props.view === 'catalog' ? 'active' : ''}`}>
       <Heading eyebrow="APPLICATION INTERFACE" title="Application catalog" action={props.isAdmin && <button className="button primary" onClick={props.importApplication}>Import application</button>} />

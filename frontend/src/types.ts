@@ -1,5 +1,5 @@
 export type Role = 'admin' | 'operator' | 'viewer'
-export type View = 'overview' | 'workspaces' | 'operations' | 'catalog' | 'plugins' | 'infrastructure'
+export type View = 'overview' | 'workspaces' | 'operations' | 'results' | 'catalog' | 'plugins' | 'infrastructure'
 
 export interface User {
   id: string
@@ -121,6 +121,35 @@ export interface Artifact {
   sizeBytes: number
   sensitive: boolean
   verifiedAt: string
+}
+
+export interface MetricPoint {
+  timestamp: string
+  value: number
+}
+
+export interface MetricSeries {
+  metric: string
+  unit: string
+  labels: Record<string, string>
+  points: MetricPoint[]
+}
+
+export interface TimeSeriesDataset {
+  apiVersion: string
+  kind: 'TimeSeriesDataset'
+  metadata: {name: string; version: string}
+  spec: {
+    applicationRef: string
+    clusterServer: string
+    namespace: string
+    start: string
+    end: string
+    stepSeconds: number
+    source: {kind: string; version: string; profile: string}
+    series: MetricSeries[]
+    summary: {metrics: number; series: number; samples: number}
+  }
 }
 
 export interface Operation {
