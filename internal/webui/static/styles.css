@@ -259,10 +259,21 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .results-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 30px; margin-bottom: 20px; }
 .results-heading h2 { margin: 5px 0 8px; font-size: 28px; letter-spacing: -.04em; }
 .results-heading > div > p:last-child { max-width: 650px; margin: 0; color: var(--muted); font-size: 13px; line-height: 1.55; }
+.results-heading-actions { display: flex; align-items: center; gap: 10px; }
 .results-count { min-width: 92px; border-radius: 14px; padding: 14px 18px; background: var(--dark); color: #fff; text-align: center; }
 .results-count strong, .results-count span { display: block; }
 .results-count strong { font-size: 26px; letter-spacing: -.04em; }
 .results-count span { margin-top: 2px; color: #aebbb2; font-size: 9px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
+.experiment-history { overflow: hidden; margin-bottom: 14px; border: 1px solid var(--line); border-radius: 15px; background: var(--surface); }
+.experiment-history-title { display: flex; align-items: center; justify-content: space-between; padding: 13px 16px 10px; }
+.experiment-history-title strong { font-size: 11px; }
+.experiment-history-title span { color: var(--muted); font-size: 9px; }
+.experiment-cards { display: flex; gap: 8px; overflow-x: auto; padding: 0 12px 12px; }
+.experiment-cards button { display: grid; min-width: 245px; grid-template-columns: 8px 1fr; align-items: center; gap: 9px; border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; background: #fafbf9; color: inherit; cursor: pointer; text-align: left; }
+.experiment-cards button:hover, .experiment-cards button.active { border-color: var(--green); background: #eef6f0; }
+.experiment-cards strong, .experiment-cards small { display: block; }
+.experiment-cards strong { font-size: 10px; }
+.experiment-cards small { margin-top: 3px; color: var(--muted); font-size: 9px; }
 .results-layout { display: grid; grid-template-columns: 290px minmax(0, 1fr); align-items: start; gap: 16px; }
 .dataset-picker { position: sticky; top: 14px; display: grid; overflow: hidden; border: 1px solid var(--line); border-radius: 15px; background: var(--surface); }
 .dataset-picker-title { display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--line); padding: 15px 16px; }
@@ -312,6 +323,11 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .dataset-downloads strong, .dataset-downloads small { display: block; }
 .dataset-downloads strong { overflow: hidden; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .dataset-downloads small { margin-top: 3px; color: var(--muted); font-size: 9px; }
+.trial-mapping { display: grid; gap: 8px; margin: 4px 0 14px; }
+.trial-mapping > p { margin: 0 0 2px; }
+.trial-mapping label { display: grid; grid-template-columns: minmax(0, 1fr) minmax(180px, .8fr); align-items: center; gap: 12px; margin: 0; border: 1px solid var(--line); border-radius: 9px; padding: 8px 10px; background: #fafbf9; }
+.trial-mapping label > span { overflow: hidden; font-size: 10px; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
+.trial-mapping input { min-width: 0; padding: 8px 9px; }
 
 .empty-state { display: grid; min-height: 180px; place-items: center; border: 1px dashed #cbd2cc; border-radius: 14px; padding: 25px; color: var(--muted); text-align: center; }
 .empty-state strong { display: block; margin-bottom: 6px; color: var(--ink); }
@@ -469,9 +485,11 @@ summary { color: var(--muted); font-size: 12px; font-weight: 750; cursor: pointe
   .audit-row { grid-template-columns: 42px 1fr auto; }
   .audit-row time { display: none; }
   .results-heading { align-items: stretch; flex-direction: column; }
+  .results-heading-actions { justify-content: space-between; }
   .results-count { align-self: flex-start; }
   .results-layout { grid-template-columns: 1fr; }
   .dataset-picker { position: static; }
   .results-stats { grid-template-columns: repeat(2, 1fr); }
   .chart-legend, .dataset-downloads { grid-template-columns: 1fr; }
+  .trial-mapping label { grid-template-columns: 1fr; gap: 6px; }
 }

@@ -1,12 +1,16 @@
-import {useEffect, useMemo, useState} from 'react'
+import {useEffect, useMemo, useState, type FormEvent} from 'react'
 import {request} from '../api'
 import {formatBytes, formatDate} from '../lib'
-import type {Artifact, MetricPoint, MetricSeries, Operation, TimeSeriesDataset, Workspace} from '../types'
+import type {Artifact, Experiment, MetricPoint, Operation, Session, TimeSeriesDataset, Workspace} from '../types'
+import {Dialog} from './Dialog'
 
 interface Props {
   artifacts: Artifact[]
+  experiments: Experiment[]
   operations: Operation[]
   workspaces: Workspace[]
+  session: Session
+  changed: () => Promise<void>
 }
 
 export interface LoadedDataset {
@@ -24,16 +28,21 @@ export interface AggregateSeries {
 
 const colors = ['#177554', '#3169a8', '#a9660c', '#8b4fa3']
 
-export function ResultsView({artifacts, operations, workspaces}: Props) {
+export function ResultsView({artifacts, experiments, operations, workspaces, session, changed}: Props) {
   const available = useMemo(() => artifacts.filter(item => !item.sensitive && item.type === 'TimeSeriesDataset' && item.version === 'v1alpha1').sort((left, right) => right.verifiedAt.localeCompare(left.verifiedAt)), [artifacts])
+  const availableKey = available.map(item => `${item.id}:${item.digest}`).join('|')
   const [selected, setSelected] = useState<string[]>([])
   const [loaded, setLoaded] = useState<LoadedDataset[]>([])
   const [error, setError] = useState('')
+  const [notice, setNotice] = useState('')
   const [loading, setLoading] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [activeExperiment, setActiveExperiment] = useState<string | null>(null)
+  const selectedKey = selected.join('|')
 
   useEffect(() => {
     setSelected(current => current.filter(id => available.some(item => item.id === id)))
-  }, [available])
+  }, [availableKey])
 
   useEffect(() => {
     if (!selected.length) {
@@ -49,22 +58,37 @@ export function ResultsView({artifacts, operations, workspaces}: Props) {
       if (!artifact) throw new Error('A selected dataset is no longer available.')
       const dataset = await request<TimeSeriesDataset>(`/artifacts/${id}/download`, {}, undefined, controller.signal)
       validateDataset(dataset)
-      return {artifact, dataset, label: datasetLabel(artifact, operations, workspaces)}
+      return {artifact, dataset, label: ''}
     })).then(values => setLoaded(values)).catch(cause => {
       if (!controller.signal.aborted) setError(cause instanceof Error ? cause.message : 'Could not load the selected datasets.')
     }).finally(() => {
       if (!controller.signal.aborted) setLoading(false)
     })
     return () => controller.abort()
-  }, [available, operations, selected, workspaces])
+  }, [availableKey, selectedKey])
 
   const toggle = (id: string) => {
+    setActiveExperiment(null)
+    setNotice('')
     setSelected(current => current.includes(id) ? current.filter(item => item !== id) : current.length < 4 ? [...current, id] : current)
   }
-  const metrics = [...new Set(loaded.flatMap(item => item.dataset.spec.series.map(series => series.metric)))].sort()
-  const samples = loaded.reduce((total, item) => total + item.dataset.spec.summary.samples, 0)
+  const experiment = experiments.find(item => item.id === activeExperiment)
+  const experimentLabels = new Map<string, string>()
+  for (const variant of experiment?.variants ?? []) for (const trial of variant.trials) experimentLabels.set(trial.resultArtifactId, `${variant.name} · Trial ${trial.position}`)
+  const displayed = loaded.map(item => ({...item, label: experimentLabels.get(item.artifact.id) ?? datasetLabel(item.artifact, operations, workspaces)}))
+  const metrics = [...new Set(displayed.flatMap(item => item.dataset.spec.series.map(series => series.metric)))].sort()
+  const samples = displayed.reduce((total, item) => total + item.dataset.spec.summary.samples, 0)
+  const selectedWorkspaceID = available.find(item => item.id === selected[0])?.workspaceId
+  const compatibleExperiments = experiments.filter(item => item.resultType === 'TimeSeriesDataset' && item.resultVersion === 'v1alpha1')
+  const openExperiment = (item: Experiment) => {
+    const artifactIDs = item.variants.flatMap(variant => variant.trials.map(trial => trial.resultArtifactId)).filter(id => available.some(artifact => artifact.id === id))
+    setActiveExperiment(item.id)
+    setSelected(artifactIDs.slice(0, 4))
+    setNotice(artifactIDs.length > 4 ? 'This experiment has more than four trials. Showing the first four.' : '')
+  }
   return <>
-    <div className="results-heading"><div><p className="eyebrow">REPEATABLE EVIDENCE</p><h2>Compare collected results</h2><p>Select up to four verified datasets. Series are normalized by their public artifact contract and remain downloadable in full.</p></div><div className="results-count"><strong>{available.length}</strong><span>datasets</span></div></div>
+    <div className="results-heading"><div><p className="eyebrow">REPEATABLE EVIDENCE</p><h2>Compare collected results</h2><p>Select up to four verified datasets. Use the same variant name for multiple trials, then save the immutable comparison.</p></div><div className="results-heading-actions"><button className="button primary" disabled={selected.length < 2} onClick={() => setSaving(true)}>Save experiment</button><div className="results-count"><strong>{available.length}</strong><span>datasets</span></div></div></div>
+    {compatibleExperiments.length > 0 && <div className="experiment-history"><div className="experiment-history-title"><strong>Saved experiments</strong><span>{compatibleExperiments.length} immutable comparisons</span></div><div className="experiment-cards">{compatibleExperiments.map(item => <button key={item.id} className={activeExperiment === item.id ? 'active' : ''} onClick={() => openExperiment(item)}><span className="status-dot succeeded" /><span><strong>{item.name}</strong><small>{item.variants.length} variants · {item.variants.reduce((total, variant) => total + variant.trials.length, 0)} trials · {formatDate(item.createdAt)}</small></span></button>)}</div></div>}
     {!available.length ? <EmptyResults /> : <div className="results-layout">
       <aside className="dataset-picker" aria-label="Available datasets">
         <div className="dataset-picker-title"><strong>Dataset history</strong><span>{selected.length}/4 selected</span></div>
@@ -72,31 +96,79 @@ export function ResultsView({artifacts, operations, workspaces}: Props) {
           const operation = operations.find(item => item.id === artifact.operationId)
           const workspace = workspaces.find(item => item.id === artifact.workspaceId)
           const active = selected.includes(artifact.id)
-          return <button className={`dataset-option ${active ? 'active' : ''}`} key={artifact.id} onClick={() => toggle(artifact.id)} disabled={!active && selected.length === 4} aria-pressed={active}>
+          const incompatibleWorkspace = Boolean(selectedWorkspaceID && artifact.workspaceId !== selectedWorkspaceID)
+          return <button className={`dataset-option ${active ? 'active' : ''}`} key={artifact.id} onClick={() => toggle(artifact.id)} disabled={!active && (selected.length === 4 || incompatibleWorkspace)} aria-pressed={active}>
             <span className="dataset-check">{active ? '✓' : ''}</span><span><strong>{operation?.title ?? artifact.name}</strong><small>{workspace?.name ?? 'Workspace'} · {formatDate(artifact.verifiedAt)}</small><small>{formatBytes(artifact.sizeBytes)} · {artifact.digest.slice(0, 14)}…</small></span>
           </button>
         })}
       </aside>
       <div className="results-content">
+        {notice && <div className="validation-item warning">{notice}</div>}
         {!selected.length && <div className="results-placeholder"><span>⌁</span><strong>Select a dataset</strong><p>Choose one result to explore it or multiple results to compare them.</p></div>}
         {loading && <div className="results-placeholder"><span className="results-spinner" /><strong>Loading verified data…</strong></div>}
         {error && <div className="validation-item error">{error}</div>}
         {!loading && !error && loaded.length > 0 && <>
           <div className="results-stats">
-            <ResultStat label="Compared" value={loaded.length} />
+            <ResultStat label="Compared" value={displayed.length} />
             <ResultStat label="Metrics" value={metrics.length} />
             <ResultStat label="Samples" value={samples.toLocaleString()} />
             <ResultStat label="Resolution" value={`${loaded[0].dataset.spec.stepSeconds}s`} />
           </div>
           <div className="chart-grid">{metrics.map(metric => {
-            const series = aggregateMetric(loaded, metric)
+            const series = aggregateMetric(displayed, metric)
             return <MetricChart key={metric} metric={metric} series={series} />
           })}</div>
-          <div className="dataset-downloads">{loaded.map(item => <a key={item.artifact.id} href={`/api/v1/artifacts/${item.artifact.id}/download`}><span>↓</span><span><strong>{item.label}</strong><small>Download verified JSON</small></span></a>)}</div>
+          <div className="dataset-downloads">{displayed.map(item => <a key={item.artifact.id} href={`/api/v1/artifacts/${item.artifact.id}/download`}><span>↓</span><span><strong>{item.label}</strong><small>Download verified JSON</small></span></a>)}</div>
         </>}
       </div>
     </div>}
+    <SaveExperimentDialog open={saving} close={() => setSaving(false)} selected={selected.map(id => available.find(item => item.id === id)).filter((item): item is Artifact => Boolean(item))} operations={operations} workspaces={workspaces} session={session} changed={changed} />
   </>
+}
+
+function SaveExperimentDialog({open, close, selected, operations, workspaces, session, changed}: {open: boolean; close: () => void; selected: Artifact[]; operations: Operation[]; workspaces: Workspace[]; session: Session; changed: () => Promise<void>}) {
+  const [pending, setPending] = useState(false)
+  const [error, setError] = useState('')
+  const workspace = workspaces.find(item => item.id === selected[0]?.workspaceId)
+  const submit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    if (!workspace) return
+    setPending(true)
+    setError('')
+    const form = new FormData(event.currentTarget)
+    const grouped = new Map<string, {name: string; trialArtifactIds: string[]}>()
+    for (const artifact of selected) {
+      const name = String(form.get(`variant-${artifact.id}`) ?? '').trim()
+      const key = name.toLocaleLowerCase()
+      const variant = grouped.get(key) ?? {name, trialArtifactIds: []}
+      variant.trialArtifactIds.push(artifact.id)
+      grouped.set(key, variant)
+    }
+    if ([...grouped.values()].some(item => !item.name) || grouped.size < 2) {
+      setError('Provide at least two distinct variant names.')
+      setPending(false)
+      return
+    }
+    try {
+      await request('/experiments', {method: 'POST', body: JSON.stringify({workspaceId: workspace.id, name: form.get('name'), description: form.get('description'), variants: [...grouped.values()].map(item => ({...item, configuration: {}}))})}, session.csrfToken)
+      close()
+      await changed()
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Could not save the experiment.')
+    } finally {
+      setPending(false)
+    }
+  }
+  return <Dialog open={open} onClose={close} title="Save experiment" eyebrow="IMMUTABLE HISTORY">
+    <form onSubmit={submit}>
+      <label>Name<input name="name" maxLength={120} placeholder="Default vs custom strategy" required autoFocus /></label>
+      <label>Description<textarea name="description" maxLength={500} rows={2} placeholder="What does this comparison test?" /></label>
+      <div className="trial-mapping"><p className="field-description">Use the same variant name on multiple datasets to group repeated trials.</p>{selected.map(artifact => <label key={artifact.id}><span>{operations.find(item => item.id === artifact.operationId)?.title ?? artifact.name}</span><input name={`variant-${artifact.id}`} maxLength={80} defaultValue={operations.find(item => item.id === artifact.operationId)?.title ?? artifact.name} required /></label>)}</div>
+      <div className="validation-callout"><span>✓</span><p><strong>Validated before saving.</strong> Every trial must be verified, successful and owned by {workspace?.name ?? 'one workspace'}.</p></div>
+      <p className="form-error">{error}</p>
+      <div className="modal-actions"><button className="button secondary" type="button" onClick={close}>Cancel</button><button className="button primary" disabled={pending}>{pending ? 'Saving…' : 'Save experiment'}</button></div>
+    </form>
+  </Dialog>
 }
 
 function MetricChart({metric, series}: {metric: string; series: AggregateSeries[]}) {

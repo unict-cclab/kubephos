@@ -29,6 +29,45 @@ func TestResolvedPlanHashIsDeterministic(t *testing.T) {
 	}
 }
 
+func TestNormalizeAndValidateExperimentInput(t *testing.T) {
+	input := createExperimentInput{
+		WorkspaceID: " ws_dev ",
+		Name:        " Scheduler comparison ",
+		Variants: []createExperimentVariantInput{
+			{Name: " Default ", TrialArtifactIDs: []string{" art_one ", "art_two"}},
+			{Name: " Custom", Configuration: json.RawMessage(`{"weight":2}`), TrialArtifactIDs: []string{"art_three"}},
+		},
+	}
+	if err := normalizeAndValidateExperimentInput(&input); err != nil {
+		t.Fatal(err)
+	}
+	if input.WorkspaceID != "ws_dev" || input.Name != "Scheduler comparison" || input.Variants[0].Name != "Default" || input.Variants[0].TrialArtifactIDs[0] != "art_one" {
+		t.Fatalf("input was not normalized: %#v", input)
+	}
+	if string(input.Variants[0].Configuration) != "{}" {
+		t.Fatalf("expected default configuration, got %s", input.Variants[0].Configuration)
+	}
+}
+
+func TestNormalizeAndValidateExperimentInputRejectsInvalidComparisons(t *testing.T) {
+	tests := []struct {
+		name  string
+		input createExperimentInput
+	}{
+		{name: "one variant", input: createExperimentInput{WorkspaceID: "ws", Name: "test", Variants: []createExperimentVariantInput{{Name: "one", TrialArtifactIDs: []string{"art"}}}}},
+		{name: "duplicate names", input: createExperimentInput{WorkspaceID: "ws", Name: "test", Variants: []createExperimentVariantInput{{Name: "same", TrialArtifactIDs: []string{"one"}}, {Name: "Same", TrialArtifactIDs: []string{"two"}}}}},
+		{name: "no trials", input: createExperimentInput{WorkspaceID: "ws", Name: "test", Variants: []createExperimentVariantInput{{Name: "one"}, {Name: "two", TrialArtifactIDs: []string{"two"}}}}},
+		{name: "non object configuration", input: createExperimentInput{WorkspaceID: "ws", Name: "test", Variants: []createExperimentVariantInput{{Name: "one", Configuration: json.RawMessage(`[]`), TrialArtifactIDs: []string{"one"}}, {Name: "two", TrialArtifactIDs: []string{"two"}}}}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if err := normalizeAndValidateExperimentInput(&test.input); err == nil {
+				t.Fatal("expected validation error")
+			}
+		})
+	}
+}
+
 type preflightPlugin struct {
 	calls  int
 	health domain.HealthReport

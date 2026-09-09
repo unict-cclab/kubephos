@@ -63,6 +63,8 @@ func NewServer(store *storage.Store, registry *plugins.Registry, artifactStore *
 	router.HandleFunc("GET /api/v1/workspaces", server.listWorkspaces)
 	router.HandleFunc("POST /api/v1/workspaces", server.createWorkspace)
 	router.HandleFunc("GET /api/v1/workspaces/{id}", server.getWorkspace)
+	router.HandleFunc("GET /api/v1/experiments", server.listExperiments)
+	router.HandleFunc("POST /api/v1/experiments", server.createCompletedExperiment)
 	router.HandleFunc("GET /api/v1/operations", server.listOperations)
 	router.HandleFunc("POST /api/v1/operations", server.createOperation)
 	router.HandleFunc("GET /api/v1/operations/{id}", server.getOperation)
@@ -359,6 +361,160 @@ func (s *Server) createWorkspace(response http.ResponseWriter, request *http.Req
 		return
 	}
 	writeJSON(response, http.StatusCreated, workspace)
+}
+
+type createExperimentInput struct {
+	WorkspaceID string                         `json:"workspaceId"`
+	Name        string                         `json:"name"`
+	Description string                         `json:"description"`
+	Variants    []createExperimentVariantInput `json:"variants"`
+}
+
+type createExperimentVariantInput struct {
+	Name             string          `json:"name"`
+	Configuration    json.RawMessage `json:"configuration"`
+	TrialArtifactIDs []string        `json:"trialArtifactIds"`
+}
+
+func (s *Server) listExperiments(response http.ResponseWriter, request *http.Request) {
+	limit := 50
+	if raw := request.URL.Query().Get("limit"); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err == nil && parsed >= 1 && parsed <= 200 {
+			limit = parsed
+		}
+	}
+	items, err := s.store.ListExperiments(request.Context(), limit)
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, "database_error", "Could not list experiments.")
+		return
+	}
+	writeJSON(response, http.StatusOK, map[string]any{"items": items})
+}
+
+func (s *Server) createCompletedExperiment(response http.ResponseWriter, request *http.Request) {
+	var input createExperimentInput
+	if err := decodeJSON(request, &input); err != nil {
+		writeError(response, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	if err := normalizeAndValidateExperimentInput(&input); err != nil {
+		writeError(response, http.StatusUnprocessableEntity, "invalid_experiment", err.Error())
+		return
+	}
+	if _, err := s.store.GetWorkspace(request.Context(), input.WorkspaceID); errors.Is(err, storage.ErrNotFound) {
+		writeError(response, http.StatusUnprocessableEntity, "invalid_workspace", "Select an existing workspace.")
+		return
+	} else if err != nil {
+		writeError(response, http.StatusInternalServerError, "database_error", "Could not validate workspace.")
+		return
+	}
+	experiment := domain.Experiment{
+		ID: id.New("exp"), WorkspaceID: input.WorkspaceID, Name: input.Name,
+		Description: input.Description, Status: domain.OperationSucceeded,
+	}
+	seenArtifacts := map[string]bool{}
+	for variantPosition, requestedVariant := range input.Variants {
+		variant := domain.ExperimentVariant{
+			ID: id.New("var"), ExperimentID: experiment.ID, Position: variantPosition + 1,
+			Name: requestedVariant.Name, Configuration: requestedVariant.Configuration,
+		}
+		for trialPosition, artifactID := range requestedVariant.TrialArtifactIDs {
+			if seenArtifacts[artifactID] {
+				writeError(response, http.StatusUnprocessableEntity, "duplicate_trial", "A result artifact can belong to only one trial in an experiment.")
+				return
+			}
+			seenArtifacts[artifactID] = true
+			artifact, err := s.store.GetArtifact(request.Context(), artifactID)
+			if errors.Is(err, storage.ErrNotFound) {
+				writeError(response, http.StatusUnprocessableEntity, "invalid_trial", "A selected result artifact is unavailable.")
+				return
+			}
+			if err != nil {
+				writeError(response, http.StatusInternalServerError, "database_error", "Could not validate a result artifact.")
+				return
+			}
+			source, err := s.store.GetOperation(request.Context(), artifact.OperationID)
+			if err != nil || source.WorkspaceID != input.WorkspaceID || source.Status != domain.OperationSucceeded || artifact.Sensitive {
+				writeError(response, http.StatusUnprocessableEntity, "invalid_trial", "Every trial must use a public result from a successful operation in the same workspace.")
+				return
+			}
+			if err := s.verifyArtifactPayload(request.Context(), artifact); err != nil {
+				writeError(response, http.StatusUnprocessableEntity, "invalid_trial", "A selected result failed integrity verification.")
+				return
+			}
+			if experiment.ResultType == "" {
+				experiment.ResultType = artifact.Type
+				experiment.ResultVersion = artifact.Version
+			} else if experiment.ResultType != artifact.Type || experiment.ResultVersion != artifact.Version {
+				writeError(response, http.StatusUnprocessableEntity, "incompatible_trials", "All trials must implement the same artifact contract.")
+				return
+			}
+			variant.Trials = append(variant.Trials, domain.ExperimentTrial{
+				ID: id.New("trial"), VariantID: variant.ID, Position: trialPosition + 1,
+				Status: domain.OperationSucceeded, OperationID: artifact.OperationID, ResultArtifactID: artifact.ID,
+			})
+		}
+		experiment.Variants = append(experiment.Variants, variant)
+	}
+	created, err := s.store.CreateCompletedExperiment(request.Context(), experiment)
+	if errors.Is(err, storage.ErrConflict) || errors.Is(err, storage.ErrNotFound) {
+		writeError(response, http.StatusConflict, "experiment_conflict", "Experiment inputs changed during validation. Refresh and try again.")
+		return
+	}
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, "database_error", "Could not save the experiment.")
+		return
+	}
+	writeJSON(response, http.StatusCreated, created)
+}
+
+func normalizeAndValidateExperimentInput(input *createExperimentInput) error {
+	input.WorkspaceID = strings.TrimSpace(input.WorkspaceID)
+	input.Name = strings.TrimSpace(input.Name)
+	input.Description = strings.TrimSpace(input.Description)
+	if input.WorkspaceID == "" {
+		return errors.New("workspace is required")
+	}
+	if input.Name == "" || len(input.Name) > 120 {
+		return errors.New("name must contain between 1 and 120 characters")
+	}
+	if len(input.Description) > 500 {
+		return errors.New("description cannot exceed 500 characters")
+	}
+	if len(input.Variants) < 2 || len(input.Variants) > 8 {
+		return errors.New("an experiment requires between 2 and 8 variants")
+	}
+	seenNames := map[string]bool{}
+	for index := range input.Variants {
+		variant := &input.Variants[index]
+		variant.Name = strings.TrimSpace(variant.Name)
+		if variant.Name == "" || len(variant.Name) > 80 {
+			return fmt.Errorf("variant %d name must contain between 1 and 80 characters", index+1)
+		}
+		key := strings.ToLower(variant.Name)
+		if seenNames[key] {
+			return errors.New("variant names must be unique")
+		}
+		seenNames[key] = true
+		if len(variant.TrialArtifactIDs) < 1 || len(variant.TrialArtifactIDs) > 20 {
+			return fmt.Errorf("variant %q requires between 1 and 20 trials", variant.Name)
+		}
+		if len(variant.Configuration) == 0 {
+			variant.Configuration = json.RawMessage(`{}`)
+		}
+		var configuration map[string]any
+		if err := json.Unmarshal(variant.Configuration, &configuration); err != nil || configuration == nil {
+			return fmt.Errorf("variant %q configuration must be a JSON object", variant.Name)
+		}
+		for trialIndex, artifactID := range variant.TrialArtifactIDs {
+			variant.TrialArtifactIDs[trialIndex] = strings.TrimSpace(artifactID)
+			if variant.TrialArtifactIDs[trialIndex] == "" {
+				return fmt.Errorf("variant %q contains an empty trial artifact", variant.Name)
+			}
+		}
+	}
+	return nil
 }
 
 func (s *Server) listOperations(response http.ResponseWriter, request *http.Request) {
@@ -798,19 +954,19 @@ func (s *Server) downloadArtifact(response http.ResponseWriter, request *http.Re
 		writeError(response, http.StatusForbidden, "sensitive_artifact", "Sensitive artifacts cannot be downloaded from the browser.")
 		return
 	}
-	reader, contentType, err := s.artifacts.Get(request.Context(), artifact.StorageKey)
+	value, err := s.artifacts.ReadVerified(request.Context(), artifact.StorageKey, artifact.StorageDigest, artifact.StoredSizeBytes)
 	if err != nil {
-		writeError(response, http.StatusBadGateway, "storage_error", "Could not read artifact data.")
+		writeError(response, http.StatusBadGateway, "storage_error", "Artifact integrity verification failed.")
 		return
 	}
-	defer reader.Close()
-	if contentType == "" {
-		contentType = artifact.MediaType
+	if err := artifacts.Verify(value, artifact.Digest, artifact.SizeBytes); err != nil {
+		writeError(response, http.StatusBadGateway, "storage_error", "Artifact integrity verification failed.")
+		return
 	}
-	response.Header().Set("Content-Type", contentType)
+	response.Header().Set("Content-Type", artifact.MediaType)
 	response.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", artifact.Name+".json"))
 	response.Header().Set("X-Content-Type-Options", "nosniff")
-	if _, err := io.Copy(response, reader); err != nil {
+	if _, err := response.Write(value); err != nil {
 		slog.Error("stream artifact", "artifact", artifact.ID, "error", err)
 	}
 }
@@ -983,6 +1139,8 @@ func auditTarget(request *http.Request) (string, string, string, bool) {
 			return "connection.create", "connection", "", true
 		case "operations":
 			return "operation.create", "operation", "", true
+		case "experiments":
+			return "experiment.create", "experiment", "", true
 		}
 	}
 	if len(parts) == 2 && parts[0] == "catalog" && parts[1] == "applications" {

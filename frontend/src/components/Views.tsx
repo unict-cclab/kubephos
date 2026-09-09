@@ -1,5 +1,5 @@
 import {formatDate, shortID} from '../lib'
-import type {Application, Artifact, AuditEvent, Connection, Credential, InfrastructureResource, Operation, Plugin, SystemStatus, View, Workspace} from '../types'
+import type {Application, Artifact, AuditEvent, Connection, Credential, Experiment, InfrastructureResource, Operation, Plugin, Session, SystemStatus, View, Workspace} from '../types'
 import {ResultsView} from './ResultsView'
 
 interface ViewProps {
@@ -8,12 +8,15 @@ interface ViewProps {
   workspaces: Workspace[]
   operations: Operation[]
   artifacts: Artifact[]
+  experiments: Experiment[]
   plugins: Plugin[]
   applications: Application[]
   credentials: Credential[]
   connections: Connection[]
   resources: InfrastructureResource[]
   audit: AuditEvent[]
+  session: Session
+  changed: () => Promise<void>
   isAdmin: boolean
   navigate: (view: View) => void
   createWorkspace: () => void
@@ -39,7 +42,7 @@ export function Views(props: ViewProps) {
       <OperationList operations={props.operations} workspaces={props.workspaces} open={props.openOperation} />
     </section>
     <section className={`view ${props.view === 'results' ? 'active' : ''}`}>
-      <ResultsView artifacts={props.artifacts} operations={props.operations} workspaces={props.workspaces} />
+      <ResultsView artifacts={props.artifacts} experiments={props.experiments} operations={props.operations} workspaces={props.workspaces} session={props.session} changed={props.changed} />
     </section>
     <section className={`view ${props.view === 'catalog' ? 'active' : ''}`}>
       <Heading eyebrow="APPLICATION INTERFACE" title="Application catalog" action={props.isAdmin && <button className="button primary" onClick={props.importApplication}>Import application</button>} />

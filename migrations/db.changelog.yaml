@@ -62,3 +62,10 @@ databaseChangeLog:
         - sqlFile:
             path: changes/009-encrypted-artifacts.sql
             relativeToChangelogFile: true
+  - changeSet:
+      id: 010-experiment-history
+      author: kubephos
+      changes:
+        - sqlFile:
+            path: changes/010-experiment-history.sql
+            relativeToChangelogFile: true

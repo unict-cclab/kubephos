@@ -38,6 +38,39 @@ type Workspace struct {
 	UpdatedAt   time.Time `json:"updatedAt"`
 }
 
+type Experiment struct {
+	ID            string              `json:"id"`
+	WorkspaceID   string              `json:"workspaceId"`
+	Name          string              `json:"name"`
+	Description   string              `json:"description"`
+	Status        string              `json:"status"`
+	ResultType    string              `json:"resultType"`
+	ResultVersion string              `json:"resultVersion"`
+	Variants      []ExperimentVariant `json:"variants"`
+	CreatedAt     time.Time           `json:"createdAt"`
+	UpdatedAt     time.Time           `json:"updatedAt"`
+}
+
+type ExperimentVariant struct {
+	ID            string            `json:"id"`
+	ExperimentID  string            `json:"experimentId"`
+	Position      int               `json:"position"`
+	Name          string            `json:"name"`
+	Configuration json.RawMessage   `json:"configuration"`
+	Trials        []ExperimentTrial `json:"trials"`
+}
+
+type ExperimentTrial struct {
+	ID               string    `json:"id"`
+	VariantID        string    `json:"variantId"`
+	Position         int       `json:"position"`
+	Status           string    `json:"status"`
+	OperationID      string    `json:"operationId"`
+	ResultArtifactID string    `json:"resultArtifactId"`
+	CreatedAt        time.Time `json:"createdAt"`
+	CompletedAt      time.Time `json:"completedAt"`
+}
+
 type Credential struct {
 	ID          string    `json:"id"`
 	Name        string    `json:"name"`

@@ -7,7 +7,7 @@ import {Views} from './components/Views'
 import {WorkspaceFlowDialog} from './components/WorkspaceFlowDialog'
 import type {PlatformData, Session, View, Workspace} from './types'
 
-const emptyData: PlatformData = {system: null, workspaces: [], operations: [], artifacts: [], plugins: [], applications: [], credentials: [], connections: [], resources: [], audit: []}
+const emptyData: PlatformData = {system: null, workspaces: [], experiments: [], operations: [], artifacts: [], plugins: [], applications: [], credentials: [], connections: [], resources: [], audit: []}
 const viewMetadata: Record<View, [string, string]> = {
   overview: ['CONTROL PLANE', 'Overview'],
   workspaces: ['ENVIRONMENTS', 'Workspaces'],
@@ -51,9 +51,10 @@ export default function App() {
     if (!session?.authenticated) return
     setRefreshing(true)
     try {
-      const [system, workspaces, operations, artifacts, plugins, applications, credentials, connections, resources, audit] = await Promise.all([
+      const [system, workspaces, experiments, operations, artifacts, plugins, applications, credentials, connections, resources, audit] = await Promise.all([
         request<PlatformData['system']>('/system'),
         request<{items: PlatformData['workspaces']}>('/workspaces'),
+        request<{items: PlatformData['experiments']}>('/experiments'),
         request<{items: PlatformData['operations']}>('/operations'),
         request<{items: PlatformData['artifacts']}>('/artifacts?limit=500'),
         request<{items: PlatformData['plugins']}>('/plugins'),
@@ -63,7 +64,7 @@ export default function App() {
         request<{items: PlatformData['resources']}>('/infrastructure/resources'),
         request<{items: PlatformData['audit']}>('/audit?limit=20')
       ])
-      setData({system, workspaces: workspaces.items, operations: operations.items, artifacts: artifacts.items, plugins: plugins.items, applications: applications.items, credentials: credentials.items, connections: connections.items, resources: resources.items, audit: audit.items})
+      setData({system, workspaces: workspaces.items, experiments: experiments.items, operations: operations.items, artifacts: artifacts.items, plugins: plugins.items, applications: applications.items, credentials: credentials.items, connections: connections.items, resources: resources.items, audit: audit.items})
       setConnected(true)
       if (!silent) notify('Everything is up to date.')
     } catch (cause) {
@@ -148,6 +149,8 @@ export default function App() {
         <Views
           view={view}
           {...data}
+          session={session}
+          changed={() => afterMutation('Experiment saved.')}
           isAdmin={session.user?.role === 'admin'}
           navigate={navigate}
           createWorkspace={() => setModal('workspace')}

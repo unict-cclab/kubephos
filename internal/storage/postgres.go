@@ -176,6 +176,159 @@ func (s *Store) GetWorkspace(ctx context.Context, workspaceID string) (domain.Wo
 	return workspace, err
 }
 
+func (s *Store) CreateCompletedExperiment(ctx context.Context, experiment domain.Experiment) (domain.Experiment, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return domain.Experiment{}, err
+	}
+	defer tx.Rollback(ctx)
+	if err := tx.QueryRow(ctx, `
+		INSERT INTO experiments (id, workspace_id, name, description, status, result_type, result_version)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
+		RETURNING created_at, updated_at
+	`, experiment.ID, experiment.WorkspaceID, experiment.Name, experiment.Description, experiment.Status, experiment.ResultType, experiment.ResultVersion).Scan(&experiment.CreatedAt, &experiment.UpdatedAt); err != nil {
+		return domain.Experiment{}, err
+	}
+	for variantIndex := range experiment.Variants {
+		variant := &experiment.Variants[variantIndex]
+		if len(variant.Configuration) == 0 {
+			variant.Configuration = json.RawMessage(`{}`)
+		}
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO experiment_variants (id, experiment_id, position, name, configuration)
+			VALUES ($1, $2, $3, $4, $5)
+		`, variant.ID, experiment.ID, variant.Position, variant.Name, variant.Configuration); err != nil {
+			return domain.Experiment{}, err
+		}
+		for trialIndex := range variant.Trials {
+			trial := &variant.Trials[trialIndex]
+			var workspaceID, operationID, operationStatus, artifactType, artifactVersion string
+			var sensitive bool
+			var completedAt *time.Time
+			err := tx.QueryRow(ctx, `
+				SELECT o.workspace_id, o.id, o.status, o.completed_at,
+				       a.artifact_type, a.artifact_version, a.sensitive
+				FROM artifacts a
+				JOIN operations o ON o.id = a.operation_id
+				WHERE a.id = $1
+				FOR SHARE OF a, o
+			`, trial.ResultArtifactID).Scan(&workspaceID, &operationID, &operationStatus, &completedAt, &artifactType, &artifactVersion, &sensitive)
+			if errors.Is(err, pgx.ErrNoRows) {
+				return domain.Experiment{}, fmt.Errorf("%w: result artifact %s", ErrNotFound, trial.ResultArtifactID)
+			}
+			if err != nil {
+				return domain.Experiment{}, err
+			}
+			if workspaceID != experiment.WorkspaceID || operationStatus != domain.OperationSucceeded || completedAt == nil || artifactType != experiment.ResultType || artifactVersion != experiment.ResultVersion || sensitive {
+				return domain.Experiment{}, fmt.Errorf("%w: result artifact %s is not an eligible completed dataset", ErrConflict, trial.ResultArtifactID)
+			}
+			trial.OperationID = operationID
+			trial.CompletedAt = completedAt.UTC()
+			if err := tx.QueryRow(ctx, `
+				INSERT INTO experiment_trials (id, variant_id, position, status, operation_id, result_artifact_id, completed_at)
+				VALUES ($1, $2, $3, $4, $5, $6, $7)
+				RETURNING created_at
+			`, trial.ID, variant.ID, trial.Position, trial.Status, trial.OperationID, trial.ResultArtifactID, trial.CompletedAt).Scan(&trial.CreatedAt); err != nil {
+				return domain.Experiment{}, err
+			}
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return domain.Experiment{}, err
+	}
+	return experiment, nil
+}
+
+func (s *Store) ListExperiments(ctx context.Context, limit int) ([]domain.Experiment, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, workspace_id, name, description, status, result_type, result_version, created_at, updated_at
+		FROM experiments
+		ORDER BY created_at DESC
+		LIMIT $1
+	`, limit)
+	if err != nil {
+		return nil, err
+	}
+	result := []domain.Experiment{}
+	for rows.Next() {
+		var experiment domain.Experiment
+		if err := rows.Scan(&experiment.ID, &experiment.WorkspaceID, &experiment.Name, &experiment.Description, &experiment.Status, &experiment.ResultType, &experiment.ResultVersion, &experiment.CreatedAt, &experiment.UpdatedAt); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		result = append(result, experiment)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	rows.Close()
+	for index := range result {
+		variants, err := s.listExperimentVariants(ctx, result[index].ID)
+		if err != nil {
+			return nil, err
+		}
+		result[index].Variants = variants
+	}
+	return result, nil
+}
+
+func (s *Store) listExperimentVariants(ctx context.Context, experimentID string) ([]domain.ExperimentVariant, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, experiment_id, position, name, configuration
+		FROM experiment_variants
+		WHERE experiment_id = $1
+		ORDER BY position
+	`, experimentID)
+	if err != nil {
+		return nil, err
+	}
+	variants := []domain.ExperimentVariant{}
+	for rows.Next() {
+		var variant domain.ExperimentVariant
+		if err := rows.Scan(&variant.ID, &variant.ExperimentID, &variant.Position, &variant.Name, &variant.Configuration); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		variants = append(variants, variant)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	rows.Close()
+	for index := range variants {
+		trials, err := s.listExperimentTrials(ctx, variants[index].ID)
+		if err != nil {
+			return nil, err
+		}
+		variants[index].Trials = trials
+	}
+	return variants, nil
+}
+
+func (s *Store) listExperimentTrials(ctx context.Context, variantID string) ([]domain.ExperimentTrial, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, variant_id, position, status, operation_id, result_artifact_id, created_at, completed_at
+		FROM experiment_trials
+		WHERE variant_id = $1
+		ORDER BY position
+	`, variantID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	trials := []domain.ExperimentTrial{}
+	for rows.Next() {
+		var trial domain.ExperimentTrial
+		if err := rows.Scan(&trial.ID, &trial.VariantID, &trial.Position, &trial.Status, &trial.OperationID, &trial.ResultArtifactID, &trial.CreatedAt, &trial.CompletedAt); err != nil {
+			return nil, err
+		}
+		trials = append(trials, trial)
+	}
+	return trials, rows.Err()
+}
+
 func (s *Store) CreateCredential(ctx context.Context, credential domain.EncryptedCredential) (domain.Credential, error) {
 	err := s.pool.QueryRow(ctx, `
 		INSERT INTO credentials (id, name, kind, fingerprint, nonce, ciphertext)

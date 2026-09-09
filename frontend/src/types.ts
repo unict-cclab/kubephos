@@ -152,6 +152,39 @@ export interface TimeSeriesDataset {
   }
 }
 
+export interface ExperimentTrial {
+  id: string
+  variantId: string
+  position: number
+  status: string
+  operationId: string
+  resultArtifactId: string
+  createdAt: string
+  completedAt: string
+}
+
+export interface ExperimentVariant {
+  id: string
+  experimentId: string
+  position: number
+  name: string
+  configuration: Record<string, unknown>
+  trials: ExperimentTrial[]
+}
+
+export interface Experiment {
+  id: string
+  workspaceId: string
+  name: string
+  description: string
+  status: string
+  resultType: string
+  resultVersion: string
+  variants: ExperimentVariant[]
+  createdAt: string
+  updatedAt: string
+}
+
 export interface Operation {
   id: string
   workspaceId: string
@@ -239,6 +272,7 @@ export interface SystemStatus {
 export interface PlatformData {
   system: SystemStatus | null
   workspaces: Workspace[]
+  experiments: Experiment[]
   operations: Operation[]
   artifacts: Artifact[]
   plugins: Plugin[]
