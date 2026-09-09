@@ -1,0 +1,67 @@
+apiVersion: plugins.kubephos.io/v1alpha1
+kind: Plugin
+metadata:
+  id: io.kubephos.scheduler.kubernetes.secondary
+  name: Managed secondary scheduler
+  version: 0.1.0
+  description: Installs an isolated Kubernetes scheduler and assigns only workloads selected by a validated target binding.
+spec:
+  protocol: v1alpha1
+  commands:
+    - describe
+    - validate
+    - plan
+    - precheck
+    - execute
+    - verify
+    - status
+    - cancel
+    - cleanup
+  configurationSchema:
+    type: object
+    additionalProperties: false
+    required:
+      - clusterConnectionRef
+      - applicationDeploymentRef
+      - targetBindingRef
+    properties:
+      clusterConnectionRef:
+        type: string
+        title: Kubernetes cluster
+        format: kubephos-artifact-ref
+        x-kubephos-artifact-type: ClusterConnection
+        x-kubephos-artifact-version: v1alpha1
+      applicationDeploymentRef:
+        type: string
+        title: Application deployment
+        format: kubephos-artifact-ref
+        x-kubephos-artifact-type: ApplicationDeployment
+        x-kubephos-artifact-version: v1alpha1
+      targetBindingRef:
+        type: string
+        title: Workload binding
+        format: kubephos-artifact-ref
+        x-kubephos-artifact-type: TargetBinding
+        x-kubephos-artifact-version: v1alpha1
+  runtime:
+    executable: secondary-scheduler-plugin
+    timeout: 25m
+  artifacts:
+    inputs:
+      - type: ClusterConnection
+        version: v1alpha1
+      - type: ApplicationDeployment
+        version: v1alpha1
+      - type: TargetBinding
+        version: v1alpha1
+    outputs:
+      - type: SchedulerDeployment
+        version: v1alpha1
+  capabilities:
+    - scheduler.kubernetes.install
+    - scheduler.kubernetes.bind
+    - scheduler.kubernetes.preflight
+    - scheduler.kubernetes.cleanup
+    - lifecycle.cleanup
+  permissions:
+    - cluster.admin
