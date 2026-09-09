@@ -300,7 +300,8 @@ func (s *Store) CreateCompletedExperiment(ctx context.Context, experiment domain
 				return domain.Experiment{}, fmt.Errorf("%w: result artifact %s is not an eligible completed dataset", ErrConflict, trial.ResultArtifactID)
 			}
 			trial.OperationID = operationID
-			trial.CompletedAt = completedAt.UTC()
+			completed := completedAt.UTC()
+			trial.CompletedAt = &completed
 			if err := tx.QueryRow(ctx, `
 				INSERT INTO experiment_trials (id, variant_id, position, status, operation_id, result_artifact_id, completed_at)
 				VALUES ($1, $2, $3, $4, $5, $6, $7)
@@ -352,7 +353,7 @@ func (s *Store) ListExperiments(ctx context.Context, limit int) ([]domain.Experi
 
 func (s *Store) listExperimentVariants(ctx context.Context, experimentID string) ([]domain.ExperimentVariant, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT id, experiment_id, position, name, configuration
+		SELECT id, experiment_id, position, name, COALESCE(pipeline_id, ''), COALESCE(pipeline_hash, ''), configuration
 		FROM experiment_variants
 		WHERE experiment_id = $1
 		ORDER BY position
@@ -363,7 +364,7 @@ func (s *Store) listExperimentVariants(ctx context.Context, experimentID string)
 	variants := []domain.ExperimentVariant{}
 	for rows.Next() {
 		var variant domain.ExperimentVariant
-		if err := rows.Scan(&variant.ID, &variant.ExperimentID, &variant.Position, &variant.Name, &variant.Configuration); err != nil {
+		if err := rows.Scan(&variant.ID, &variant.ExperimentID, &variant.Position, &variant.Name, &variant.PipelineID, &variant.PipelineHash, &variant.Configuration); err != nil {
 			rows.Close()
 			return nil, err
 		}
@@ -386,7 +387,7 @@ func (s *Store) listExperimentVariants(ctx context.Context, experimentID string)
 
 func (s *Store) listExperimentTrials(ctx context.Context, variantID string) ([]domain.ExperimentTrial, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT id, variant_id, position, status, operation_id, result_artifact_id, created_at, completed_at
+		SELECT id, variant_id, position, status, COALESCE(operation_id, ''), COALESCE(pipeline_run_id, ''), COALESCE(result_artifact_id, ''), error, created_at, completed_at
 		FROM experiment_trials
 		WHERE variant_id = $1
 		ORDER BY position
@@ -398,7 +399,7 @@ func (s *Store) listExperimentTrials(ctx context.Context, variantID string) ([]d
 	trials := []domain.ExperimentTrial{}
 	for rows.Next() {
 		var trial domain.ExperimentTrial
-		if err := rows.Scan(&trial.ID, &trial.VariantID, &trial.Position, &trial.Status, &trial.OperationID, &trial.ResultArtifactID, &trial.CreatedAt, &trial.CompletedAt); err != nil {
+		if err := rows.Scan(&trial.ID, &trial.VariantID, &trial.Position, &trial.Status, &trial.OperationID, &trial.PipelineRunID, &trial.ResultArtifactID, &trial.Error, &trial.CreatedAt, &trial.CompletedAt); err != nil {
 			return nil, err
 		}
 		trials = append(trials, trial)

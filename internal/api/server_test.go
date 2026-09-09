@@ -68,6 +68,50 @@ func TestNormalizeAndValidateExperimentInputRejectsInvalidComparisons(t *testing
 	}
 }
 
+func TestNormalizePipelineExperimentInput(t *testing.T) {
+	input := createPipelineExperimentInput{
+		WorkspaceID: " ws_dev ", Name: " Scheduler comparison ", Repetitions: 3,
+		Variants: []createPipelineExperimentVariantInput{
+			{Name: " Default ", PipelineID: " pipe_default "},
+			{Name: " Secondary ", PipelineID: " pipe_secondary "},
+		},
+	}
+	if err := normalizePipelineExperimentInput(&input); err != nil {
+		t.Fatal(err)
+	}
+	if input.WorkspaceID != "ws_dev" || input.Name != "Scheduler comparison" || input.Variants[1].PipelineID != "pipe_secondary" {
+		t.Fatalf("input was not normalized: %#v", input)
+	}
+}
+
+func TestNormalizePipelineExperimentInputRejectsUnsafeFanout(t *testing.T) {
+	tests := []createPipelineExperimentInput{
+		{WorkspaceID: "ws", Name: "one", Repetitions: 1, Variants: []createPipelineExperimentVariantInput{{Name: "only", PipelineID: "pipe_one"}}},
+		{WorkspaceID: "ws", Name: "duplicate", Repetitions: 1, Variants: []createPipelineExperimentVariantInput{{Name: "same", PipelineID: "pipe_one"}, {Name: "Same", PipelineID: "pipe_two"}}},
+		{WorkspaceID: "ws", Name: "pipeline", Repetitions: 1, Variants: []createPipelineExperimentVariantInput{{Name: "one", PipelineID: "pipe_one"}, {Name: "two", PipelineID: "pipe_one"}}},
+		{WorkspaceID: "ws", Name: "fanout", Repetitions: 10, Variants: []createPipelineExperimentVariantInput{{Name: "one", PipelineID: "pipe_one"}, {Name: "two", PipelineID: "pipe_two"}, {Name: "three", PipelineID: "pipe_three"}, {Name: "four", PipelineID: "pipe_four"}, {Name: "five", PipelineID: "pipe_five"}}},
+	}
+	for _, input := range tests {
+		if err := normalizePipelineExperimentInput(&input); err == nil {
+			t.Fatalf("expected rejection for %#v", input)
+		}
+	}
+}
+
+func TestPipelineResultSensitiveUsesResolvedOutput(t *testing.T) {
+	pipeline := domain.Pipeline{
+		Definition: domain.PipelineDefinition{Result: domain.PipelineOutput{Stage: "result", Output: "dataset"}},
+		Resolution: domain.PipelineResolution{Stages: []domain.ResolvedPipelineStage{{ID: "result", Plan: domain.Plan{Steps: []domain.PlanStep{{Outputs: []domain.ArtifactOutput{{Name: "dataset"}}}}}}}},
+	}
+	if pipelineResultSensitive(pipeline) {
+		t.Fatal("public result was classified as sensitive")
+	}
+	pipeline.Resolution.Stages[0].Plan.Steps[0].Outputs[0].Sensitive = true
+	if !pipelineResultSensitive(pipeline) {
+		t.Fatal("sensitive result was not detected")
+	}
+}
+
 type preflightPlugin struct {
 	calls            int
 	receivedResolved bool

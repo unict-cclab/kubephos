@@ -41,6 +41,11 @@ func (w *Worker) runPipelineCoordinator(ctx context.Context) {
 }
 
 func (w *Worker) reconcilePipelineRun(ctx context.Context, owner string, run domain.PipelineRun) error {
+	defer func() {
+		if err := w.store.SyncExperimentPipelineRun(context.WithoutCancel(ctx), run.ID); err != nil {
+			slog.Error("sync experiment trial", "run", run.ID, "error", err)
+		}
+	}()
 	released := false
 	release := func() {
 		if !released {

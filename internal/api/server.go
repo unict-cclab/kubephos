@@ -73,6 +73,7 @@ func NewServer(store *storage.Store, registry *plugins.Registry, artifactStore *
 	router.HandleFunc("POST /api/v1/pipeline-runs/{id}/cancel", server.cancelPipelineRun)
 	router.HandleFunc("GET /api/v1/experiments", server.listExperiments)
 	router.HandleFunc("POST /api/v1/experiments", server.createCompletedExperiment)
+	router.HandleFunc("POST /api/v1/experiment-runs", server.createPipelineExperiment)
 	router.HandleFunc("GET /api/v1/operations", server.listOperations)
 	router.HandleFunc("POST /api/v1/operations", server.createOperation)
 	router.HandleFunc("GET /api/v1/operations/{id}", server.getOperation)
@@ -627,6 +628,19 @@ type createExperimentVariantInput struct {
 	TrialArtifactIDs []string        `json:"trialArtifactIds"`
 }
 
+type createPipelineExperimentInput struct {
+	WorkspaceID string                                 `json:"workspaceId"`
+	Name        string                                 `json:"name"`
+	Description string                                 `json:"description"`
+	Repetitions int                                    `json:"repetitions"`
+	Variants    []createPipelineExperimentVariantInput `json:"variants"`
+}
+
+type createPipelineExperimentVariantInput struct {
+	Name       string `json:"name"`
+	PipelineID string `json:"pipelineId"`
+}
+
 func (s *Server) listExperiments(response http.ResponseWriter, request *http.Request) {
 	limit := 50
 	if raw := request.URL.Query().Get("limit"); raw != "" {
@@ -718,6 +732,159 @@ func (s *Server) createCompletedExperiment(response http.ResponseWriter, request
 		return
 	}
 	writeJSON(response, http.StatusCreated, created)
+}
+
+func (s *Server) createPipelineExperiment(response http.ResponseWriter, request *http.Request) {
+	var input createPipelineExperimentInput
+	if err := decodeJSON(request, &input); err != nil {
+		writeError(response, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	if err := normalizePipelineExperimentInput(&input); err != nil {
+		writeError(response, http.StatusUnprocessableEntity, "invalid_experiment", err.Error())
+		return
+	}
+	if _, err := s.store.GetWorkspace(request.Context(), input.WorkspaceID); errors.Is(err, storage.ErrNotFound) {
+		writeError(response, http.StatusUnprocessableEntity, "invalid_workspace", "Select an existing workspace.")
+		return
+	} else if err != nil {
+		writeError(response, http.StatusInternalServerError, "database_error", "Could not validate workspace.")
+		return
+	}
+	pipelines := map[string]domain.Pipeline{}
+	resultType, resultVersion := "", ""
+	for _, requested := range input.Variants {
+		pipeline, err := s.store.GetPipeline(request.Context(), requested.PipelineID)
+		if errors.Is(err, storage.ErrNotFound) {
+			writeError(response, http.StatusUnprocessableEntity, "invalid_pipeline", "Every variant must select an existing pipeline.")
+			return
+		}
+		if err != nil {
+			writeError(response, http.StatusInternalServerError, "database_error", "Could not validate a pipeline.")
+			return
+		}
+		if pipeline.WorkspaceID != input.WorkspaceID || !pipeline.Validation.Valid {
+			writeError(response, http.StatusUnprocessableEntity, "invalid_pipeline", "Every pipeline must be validated and belong to the selected workspace.")
+			return
+		}
+		if pipelineResultSensitive(pipeline) {
+			writeError(response, http.StatusUnprocessableEntity, "sensitive_result", "Experiment results must be public artifacts that can be compared and exported.")
+			return
+		}
+		for _, stage := range pipeline.Resolution.Stages {
+			plugin, err := s.registry.Get(stage.PluginID)
+			if err != nil || plugin.Manifest().Version != stage.PluginVersion {
+				writeError(response, http.StatusConflict, "plugin_changed", "An installed plug-in no longer matches a validated pipeline. Create a new pipeline version.")
+				return
+			}
+		}
+		if resultType == "" {
+			resultType, resultVersion = pipeline.Resolution.Result.Type, pipeline.Resolution.Result.Version
+		} else if resultType != pipeline.Resolution.Result.Type || resultVersion != pipeline.Resolution.Result.Version {
+			writeError(response, http.StatusUnprocessableEntity, "incompatible_variants", "Every variant pipeline must produce the same result contract.")
+			return
+		}
+		pipelines[pipeline.ID] = pipeline
+	}
+	experiment := domain.Experiment{
+		ID: id.New("exp"), WorkspaceID: input.WorkspaceID, Name: input.Name, Description: input.Description,
+		Status: domain.OperationQueued, ResultType: resultType, ResultVersion: resultVersion,
+	}
+	runs := map[string]domain.PipelineRun{}
+	for variantPosition, requested := range input.Variants {
+		pipeline := pipelines[requested.PipelineID]
+		variant := domain.ExperimentVariant{
+			ID: id.New("var"), ExperimentID: experiment.ID, Position: variantPosition + 1, Name: requested.Name,
+			PipelineID: pipeline.ID, PipelineHash: pipeline.Hash, Configuration: json.RawMessage(`{}`),
+		}
+		for trialPosition := 1; trialPosition <= input.Repetitions; trialPosition++ {
+			trial := domain.ExperimentTrial{ID: id.New("trial"), VariantID: variant.ID, Position: trialPosition, Status: domain.OperationQueued}
+			run := domain.PipelineRun{
+				ID: id.New("run"), PipelineID: pipeline.ID, WorkspaceID: input.WorkspaceID,
+				Name:   fmt.Sprintf("%s · %s · Trial %d", input.Name, requested.Name, trialPosition),
+				Status: domain.OperationQueued, PipelineHash: pipeline.Hash,
+				ResultType: resultType, ResultVersion: resultVersion,
+			}
+			for stagePosition, stage := range pipeline.Definition.Stages {
+				run.Stages = append(run.Stages, domain.PipelineRunStage{
+					ID: run.ID + "_" + stage.ID, RunID: run.ID, Position: stagePosition + 1,
+					StageID: stage.ID, PluginID: stage.PluginID, Title: stage.Title, Status: domain.StepPending,
+				})
+			}
+			trial.PipelineRunID = run.ID
+			variant.Trials = append(variant.Trials, trial)
+			runs[trial.ID] = run
+		}
+		experiment.Variants = append(experiment.Variants, variant)
+	}
+	created, err := s.store.CreatePipelineExperiment(request.Context(), experiment, runs)
+	if errors.Is(err, storage.ErrConflict) || errors.Is(err, storage.ErrNotFound) {
+		writeError(response, http.StatusConflict, "experiment_conflict", "A selected pipeline changed during validation. Refresh and try again.")
+		return
+	}
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, "database_error", "Could not start the experiment.")
+		return
+	}
+	writeJSON(response, http.StatusAccepted, created)
+}
+
+func normalizePipelineExperimentInput(input *createPipelineExperimentInput) error {
+	input.WorkspaceID = strings.TrimSpace(input.WorkspaceID)
+	input.Name = strings.TrimSpace(input.Name)
+	input.Description = strings.TrimSpace(input.Description)
+	if input.WorkspaceID == "" {
+		return errors.New("workspace is required")
+	}
+	if input.Name == "" || len(input.Name) > 120 {
+		return errors.New("name must contain between 1 and 120 characters")
+	}
+	if len(input.Description) > 500 {
+		return errors.New("description cannot exceed 500 characters")
+	}
+	if input.Repetitions < 1 || input.Repetitions > 10 {
+		return errors.New("repetitions must be between 1 and 10")
+	}
+	if len(input.Variants) < 2 || len(input.Variants) > 8 || len(input.Variants)*input.Repetitions > 40 {
+		return errors.New("use between 2 and 8 variants and at most 40 total trials")
+	}
+	names, pipelineIDs := map[string]bool{}, map[string]bool{}
+	for index := range input.Variants {
+		variant := &input.Variants[index]
+		variant.Name = strings.TrimSpace(variant.Name)
+		variant.PipelineID = strings.TrimSpace(variant.PipelineID)
+		if variant.Name == "" || len(variant.Name) > 80 {
+			return fmt.Errorf("variant %d name must contain between 1 and 80 characters", index+1)
+		}
+		if variant.PipelineID == "" {
+			return fmt.Errorf("variant %q requires a pipeline", variant.Name)
+		}
+		nameKey := strings.ToLower(variant.Name)
+		if names[nameKey] {
+			return errors.New("variant names must be unique")
+		}
+		if pipelineIDs[variant.PipelineID] {
+			return errors.New("each variant must use a different validated pipeline")
+		}
+		names[nameKey], pipelineIDs[variant.PipelineID] = true, true
+	}
+	return nil
+}
+
+func pipelineResultSensitive(pipeline domain.Pipeline) bool {
+	for _, stage := range pipeline.Resolution.Stages {
+		if stage.ID != pipeline.Definition.Result.Stage {
+			continue
+		}
+		for _, step := range stage.Plan.Steps {
+			for _, output := range step.Outputs {
+				if output.Name == pipeline.Definition.Result.Output {
+					return output.Sensitive
+				}
+			}
+		}
+	}
+	return true
 }
 
 func normalizeAndValidateExperimentInput(input *createExperimentInput) error {
@@ -1442,6 +1609,8 @@ func auditTarget(request *http.Request) (string, string, string, bool) {
 			return "pipeline.create", "pipeline", "", true
 		case "experiments":
 			return "experiment.create", "experiment", "", true
+		case "experiment-runs":
+			return "experiment.run.create", "experiment", "", true
 		}
 	}
 	if len(parts) == 3 && parts[0] == "pipelines" && parts[2] == "runs" {

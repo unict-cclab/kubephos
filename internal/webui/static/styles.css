@@ -402,6 +402,24 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .pipeline-result strong { font-size: 11px; }
 .pipeline-result small { margin-top: 4px; color: var(--muted); font-size: 9px; }
 .pipeline-result select { width: min(330px, 50%); }
+.compare-modal { width: min(760px, calc(100vw - 28px)); max-height: calc(100vh - 30px); }
+.compare-pipelines { display: grid; max-height: min(330px, 38vh); overflow-y: auto; margin-top: 18px; border: 1px solid var(--line); border-radius: 12px; }
+.compare-pipelines > div { padding: 13px 15px; background: #f4f7f3; }
+.compare-pipelines > div strong, .compare-pipelines > div small { display: block; }
+.compare-pipelines > div strong { font-size: 11px; }
+.compare-pipelines > div small { margin-top: 4px; color: var(--muted); font-size: 9px; }
+.compare-pipelines > label { display: grid; grid-template-columns: 20px minmax(0, 1fr) minmax(170px, .7fr); align-items: center; gap: 11px; margin: 0; border-top: 1px solid var(--line); padding: 12px 15px; cursor: pointer; }
+.compare-pipelines > label.selected { background: #f0f6f1; }
+.compare-pipelines > label > input[type="checkbox"] { width: auto; }
+.compare-pipelines > label > span { min-width: 0; }
+.compare-pipelines > label > span strong, .compare-pipelines > label > span small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.compare-pipelines > label > span strong { font-size: 11px; }
+.compare-pipelines > label > span small { margin-top: 4px; color: var(--muted); font-size: 9px; }
+.compare-pipelines > label > input:last-child:not([type="checkbox"]) { padding: 8px 10px; font-size: 10px; }
+.experiment-fanout { display: flex; align-items: baseline; justify-content: center; gap: 7px; margin: 15px 0; border-radius: 10px; padding: 12px; background: var(--dark); color: #fff; }
+.experiment-fanout span { color: var(--lime); font-size: 18px; font-weight: 850; }
+.experiment-fanout small { color: #aebbb2; font-size: 9px; font-weight: 700; text-transform: uppercase; }
+.experiment-fanout strong { margin: 0 4px; color: #79867d; }
 
 .empty-state { display: grid; min-height: 180px; place-items: center; border: 1px dashed #cbd2cc; border-radius: 14px; padding: 25px; color: var(--muted); text-align: center; }
 .empty-state strong { display: block; margin-bottom: 6px; color: var(--ink); }
@@ -570,4 +588,7 @@ summary { color: var(--muted); font-size: 12px; font-weight: 750; cursor: pointe
   .pipeline-basics .wide, .pipeline-stage-fields > .schema-fields { grid-column: auto; }
   .pipeline-result { align-items: stretch; flex-direction: column; }
   .pipeline-result select { width: 100%; }
+  .compare-pipelines > label { grid-template-columns: 20px 1fr; }
+  .compare-pipelines > label > input:last-child:not([type="checkbox"]) { grid-column: 2; }
+  .experiment-fanout { flex-wrap: wrap; }
 }

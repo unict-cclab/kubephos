@@ -59,6 +59,91 @@ func (s *Store) CreatePipelineRun(ctx context.Context, run domain.PipelineRun) (
 	return run, nil
 }
 
+func (s *Store) CreatePipelineExperiment(ctx context.Context, experiment domain.Experiment, runs map[string]domain.PipelineRun) (domain.Experiment, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return domain.Experiment{}, err
+	}
+	defer tx.Rollback(ctx)
+	err = tx.QueryRow(ctx, `
+		INSERT INTO experiments (id, workspace_id, name, description, status, result_type, result_version)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
+		RETURNING created_at, updated_at
+	`, experiment.ID, experiment.WorkspaceID, experiment.Name, experiment.Description, domain.OperationQueued, experiment.ResultType, experiment.ResultVersion).Scan(&experiment.CreatedAt, &experiment.UpdatedAt)
+	if err != nil {
+		return domain.Experiment{}, err
+	}
+	experiment.Status = domain.OperationQueued
+	for variantIndex := range experiment.Variants {
+		variant := &experiment.Variants[variantIndex]
+		if len(variant.Configuration) == 0 {
+			variant.Configuration = json.RawMessage(`{}`)
+		}
+		var workspaceID, pipelineHash, resultType, resultVersion string
+		err := tx.QueryRow(ctx, `
+			SELECT workspace_id, pipeline_hash, resolution->'result'->>'type', resolution->'result'->>'version'
+			FROM pipelines
+			WHERE id = $1
+			FOR SHARE
+		`, variant.PipelineID).Scan(&workspaceID, &pipelineHash, &resultType, &resultVersion)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return domain.Experiment{}, ErrNotFound
+		}
+		if err != nil {
+			return domain.Experiment{}, err
+		}
+		if workspaceID != experiment.WorkspaceID || pipelineHash != variant.PipelineHash || resultType != experiment.ResultType || resultVersion != experiment.ResultVersion {
+			return domain.Experiment{}, ErrConflict
+		}
+		_, err = tx.Exec(ctx, `
+			INSERT INTO experiment_variants (id, experiment_id, position, name, pipeline_id, pipeline_hash, configuration)
+			VALUES ($1, $2, $3, $4, $5, $6, $7)
+		`, variant.ID, experiment.ID, variant.Position, variant.Name, variant.PipelineID, variant.PipelineHash, variant.Configuration)
+		if err != nil {
+			return domain.Experiment{}, err
+		}
+		for trialIndex := range variant.Trials {
+			trial := &variant.Trials[trialIndex]
+			run, ok := runs[trial.ID]
+			if !ok || run.PipelineID != variant.PipelineID || run.PipelineHash != variant.PipelineHash || run.WorkspaceID != experiment.WorkspaceID {
+				return domain.Experiment{}, ErrConflict
+			}
+			err = tx.QueryRow(ctx, `
+				INSERT INTO pipeline_runs (id, pipeline_id, workspace_id, name, status, pipeline_hash, result_type, result_version)
+				VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+				RETURNING created_at, queued_at
+			`, run.ID, run.PipelineID, run.WorkspaceID, run.Name, domain.OperationQueued, run.PipelineHash, run.ResultType, run.ResultVersion).Scan(&run.CreatedAt, &run.QueuedAt)
+			if err != nil {
+				return domain.Experiment{}, err
+			}
+			for stageIndex := range run.Stages {
+				stage := &run.Stages[stageIndex]
+				_, err = tx.Exec(ctx, `
+					INSERT INTO pipeline_run_stages (id, run_id, position, stage_id, plugin_id, title, status)
+					VALUES ($1, $2, $3, $4, $5, $6, $7)
+				`, stage.ID, run.ID, stage.Position, stage.StageID, stage.PluginID, stage.Title, domain.StepPending)
+				if err != nil {
+					return domain.Experiment{}, err
+				}
+			}
+			trial.PipelineRunID = run.ID
+			trial.Status = domain.OperationQueued
+			err = tx.QueryRow(ctx, `
+				INSERT INTO experiment_trials (id, variant_id, position, status, pipeline_run_id)
+				VALUES ($1, $2, $3, $4, $5)
+				RETURNING created_at
+			`, trial.ID, variant.ID, trial.Position, trial.Status, run.ID).Scan(&trial.CreatedAt)
+			if err != nil {
+				return domain.Experiment{}, err
+			}
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return domain.Experiment{}, err
+	}
+	return experiment, nil
+}
+
 func (s *Store) ListPipelineRuns(ctx context.Context, limit int) ([]domain.PipelineRun, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT id, pipeline_id, workspace_id, name, status, pipeline_hash, result_type, result_version,
@@ -319,4 +404,55 @@ func (s *Store) PipelineRunCount(ctx context.Context, pipelineID string) (int, e
 	var count int
 	err := s.pool.QueryRow(ctx, `SELECT count(*) FROM pipeline_runs WHERE pipeline_id = $1`, pipelineID).Scan(&count)
 	return count, err
+}
+
+func (s *Store) SyncExperimentPipelineRun(ctx context.Context, runID string) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	var experimentID string
+	err = tx.QueryRow(ctx, `
+		UPDATE experiment_trials t
+		SET status = r.status,
+		    operation_id = (SELECT operation_id FROM pipeline_run_stages WHERE run_id = r.id ORDER BY position DESC LIMIT 1),
+		    result_artifact_id = r.result_artifact_id,
+		    error = r.error,
+		    updated_at = now(),
+		    completed_at = r.completed_at
+		FROM pipeline_runs r, experiment_variants v
+		WHERE t.pipeline_run_id = r.id AND r.id = $1 AND v.id = t.variant_id
+		RETURNING v.experiment_id
+	`, runID).Scan(&experimentID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	_, err = tx.Exec(ctx, `
+		UPDATE experiments e
+		SET status = summary.status,
+		    updated_at = now()
+		FROM (
+			SELECT v.experiment_id,
+			       CASE
+			           WHEN bool_and(t.status = $2) THEN $2
+			           WHEN bool_and(t.status IN ($2, $3, $4)) AND bool_or(t.status = $3) THEN $3
+			           WHEN bool_and(t.status IN ($2, $3, $4)) THEN $4
+			           WHEN bool_or(t.status <> $5) THEN $6
+			           ELSE $5
+			       END AS status
+			FROM experiment_variants v
+			JOIN experiment_trials t ON t.variant_id = v.id
+			WHERE v.experiment_id = $1
+			GROUP BY v.experiment_id
+		) summary
+		WHERE e.id = summary.experiment_id
+	`, experimentID, domain.OperationSucceeded, domain.OperationFailed, domain.OperationCanceled, domain.OperationQueued, domain.OperationRunning)
+	if err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }

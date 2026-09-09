@@ -144,19 +144,23 @@ type ExperimentVariant struct {
 	ExperimentID  string            `json:"experimentId"`
 	Position      int               `json:"position"`
 	Name          string            `json:"name"`
+	PipelineID    string            `json:"pipelineId,omitempty"`
+	PipelineHash  string            `json:"pipelineHash,omitempty"`
 	Configuration json.RawMessage   `json:"configuration"`
 	Trials        []ExperimentTrial `json:"trials"`
 }
 
 type ExperimentTrial struct {
-	ID               string    `json:"id"`
-	VariantID        string    `json:"variantId"`
-	Position         int       `json:"position"`
-	Status           string    `json:"status"`
-	OperationID      string    `json:"operationId"`
-	ResultArtifactID string    `json:"resultArtifactId"`
-	CreatedAt        time.Time `json:"createdAt"`
-	CompletedAt      time.Time `json:"completedAt"`
+	ID               string     `json:"id"`
+	VariantID        string     `json:"variantId"`
+	Position         int        `json:"position"`
+	Status           string     `json:"status"`
+	OperationID      string     `json:"operationId"`
+	PipelineRunID    string     `json:"pipelineRunId,omitempty"`
+	ResultArtifactID string     `json:"resultArtifactId"`
+	Error            string     `json:"error,omitempty"`
+	CreatedAt        time.Time  `json:"createdAt"`
+	CompletedAt      *time.Time `json:"completedAt,omitempty"`
 }
 
 type Credential struct {

@@ -158,9 +158,11 @@ export interface ExperimentTrial {
   position: number
   status: string
   operationId: string
+  pipelineRunId?: string
   resultArtifactId: string
+  error?: string
   createdAt: string
-  completedAt: string
+  completedAt?: string
 }
 
 export interface ExperimentVariant {
@@ -168,6 +170,8 @@ export interface ExperimentVariant {
   experimentId: string
   position: number
   name: string
+  pipelineId?: string
+  pipelineHash?: string
   configuration: Record<string, unknown>
   trials: ExperimentTrial[]
 }

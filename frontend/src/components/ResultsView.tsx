@@ -74,7 +74,7 @@ export function ResultsView({artifacts, experiments, operations, workspaces, ses
   }
   const experiment = experiments.find(item => item.id === activeExperiment)
   const experimentLabels = new Map<string, string>()
-  for (const variant of experiment?.variants ?? []) for (const trial of variant.trials) experimentLabels.set(trial.resultArtifactId, `${variant.name} · Trial ${trial.position}`)
+  for (const variant of experiment?.variants ?? []) for (const trial of variant.trials) if (trial.resultArtifactId) experimentLabels.set(trial.resultArtifactId, `${variant.name} · Trial ${trial.position}`)
   const displayed = loaded.map(item => ({...item, label: experimentLabels.get(item.artifact.id) ?? datasetLabel(item.artifact, operations, workspaces)}))
   const metrics = [...new Set(displayed.flatMap(item => item.dataset.spec.series.map(series => series.metric)))].sort()
   const samples = displayed.reduce((total, item) => total + item.dataset.spec.summary.samples, 0)
@@ -88,7 +88,7 @@ export function ResultsView({artifacts, experiments, operations, workspaces, ses
   }
   return <>
     <div className="results-heading"><div><p className="eyebrow">REPEATABLE EVIDENCE</p><h2>Compare collected results</h2><p>Select up to four verified datasets. Use the same variant name for multiple trials, then save the immutable comparison.</p></div><div className="results-heading-actions"><button className="button primary" disabled={selected.length < 2} onClick={() => setSaving(true)}>Save experiment</button><div className="results-count"><strong>{available.length}</strong><span>datasets</span></div></div></div>
-    {compatibleExperiments.length > 0 && <div className="experiment-history"><div className="experiment-history-title"><strong>Saved experiments</strong><span>{compatibleExperiments.length} immutable comparisons</span></div><div className="experiment-cards">{compatibleExperiments.map(item => <button key={item.id} className={activeExperiment === item.id ? 'active' : ''} onClick={() => openExperiment(item)}><span className="status-dot succeeded" /><span><strong>{item.name}</strong><small>{item.variants.length} variants · {item.variants.reduce((total, variant) => total + variant.trials.length, 0)} trials · {formatDate(item.createdAt)}</small></span></button>)}</div></div>}
+    {compatibleExperiments.length > 0 && <div className="experiment-history"><div className="experiment-history-title"><strong>Experiment history</strong><span>{compatibleExperiments.length} repeatable comparisons</span></div><div className="experiment-cards">{compatibleExperiments.map(item => <button key={item.id} className={activeExperiment === item.id ? 'active' : ''} onClick={() => openExperiment(item)}><span className={`status-dot ${item.status}`} /><span><strong>{item.name}</strong><small>{item.status} · {item.variants.length} variants · {item.variants.reduce((total, variant) => total + variant.trials.length, 0)} trials · {formatDate(item.createdAt)}</small></span></button>)}</div></div>}
     {!available.length ? <EmptyResults /> : <div className="results-layout">
       <aside className="dataset-picker" aria-label="Available datasets">
         <div className="dataset-picker-title"><strong>Dataset history</strong><span>{selected.length}/4 selected</span></div>
