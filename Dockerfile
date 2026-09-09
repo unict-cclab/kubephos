@@ -23,6 +23,7 @@ RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/application-inspec
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/application-deployer-plugin ./cmd/application-deployer-plugin
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/load-session-plugin ./cmd/load-session-plugin
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/metrics-collector-plugin ./cmd/metrics-collector-plugin
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/target-binding-plugin ./cmd/target-binding-plugin
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/k3s-plugin ./cmd/k3s-plugin
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/nfs-plugin ./cmd/nfs-plugin
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/harbor-plugin ./cmd/harbor-plugin
@@ -50,6 +51,8 @@ COPY --from=build /out/load-session-plugin /opt/kubephos/plugins/load-session/lo
 COPY plugins/load-session/plugin.yaml /opt/kubephos/plugins/load-session/plugin.yaml
 COPY --from=build /out/metrics-collector-plugin /opt/kubephos/plugins/metrics-collector/metrics-collector-plugin
 COPY plugins/metrics-collector/plugin.yaml /opt/kubephos/plugins/metrics-collector/plugin.yaml
+COPY --from=build /out/target-binding-plugin /opt/kubephos/plugins/target-binding/target-binding-plugin
+COPY plugins/target-binding/plugin.yaml /opt/kubephos/plugins/target-binding/plugin.yaml
 COPY --from=build /out/k3s-plugin /opt/kubephos/plugins/k3s/k3s-plugin
 COPY plugins/k3s/plugin.yaml /opt/kubephos/plugins/k3s/plugin.yaml
 COPY --from=build /out/nfs-plugin /opt/kubephos/plugins/nfs/nfs-plugin

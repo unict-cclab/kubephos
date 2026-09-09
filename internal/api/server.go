@@ -618,7 +618,9 @@ func (s *Server) createOperation(response http.ResponseWriter, request *http.Req
 		writeError(response, http.StatusConflict, "resource_conflict", err.Error())
 		return
 	}
-	preflight := preflightPlan(request.Context(), plugin, plan)
+	preflight := preflightPlan(request.Context(), plugin, plan, func(ctx context.Context, step domain.PlanStep) (domain.PlanStep, error) {
+		return s.resolvePreflightArtifactInputs(ctx, input.WorkspaceID, step)
+	})
 	validation.Issues = append(validation.Issues, preflight...)
 	for _, issue := range preflight {
 		if issue.Level == "error" {
@@ -653,17 +655,31 @@ func (s *Server) createOperation(response http.ResponseWriter, request *http.Req
 	writeJSON(response, http.StatusCreated, operation)
 }
 
-func preflightPlan(ctx context.Context, plugin plugins.Plugin, plan domain.Plan) []domain.ValidationIssue {
+func preflightPlan(ctx context.Context, plugin plugins.Plugin, plan domain.Plan, hydrate func(context.Context, domain.PlanStep) (domain.PlanStep, error)) []domain.ValidationIssue {
 	issues := make([]domain.ValidationIssue, 0, len(plan.Steps))
 	priorMutation := false
 	for _, step := range plan.Steps {
 		path := "plan.steps." + step.ID
-		if len(step.ArtifactInputs) > 0 || priorMutation {
+		requiresFutureOutput := false
+		for _, input := range step.ArtifactInputs {
+			requiresFutureOutput = requiresFutureOutput || input.ArtifactID == ""
+		}
+		if priorMutation || requiresFutureOutput || len(step.ArtifactInputs) > 0 && hydrate == nil {
 			issues = append(issues, domain.ValidationIssue{Level: "info", Path: path, Message: "Dynamic preflight will run after prior outputs and mutations are verified."})
 			priorMutation = priorMutation || step.Mutating || len(step.Effects) > 0
 			continue
 		}
-		health, err := plugin.Precheck(ctx, step, func(string, string) error { return nil })
+		runtimeStep := step
+		if len(step.ArtifactInputs) > 0 {
+			var err error
+			runtimeStep, err = hydrate(ctx, step)
+			if err != nil {
+				issues = append(issues, domain.ValidationIssue{Level: "error", Path: path, Message: "Artifact preflight failed: " + err.Error()})
+				priorMutation = priorMutation || step.Mutating || len(step.Effects) > 0
+				continue
+			}
+		}
+		health, err := plugin.Precheck(ctx, runtimeStep, func(string, string) error { return nil })
 		if err != nil {
 			issues = append(issues, domain.ValidationIssue{Level: "error", Path: path, Message: "Preflight failed: " + err.Error()})
 			continue
@@ -676,6 +692,35 @@ func preflightPlan(ctx context.Context, plugin plugins.Plugin, plan domain.Plan)
 		priorMutation = step.Mutating || len(step.Effects) > 0
 	}
 	return issues
+}
+
+func (s *Server) resolvePreflightArtifactInputs(ctx context.Context, workspaceID string, step domain.PlanStep) (domain.PlanStep, error) {
+	step.ResolvedInputs = make(map[string]domain.ResolvedArtifact, len(step.ArtifactInputs))
+	for _, input := range step.ArtifactInputs {
+		if input.ArtifactID == "" {
+			return domain.PlanStep{}, fmt.Errorf("input %q requires a future output", input.Name)
+		}
+		artifact, err := s.store.GetArtifact(ctx, input.ArtifactID)
+		if err != nil {
+			return domain.PlanStep{}, fmt.Errorf("resolve input %q: %w", input.Name, err)
+		}
+		source, err := s.store.GetOperation(ctx, artifact.OperationID)
+		if err != nil || source.WorkspaceID != workspaceID || source.Status != domain.OperationSucceeded {
+			return domain.PlanStep{}, fmt.Errorf("input %q does not belong to a successful operation in this workspace", input.Name)
+		}
+		if artifact.Type != input.Type || artifact.Version != input.Version {
+			return domain.PlanStep{}, fmt.Errorf("input %q expected %s/%s, received %s/%s", input.Name, input.Type, input.Version, artifact.Type, artifact.Version)
+		}
+		value, err := s.readArtifactPayload(ctx, artifact)
+		if err != nil {
+			return domain.PlanStep{}, fmt.Errorf("verify input %q: %w", input.Name, err)
+		}
+		step.ResolvedInputs[input.Name] = domain.ResolvedArtifact{
+			ID: artifact.ID, Type: artifact.Type, Version: artifact.Version, MediaType: artifact.MediaType,
+			Digest: artifact.Digest, SizeBytes: artifact.SizeBytes, Sensitive: artifact.Sensitive, Value: value,
+		}
+	}
+	return step, nil
 }
 
 func (s *Server) createCleanupOperation(response http.ResponseWriter, request *http.Request) {
@@ -724,7 +769,9 @@ func (s *Server) createCleanupOperation(response http.ResponseWriter, request *h
 		return
 	}
 	validation := domain.ValidationReport{Valid: true, CheckedAt: time.Now().UTC(), Issues: []domain.ValidationIssue{{Level: "info", Message: "Cleanup targets only resources owned by the source operation."}}}
-	preflight := preflightPlan(request.Context(), plugin, plan)
+	preflight := preflightPlan(request.Context(), plugin, plan, func(ctx context.Context, step domain.PlanStep) (domain.PlanStep, error) {
+		return s.resolvePreflightArtifactInputs(ctx, source.WorkspaceID, step)
+	})
 	validation.Issues = append(validation.Issues, preflight...)
 	for _, issue := range preflight {
 		if issue.Level == "error" {
@@ -817,27 +864,32 @@ func (s *Server) validateExternalArtifactInputs(ctx context.Context, workspaceID
 }
 
 func (s *Server) verifyArtifactPayload(ctx context.Context, artifact domain.Artifact) error {
+	_, err := s.readArtifactPayload(ctx, artifact)
+	return err
+}
+
+func (s *Server) readArtifactPayload(ctx context.Context, artifact domain.Artifact) ([]byte, error) {
 	stored, err := s.artifacts.ReadVerified(ctx, artifact.StorageKey, artifact.StorageDigest, artifact.StoredSizeBytes)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	value := stored
 	if artifact.Sensitive {
 		if s.vault == nil {
-			return errors.New("artifact vault is unavailable")
+			return nil, errors.New("artifact vault is unavailable")
 		}
 		value, err = s.vault.DecryptBound(artifact.EncryptionNonce, stored, []byte(artifact.ID))
 		if err != nil {
-			return err
+			return nil, err
 		}
 	}
 	if err := artifacts.Verify(value, artifact.Digest, artifact.SizeBytes); err != nil {
-		return err
+		return nil, err
 	}
 	if artifact.MediaType == "application/json" && !json.Valid(value) {
-		return errors.New("artifact contains invalid JSON")
+		return nil, errors.New("artifact contains invalid JSON")
 	}
-	return nil
+	return value, nil
 }
 
 func (s *Server) queueOperation(response http.ResponseWriter, request *http.Request) {
@@ -954,12 +1006,8 @@ func (s *Server) downloadArtifact(response http.ResponseWriter, request *http.Re
 		writeError(response, http.StatusForbidden, "sensitive_artifact", "Sensitive artifacts cannot be downloaded from the browser.")
 		return
 	}
-	value, err := s.artifacts.ReadVerified(request.Context(), artifact.StorageKey, artifact.StorageDigest, artifact.StoredSizeBytes)
+	value, err := s.readArtifactPayload(request.Context(), artifact)
 	if err != nil {
-		writeError(response, http.StatusBadGateway, "storage_error", "Artifact integrity verification failed.")
-		return
-	}
-	if err := artifacts.Verify(value, artifact.Digest, artifact.SizeBytes); err != nil {
 		writeError(response, http.StatusBadGateway, "storage_error", "Artifact integrity verification failed.")
 		return
 	}

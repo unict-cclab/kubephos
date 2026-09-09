@@ -1,0 +1,73 @@
+apiVersion: plugins.kubephos.io/v1alpha1
+kind: Plugin
+metadata:
+  id: io.kubephos.targets.bind
+  name: Workload target binding
+  version: 0.1.0
+  description: Selects compatible application workloads and produces an immutable target binding for component plugins.
+spec:
+  protocol: v1alpha1
+  commands:
+    - describe
+    - validate
+    - plan
+    - precheck
+    - execute
+    - verify
+    - status
+    - cancel
+    - cleanup
+  configurationSchema:
+    type: object
+    additionalProperties: false
+    required:
+      - workloadTargetsRef
+      - requiredTrait
+    properties:
+      workloadTargetsRef:
+        type: string
+        title: Application workloads
+        format: kubephos-artifact-ref
+        x-kubephos-artifact-type: WorkloadTargets
+        x-kubephos-artifact-version: v1alpha1
+      requiredTrait:
+        type: string
+        title: Required capability
+        description: Selects only workloads that declare this trait. Use * to accept every workload.
+        minLength: 1
+        maxLength: 63
+        default: schedulable
+      includeComponentIds:
+        type: array
+        title: Only these components
+        description: Optional JSON array of component IDs. An empty array selects every compatible component.
+        maxItems: 200
+        default: []
+        items:
+          type: string
+          minLength: 1
+          maxLength: 63
+      excludeComponentIds:
+        type: array
+        title: Exclude components
+        description: Optional JSON array of component IDs removed from the compatible set.
+        maxItems: 200
+        default: []
+        items:
+          type: string
+          minLength: 1
+          maxLength: 63
+  runtime:
+    executable: target-binding-plugin
+    timeout: 2m
+  artifacts:
+    inputs:
+      - type: WorkloadTargets
+        version: v1alpha1
+    outputs:
+      - type: TargetBinding
+        version: v1alpha1
+  capabilities:
+    - targets.bind
+    - targets.validate
+  permissions: []

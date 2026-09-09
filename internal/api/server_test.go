@@ -69,8 +69,9 @@ func TestNormalizeAndValidateExperimentInputRejectsInvalidComparisons(t *testing
 }
 
 type preflightPlugin struct {
-	calls  int
-	health domain.HealthReport
+	calls            int
+	receivedResolved bool
+	health           domain.HealthReport
 }
 
 func (p *preflightPlugin) Manifest() plugins.Manifest { return plugins.Manifest{ID: "test"} }
@@ -80,8 +81,9 @@ func (p *preflightPlugin) Validate(context.Context, json.RawMessage) domain.Vali
 func (p *preflightPlugin) Plan(context.Context, json.RawMessage) (domain.Plan, error) {
 	return domain.Plan{}, nil
 }
-func (p *preflightPlugin) Precheck(context.Context, domain.PlanStep, plugins.Logger) (domain.HealthReport, error) {
+func (p *preflightPlugin) Precheck(_ context.Context, step domain.PlanStep, _ plugins.Logger) (domain.HealthReport, error) {
 	p.calls++
+	p.receivedResolved = len(step.ResolvedInputs) > 0
 	return p.health, nil
 }
 func (p *preflightPlugin) Execute(context.Context, domain.PlanStep, plugins.Logger) (json.RawMessage, error) {
@@ -100,11 +102,28 @@ func TestPreflightPlanRunsReachableChecksAndDefersArtifactConsumers(t *testing.T
 		{ID: "first"},
 		{ID: "second", ArtifactInputs: []domain.ArtifactInput{{Name: "input"}}},
 	}}
-	issues := preflightPlan(context.Background(), plugin, plan)
+	issues := preflightPlan(context.Background(), plugin, plan, nil)
 	if plugin.calls != 1 {
 		t.Fatalf("expected one reachable preflight, got %d", plugin.calls)
 	}
 	if len(issues) != 2 || issues[0].Level != "info" || issues[1].Level != "info" {
+		t.Fatalf("unexpected issues %#v", issues)
+	}
+}
+
+func TestPreflightPlanHydratesExistingArtifactInputs(t *testing.T) {
+	plugin := &preflightPlugin{health: domain.HealthReport{Status: domain.HealthHealthy, Summary: "ready"}}
+	plan := domain.Plan{Steps: []domain.PlanStep{{ID: "consumer", ArtifactInputs: []domain.ArtifactInput{{Name: "input", ArtifactID: "art_one"}}}}}
+	hydrated := false
+	issues := preflightPlan(context.Background(), plugin, plan, func(_ context.Context, step domain.PlanStep) (domain.PlanStep, error) {
+		hydrated = true
+		step.ResolvedInputs = map[string]domain.ResolvedArtifact{"input": {ID: "art_one"}}
+		return step, nil
+	})
+	if !hydrated || plugin.calls != 1 || !plugin.receivedResolved {
+		t.Fatalf("expected hydrated preflight, got hydrated=%t calls=%d resolved=%t", hydrated, plugin.calls, plugin.receivedResolved)
+	}
+	if len(issues) != 1 || issues[0].Level != "info" || issues[0].Message != "Non-mutating preflight passed: ready" {
 		t.Fatalf("unexpected issues %#v", issues)
 	}
 }
@@ -115,7 +134,7 @@ func TestPreflightPlanDefersStepsAfterInfrastructureEffects(t *testing.T) {
 		{ID: "create", Effects: []domain.ResourceEffect{{Action: "create", ExternalID: "machine/1", Kind: "machine", Name: "one"}}},
 		{ID: "verify-dependent-state"},
 	}}
-	issues := preflightPlan(context.Background(), plugin, plan)
+	issues := preflightPlan(context.Background(), plugin, plan, nil)
 	if plugin.calls != 1 {
 		t.Fatalf("expected only the first preflight to run, got %d", plugin.calls)
 	}
@@ -130,7 +149,7 @@ func TestPreflightPlanDefersStepsAfterGenericMutation(t *testing.T) {
 		{ID: "install", Mutating: true},
 		{ID: "verify-dependent-state"},
 	}}
-	issues := preflightPlan(context.Background(), plugin, plan)
+	issues := preflightPlan(context.Background(), plugin, plan, nil)
 	if plugin.calls != 1 {
 		t.Fatalf("expected only the mutating step preflight to run, got %d", plugin.calls)
 	}
@@ -141,7 +160,7 @@ func TestPreflightPlanDefersStepsAfterGenericMutation(t *testing.T) {
 
 func TestPreflightPlanRejectsUnhealthyStep(t *testing.T) {
 	plugin := &preflightPlugin{health: domain.HealthReport{Status: domain.HealthUnhealthy, Summary: "unreachable"}}
-	issues := preflightPlan(context.Background(), plugin, domain.Plan{Steps: []domain.PlanStep{{ID: "first"}}})
+	issues := preflightPlan(context.Background(), plugin, domain.Plan{Steps: []domain.PlanStep{{ID: "first"}}}, nil)
 	if len(issues) != 1 || issues[0].Level != "error" {
 		t.Fatalf("unexpected issues %#v", issues)
 	}
