@@ -2,15 +2,17 @@ import {useCallback, useEffect, useMemo, useState} from 'react'
 import {ApiError, request} from './api'
 import {ApplicationDialog, AuthDialog, ConnectionDialog, CredentialDialog, OperationDialog, WorkspaceDialog} from './components/Forms'
 import {OperationDrawer} from './components/OperationDrawer'
+import {PipelineDialog} from './components/PipelineDialog'
 import {ToastRegion, type ToastMessage} from './components/ToastRegion'
 import {Views} from './components/Views'
 import {WorkspaceFlowDialog} from './components/WorkspaceFlowDialog'
 import type {PlatformData, Session, View, Workspace} from './types'
 
-const emptyData: PlatformData = {system: null, workspaces: [], experiments: [], operations: [], artifacts: [], plugins: [], applications: [], credentials: [], connections: [], resources: [], audit: []}
+const emptyData: PlatformData = {system: null, workspaces: [], pipelines: [], experiments: [], operations: [], artifacts: [], plugins: [], applications: [], credentials: [], connections: [], resources: [], audit: []}
 const viewMetadata: Record<View, [string, string]> = {
   overview: ['CONTROL PLANE', 'Overview'],
   workspaces: ['ENVIRONMENTS', 'Workspaces'],
+  pipelines: ['REUSABLE FLOWS', 'Pipelines'],
   operations: ['BACKGROUND WORK', 'Operations'],
   results: ['OBSERVATIONS', 'Results'],
   catalog: ['APPLICATIONS', 'Catalog'],
@@ -20,6 +22,7 @@ const viewMetadata: Record<View, [string, string]> = {
 const navigation: Array<[View, string, string]> = [
   ['overview', '⌂', 'Overview'],
   ['workspaces', '◇', 'Workspaces'],
+  ['pipelines', '⇢', 'Pipelines'],
   ['operations', '↻', 'Operations'],
   ['results', '⌁', 'Results'],
   ['catalog', '◫', 'Catalog'],
@@ -27,7 +30,7 @@ const navigation: Array<[View, string, string]> = [
   ['infrastructure', '▦', 'Infrastructure']
 ]
 
-type Modal = 'workspace' | 'workspaceFlow' | 'operation' | 'credential' | 'connection' | 'application' | null
+type Modal = 'workspace' | 'workspaceFlow' | 'operation' | 'pipeline' | 'credential' | 'connection' | 'application' | null
 
 export default function App() {
   const [session, setSession] = useState<Session | null>(null)
@@ -51,9 +54,10 @@ export default function App() {
     if (!session?.authenticated) return
     setRefreshing(true)
     try {
-      const [system, workspaces, experiments, operations, artifacts, plugins, applications, credentials, connections, resources, audit] = await Promise.all([
+      const [system, workspaces, pipelines, experiments, operations, artifacts, plugins, applications, credentials, connections, resources, audit] = await Promise.all([
         request<PlatformData['system']>('/system'),
         request<{items: PlatformData['workspaces']}>('/workspaces'),
+        request<{items: PlatformData['pipelines']}>('/pipelines'),
         request<{items: PlatformData['experiments']}>('/experiments'),
         request<{items: PlatformData['operations']}>('/operations'),
         request<{items: PlatformData['artifacts']}>('/artifacts?limit=500'),
@@ -64,7 +68,7 @@ export default function App() {
         request<{items: PlatformData['resources']}>('/infrastructure/resources'),
         request<{items: PlatformData['audit']}>('/audit?limit=20')
       ])
-      setData({system, workspaces: workspaces.items, experiments: experiments.items, operations: operations.items, artifacts: artifacts.items, plugins: plugins.items, applications: applications.items, credentials: credentials.items, connections: connections.items, resources: resources.items, audit: audit.items})
+      setData({system, workspaces: workspaces.items, pipelines: pipelines.items, experiments: experiments.items, operations: operations.items, artifacts: artifacts.items, plugins: plugins.items, applications: applications.items, credentials: credentials.items, connections: connections.items, resources: resources.items, audit: audit.items})
       setConnected(true)
       if (!silent) notify('Everything is up to date.')
     } catch (cause) {
@@ -154,6 +158,7 @@ export default function App() {
           isAdmin={session.user?.role === 'admin'}
           navigate={navigate}
           createWorkspace={() => setModal('workspace')}
+          createPipeline={() => setModal('pipeline')}
           createOperation={openOperationForm}
           openWorkspace={openWorkspace}
           openOperation={setOperationID}
@@ -164,6 +169,7 @@ export default function App() {
       </main>
     </div>
     <WorkspaceDialog {...common} open={modal === 'workspace'} close={() => setModal(null)} />
+    <PipelineDialog open={modal === 'pipeline'} close={() => setModal(null)} session={session} workspaces={data.workspaces} plugins={data.plugins} applications={data.applications} artifacts={data.artifacts} connections={data.connections} credentials={data.credentials} changed={() => afterMutation('Pipeline validated and saved.')} />
     <WorkspaceFlowDialog open={modal === 'workspaceFlow'} close={() => setModal(null)} workspace={workspace} plugins={data.plugins} artifacts={data.artifacts} operations={data.operations} configure={configureWorkspaceCapability} />
     <OperationDialog key={`${workspace?.id ?? ''}-${operationPluginID ?? 'advanced'}`} {...common} initialPluginID={operationPluginID} open={modal === 'operation'} close={() => setModal(null)} workspace={workspace} plugins={data.plugins} onCreated={async id => {await load(true); setOperationID(id)}} />
     <CredentialDialog {...common} open={modal === 'credential'} close={() => setModal(null)} plugins={data.plugins} />

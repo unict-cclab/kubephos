@@ -1,11 +1,12 @@
 import {formatDate, shortID} from '../lib'
-import type {Application, Artifact, AuditEvent, Connection, Credential, Experiment, InfrastructureResource, Operation, Plugin, Session, SystemStatus, View, Workspace} from '../types'
+import type {Application, Artifact, AuditEvent, Connection, Credential, Experiment, InfrastructureResource, Operation, Pipeline, Plugin, Session, SystemStatus, View, Workspace} from '../types'
 import {ResultsView} from './ResultsView'
 
 interface ViewProps {
   view: View
   system: SystemStatus | null
   workspaces: Workspace[]
+  pipelines: Pipeline[]
   operations: Operation[]
   artifacts: Artifact[]
   experiments: Experiment[]
@@ -20,6 +21,7 @@ interface ViewProps {
   isAdmin: boolean
   navigate: (view: View) => void
   createWorkspace: () => void
+  createPipeline: () => void
   createOperation: (workspace: Workspace) => void
   openWorkspace: (workspace: Workspace) => void
   openOperation: (id: string) => void
@@ -41,6 +43,11 @@ export function Views(props: ViewProps) {
       <Heading eyebrow="BACKGROUND WORK" title="Operation history" copy="Validated plans, live progress and diagnostic evidence." />
       <OperationList operations={props.operations} workspaces={props.workspaces} open={props.openOperation} />
     </section>
+    <section className={`view ${props.view === 'pipelines' ? 'active' : ''}`}>
+      <Heading eyebrow="REUSABLE FLOWS" title="Validated pipelines" action={<button className="button primary" onClick={props.createPipeline} disabled={!props.workspaces.length}>Create flow</button>} />
+      <p className="section-copy pipeline-copy">Choose capabilities in order. KubePhos connects compatible outputs and validates the whole flow before anything runs.</p>
+      <PipelineGrid pipelines={props.pipelines} workspaces={props.workspaces} plugins={props.plugins} create={props.createPipeline} />
+    </section>
     <section className={`view ${props.view === 'results' ? 'active' : ''}`}>
       <ResultsView artifacts={props.artifacts} experiments={props.experiments} operations={props.operations} workspaces={props.workspaces} session={props.session} changed={props.changed} />
     </section>
@@ -57,6 +64,16 @@ export function Views(props: ViewProps) {
       <Infrastructure {...props} />
     </section>
   </>
+}
+
+function PipelineGrid({pipelines, workspaces, plugins, create}: {pipelines: Pipeline[]; workspaces: Workspace[]; plugins: Plugin[]; create: () => void}) {
+  if (!pipelines.length) return <div className="pipeline-empty"><span>⇢</span><h3>No reusable flow yet</h3><p>Combine installed capabilities once, validate them together and reuse the result for multiple variants and trials.</p><button className="button primary" onClick={create} disabled={!workspaces.length}>Create your first flow</button></div>
+  return <div className="pipeline-grid">{pipelines.map(pipeline => <article className="pipeline-card" key={pipeline.id}>
+    <div className="pipeline-card-head"><span className="status-dot succeeded" /><div><h3>{pipeline.name}</h3><p>{workspaces.find(item => item.id === pipeline.workspaceId)?.name ?? 'Workspace'} · {formatDate(pipeline.createdAt)}</p></div><span className="pipeline-result-badge">{pipeline.resolution.result.type}</span></div>
+    <p>{pipeline.description || 'A validated, reusable execution flow.'}</p>
+    <div className="pipeline-track">{pipeline.resolution.stages.map((stage, index) => <div key={stage.id}><span>{index + 1}</span><strong>{pipeline.definition.stages[index]?.title ?? plugins.find(item => item.id === stage.pluginId)?.name ?? stage.pluginId}</strong><small>{stage.pluginVersion}</small></div>)}</div>
+    <div className="pipeline-card-foot"><span>✓ {pipeline.resolution.stages.length} stages validated</span><code>{pipeline.hash.slice(0, 12)}</code></div>
+  </article>)}</div>
 }
 
 function Overview(props: ViewProps) {

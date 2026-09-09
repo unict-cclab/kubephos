@@ -69,3 +69,10 @@ databaseChangeLog:
         - sqlFile:
             path: changes/010-experiment-history.sql
             relativeToChangelogFile: true
+  - changeSet:
+      id: 011-pipelines
+      author: kubephos
+      changes:
+        - sqlFile:
+            path: changes/011-pipelines.sql
+            relativeToChangelogFile: true

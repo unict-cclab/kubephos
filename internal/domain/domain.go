@@ -38,6 +38,59 @@ type Workspace struct {
 	UpdatedAt   time.Time `json:"updatedAt"`
 }
 
+type Pipeline struct {
+	ID          string             `json:"id"`
+	WorkspaceID string             `json:"workspaceId"`
+	Name        string             `json:"name"`
+	Description string             `json:"description"`
+	Definition  PipelineDefinition `json:"definition"`
+	Resolution  PipelineResolution `json:"resolution"`
+	Validation  ValidationReport   `json:"validation"`
+	Hash        string             `json:"hash"`
+	CreatedAt   time.Time          `json:"createdAt"`
+	UpdatedAt   time.Time          `json:"updatedAt"`
+}
+
+type PipelineDefinition struct {
+	Stages []PipelineStage `json:"stages"`
+	Result PipelineOutput  `json:"result"`
+}
+
+type PipelineStage struct {
+	ID       string            `json:"id"`
+	PluginID string            `json:"pluginId"`
+	Title    string            `json:"title"`
+	Spec     json.RawMessage   `json:"spec"`
+	Bindings []PipelineBinding `json:"bindings,omitempty"`
+}
+
+type PipelineBinding struct {
+	Path       string `json:"path"`
+	FromStage  string `json:"fromStage"`
+	FromOutput string `json:"fromOutput"`
+}
+
+type PipelineOutput struct {
+	Stage   string `json:"stage"`
+	Output  string `json:"output,omitempty"`
+	Type    string `json:"type,omitempty"`
+	Version string `json:"version,omitempty"`
+}
+
+type PipelineResolution struct {
+	Stages []ResolvedPipelineStage `json:"stages"`
+	Result ArtifactContract        `json:"result"`
+}
+
+type ResolvedPipelineStage struct {
+	ID            string            `json:"id"`
+	PluginID      string            `json:"pluginId"`
+	PluginVersion string            `json:"pluginVersion"`
+	Spec          json.RawMessage   `json:"spec"`
+	Bindings      []PipelineBinding `json:"bindings,omitempty"`
+	Plan          Plan              `json:"plan"`
+}
+
 type Experiment struct {
 	ID            string              `json:"id"`
 	WorkspaceID   string              `json:"workspaceId"`

@@ -1,5 +1,5 @@
 export type Role = 'admin' | 'operator' | 'viewer'
-export type View = 'overview' | 'workspaces' | 'operations' | 'results' | 'catalog' | 'plugins' | 'infrastructure'
+export type View = 'overview' | 'workspaces' | 'pipelines' | 'operations' | 'results' | 'catalog' | 'plugins' | 'infrastructure'
 
 export interface User {
   id: string
@@ -185,6 +185,39 @@ export interface Experiment {
   updatedAt: string
 }
 
+export interface PipelineBinding {
+  path: string
+  fromStage: string
+  fromOutput?: string
+}
+
+export interface PipelineStage {
+  id: string
+  pluginId: string
+  title: string
+  spec: Record<string, unknown>
+  bindings?: PipelineBinding[]
+}
+
+export interface Pipeline {
+  id: string
+  workspaceId: string
+  name: string
+  description: string
+  definition: {
+    stages: PipelineStage[]
+    result: {stage: string; output?: string; type?: string; version?: string}
+  }
+  resolution: {
+    stages: Array<{id: string; pluginId: string; pluginVersion: string}>
+    result: {type: string; version: string}
+  }
+  validation: {valid: boolean; issues: ValidationIssue[]}
+  hash: string
+  createdAt: string
+  updatedAt: string
+}
+
 export interface Operation {
   id: string
   workspaceId: string
@@ -273,6 +306,7 @@ export interface PlatformData {
   system: SystemStatus | null
   workspaces: Workspace[]
   experiments: Experiment[]
+  pipelines: Pipeline[]
   operations: Operation[]
   artifacts: Artifact[]
   plugins: Plugin[]
