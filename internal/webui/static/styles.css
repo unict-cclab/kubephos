@@ -215,6 +215,14 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .status.succeeded, .status.ready, .status.available { background: #e8f5ee; color: var(--green); }
 .status.failed, .status.canceled { background: #fae9e8; color: var(--red); }
 .status.queued, .status.prechecking, .status.running, .status.verifying { background: #e9f0f8; color: var(--blue); }
+.status-dot { width: 8px; height: 8px; flex: 0 0 auto; border-radius: 50%; background: #aeb8b1; }
+.status-dot.succeeded, .status-dot.ready { background: var(--green); }
+.status-dot.failed, .status-dot.canceled { background: var(--red); }
+.status-dot.queued, .status-dot.prechecking, .status-dot.running, .status-dot.verifying { background: var(--blue); box-shadow: 0 0 0 3px rgba(49,105,168,.12); }
+.status-pill { border-radius: 999px; padding: 5px 8px; background: #eef1ee; color: var(--muted); font-size: 8px; font-weight: 850; text-transform: uppercase; }
+.status-pill.succeeded { background: #e8f5ee; color: var(--green); }
+.status-pill.failed, .status-pill.canceled { background: #fae9e8; color: var(--red); }
+.status-pill.queued, .status-pill.running, .status-pill.prechecking, .status-pill.verifying { background: #e9f0f8; color: var(--blue); }
 
 .workspace-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 15px; }
 .catalog-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 15px; margin-top: 20px; }
@@ -349,6 +357,19 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .pipeline-card-foot { display: flex; justify-content: space-between; gap: 15px; margin-top: 15px; color: var(--muted); font-size: 10px; }
 .pipeline-card-foot span { color: var(--green); font-weight: 750; }
 .pipeline-card-foot code { font-size: 9px; }
+.pipeline-run { margin-top: 15px; border: 1px solid #dbe3dc; border-radius: 11px; padding: 12px; background: #f7f9f6; }
+.pipeline-run-head { display: flex; align-items: center; gap: 10px; }
+.pipeline-run-head > div { display: flex; min-width: 0; flex: 1; align-items: center; gap: 8px; }
+.pipeline-run-head strong { overflow: hidden; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.pipeline-run-head small { color: var(--muted); font-size: 9px; }
+.pipeline-run-stages { display: flex; gap: 6px; overflow-x: auto; margin-top: 10px; }
+.pipeline-run-stages button { display: flex; min-width: 165px; flex: 1; align-items: center; gap: 8px; border: 1px solid var(--line); border-radius: 8px; padding: 8px 9px; background: #fff; text-align: left; cursor: pointer; }
+.pipeline-run-stages button:disabled { cursor: default; opacity: .68; }
+.pipeline-run-stages button > span:last-child { min-width: 0; }
+.pipeline-run-stages strong, .pipeline-run-stages small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pipeline-run-stages strong { font-size: 9px; }
+.pipeline-run-stages small { margin-top: 3px; color: var(--muted); font-size: 8px; }
+.pipeline-run-error { margin: 9px 0 0; color: var(--red); font-size: 10px; }
 .pipeline-empty { display: grid; min-height: 310px; place-content: center; justify-items: center; border: 1px dashed #cbd2cc; border-radius: 16px; padding: 30px; text-align: center; }
 .pipeline-empty > span { display: grid; width: 50px; height: 50px; place-items: center; border-radius: 15px; background: #e8f1ea; color: var(--green); font-size: 23px; }
 .pipeline-empty h3 { margin: 17px 0 6px; }

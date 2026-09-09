@@ -28,6 +28,7 @@ func (p workflowPlugin) Plan(_ context.Context, spec json.RawMessage) (domain.Pl
 	_ = json.Unmarshal(spec, &values)
 	plan := p.plan
 	for stepIndex := range plan.Steps {
+		plan.Steps[stepIndex].Input = append(json.RawMessage(nil), spec...)
 		for inputIndex := range plan.Steps[stepIndex].ArtifactInputs {
 			name := plan.Steps[stepIndex].ArtifactInputs[inputIndex].Name
 			plan.Steps[stepIndex].ArtifactInputs[inputIndex].ArtifactID = values[name]
@@ -90,6 +91,21 @@ func TestValidateResolvesTypedPipeline(t *testing.T) {
 	second, err := Validate(context.Background(), registry, definition)
 	if err != nil || second.Hash != result.Hash {
 		t.Fatalf("expected deterministic hash, got %q and %q", result.Hash, second.Hash)
+	}
+	pipeline := domain.Pipeline{Definition: result.Definition, Resolution: result.Resolution}
+	runtimeStage, err := ResolveStage(pipeline, 1, map[string]map[string]string{"cluster": {"cluster": "art_real"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtimeStage.Plan.Steps[0].ArtifactInputs[0].ArtifactID != "art_real" {
+		t.Fatalf("binding was not resolved: %#v", runtimeStage.Plan)
+	}
+	var planInput map[string]string
+	if err := json.Unmarshal(runtimeStage.Plan.Steps[0].Input, &planInput); err != nil || planInput["cluster"] != "art_real" {
+		t.Fatalf("plan input was not resolved: %s", runtimeStage.Plan.Steps[0].Input)
+	}
+	if err := json.Unmarshal(runtimeStage.Spec, &resolved); err != nil || resolved["cluster"] != "art_real" {
+		t.Fatalf("runtime spec was not resolved: %s", runtimeStage.Spec)
 	}
 }
 

@@ -67,6 +67,10 @@ func NewServer(store *storage.Store, registry *plugins.Registry, artifactStore *
 	router.HandleFunc("GET /api/v1/pipelines", server.listPipelines)
 	router.HandleFunc("POST /api/v1/pipelines", server.createPipeline)
 	router.HandleFunc("GET /api/v1/pipelines/{id}", server.getPipeline)
+	router.HandleFunc("POST /api/v1/pipelines/{id}/runs", server.createPipelineRun)
+	router.HandleFunc("GET /api/v1/pipeline-runs", server.listPipelineRuns)
+	router.HandleFunc("GET /api/v1/pipeline-runs/{id}", server.getPipelineRun)
+	router.HandleFunc("POST /api/v1/pipeline-runs/{id}/cancel", server.cancelPipelineRun)
 	router.HandleFunc("GET /api/v1/experiments", server.listExperiments)
 	router.HandleFunc("POST /api/v1/experiments", server.createCompletedExperiment)
 	router.HandleFunc("GET /api/v1/operations", server.listOperations)
@@ -203,6 +207,101 @@ func (s *Server) createPipeline(response http.ResponseWriter, request *http.Requ
 		return
 	}
 	writeJSON(response, http.StatusCreated, pipeline)
+}
+
+func (s *Server) listPipelineRuns(response http.ResponseWriter, request *http.Request) {
+	limit := 100
+	if raw := request.URL.Query().Get("limit"); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err == nil && parsed >= 1 && parsed <= 200 {
+			limit = parsed
+		}
+	}
+	items, err := s.store.ListPipelineRuns(request.Context(), limit)
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, "database_error", "Could not list pipeline runs.")
+		return
+	}
+	writeJSON(response, http.StatusOK, map[string]any{"items": items})
+}
+
+func (s *Server) getPipelineRun(response http.ResponseWriter, request *http.Request) {
+	run, err := s.store.GetPipelineRun(request.Context(), request.PathValue("id"))
+	if errors.Is(err, storage.ErrNotFound) {
+		writeError(response, http.StatusNotFound, "not_found", "Pipeline run not found.")
+		return
+	}
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, "database_error", "Could not read pipeline run.")
+		return
+	}
+	writeJSON(response, http.StatusOK, run)
+}
+
+func (s *Server) createPipelineRun(response http.ResponseWriter, request *http.Request) {
+	var input struct {
+		Name string `json:"name"`
+	}
+	if err := decodeJSON(request, &input); err != nil {
+		writeError(response, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	input.Name = strings.TrimSpace(input.Name)
+	if input.Name == "" || len(input.Name) > 120 {
+		writeError(response, http.StatusUnprocessableEntity, "invalid_name", "Run name must contain between 1 and 120 characters.")
+		return
+	}
+	pipeline, err := s.store.GetPipeline(request.Context(), request.PathValue("id"))
+	if errors.Is(err, storage.ErrNotFound) {
+		writeError(response, http.StatusNotFound, "not_found", "Pipeline not found.")
+		return
+	}
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, "database_error", "Could not read pipeline.")
+		return
+	}
+	if !pipeline.Validation.Valid || len(pipeline.Resolution.Stages) != len(pipeline.Definition.Stages) {
+		writeError(response, http.StatusConflict, "pipeline_invalid", "The saved pipeline is not executable.")
+		return
+	}
+	for _, stage := range pipeline.Resolution.Stages {
+		plugin, err := s.registry.Get(stage.PluginID)
+		if err != nil || plugin.Manifest().Version != stage.PluginVersion {
+			writeError(response, http.StatusConflict, "plugin_changed", "An installed plug-in no longer matches the validated pipeline. Create a new pipeline version.")
+			return
+		}
+	}
+	run := domain.PipelineRun{
+		ID: id.New("run"), PipelineID: pipeline.ID, WorkspaceID: pipeline.WorkspaceID, Name: input.Name,
+		PipelineHash: pipeline.Hash, ResultType: pipeline.Resolution.Result.Type, ResultVersion: pipeline.Resolution.Result.Version,
+	}
+	for position, stage := range pipeline.Definition.Stages {
+		run.Stages = append(run.Stages, domain.PipelineRunStage{
+			ID: run.ID + "_" + stage.ID, RunID: run.ID, Position: position + 1, StageID: stage.ID,
+			PluginID: stage.PluginID, Title: stage.Title, Status: domain.StepPending,
+		})
+	}
+	created, err := s.store.CreatePipelineRun(request.Context(), run)
+	if errors.Is(err, storage.ErrConflict) || errors.Is(err, storage.ErrNotFound) {
+		writeError(response, http.StatusConflict, "pipeline_changed", "The pipeline changed while the run was being created.")
+		return
+	}
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, "database_error", "Could not start pipeline run.")
+		return
+	}
+	writeJSON(response, http.StatusAccepted, created)
+}
+
+func (s *Server) cancelPipelineRun(response http.ResponseWriter, request *http.Request) {
+	if err := s.store.RequestPipelineRunCancel(request.Context(), request.PathValue("id")); errors.Is(err, storage.ErrConflict) {
+		writeError(response, http.StatusConflict, "invalid_transition", "Pipeline run cannot be canceled in its current state.")
+		return
+	} else if err != nil {
+		writeError(response, http.StatusInternalServerError, "database_error", "Could not request pipeline cancellation.")
+		return
+	}
+	response.WriteHeader(http.StatusAccepted)
 }
 
 func hasPipelineBindings(plan domain.Plan) bool {
@@ -1344,6 +1443,12 @@ func auditTarget(request *http.Request) (string, string, string, bool) {
 		case "experiments":
 			return "experiment.create", "experiment", "", true
 		}
+	}
+	if len(parts) == 3 && parts[0] == "pipelines" && parts[2] == "runs" {
+		return "pipeline.run.create", "pipeline", parts[1], true
+	}
+	if len(parts) == 3 && parts[0] == "pipeline-runs" && parts[2] == "cancel" {
+		return "pipeline.run.cancel", "pipeline-run", parts[1], true
 	}
 	if len(parts) == 2 && parts[0] == "catalog" && parts[1] == "applications" {
 		return "application.import", "catalog-application", "", true

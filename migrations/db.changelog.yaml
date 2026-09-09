@@ -76,3 +76,10 @@ databaseChangeLog:
         - sqlFile:
             path: changes/011-pipelines.sql
             relativeToChangelogFile: true
+  - changeSet:
+      id: 012-pipeline-runs
+      author: kubephos
+      changes:
+        - sqlFile:
+            path: changes/012-pipeline-runs.sql
+            relativeToChangelogFile: true

@@ -16,6 +16,7 @@ const (
 	OperationCanceled    = "canceled"
 
 	StepPending     = "pending"
+	StepQueued      = "queued"
 	StepPrechecking = "prechecking"
 	StepRunning     = "running"
 	StepVerifying   = "verifying"
@@ -89,6 +90,40 @@ type ResolvedPipelineStage struct {
 	Spec          json.RawMessage   `json:"spec"`
 	Bindings      []PipelineBinding `json:"bindings,omitempty"`
 	Plan          Plan              `json:"plan"`
+}
+
+type PipelineRun struct {
+	ID               string             `json:"id"`
+	PipelineID       string             `json:"pipelineId"`
+	WorkspaceID      string             `json:"workspaceId"`
+	Name             string             `json:"name"`
+	Status           string             `json:"status"`
+	PipelineHash     string             `json:"pipelineHash"`
+	ResultType       string             `json:"resultType"`
+	ResultVersion    string             `json:"resultVersion"`
+	ResultArtifactID string             `json:"resultArtifactId,omitempty"`
+	CancelRequested  bool               `json:"cancelRequested"`
+	Error            string             `json:"error,omitempty"`
+	CreatedAt        time.Time          `json:"createdAt"`
+	QueuedAt         *time.Time         `json:"queuedAt,omitempty"`
+	StartedAt        *time.Time         `json:"startedAt,omitempty"`
+	CompletedAt      *time.Time         `json:"completedAt,omitempty"`
+	Stages           []PipelineRunStage `json:"stages"`
+}
+
+type PipelineRunStage struct {
+	ID          string          `json:"id"`
+	RunID       string          `json:"runId"`
+	Position    int             `json:"position"`
+	StageID     string          `json:"stageId"`
+	PluginID    string          `json:"pluginId"`
+	Title       string          `json:"title"`
+	Status      string          `json:"status"`
+	OperationID string          `json:"operationId,omitempty"`
+	Spec        json.RawMessage `json:"spec,omitempty"`
+	Error       string          `json:"error,omitempty"`
+	StartedAt   *time.Time      `json:"startedAt,omitempty"`
+	CompletedAt *time.Time      `json:"completedAt,omitempty"`
 }
 
 type Experiment struct {

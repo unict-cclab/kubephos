@@ -41,6 +41,11 @@ func (w *Worker) Run(ctx context.Context) error {
 		defer group.Done()
 		w.expireLeases(ctx)
 	}()
+	group.Add(1)
+	go func() {
+		defer group.Done()
+		w.runPipelineCoordinator(ctx)
+	}()
 	for slot := 1; slot <= w.concurrency; slot++ {
 		group.Add(1)
 		go func(slot int) {

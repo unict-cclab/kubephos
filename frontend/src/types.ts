@@ -218,6 +218,37 @@ export interface Pipeline {
   updatedAt: string
 }
 
+export interface PipelineRunStage {
+  id: string
+  runId: string
+  position: number
+  stageId: string
+  pluginId: string
+  title: string
+  status: string
+  operationId?: string
+  error?: string
+}
+
+export interface PipelineRun {
+  id: string
+  pipelineId: string
+  workspaceId: string
+  name: string
+  status: string
+  pipelineHash: string
+  resultType: string
+  resultVersion: string
+  resultArtifactId?: string
+  cancelRequested: boolean
+  error?: string
+  createdAt: string
+  queuedAt?: string
+  startedAt?: string
+  completedAt?: string
+  stages: PipelineRunStage[]
+}
+
 export interface Operation {
   id: string
   workspaceId: string
@@ -307,6 +338,7 @@ export interface PlatformData {
   workspaces: Workspace[]
   experiments: Experiment[]
   pipelines: Pipeline[]
+  pipelineRuns: PipelineRun[]
   operations: Operation[]
   artifacts: Artifact[]
   plugins: Plugin[]

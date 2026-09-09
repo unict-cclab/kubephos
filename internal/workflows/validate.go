@@ -27,6 +27,102 @@ type Result struct {
 	Hash       string
 }
 
+func ResolveStage(pipeline domain.Pipeline, position int, produced map[string]map[string]string) (domain.ResolvedPipelineStage, error) {
+	if position < 0 || position >= len(pipeline.Resolution.Stages) || position >= len(pipeline.Definition.Stages) {
+		return domain.ResolvedPipelineStage{}, errors.New("pipeline stage position is invalid")
+	}
+	resolved := pipeline.Resolution.Stages[position]
+	definition := pipeline.Definition.Stages[position]
+	var spec any
+	if err := json.Unmarshal(resolved.Spec, &spec); err != nil {
+		return domain.ResolvedPipelineStage{}, fmt.Errorf("stage %q resolved spec is invalid: %w", resolved.ID, err)
+	}
+	resolved.Plan.Steps = append([]domain.PlanStep(nil), resolved.Plan.Steps...)
+	for bindingIndex, binding := range definition.Bindings {
+		stageOutputs, ok := produced[binding.FromStage]
+		if !ok {
+			return domain.ResolvedPipelineStage{}, fmt.Errorf("stage %q output is not available", binding.FromStage)
+		}
+		artifactID, ok := stageOutputs[binding.FromOutput]
+		if !ok || artifactID == "" {
+			return domain.ResolvedPipelineStage{}, fmt.Errorf("output %q from stage %q is not available", binding.FromOutput, binding.FromStage)
+		}
+		if err := setPointer(&spec, binding.Path, artifactID); err != nil {
+			return domain.ResolvedPipelineStage{}, fmt.Errorf("stage %q binding %d: %w", resolved.ID, bindingIndex+1, err)
+		}
+		token := fmt.Sprintf("art_pipeline_%d_%d", position+1, bindingIndex+1)
+		replaced := false
+		for stepIndex := range resolved.Plan.Steps {
+			resolved.Plan.Steps[stepIndex].ArtifactInputs = append([]domain.ArtifactInput(nil), resolved.Plan.Steps[stepIndex].ArtifactInputs...)
+			for inputIndex := range resolved.Plan.Steps[stepIndex].ArtifactInputs {
+				input := &resolved.Plan.Steps[stepIndex].ArtifactInputs[inputIndex]
+				if input.ArtifactID == token {
+					input.ArtifactID = artifactID
+					replaced = true
+				}
+			}
+			input, changed, err := replaceJSONToken(resolved.Plan.Steps[stepIndex].Input, token, artifactID)
+			if err != nil {
+				return domain.ResolvedPipelineStage{}, fmt.Errorf("stage %q plan input is invalid: %w", resolved.ID, err)
+			}
+			if changed {
+				resolved.Plan.Steps[stepIndex].Input = input
+				replaced = true
+			}
+		}
+		if !replaced {
+			return domain.ResolvedPipelineStage{}, fmt.Errorf("stage %q binding %d is absent from the resolved plan", resolved.ID, bindingIndex+1)
+		}
+	}
+	raw, err := json.Marshal(spec)
+	if err != nil {
+		return domain.ResolvedPipelineStage{}, err
+	}
+	resolved.Spec = raw
+	return resolved, nil
+}
+
+func replaceJSONToken(raw json.RawMessage, token, value string) (json.RawMessage, bool, error) {
+	var decoded any
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		return nil, false, err
+	}
+	changed := replaceValue(&decoded, token, value)
+	if !changed {
+		return raw, false, nil
+	}
+	replaced, err := json.Marshal(decoded)
+	return replaced, true, err
+}
+
+func replaceValue(current *any, token, value string) bool {
+	switch typed := (*current).(type) {
+	case string:
+		if typed == token {
+			*current = value
+			return true
+		}
+	case map[string]any:
+		changed := false
+		for key, item := range typed {
+			if replaceValue(&item, token, value) {
+				typed[key] = item
+				changed = true
+			}
+		}
+		return changed
+	case []any:
+		changed := false
+		for index := range typed {
+			if replaceValue(&typed[index], token, value) {
+				changed = true
+			}
+		}
+		return changed
+	}
+	return false
+}
+
 func Validate(ctx context.Context, registry *plugins.Registry, definition domain.PipelineDefinition) (Result, error) {
 	normalized, err := normalize(definition)
 	if err != nil {
