@@ -254,6 +254,9 @@ func loadDefinition(value []byte, baseDirectory string, resolver SecretResolver,
 	}
 	timeout := 30 * time.Minute
 	if definition.Spec.Runtime.Timeout != "" {
+		if len(definition.Spec.Runtime.Timeout) > 64 {
+			return nil, errors.New("plugin runtime timeout is invalid")
+		}
 		timeout, err = time.ParseDuration(definition.Spec.Runtime.Timeout)
 		if err != nil || timeout <= 0 || timeout > 24*time.Hour {
 			return nil, errors.New("plugin runtime timeout is invalid")
