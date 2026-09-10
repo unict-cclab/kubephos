@@ -51,6 +51,7 @@ export interface Plugin {
   artifactInputs?: Array<{type: string; version: string}>
   artifactOutputs?: Array<{type: string; version: string}>
   credentialSchemas?: CredentialDefinition[]
+  runtime: {kind: string; reference?: string; digest?: string}
 }
 
 export interface CredentialDefinition {
@@ -214,7 +215,7 @@ export interface Pipeline {
     result: {stage: string; output?: string; type?: string; version?: string}
   }
   resolution: {
-    stages: Array<{id: string; pluginId: string; pluginVersion: string}>
+    stages: Array<{id: string; pluginId: string; pluginVersion: string; pluginDigest?: string}>
     result: {type: string; version: string}
   }
   validation: {valid: boolean; issues: ValidationIssue[]}
@@ -259,6 +260,8 @@ export interface Operation {
   id: string
   workspaceId: string
   pluginId: string
+  pluginVersion: string
+  pluginDigest?: string
   title: string
   status: string
   error?: string

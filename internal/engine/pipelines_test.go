@@ -25,6 +25,11 @@ func TestPipelineStageHashIncludesResolvedInputsAndVersion(t *testing.T) {
 	if err != nil || changed == first {
 		t.Fatalf("plugin version did not change hash: %q", changed)
 	}
+	stage.PluginDigest = "sha256:" + "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	digestChanged, err := pipelineStageHash(stage)
+	if err != nil || digestChanged == changed {
+		t.Fatalf("plugin digest did not change hash: %q", digestChanged)
+	}
 }
 
 func TestTerminalOperation(t *testing.T) {

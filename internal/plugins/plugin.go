@@ -21,6 +21,13 @@ type Manifest struct {
 	ArtifactOutputs   []domain.ArtifactContract `json:"artifactOutputs"`
 	Capabilities      []string                  `json:"capabilities"`
 	Permissions       []string                  `json:"permissions"`
+	Runtime           Runtime                   `json:"runtime"`
+}
+
+type Runtime struct {
+	Kind      string `json:"kind"`
+	Reference string `json:"reference,omitempty"`
+	Digest    string `json:"digest,omitempty"`
 }
 
 func (m Manifest) HasCapability(capability string) bool {
@@ -30,6 +37,10 @@ func (m Manifest) HasCapability(capability string) bool {
 		}
 	}
 	return false
+}
+
+func (m Manifest) Matches(version, digest string) bool {
+	return m.Version == version && m.Runtime.Digest == digest
 }
 
 type CredentialSchema struct {
@@ -46,6 +57,11 @@ type ConnectionResolver func(context.Context, string) (string, json.RawMessage, 
 type CatalogResolver func(context.Context, string) (json.RawMessage, error)
 
 type Logger func(level, message string) error
+
+type ContainerRunner interface {
+	Ready(context.Context) error
+	Run(context.Context, string, string, []byte, bool, Logger) ([]byte, []string, error)
+}
 
 type Plugin interface {
 	Manifest() Manifest

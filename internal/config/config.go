@@ -18,6 +18,7 @@ type Config struct {
 	WorkerConcurrency int
 	WorkerPoll        time.Duration
 	InstanceID        string
+	PluginRuntimeHost string
 }
 
 func Load() Config {
@@ -33,6 +34,7 @@ func Load() Config {
 		WorkerConcurrency: integer("KUBEPHOS_WORKER_CONCURRENCY", 4),
 		WorkerPoll:        duration("KUBEPHOS_WORKER_POLL_INTERVAL", time.Second),
 		InstanceID:        value("KUBEPHOS_INSTANCE_ID", "local"),
+		PluginRuntimeHost: value("KUBEPHOS_PLUGIN_RUNTIME_HOST", ""),
 	}
 }
 

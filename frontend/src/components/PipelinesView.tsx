@@ -30,7 +30,7 @@ export function PipelinesView({pipelines, runs, workspaces, plugins, session, cr
       return <article className="pipeline-card" key={pipeline.id}>
         <div className="pipeline-card-head"><span className="status-dot succeeded" /><div><h3>{pipeline.name}</h3><p>{workspaces.find(item => item.id === pipeline.workspaceId)?.name ?? 'Workspace'} · {formatDate(pipeline.createdAt)}</p></div><span className="pipeline-result-badge">{pipeline.resolution.result.type}</span><button className="button primary compact" onClick={() => setSelected(pipeline)}>Run</button></div>
         <p>{pipeline.description || 'A validated, reusable execution flow.'}</p>
-        <div className="pipeline-track">{pipeline.resolution.stages.map((stage, index) => <div key={stage.id}><span>{index + 1}</span><strong>{pipeline.definition.stages[index]?.title ?? plugins.find(item => item.id === stage.pluginId)?.name ?? stage.pluginId}</strong><small>{stage.pluginVersion}</small></div>)}</div>
+        <div className="pipeline-track">{pipeline.resolution.stages.map((stage, index) => <div key={stage.id}><span>{index + 1}</span><strong>{pipeline.definition.stages[index]?.title ?? plugins.find(item => item.id === stage.pluginId)?.name ?? stage.pluginId}</strong><small>{stage.pluginVersion}{stage.pluginDigest ? ` · ${stage.pluginDigest.slice(0, 12)}` : ''}</small></div>)}</div>
         {latest && <RunSummary run={latest} session={session} changed={changed} openOperation={openOperation} />}
         <div className="pipeline-card-foot"><span>✓ {pipeline.resolution.stages.length} stages validated</span><span>{pipelineRuns.length} run{pipelineRuns.length === 1 ? '' : 's'}</span><code>{pipeline.hash.slice(0, 12)}</code></div>
       </article>

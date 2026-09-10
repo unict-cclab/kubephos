@@ -5,8 +5,26 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
+
+type recordingContainerRunner struct {
+	image   string
+	command string
+	network bool
+}
+
+func (r *recordingContainerRunner) Ready(context.Context) error {
+	return nil
+}
+
+func (r *recordingContainerRunner) Run(_ context.Context, image, command string, _ []byte, network bool, _ Logger) ([]byte, []string, error) {
+	r.image = image
+	r.command = command
+	r.network = network
+	return []byte(`{"id":"dev.example.oci","name":"OCI example","version":"2.0.0","schema":{}}`), nil, nil
+}
 
 func TestValidatePackageChecksExecutableHandshake(t *testing.T) {
 	directory := t.TempDir()
@@ -95,6 +113,62 @@ spec:
 	}
 	if _, err := ValidatePackage(directory); err == nil {
 		t.Fatal("expected unknown field error")
+	}
+}
+
+func TestValidatePackageUsesPinnedOCIImage(t *testing.T) {
+	directory := t.TempDir()
+	digest := strings.Repeat("a", 64)
+	descriptor := `apiVersion: plugins.kubephos.io/v1alpha1
+kind: Plugin
+metadata:
+  id: dev.example.oci
+  name: OCI example
+  version: 2.0.0
+spec:
+  protocol: v1alpha1
+  commands: [describe, validate, plan, precheck, execute, verify, status, cancel, cleanup]
+  configurationSchema: {type: object}
+  permissions: [network.egress]
+  runtime:
+    image: registry.example.test/kubephos/plugin@sha256:` + digest + `
+`
+	if err := os.WriteFile(filepath.Join(directory, "plugin.yaml"), []byte(descriptor), 0600); err != nil {
+		t.Fatal(err)
+	}
+	runner := &recordingContainerRunner{}
+	manifest, err := ValidatePackage(directory, runner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runner.command != "describe" || runner.image != manifest.Runtime.Reference || !runner.network {
+		t.Fatalf("unexpected invocation: %#v %#v", runner, manifest.Runtime)
+	}
+	if manifest.Runtime.Kind != "oci" || manifest.Runtime.Digest != "sha256:"+digest {
+		t.Fatalf("unexpected runtime: %#v", manifest.Runtime)
+	}
+}
+
+func TestValidatePackageRejectsMutableOCIImage(t *testing.T) {
+	directory := t.TempDir()
+	descriptor := `apiVersion: plugins.kubephos.io/v1alpha1
+kind: Plugin
+metadata:
+  id: dev.example.oci
+  name: OCI example
+  version: 2.0.0
+spec:
+  protocol: v1alpha1
+  commands: [describe, validate, plan, precheck, execute, verify, status, cancel, cleanup]
+  configurationSchema: {type: object}
+  runtime:
+    image: registry.example.test/kubephos/plugin:latest
+`
+	if err := os.WriteFile(filepath.Join(directory, "plugin.yaml"), []byte(descriptor), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ValidatePackage(directory, &recordingContainerRunner{}); err == nil {
+		t.Fatal("expected mutable image rejection")
 	}
 }
 

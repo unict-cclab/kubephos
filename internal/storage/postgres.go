@@ -854,10 +854,10 @@ func (s *Store) CreateOperation(ctx context.Context, operation domain.Operation)
 		return domain.Operation{}, err
 	}
 	err = tx.QueryRow(ctx, `
-		INSERT INTO operations (id, workspace_id, plugin_id, title, status, spec, plan, validation, plan_hash)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		INSERT INTO operations (id, workspace_id, plugin_id, plugin_version, plugin_digest, title, status, spec, plan, validation, plan_hash)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 		RETURNING created_at
-	`, operation.ID, operation.WorkspaceID, operation.PluginID, operation.Title, operation.Status, operation.Spec, plan, validation, operation.PlanHash).Scan(&operation.CreatedAt)
+	`, operation.ID, operation.WorkspaceID, operation.PluginID, operation.PluginVersion, operation.PluginDigest, operation.Title, operation.Status, operation.Spec, plan, validation, operation.PlanHash).Scan(&operation.CreatedAt)
 	if err != nil {
 		return domain.Operation{}, err
 	}
@@ -955,7 +955,7 @@ func (s *Store) QueueOperation(ctx context.Context, operationID, planHash string
 
 func (s *Store) ListOperations(ctx context.Context, limit int) ([]domain.Operation, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT id, workspace_id, plugin_id, title, status, spec, plan, validation, plan_hash,
+		SELECT id, workspace_id, plugin_id, plugin_version, plugin_digest, title, status, spec, plan, validation, plan_hash,
 		       cancel_requested, error, created_at, queued_at, started_at, completed_at
 		FROM operations
 		ORDER BY created_at DESC
@@ -978,7 +978,7 @@ func (s *Store) ListOperations(ctx context.Context, limit int) ([]domain.Operati
 
 func (s *Store) GetOperation(ctx context.Context, operationID string) (domain.Operation, error) {
 	row := s.pool.QueryRow(ctx, `
-		SELECT id, workspace_id, plugin_id, title, status, spec, plan, validation, plan_hash,
+		SELECT id, workspace_id, plugin_id, plugin_version, plugin_digest, title, status, spec, plan, validation, plan_hash,
 		       cancel_requested, error, created_at, queued_at, started_at, completed_at
 		FROM operations
 		WHERE id = $1
@@ -1034,7 +1034,7 @@ func (s *Store) ClaimOperation(ctx context.Context, owner string) (domain.Operat
 		SET status = $2, lease_owner = $3, lease_until = now() + interval '30 seconds', started_at = COALESCE(started_at, now())
 		FROM candidate
 		WHERE operation.id = candidate.id
-		RETURNING operation.id, operation.workspace_id, operation.plugin_id, operation.title, operation.status,
+		RETURNING operation.id, operation.workspace_id, operation.plugin_id, operation.plugin_version, operation.plugin_digest, operation.title, operation.status,
 		          operation.spec, operation.plan, operation.validation, operation.plan_hash, operation.cancel_requested,
 		          operation.error, operation.created_at, operation.queued_at, operation.started_at, operation.completed_at
 	`, domain.OperationQueued, domain.OperationPrechecking, owner)
@@ -1325,6 +1325,8 @@ func scanOperation(row scanner) (domain.Operation, error) {
 		&operation.ID,
 		&operation.WorkspaceID,
 		&operation.PluginID,
+		&operation.PluginVersion,
+		&operation.PluginDigest,
 		&operation.Title,
 		&operation.Status,
 		&operation.Spec,

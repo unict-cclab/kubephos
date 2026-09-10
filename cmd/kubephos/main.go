@@ -49,7 +49,7 @@ func run() error {
 	case "catalog":
 		return catalogMaintenance(configValue)
 	case "plugin":
-		return pluginMaintenance()
+		return pluginMaintenance(configValue)
 	case "version":
 		fmt.Println(version)
 		return nil
@@ -58,7 +58,7 @@ func run() error {
 	}
 }
 
-func pluginMaintenance() error {
+func pluginMaintenance(configValue config.Config) error {
 	if len(os.Args) < 3 || len(os.Args) > 4 || os.Args[2] != "validate" {
 		return errors.New("usage: kubephos plugin validate [path]")
 	}
@@ -66,7 +66,7 @@ func pluginMaintenance() error {
 	if len(os.Args) == 4 {
 		path = os.Args[3]
 	}
-	manifest, err := plugins.ValidatePackage(path)
+	manifest, err := plugins.ValidatePackage(path, plugins.NewDockerRunner(configValue.PluginRuntimeHost))
 	if err != nil {
 		return err
 	}
@@ -108,12 +108,13 @@ func serve(configValue config.Config) error {
 	if err != nil {
 		return err
 	}
-	registry, err := plugins.LoadDirectory(configValue.PluginDirectory, resolver, connectionRuntime(store), catalogRuntime(store))
+	runtime := plugins.NewDockerRunner(configValue.PluginRuntimeHost)
+	registry, err := plugins.LoadDirectory(configValue.PluginDirectory, resolver, connectionRuntime(store), catalogRuntime(store), runtime)
 	if err != nil {
 		return err
 	}
 	artifactStore := artifacts.New(configValue.ArtifactEndpoint)
-	handler, err := api.NewServer(store, registry, artifactStore, vault, version, configValue.WebDirectory)
+	handler, err := api.NewServer(store, registry, artifactStore, vault, runtime, version, configValue.WebDirectory)
 	if err != nil {
 		return err
 	}
@@ -136,7 +137,16 @@ func work(configValue config.Config) error {
 	if err != nil {
 		return err
 	}
-	registry, err := plugins.LoadDirectory(configValue.PluginDirectory, resolver, connectionRuntime(store), catalogRuntime(store))
+	runtime := plugins.NewDockerRunner(configValue.PluginRuntimeHost)
+	if runtime != nil {
+		readyContext, cancel := context.WithTimeout(ctx, 10*time.Second)
+		runtimeErr := runtime.Ready(readyContext)
+		cancel()
+		if runtimeErr != nil {
+			return fmt.Errorf("OCI plugin runtime: %w", runtimeErr)
+		}
+	}
+	registry, err := plugins.LoadDirectory(configValue.PluginDirectory, resolver, connectionRuntime(store), catalogRuntime(store), runtime)
 	if err != nil {
 		return err
 	}

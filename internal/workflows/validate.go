@@ -180,7 +180,7 @@ func Validate(ctx context.Context, registry *plugins.Registry, definition domain
 		}
 		outputs[stage.ID] = stageOutputs
 		resolution.Stages = append(resolution.Stages, domain.ResolvedPipelineStage{
-			ID: stage.ID, PluginID: stage.PluginID, PluginVersion: manifest.Version,
+			ID: stage.ID, PluginID: stage.PluginID, PluginVersion: manifest.Version, PluginDigest: manifest.Runtime.Digest,
 			Spec: resolvedSpec, Bindings: resolvedBindings, Plan: plan,
 		})
 		issues = append(issues, domain.ValidationIssue{Level: "info", Path: "stages." + stage.ID, Message: fmt.Sprintf("Validated %s %s with %d planned step(s).", manifest.Name, manifest.Version, len(plan.Steps))})

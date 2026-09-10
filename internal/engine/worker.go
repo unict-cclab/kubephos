@@ -86,6 +86,10 @@ func (w *Worker) process(parent context.Context, owner string, operation domain.
 		w.fail(parent, operation.ID, "", err)
 		return
 	}
+	if !plugin.Manifest().Matches(operation.PluginVersion, operation.PluginDigest) {
+		w.fail(parent, operation.ID, "", errors.New("installed plugin runtime no longer matches the validated operation"))
+		return
+	}
 	runCtx, cancel := context.WithCancel(parent)
 	done := make(chan struct{})
 	go w.monitor(runCtx, cancel, done, owner, operation.ID)

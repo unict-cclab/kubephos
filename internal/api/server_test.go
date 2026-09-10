@@ -28,6 +28,11 @@ func TestResolvedPlanHashIsDeterministic(t *testing.T) {
 	if len(first) != 64 {
 		t.Fatalf("expected SHA-256 hex, got %d characters", len(first))
 	}
+	manifest.Runtime.Digest = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	changed, err := resolvedPlanHash(manifest, spec, plan)
+	if err != nil || changed == first {
+		t.Fatalf("plugin digest did not change hash: %q", changed)
+	}
 }
 
 func TestNormalizeAndValidateExperimentInput(t *testing.T) {

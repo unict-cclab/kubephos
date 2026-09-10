@@ -121,8 +121,9 @@ function PluginGrid({items}: {items: Plugin[]}) {
   return <div className="workspace-grid">{items.map(plugin => {
     const inputs = plugin.artifactInputs ?? []
     const outputs = plugin.artifactOutputs ?? []
+    const runtime = plugin.runtime.kind === 'oci' ? `Isolated · ${plugin.runtime.digest?.slice(0, 12)}` : 'Built in'
     return <article className="feature-card" key={plugin.id}>
-      <span className="feature-icon">⌘</span><div><h3>{plugin.name}</h3><p>{plugin.description}</p><p>{plugin.id} · {plugin.version}</p>{!!(inputs.length || outputs.length) && <small>{inputs.length} typed inputs · {outputs.length} typed outputs</small>}</div><span className="planned">Installed</span>
+      <span className="feature-icon">⌘</span><div><h3>{plugin.name}</h3><p>{plugin.description}</p><p>{plugin.id} · {plugin.version}</p>{!!(inputs.length || outputs.length) && <small>{inputs.length} typed inputs · {outputs.length} typed outputs</small>}</div><span className="planned">{runtime}</span>
     </article>
   })}</div>
 }

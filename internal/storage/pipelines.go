@@ -288,10 +288,10 @@ func (s *Store) CreatePipelineStageOperation(ctx context.Context, runID, runStag
 		return domain.Operation{}, err
 	}
 	err = tx.QueryRow(ctx, `
-		INSERT INTO operations (id, workspace_id, plugin_id, title, status, spec, plan, validation, plan_hash, queued_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, now())
+		INSERT INTO operations (id, workspace_id, plugin_id, plugin_version, plugin_digest, title, status, spec, plan, validation, plan_hash, queued_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, now())
 		RETURNING created_at, queued_at
-	`, operation.ID, operation.WorkspaceID, operation.PluginID, operation.Title, domain.OperationQueued, operation.Spec, plan, validation, operation.PlanHash).Scan(&operation.CreatedAt, &operation.QueuedAt)
+	`, operation.ID, operation.WorkspaceID, operation.PluginID, operation.PluginVersion, operation.PluginDigest, operation.Title, domain.OperationQueued, operation.Spec, plan, validation, operation.PlanHash).Scan(&operation.CreatedAt, &operation.QueuedAt)
 	if err != nil {
 		return domain.Operation{}, err
 	}

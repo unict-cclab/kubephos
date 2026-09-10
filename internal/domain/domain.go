@@ -87,6 +87,7 @@ type ResolvedPipelineStage struct {
 	ID            string            `json:"id"`
 	PluginID      string            `json:"pluginId"`
 	PluginVersion string            `json:"pluginVersion"`
+	PluginDigest  string            `json:"pluginDigest,omitempty"`
 	Spec          json.RawMessage   `json:"spec"`
 	Bindings      []PipelineBinding `json:"bindings,omitempty"`
 	Plan          Plan              `json:"plan"`
@@ -263,6 +264,8 @@ type Operation struct {
 	ID              string           `json:"id"`
 	WorkspaceID     string           `json:"workspaceId"`
 	PluginID        string           `json:"pluginId"`
+	PluginVersion   string           `json:"pluginVersion"`
+	PluginDigest    string           `json:"pluginDigest,omitempty"`
 	Title           string           `json:"title"`
 	Status          string           `json:"status"`
 	Spec            json.RawMessage  `json:"spec"`

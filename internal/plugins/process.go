@@ -49,6 +49,7 @@ type descriptor struct {
 		Capabilities []string `yaml:"capabilities"`
 		Runtime      struct {
 			Executable string `yaml:"executable"`
+			Image      string `yaml:"image"`
 			Timeout    string `yaml:"timeout"`
 		} `yaml:"runtime"`
 	} `yaml:"spec"`
@@ -57,6 +58,8 @@ type descriptor struct {
 type Process struct {
 	manifest    Manifest
 	executable  string
+	image       string
+	runner      ContainerRunner
 	timeout     time.Duration
 	resolver    SecretResolver
 	connections ConnectionResolver
@@ -64,7 +67,7 @@ type Process struct {
 	secretKinds map[string]bool
 }
 
-func LoadDirectory(directory string, resolver SecretResolver, connections ConnectionResolver, catalogResolver CatalogResolver) (*Registry, error) {
+func LoadDirectory(directory string, resolver SecretResolver, connections ConnectionResolver, catalogResolver CatalogResolver, runners ...ContainerRunner) (*Registry, error) {
 	entries, err := os.ReadDir(directory)
 	if err != nil {
 		return nil, err
@@ -76,7 +79,7 @@ func LoadDirectory(directory string, resolver SecretResolver, connections Connec
 			continue
 		}
 		path := filepath.Join(directory, entry.Name(), "plugin.yaml")
-		value, err := LoadProcess(path, resolver, connections, catalogResolver)
+		value, err := LoadProcess(path, resolver, connections, catalogResolver, runners...)
 		if errors.Is(err, os.ErrNotExist) {
 			continue
 		}
@@ -96,7 +99,7 @@ func LoadDirectory(directory string, resolver SecretResolver, connections Connec
 	return NewRegistry(values...), nil
 }
 
-func ValidatePackage(path string) (Manifest, error) {
+func ValidatePackage(path string, runners ...ContainerRunner) (Manifest, error) {
 	info, err := os.Stat(path)
 	if err != nil {
 		return Manifest{}, err
@@ -104,14 +107,14 @@ func ValidatePackage(path string) (Manifest, error) {
 	if info.IsDir() {
 		path = filepath.Join(path, "plugin.yaml")
 	}
-	plugin, err := LoadProcess(path, nil, nil, nil)
+	plugin, err := LoadProcess(path, nil, nil, nil, runners...)
 	if err != nil {
 		return Manifest{}, err
 	}
 	return plugin.Manifest(), nil
 }
 
-func LoadProcess(path string, resolver SecretResolver, connections ConnectionResolver, catalogResolver CatalogResolver) (*Process, error) {
+func LoadProcess(path string, resolver SecretResolver, connections ConnectionResolver, catalogResolver CatalogResolver, runners ...ContainerRunner) (*Process, error) {
 	value, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
@@ -146,19 +149,34 @@ func LoadProcess(path string, resolver SecretResolver, connections ConnectionRes
 			return nil, fmt.Errorf("required command %q is missing", command)
 		}
 	}
-	if definition.Spec.Runtime.Executable == "" {
-		return nil, errors.New("plugin executable is missing")
+	if (definition.Spec.Runtime.Executable == "") == (definition.Spec.Runtime.Image == "") {
+		return nil, errors.New("plugin runtime must declare exactly one executable or image")
 	}
-	executable := definition.Spec.Runtime.Executable
-	if !filepath.IsAbs(executable) {
-		executable = filepath.Join(filepath.Dir(path), executable)
-	}
-	info, err := os.Stat(executable)
-	if err != nil {
-		return nil, err
-	}
-	if info.Mode()&0111 == 0 {
-		return nil, fmt.Errorf("plugin executable %s is not executable", executable)
+	executable := ""
+	image := definition.Spec.Runtime.Image
+	var runtimeManifest Runtime
+	if definition.Spec.Runtime.Executable != "" {
+		executable = definition.Spec.Runtime.Executable
+		if !filepath.IsAbs(executable) {
+			executable = filepath.Join(filepath.Dir(path), executable)
+		}
+		info, err := os.Stat(executable)
+		if err != nil {
+			return nil, err
+		}
+		if info.Mode()&0111 == 0 {
+			return nil, fmt.Errorf("plugin executable %s is not executable", executable)
+		}
+		runtimeManifest = Runtime{Kind: "bundled"}
+	} else {
+		digest, err := validateOCIReference(image)
+		if err != nil {
+			return nil, err
+		}
+		if len(runners) == 0 || runners[0] == nil {
+			return nil, errors.New("OCI plugin runner is unavailable")
+		}
+		runtimeManifest = Runtime{Kind: "oci", Reference: image, Digest: digest}
 	}
 	schemaDefinition, err := json.Marshal(definition.Spec.ConfigurationSchema)
 	if err != nil {
@@ -213,13 +231,18 @@ func LoadProcess(path string, resolver SecretResolver, connections ConnectionRes
 			ArtifactOutputs:   definition.Spec.Artifacts.Outputs,
 			Capabilities:      definition.Spec.Capabilities,
 			Permissions:       definition.Spec.Permissions,
+			Runtime:           runtimeManifest,
 		},
 		executable:  executable,
+		image:       image,
 		timeout:     timeout,
 		resolver:    resolver,
 		connections: connections,
 		catalog:     catalogResolver,
 		secretKinds: secretKinds,
+	}
+	if len(runners) > 0 {
+		plugin.runner = runners[0]
 	}
 	describeContext, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -310,21 +333,29 @@ func (p *Process) invoke(parent context.Context, command string, input, output a
 	if err != nil {
 		return err
 	}
-	process := exec.CommandContext(ctx, p.executable, command)
-	process.Stdin = bytes.NewReader(payload)
-	var stdout bytes.Buffer
-	process.Stdout = &stdout
-	stderr, err := process.StderrPipe()
-	if err != nil {
-		return err
+	var stdout []byte
+	var messages []string
+	var processErr error
+	if p.image != "" {
+		stdout, messages, processErr = p.runner.Run(ctx, p.image, command, payload, contains(p.manifest.Permissions, "network.egress"), log)
+	} else {
+		process := exec.CommandContext(ctx, p.executable, command)
+		process.Stdin = bytes.NewReader(payload)
+		var output bytes.Buffer
+		process.Stdout = &output
+		stderr, err := process.StderrPipe()
+		if err != nil {
+			return err
+		}
+		lines := make(chan []string, 1)
+		go scanLines(stderr, lines, log)
+		if err := process.Start(); err != nil {
+			return err
+		}
+		processErr = process.Wait()
+		messages = <-lines
+		stdout = output.Bytes()
 	}
-	lines := make(chan []string, 1)
-	go scanLines(stderr, lines, log)
-	if err := process.Start(); err != nil {
-		return err
-	}
-	processErr := process.Wait()
-	messages := <-lines
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
@@ -335,10 +366,23 @@ func (p *Process) invoke(parent context.Context, command string, input, output a
 		}
 		return errors.New(message)
 	}
-	if err := json.Unmarshal(stdout.Bytes(), output); err != nil {
+	if err := json.Unmarshal(stdout, output); err != nil {
 		return fmt.Errorf("plugin returned invalid JSON: %w", err)
 	}
 	return nil
+}
+
+func validateOCIReference(reference string) (string, error) {
+	parts := strings.Split(reference, "@sha256:")
+	if len(parts) != 2 || parts[0] == "" || strings.ContainsAny(parts[0], " \t\r\n@") || len(parts[1]) != 64 {
+		return "", errors.New("OCI plugin image must use an immutable sha256 digest")
+	}
+	for _, character := range parts[1] {
+		if !strings.ContainsRune("0123456789abcdef", character) {
+			return "", errors.New("OCI plugin image has an invalid sha256 digest")
+		}
+	}
+	return "sha256:" + parts[1], nil
 }
 
 func referenceResolutionPayload(payload []byte) ([]byte, error) {

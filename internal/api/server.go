@@ -35,11 +35,12 @@ type Server struct {
 	registry  *plugins.Registry
 	artifacts *artifacts.Client
 	vault     *secrets.Vault
+	runtime   plugins.ContainerRunner
 	version   string
 }
 
-func NewServer(store *storage.Store, registry *plugins.Registry, artifactStore *artifacts.Client, vault *secrets.Vault, version, webDirectory string) (http.Handler, error) {
-	server := &Server{store: store, registry: registry, artifacts: artifactStore, vault: vault, version: version}
+func NewServer(store *storage.Store, registry *plugins.Registry, artifactStore *artifacts.Client, vault *secrets.Vault, runtime plugins.ContainerRunner, version, webDirectory string) (http.Handler, error) {
+	server := &Server{store: store, registry: registry, artifacts: artifactStore, vault: vault, runtime: runtime, version: version}
 	webHandler, err := webui.Handler(webDirectory)
 	if err != nil {
 		return nil, err
@@ -273,7 +274,7 @@ func (s *Server) createPipelineRun(response http.ResponseWriter, request *http.R
 	}
 	for _, stage := range pipeline.Resolution.Stages {
 		plugin, err := s.registry.Get(stage.PluginID)
-		if err != nil || plugin.Manifest().Version != stage.PluginVersion {
+		if err != nil || !plugin.Manifest().Matches(stage.PluginVersion, stage.PluginDigest) {
 			writeError(response, http.StatusConflict, "plugin_changed", "An installed plug-in no longer matches the validated pipeline. Create a new pipeline version.")
 			return
 		}
@@ -350,6 +351,12 @@ func (s *Server) ready(response http.ResponseWriter, request *http.Request) {
 	if err := s.artifacts.Health(request.Context()); err != nil {
 		writeError(response, http.StatusServiceUnavailable, "not_ready", err.Error())
 		return
+	}
+	if s.runtime != nil {
+		if err := s.runtime.Ready(request.Context()); err != nil {
+			writeError(response, http.StatusServiceUnavailable, "not_ready", "OCI plugin runtime is unavailable: "+err.Error())
+			return
+		}
 	}
 	writeJSON(response, http.StatusOK, map[string]string{"status": "healthy"})
 }
@@ -786,7 +793,7 @@ func (s *Server) createPipelineExperiment(response http.ResponseWriter, request 
 		}
 		for _, stage := range pipeline.Resolution.Stages {
 			plugin, err := s.registry.Get(stage.PluginID)
-			if err != nil || plugin.Manifest().Version != stage.PluginVersion {
+			if err != nil || !plugin.Manifest().Matches(stage.PluginVersion, stage.PluginDigest) {
 				writeError(response, http.StatusConflict, "plugin_changed", "An installed plug-in no longer matches a validated pipeline. Create a new pipeline version.")
 				return
 			}
@@ -1085,15 +1092,17 @@ func (s *Server) createOperation(response http.ResponseWriter, request *http.Req
 		return
 	}
 	operation, err := s.store.CreateOperation(request.Context(), domain.Operation{
-		ID:          id.New("op"),
-		WorkspaceID: input.WorkspaceID,
-		PluginID:    input.PluginID,
-		Title:       input.Title,
-		Status:      domain.OperationReady,
-		Spec:        input.Spec,
-		Plan:        plan,
-		Validation:  validation,
-		PlanHash:    planHash,
+		ID:            id.New("op"),
+		WorkspaceID:   input.WorkspaceID,
+		PluginID:      input.PluginID,
+		PluginVersion: manifest.Version,
+		PluginDigest:  manifest.Runtime.Digest,
+		Title:         input.Title,
+		Status:        domain.OperationReady,
+		Spec:          input.Spec,
+		Plan:          plan,
+		Validation:    validation,
+		PlanHash:      planHash,
 	})
 	if err != nil {
 		writeError(response, http.StatusInternalServerError, "database_error", "Could not save the validated operation.")
@@ -1190,6 +1199,10 @@ func (s *Server) createCleanupOperation(response http.ResponseWriter, request *h
 		return
 	}
 	manifest := plugin.Manifest()
+	if source.PluginVersion != "" && !manifest.Matches(source.PluginVersion, source.PluginDigest) {
+		writeError(response, http.StatusConflict, "plugin_changed", "The installed plug-in no longer matches the source operation.")
+		return
+	}
 	if !manifest.HasCapability("lifecycle.cleanup") {
 		writeError(response, http.StatusConflict, "cleanup_unavailable", "This plugin does not expose explicit cleanup.")
 		return
@@ -1236,7 +1249,7 @@ func (s *Server) createCleanupOperation(response http.ResponseWriter, request *h
 		return
 	}
 	operation, err := s.store.CreateOperation(request.Context(), domain.Operation{
-		ID: id.New("op"), WorkspaceID: source.WorkspaceID, PluginID: source.PluginID,
+		ID: id.New("op"), WorkspaceID: source.WorkspaceID, PluginID: source.PluginID, PluginVersion: manifest.Version, PluginDigest: manifest.Runtime.Digest,
 		Title: "Cleanup: " + source.Title, Status: domain.OperationReady, Spec: spec,
 		Plan: plan, Validation: validation, PlanHash: planHash,
 	})
@@ -1348,7 +1361,21 @@ func (s *Server) queueOperation(response http.ResponseWriter, request *http.Requ
 		writeError(response, http.StatusBadRequest, "invalid_request", err.Error())
 		return
 	}
-	operation, err := s.store.QueueOperation(request.Context(), request.PathValue("id"), input.PlanHash, input.AcceptWarnings)
+	pending, err := s.store.GetOperation(request.Context(), request.PathValue("id"))
+	if errors.Is(err, storage.ErrNotFound) {
+		writeError(response, http.StatusNotFound, "not_found", "Operation not found.")
+		return
+	}
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, "database_error", "Could not read operation.")
+		return
+	}
+	plugin, err := s.registry.Get(pending.PluginID)
+	if err != nil || !plugin.Manifest().Matches(pending.PluginVersion, pending.PluginDigest) {
+		writeError(response, http.StatusConflict, "plugin_changed", "The installed plug-in no longer matches the validated operation. Validate it again.")
+		return
+	}
+	operation, err := s.store.QueueOperation(request.Context(), pending.ID, input.PlanHash, input.AcceptWarnings)
 	if errors.Is(err, storage.ErrConflict) {
 		writeError(response, http.StatusConflict, "invalid_transition", err.Error())
 		return
@@ -1470,9 +1497,10 @@ func resolvedPlanHash(manifest plugins.Manifest, spec json.RawMessage, plan doma
 	value, err := json.Marshal(struct {
 		PluginID      string          `json:"pluginId"`
 		PluginVersion string          `json:"pluginVersion"`
+		PluginDigest  string          `json:"pluginDigest,omitempty"`
 		Spec          json.RawMessage `json:"spec"`
 		Plan          domain.Plan     `json:"plan"`
-	}{manifest.ID, manifest.Version, spec, plan})
+	}{manifest.ID, manifest.Version, manifest.Runtime.Digest, spec, plan})
 	if err != nil {
 		return "", err
 	}

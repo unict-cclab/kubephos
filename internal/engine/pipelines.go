@@ -135,7 +135,7 @@ func (w *Worker) startPipelineStage(ctx context.Context, owner string, run domai
 		return err
 	}
 	manifest := plugin.Manifest()
-	if manifest.Version != resolved.PluginVersion || resolved.Plan.PluginID != resolved.PluginID {
+	if !manifest.Matches(resolved.PluginVersion, resolved.PluginDigest) || resolved.Plan.PluginID != resolved.PluginID {
 		return fmt.Errorf("stage %q plugin version or identity changed", resolved.ID)
 	}
 	validation := plugin.Validate(ctx, resolved.Spec)
@@ -151,6 +151,7 @@ func (w *Worker) startPipelineStage(ctx context.Context, owner string, run domai
 	runStage := run.Stages[position]
 	_, err = w.store.CreatePipelineStageOperation(ctx, run.ID, runStage.ID, owner, domain.Operation{
 		ID: id.New("op"), WorkspaceID: run.WorkspaceID, PluginID: resolved.PluginID,
+		PluginVersion: resolved.PluginVersion, PluginDigest: resolved.PluginDigest,
 		Title: run.Name + " · " + runStage.Title, Status: domain.OperationQueued,
 		Spec: resolved.Spec, Plan: resolved.Plan, Validation: validation, PlanHash: hash,
 	})
@@ -161,9 +162,10 @@ func pipelineStageHash(stage domain.ResolvedPipelineStage) (string, error) {
 	payload, err := json.Marshal(struct {
 		PluginID      string          `json:"pluginId"`
 		PluginVersion string          `json:"pluginVersion"`
+		PluginDigest  string          `json:"pluginDigest,omitempty"`
 		Spec          json.RawMessage `json:"spec"`
 		Plan          domain.Plan     `json:"plan"`
-	}{PluginID: stage.PluginID, PluginVersion: stage.PluginVersion, Spec: stage.Spec, Plan: stage.Plan})
+	}{PluginID: stage.PluginID, PluginVersion: stage.PluginVersion, PluginDigest: stage.PluginDigest, Spec: stage.Spec, Plan: stage.Plan})
 	if err != nil {
 		return "", err
 	}
