@@ -221,7 +221,7 @@ export function ApplicationDialog({open, close, ...common}: CommonProps & {open:
 export function PluginDialog({open, close, ...common}: CommonProps & {open: boolean; close: () => void}) {
   const [file, setFile] = useState<File | null>(null)
   const [descriptor, setDescriptor] = useState('')
-  const [preview, setPreview] = useState<{manifest: Plugin; executorAvailable: boolean} | null>(null)
+  const [preview, setPreview] = useState<{manifest: Plugin; executorAvailable: boolean; policyAccepted: boolean; policyMessage: string} | null>(null)
   const [error, setError] = useState('')
   const [pending, setPending] = useState(false)
   const dismiss = () => {
@@ -243,7 +243,7 @@ export function PluginDialog({open, close, ...common}: CommonProps & {open: bool
     try {
       const value = descriptor || await file.text()
       if (!preview) {
-        const result = await request<{manifest: Plugin; executorAvailable: boolean}>('/plugins/inspect', {method: 'POST', body: JSON.stringify({descriptor: value})}, common.session.csrfToken)
+        const result = await request<{manifest: Plugin; executorAvailable: boolean; policyAccepted: boolean; policyMessage: string}>('/plugins/inspect', {method: 'POST', body: JSON.stringify({descriptor: value})}, common.session.csrfToken)
         setDescriptor(value)
         setPreview(result)
         return
@@ -261,9 +261,9 @@ export function PluginDialog({open, close, ...common}: CommonProps & {open: bool
     <form onSubmit={submit} key={file?.name ?? 'empty'}>
       <label>Plugin descriptor<input type="file" accept=".yaml,.yml,application/yaml" required onChange={event => {setFile(event.target.files?.[0] ?? null); setDescriptor(''); setPreview(null); setError('')}} /></label>
       <p className="field-description">{file ? `${file.name} · ${Math.ceil(file.size / 1024)} KB` : 'Select a plugins.kubephos.io/v1alpha1 descriptor.'}</p>
-      {preview ? <div className="notice"><strong>{preview.manifest.name} · {preview.manifest.version}</strong><p>{preview.manifest.id}</p><p className="digest">{preview.manifest.runtime.reference}</p><p>{preview.manifest.permissions?.length ? `Permissions: ${preview.manifest.permissions.join(', ')}` : 'No permissions requested.'}</p><p>{preview.manifest.capabilities?.length ? `Capabilities: ${preview.manifest.capabilities.join(', ')}` : 'No capabilities declared.'}</p>{!preview.executorAvailable && <p className="form-error">The descriptor is valid, but activation requires the dedicated OCI executor.</p>}</div> : <ValidationCallout text="The first step parses the strict contract and shows image, digest, permissions and capabilities without executing the plugin." />}
+      {preview ? <div className="notice"><strong>{preview.manifest.name} · {preview.manifest.version}</strong><p>{preview.manifest.id}</p><p className="digest">{preview.manifest.runtime.reference}</p><p>{preview.manifest.permissions?.length ? `Permissions: ${preview.manifest.permissions.join(', ')}` : 'No permissions requested.'}</p><p>{preview.manifest.capabilities?.length ? `Capabilities: ${preview.manifest.capabilities.join(', ')}` : 'No capabilities declared.'}</p><p className={preview.policyAccepted ? 'field-description' : 'form-error'}>{preview.policyMessage}</p></div> : <ValidationCallout text="The first step parses the strict contract and shows image, digest, permissions and capabilities without executing the plugin." />}
       <p className="form-error">{error}</p>
-      <div className="modal-actions"><button className="button secondary" type="button" onClick={dismiss}>Cancel</button><button className="button primary" disabled={pending || Boolean(preview && !preview.executorAvailable)}>{pending ? 'Please wait…' : preview ? 'Run checks and activate' : 'Review plugin'}</button></div>
+      <div className="modal-actions"><button className="button secondary" type="button" onClick={dismiss}>Cancel</button><button className="button primary" disabled={pending || Boolean(preview && (!preview.executorAvailable || !preview.policyAccepted))}>{pending ? 'Please wait…' : preview ? 'Run checks and activate' : 'Review plugin'}</button></div>
     </form>
   </Dialog>
 }

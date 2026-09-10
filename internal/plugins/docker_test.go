@@ -24,7 +24,7 @@ func TestDockerRunnerAppliesIsolation(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	runner := &DockerRunner{host: "tcp://runtime:2376", binary: binary, ca: ca, cert: cert, key: key}
+	runner := &DockerRunner{host: "tcp://runtime:2376", binary: binary, ca: ca, cert: cert, key: key, allowedRegistries: map[string]bool{"registry.example.test": true}}
 	logs := []string{}
 	digest := strings.Repeat("b", 64)
 	output, _, err := runner.Run(context.Background(), "registry.example.test/plugin@sha256:"+digest, "describe", []byte(`{}`), false, func(_, message string) error {
@@ -57,8 +57,32 @@ func TestDockerRunnerRejectsHostSocket(t *testing.T) {
 }
 
 func TestDockerRunnerRequiresMutualTLS(t *testing.T) {
-	runner := &DockerRunner{host: "tcp://runtime:2376", binary: "docker"}
+	runner := &DockerRunner{host: "tcp://runtime:2376", binary: "docker", allowedRegistries: map[string]bool{"example.test": true}}
 	if err := runner.Ready(context.Background()); err == nil || !strings.Contains(err.Error(), "path must be absolute") {
 		t.Fatalf("expected mutual TLS error, got %v", err)
+	}
+}
+
+func TestDockerRunnerEnforcesRegistryPolicy(t *testing.T) {
+	runner := NewDockerRunner("tcp://runtime:2376", "/ca", "/cert", "/key", "harbor.kubephos.test:5443")
+	digest := strings.Repeat("a", 64)
+	if err := ValidateRuntimeImage(runner, "harbor.kubephos.test:5443/team/plugin@sha256:"+digest); err != nil {
+		t.Fatal(err)
+	}
+	for _, image := range []string{
+		"other.test/team/plugin@sha256:" + digest,
+		"harbor.kubephos.test.evil/team/plugin@sha256:" + digest,
+		"harbor.kubephos.test:5443/team/plugin:latest",
+	} {
+		if err := ValidateRuntimeImage(runner, image); err == nil {
+			t.Fatalf("expected image rejection for %s", image)
+		}
+	}
+}
+
+func TestDockerRunnerRequiresRegistryPolicy(t *testing.T) {
+	runner := NewDockerRunner("tcp://runtime:2376", "/ca", "/cert", "/key")
+	if err := ValidateRuntimeImage(runner, "example.test/plugin@sha256:"+strings.Repeat("a", 64)); err == nil || !strings.Contains(err.Error(), "at least one allowed registry") {
+		t.Fatalf("expected missing policy error, got %v", err)
 	}
 }

@@ -240,6 +240,11 @@ func loadDefinition(value []byte, baseDirectory string, resolver SecretResolver,
 		if verify && (len(runners) == 0 || runners[0] == nil) {
 			return nil, errors.New("OCI plugin runner is unavailable")
 		}
+		if verify {
+			if err := ValidateRuntimeImage(runners[0], image); err != nil {
+				return nil, err
+			}
+		}
 		runtimeManifest = Runtime{Kind: "oci", Reference: image, Digest: digest}
 	}
 	schemaDefinition, err := json.Marshal(definition.Spec.ConfigurationSchema)

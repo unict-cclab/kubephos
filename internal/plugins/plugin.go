@@ -65,6 +65,20 @@ type ContainerRunner interface {
 	Run(context.Context, string, string, []byte, bool, Logger) ([]byte, []string, error)
 }
 
+type ContainerImagePolicy interface {
+	ValidateImage(string) error
+}
+
+func ValidateRuntimeImage(runner ContainerRunner, image string) error {
+	if _, err := validateOCIReference(image); err != nil {
+		return err
+	}
+	if policy, ok := runner.(ContainerImagePolicy); ok {
+		return policy.ValidateImage(image)
+	}
+	return nil
+}
+
 type Plugin interface {
 	Manifest() Manifest
 	Validate(context.Context, json.RawMessage) domain.ValidationReport

@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -22,6 +23,7 @@ type Config struct {
 	PluginRuntimeCA   string
 	PluginRuntimeCert string
 	PluginRuntimeKey  string
+	PluginRegistries  []string
 }
 
 func Load() Config {
@@ -41,7 +43,18 @@ func Load() Config {
 		PluginRuntimeCA:   value("KUBEPHOS_PLUGIN_RUNTIME_CA", ""),
 		PluginRuntimeCert: value("KUBEPHOS_PLUGIN_RUNTIME_CERT", ""),
 		PluginRuntimeKey:  value("KUBEPHOS_PLUGIN_RUNTIME_KEY", ""),
+		PluginRegistries:  list("KUBEPHOS_PLUGIN_ALLOWED_REGISTRIES"),
 	}
+}
+
+func list(key string) []string {
+	result := []string{}
+	for _, current := range strings.Split(os.Getenv(key), ",") {
+		if current = strings.TrimSpace(current); current != "" {
+			result = append(result, current)
+		}
+	}
+	return result
 }
 
 func value(key, fallback string) string {

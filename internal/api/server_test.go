@@ -23,6 +23,22 @@ func (unavailableRunner) Run(context.Context, string, string, []byte, bool, plug
 	return nil, nil, errors.New("executor offline")
 }
 
+type policyRunner struct {
+	err error
+}
+
+func (p policyRunner) Ready(context.Context) error {
+	return nil
+}
+
+func (p policyRunner) Run(context.Context, string, string, []byte, bool, plugins.Logger) ([]byte, []string, error) {
+	return nil, nil, nil
+}
+
+func (p policyRunner) ValidateImage(string) error {
+	return p.err
+}
+
 func TestRuntimeHealthDistinguishesDisabledAndUnavailable(t *testing.T) {
 	disabled := &Server{}
 	if state, _ := disabled.runtimeHealth(context.Background()); state != "disabled" {
@@ -61,12 +77,54 @@ spec:
 	var body struct {
 		Manifest          plugins.Manifest `json:"manifest"`
 		ExecutorAvailable bool             `json:"executorAvailable"`
+		PolicyAccepted    bool             `json:"policyAccepted"`
+		PolicyMessage     string           `json:"policyMessage"`
 	}
 	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
 		t.Fatal(err)
 	}
-	if body.Manifest.ID != "dev.example.preview" || body.ExecutorAvailable {
+	if body.Manifest.ID != "dev.example.preview" || body.ExecutorAvailable || body.PolicyAccepted || body.PolicyMessage == "" {
 		t.Fatalf("unexpected preview: %#v", body)
+	}
+}
+
+func TestInspectPluginReportsImagePolicy(t *testing.T) {
+	digest := strings.Repeat("e", 64)
+	descriptor := `apiVersion: plugins.kubephos.io/v1alpha1
+kind: Plugin
+metadata:
+  id: dev.example.policy-preview
+  name: Policy preview
+  version: 1.0.0
+spec:
+  protocol: v1alpha1
+  commands: [describe, validate, plan, precheck, execute, verify, status, cancel, cleanup]
+  configurationSchema: {type: object}
+  runtime:
+    image: registry.example.test/plugin@sha256:` + digest + `
+`
+	payload, _ := json.Marshal(map[string]string{"descriptor": descriptor})
+	for name, runtime := range map[string]policyRunner{"accepted": {}, "rejected": {err: errors.New("registry denied")}} {
+		t.Run(name, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodPost, "/api/v1/plugins/inspect", strings.NewReader(string(payload)))
+			response := httptest.NewRecorder()
+			server := &Server{registry: plugins.NewRegistry(), runtime: runtime}
+			server.inspectPlugin(response, request)
+			if response.Code != http.StatusOK {
+				t.Fatalf("expected preview, got %d: %s", response.Code, response.Body.String())
+			}
+			var body struct {
+				ExecutorAvailable bool   `json:"executorAvailable"`
+				PolicyAccepted    bool   `json:"policyAccepted"`
+				PolicyMessage     string `json:"policyMessage"`
+			}
+			if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+				t.Fatal(err)
+			}
+			if !body.ExecutorAvailable || body.PolicyAccepted != (runtime.err == nil) || body.PolicyMessage == "" {
+				t.Fatalf("unexpected policy preview: %#v", body)
+			}
+		})
 	}
 }
 

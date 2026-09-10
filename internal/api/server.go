@@ -421,7 +421,22 @@ func (s *Server) inspectPlugin(response http.ResponseWriter, request *http.Reque
 		writeError(response, http.StatusConflict, "plugin_conflict", "A bundled plugin cannot be replaced.")
 		return
 	}
-	writeJSON(response, http.StatusOK, map[string]any{"manifest": manifest, "executorAvailable": s.runtime != nil})
+	runtimeContext, cancel := context.WithTimeout(request.Context(), 2*time.Second)
+	runtimeState, runtimeMessage := s.runtimeHealth(runtimeContext)
+	cancel()
+	policyAccepted := false
+	policyMessage := runtimeMessage
+	if runtimeState == "healthy" {
+		if err := plugins.ValidateRuntimeImage(s.runtime, manifest.Runtime.Reference); err != nil {
+			policyMessage = err.Error()
+		} else {
+			policyAccepted = true
+			policyMessage = "Image registry and digest satisfy the executor policy."
+		}
+	}
+	writeJSON(response, http.StatusOK, map[string]any{
+		"manifest": manifest, "executorAvailable": runtimeState == "healthy", "policyAccepted": policyAccepted, "policyMessage": policyMessage,
+	})
 }
 
 func (s *Server) importPlugin(response http.ResponseWriter, request *http.Request) {

@@ -173,7 +173,7 @@ func externalPluginLoader(resolver plugins.SecretResolver, connections plugins.C
 }
 
 func pluginRuntime(configValue config.Config) plugins.ContainerRunner {
-	return plugins.NewDockerRunner(configValue.PluginRuntimeHost, configValue.PluginRuntimeCA, configValue.PluginRuntimeCert, configValue.PluginRuntimeKey)
+	return plugins.NewDockerRunner(configValue.PluginRuntimeHost, configValue.PluginRuntimeCA, configValue.PluginRuntimeCert, configValue.PluginRuntimeKey, configValue.PluginRegistries...)
 }
 
 func refreshInstalledPlugins(ctx context.Context, store *storage.Store, registry *plugins.Registry, loader func([]byte) (plugins.Plugin, error)) error {
