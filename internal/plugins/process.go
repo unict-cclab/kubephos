@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"strings"
 	"time"
 
@@ -66,6 +67,14 @@ type Process struct {
 	catalog     CatalogResolver
 	secretKinds map[string]bool
 }
+
+var pluginIDExpression = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9.-]{0,126}[a-z0-9])?$`)
+var providerExpression = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9.-]{0,78}[a-z0-9])?$`)
+var versionExpression = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._+-]{0,127}$`)
+var capabilityExpression = regexp.MustCompile(`^[a-z][a-z0-9.-]*(?::[a-z0-9][a-z0-9._-]{0,79})?$`)
+var artifactTypeExpression = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9.-]{0,127}$`)
+var artifactVersionExpression = regexp.MustCompile(`^v[0-9]+(?:alpha[0-9]+|beta[0-9]+)?$`)
+var ociNameExpression = regexp.MustCompile(`^[a-z0-9]+(?:(?:[._-][a-z0-9]+)|(?::[0-9]+))*(?:/[a-z0-9]+(?:[._-][a-z0-9]+)*)*(?::[A-Za-z0-9_][A-Za-z0-9._-]{0,127})?$`)
 
 func LoadDirectory(directory string, resolver SecretResolver, connections ConnectionResolver, catalogResolver CatalogResolver, runners ...ContainerRunner) (*Registry, error) {
 	entries, err := os.ReadDir(directory)
@@ -151,8 +160,20 @@ func loadDefinition(value []byte, baseDirectory string, resolver SecretResolver,
 	if definition.APIVersion != "plugins.kubephos.io/v1alpha1" || definition.Kind != "Plugin" || definition.Spec.Protocol != "v1alpha1" {
 		return nil, errors.New("unsupported plugin contract")
 	}
-	if definition.Metadata.ID == "" || definition.Metadata.Name == "" || definition.Metadata.Version == "" {
-		return nil, errors.New("plugin identity is incomplete")
+	if !pluginIDExpression.MatchString(definition.Metadata.ID) {
+		return nil, errors.New("plugin id is invalid")
+	}
+	if strings.TrimSpace(definition.Metadata.Name) != definition.Metadata.Name || len(definition.Metadata.Name) == 0 || len(definition.Metadata.Name) > 120 {
+		return nil, errors.New("plugin name is invalid")
+	}
+	if !versionExpression.MatchString(definition.Metadata.Version) {
+		return nil, errors.New("plugin version is invalid")
+	}
+	if len(definition.Metadata.Description) > 500 {
+		return nil, errors.New("plugin description is too long")
+	}
+	if definition.Spec.Provider != "" && !providerExpression.MatchString(definition.Spec.Provider) {
+		return nil, errors.New("plugin provider is invalid")
 	}
 	for _, capability := range definition.Spec.Capabilities {
 		if strings.HasPrefix(capability, "infrastructure.") && definition.Spec.Provider == "" {
@@ -160,10 +181,29 @@ func loadDefinition(value []byte, baseDirectory string, resolver SecretResolver,
 		}
 	}
 	required := []string{"describe", "validate", "plan", "precheck", "execute", "verify", "status", "cancel", "cleanup"}
+	commandSet := make(map[string]bool, len(definition.Spec.Commands))
+	for _, command := range definition.Spec.Commands {
+		if commandSet[command] || !contains(required, command) {
+			return nil, fmt.Errorf("plugin command %q is invalid or duplicated", command)
+		}
+		commandSet[command] = true
+	}
 	for _, command := range required {
-		if !contains(definition.Spec.Commands, command) {
+		if !commandSet[command] {
 			return nil, fmt.Errorf("required command %q is missing", command)
 		}
+	}
+	if err := validateManifestValues(definition.Spec.Capabilities, "capability"); err != nil {
+		return nil, err
+	}
+	if err := validateManifestValues(definition.Spec.Permissions, "permission"); err != nil {
+		return nil, err
+	}
+	if err := validateArtifactContracts(definition.Spec.Artifacts.Inputs, "input"); err != nil {
+		return nil, err
+	}
+	if err := validateArtifactContracts(definition.Spec.Artifacts.Outputs, "output"); err != nil {
+		return nil, err
 	}
 	if (definition.Spec.Runtime.Executable == "") == (definition.Spec.Runtime.Image == "") {
 		return nil, errors.New("plugin runtime must declare exactly one executable or image")
@@ -210,15 +250,17 @@ func loadDefinition(value []byte, baseDirectory string, resolver SecretResolver,
 	timeout := 30 * time.Minute
 	if definition.Spec.Runtime.Timeout != "" {
 		timeout, err = time.ParseDuration(definition.Spec.Runtime.Timeout)
-		if err != nil || timeout <= 0 {
+		if err != nil || timeout <= 0 || timeout > 24*time.Hour {
 			return nil, errors.New("plugin runtime timeout is invalid")
 		}
 	}
 	credentialSchemas := make([]CredentialSchema, 0, len(definition.Spec.CredentialSchemas))
+	credentialKinds := map[string]bool{}
 	for _, value := range definition.Spec.CredentialSchemas {
-		if value.Kind == "" || value.Name == "" {
+		if !providerExpression.MatchString(value.Kind) || strings.TrimSpace(value.Name) != value.Name || len(value.Name) == 0 || len(value.Name) > 120 || credentialKinds[value.Kind] {
 			return nil, errors.New("credential schema identity is incomplete")
 		}
+		credentialKinds[value.Kind] = true
 		raw, err := json.Marshal(value.Schema)
 		if err != nil {
 			return nil, err
@@ -396,7 +438,7 @@ func (p *Process) invoke(parent context.Context, command string, input, output a
 
 func validateOCIReference(reference string) (string, error) {
 	parts := strings.Split(reference, "@sha256:")
-	if len(parts) != 2 || parts[0] == "" || strings.ContainsAny(parts[0], " \t\r\n@") || len(parts[1]) != 64 {
+	if len(parts) != 2 || !ociNameExpression.MatchString(parts[0]) || len(parts[1]) != 64 {
 		return "", errors.New("OCI plugin image must use an immutable sha256 digest")
 	}
 	for _, character := range parts[1] {
@@ -405,6 +447,29 @@ func validateOCIReference(reference string) (string, error) {
 		}
 	}
 	return "sha256:" + parts[1], nil
+}
+
+func validateManifestValues(values []string, kind string) error {
+	seen := map[string]bool{}
+	for _, value := range values {
+		if !capabilityExpression.MatchString(value) || seen[value] {
+			return fmt.Errorf("plugin %s %q is invalid or duplicated", kind, value)
+		}
+		seen[value] = true
+	}
+	return nil
+}
+
+func validateArtifactContracts(values []domain.ArtifactContract, direction string) error {
+	seen := map[string]bool{}
+	for _, value := range values {
+		key := value.Type + "/" + value.Version
+		if !artifactTypeExpression.MatchString(value.Type) || !artifactVersionExpression.MatchString(value.Version) || seen[key] {
+			return fmt.Errorf("plugin artifact %s contract %q is invalid or duplicated", direction, key)
+		}
+		seen[key] = true
+	}
+	return nil
 }
 
 func referenceResolutionPayload(payload []byte) ([]byte, error) {

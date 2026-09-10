@@ -217,6 +217,43 @@ spec:
 	}
 }
 
+func TestInspectDefinitionRejectsInvalidManifestMetadata(t *testing.T) {
+	digest := strings.Repeat("f", 64)
+	valid := `apiVersion: plugins.kubephos.io/v1alpha1
+kind: Plugin
+metadata:
+  id: dev.example.policy
+  name: Policy
+  version: git-a1b2c3-k8s1.36
+spec:
+  protocol: v1alpha1
+  commands: [describe, validate, plan, precheck, execute, verify, status, cancel, cleanup]
+  configurationSchema: {type: object}
+  capabilities: [example.policy]
+  permissions: [network.egress]
+  runtime:
+    image: registry.example.test/plugin@sha256:` + digest + `
+    timeout: 1h
+  artifacts:
+    outputs: [{type: PolicyResult, version: v1alpha1}]
+`
+	tests := map[string]string{
+		"id":         strings.Replace(valid, "dev.example.policy", "Dev Example", 1),
+		"command":    strings.Replace(valid, "describe, validate", "describe, describe, validate", 1),
+		"capability": strings.Replace(valid, "[example.policy]", "[example.policy, example.policy]", 1),
+		"permission": strings.Replace(valid, "[network.egress]", "[network.egress, INVALID]", 1),
+		"timeout":    strings.Replace(valid, "timeout: 1h", "timeout: 25h", 1),
+		"artifact":   strings.Replace(valid, "outputs: [{type: PolicyResult, version: v1alpha1}]", "outputs: [{type: PolicyResult, version: v1alpha1}, {type: PolicyResult, version: v1alpha1}]", 1),
+	}
+	for name, descriptor := range tests {
+		t.Run(name, func(t *testing.T) {
+			if _, err := InspectDefinition([]byte(descriptor)); err == nil {
+				t.Fatal("expected invalid manifest rejection")
+			}
+		})
+	}
+}
+
 func TestResolveSecretsHonorsDeclaredKinds(t *testing.T) {
 	process := &Process{
 		secretKinds: map[string]bool{"allowed": true},
