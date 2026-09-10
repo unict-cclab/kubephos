@@ -3,7 +3,7 @@ kind: Plugin
 metadata:
   id: io.kubephos.registry.harbor.managed
   name: Managed OCI registry
-  version: 0.1.0
+  version: 0.2.0
   description: Installs and validates a managed OCI registry on one dedicated machine.
 spec:
   protocol: v1alpha1

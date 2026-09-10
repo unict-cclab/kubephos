@@ -4,7 +4,10 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
@@ -63,6 +66,7 @@ type registryEndpoint struct {
 		Host     string   `json:"host"`
 		URL      string   `json:"url"`
 		APIURL   string   `json:"apiURL"`
+		CABundle string   `json:"caBundle"`
 		Insecure bool     `json:"insecure"`
 		Projects []string `json:"projects"`
 	} `json:"spec"`
@@ -125,7 +129,7 @@ type buildRunner interface {
 
 func (Plugin) Manifest() plugins.Manifest {
 	return plugins.Manifest{
-		ID: pluginID, Name: "OCI image build", Version: "0.1.0",
+		ID: pluginID, Name: "OCI image build", Version: "0.2.0",
 		Description:     "Builds an immutable OCI image from an exact Git commit and publishes it to a managed registry.",
 		Schema:          json.RawMessage(`{"type":"object","additionalProperties":false,"required":["registryEndpointRef","registryCredentialRef","repositoryURL","commit","contextPath","dockerfile","imageName","tagSuffix"],"properties":{"registryEndpointRef":{"type":"string","title":"Target registry","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"RegistryEndpoint","x-kubephos-artifact-version":"v1alpha1"},"registryCredentialRef":{"type":"string","title":"Push credential","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"RegistryCredential","x-kubephos-artifact-version":"v1alpha1"},"repositoryURL":{"type":"string","title":"Git repository","pattern":"^https://[^[:space:]]+$","maxLength":2048},"commit":{"type":"string","title":"Full commit SHA","pattern":"^[0-9a-f]{40}$"},"contextPath":{"type":"string","title":"Build context","pattern":"^(\\.|[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*)$","maxLength":256,"default":"."},"dockerfile":{"type":"string","title":"Dockerfile","pattern":"^[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*$","maxLength":256,"default":"Dockerfile"},"imageName":{"type":"string","title":"Image name","pattern":"^[a-z0-9]+(?:[._-][a-z0-9]+)*(?:/[a-z0-9]+(?:[._-][a-z0-9]+)*)*$","maxLength":255},"tagSuffix":{"type":"string","title":"Tag suffix","pattern":"^[a-z0-9][a-z0-9.-]{0,31}$","default":"dev"}}}`),
 		ArtifactInputs:  []domain.ArtifactContract{{Type: "RegistryEndpoint", Version: "v1alpha1"}, {Type: "RegistryCredential", Version: "v1alpha1"}},
@@ -310,14 +314,17 @@ func validateResolved(spec Spec, endpoint registryEndpoint, credential registryC
 	if len(validateSpec(spec)) != 0 {
 		return errors.New("build configuration is invalid")
 	}
-	if endpoint.APIVersion != artifactAPI || endpoint.Kind != "RegistryEndpoint" || endpoint.Metadata.Version == "" || endpoint.Spec.Protocol != "oci" || endpoint.Spec.Host == "" || endpoint.Spec.URL == "" {
+	if endpoint.APIVersion != artifactAPI || endpoint.Kind != "RegistryEndpoint" || endpoint.Metadata.Version == "" || endpoint.Spec.Protocol != "oci" || endpoint.Spec.Host == "" || endpoint.Spec.URL == "" || endpoint.Spec.Insecure {
 		return errors.New("registry endpoint does not implement RegistryEndpoint/v1alpha1")
+	}
+	if _, err := registryCertPool(endpoint.Spec.CABundle); err != nil {
+		return errors.New("registry endpoint does not contain a valid certificate authority")
 	}
 	if credential.APIVersion != artifactAPI || credential.Kind != "RegistryCredential" || credential.Metadata.Role != "push" || credential.Spec.Server != endpoint.Spec.Host || credential.Spec.Username == "" || credential.Spec.Password == "" || credential.Spec.Project == "" || !contains(credential.Spec.Scopes, "push") || !contains(endpoint.Spec.Projects, credential.Spec.Project) {
 		return errors.New("registry credential is not a matching project-scoped push credential")
 	}
 	endpointURL, err := url.Parse(endpoint.Spec.URL)
-	if err != nil || endpointURL.Host != endpoint.Spec.Host || endpointURL.User != nil || endpointURL.RawQuery != "" || endpointURL.Fragment != "" || endpointURL.Path != "" || endpointURL.Scheme != map[bool]string{true: "http", false: "https"}[endpoint.Spec.Insecure] {
+	if err != nil || endpointURL.Host != endpoint.Spec.Host || endpointURL.User != nil || endpointURL.RawQuery != "" || endpointURL.Fragment != "" || endpointURL.Path != "" || endpointURL.Scheme != "https" {
 		return errors.New("registry endpoint URL is inconsistent")
 	}
 	return nil
@@ -371,6 +378,12 @@ type dockerSettings struct {
 	registries []string
 }
 
+type registryClientFiles struct {
+	root     string
+	certDir  string
+	authFile string
+}
+
 func (systemBuildRunner) Precheck(ctx context.Context, spec Spec, endpoint registryEndpoint, credential registryCredential, log plugins.Logger) error {
 	if err := validateGitHost(spec.RepositoryURL); err != nil {
 		return err
@@ -391,6 +404,9 @@ func (systemBuildRunner) Precheck(ctx context.Context, spec Spec, endpoint regis
 	if err := log("info", "Checking access to the exact source repository and managed registry"); err != nil {
 		return err
 	}
+	if _, err := exec.LookPath("skopeo"); err != nil {
+		return errors.New("OCI registry client is unavailable")
+	}
 	sourceContext, sourceCancel := context.WithTimeout(ctx, 20*time.Second)
 	defer sourceCancel()
 	command := exec.CommandContext(sourceContext, "git", "ls-remote", "--heads", spec.RepositoryURL)
@@ -401,7 +417,15 @@ func (systemBuildRunner) Precheck(ctx context.Context, spec Spec, endpoint regis
 	if err := command.Run(); err != nil {
 		return commandError("source repository is unavailable", stderr.Bytes(), err)
 	}
-	return registryPing(ctx, endpoint, credential, settings)
+	if err := registryPing(ctx, endpoint, credential, settings); err != nil {
+		return err
+	}
+	files, err := prepareRegistryClient(endpoint)
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(files.root)
+	return registryLogin(ctx, files, endpoint, credential)
 }
 
 func (systemBuildRunner) Build(ctx context.Context, spec Spec, endpoint registryEndpoint, credential registryCredential, log plugins.Logger) (ociImage, error) {
@@ -459,7 +483,12 @@ func (systemBuildRunner) Build(ctx context.Context, spec Spec, endpoint registry
 	repository := credential.Spec.Project + "/" + spec.ImageName
 	taggedReference := endpoint.Spec.Host + "/" + repository + ":" + tag(spec)
 	defer removeLocalImage(settings, dockerConfig, taggedReference)
-	if err := dockerLogin(ctx, settings, dockerConfig, endpoint.Spec.Host, credential); err != nil {
+	registryFiles, err := prepareRegistryClient(endpoint)
+	if err != nil {
+		return ociImage{}, err
+	}
+	defer os.RemoveAll(registryFiles.root)
+	if err := registryLogin(ctx, registryFiles, endpoint, credential); err != nil {
 		return ociImage{}, err
 	}
 	if err := log("info", "Building "+taggedReference+" on the dedicated rootless executor"); err != nil {
@@ -471,10 +500,14 @@ func (systemBuildRunner) Build(ctx context.Context, spec Spec, endpoint registry
 	if err := log("info", "Publishing image to the managed registry"); err != nil {
 		return ociImage{}, err
 	}
-	if err := runLogged(ctx, dockerArguments(settings, "push", taggedReference), dockerConfig, log); err != nil {
+	archive := filepath.Join(registryFiles.root, "image.tar")
+	if output, err := exec.CommandContext(ctx, "docker", dockerArguments(settings, "save", "--output", archive, taggedReference)...).CombinedOutput(); err != nil {
+		return ociImage{}, commandError("export built image", output, err)
+	}
+	if err := runLoggedProgram(ctx, "skopeo", []string{"copy", "--retry-times", "3", "--authfile", registryFiles.authFile, "--dest-cert-dir", registryFiles.certDir, "docker-archive:" + archive, "docker://" + taggedReference}, nil, log); err != nil {
 		return ociImage{}, err
 	}
-	digest, err := repositoryDigest(ctx, settings, dockerConfig, taggedReference, endpoint.Spec.Host+"/"+repository+"@")
+	digest, err := repositoryDigest(ctx, registryFiles, taggedReference)
 	if err != nil {
 		return ociImage{}, err
 	}
@@ -489,11 +522,7 @@ func (systemBuildRunner) Build(ctx context.Context, spec Spec, endpoint registry
 }
 
 func (systemBuildRunner) Verify(ctx context.Context, image ociImage, endpoint registryEndpoint, credential registryCredential, log plugins.Logger) error {
-	settings, _, err := configuredRunner()
-	if err != nil {
-		return err
-	}
-	if err := registryManifest(ctx, image, endpoint, credential, settings); err != nil {
+	if err := registryManifest(ctx, image, endpoint, credential); err != nil {
 		return err
 	}
 	return log("info", "Registry returned the exact published manifest digest")
@@ -609,9 +638,25 @@ func dockerArguments(settings dockerSettings, arguments ...string) []string {
 	return append(connection, arguments...)
 }
 
-func dockerLogin(ctx context.Context, settings dockerSettings, dockerConfig, registry string, credential registryCredential) error {
-	command := exec.CommandContext(ctx, "docker", dockerArguments(settings, "login", registry, "--username", credential.Spec.Username, "--password-stdin")...)
-	command.Env = append(os.Environ(), "DOCKER_CONFIG="+dockerConfig)
+func prepareRegistryClient(endpoint registryEndpoint) (registryClientFiles, error) {
+	root, err := os.MkdirTemp("", "kubephos-registry-")
+	if err != nil {
+		return registryClientFiles{}, err
+	}
+	files := registryClientFiles{root: root, certDir: filepath.Join(root, "certs"), authFile: filepath.Join(root, "auth.json")}
+	if err := os.Mkdir(files.certDir, 0700); err != nil {
+		os.RemoveAll(root)
+		return registryClientFiles{}, err
+	}
+	if err := os.WriteFile(filepath.Join(files.certDir, "ca.crt"), []byte(endpoint.Spec.CABundle), 0600); err != nil {
+		os.RemoveAll(root)
+		return registryClientFiles{}, err
+	}
+	return files, nil
+}
+
+func registryLogin(ctx context.Context, files registryClientFiles, endpoint registryEndpoint, credential registryCredential) error {
+	command := exec.CommandContext(ctx, "skopeo", "login", "--tls-verify=true", "--cert-dir", files.certDir, "--authfile", files.authFile, "--username", credential.Spec.Username, "--password-stdin", endpoint.Spec.Host)
 	command.Stdin = strings.NewReader(credential.Spec.Password)
 	output, err := command.CombinedOutput()
 	if err != nil {
@@ -621,8 +666,12 @@ func dockerLogin(ctx context.Context, settings dockerSettings, dockerConfig, reg
 }
 
 func runLogged(ctx context.Context, arguments []string, dockerConfig string, log plugins.Logger) error {
-	command := exec.CommandContext(ctx, "docker", arguments...)
-	command.Env = append(os.Environ(), "DOCKER_CONFIG="+dockerConfig)
+	return runLoggedProgram(ctx, "docker", arguments, []string{"DOCKER_CONFIG=" + dockerConfig}, log)
+}
+
+func runLoggedProgram(ctx context.Context, program string, arguments, environment []string, log plugins.Logger) error {
+	command := exec.CommandContext(ctx, program, arguments...)
+	command.Env = append(os.Environ(), environment...)
 	reader, writer, err := os.Pipe()
 	if err != nil {
 		return err
@@ -656,31 +705,22 @@ func runLogged(ctx context.Context, arguments []string, dockerConfig string, log
 		return errors.New("build output exceeded the line limit")
 	}
 	if err := command.Wait(); err != nil {
-		return fmt.Errorf("build command failed: %w", err)
+		return fmt.Errorf("%s command failed: %w", program, err)
 	}
 	return nil
 }
 
-func repositoryDigest(ctx context.Context, settings dockerSettings, dockerConfig, taggedReference, prefix string) (string, error) {
-	command := exec.CommandContext(ctx, "docker", dockerArguments(settings, "image", "inspect", "--format", "{{json .RepoDigests}}", taggedReference)...)
-	command.Env = append(os.Environ(), "DOCKER_CONFIG="+dockerConfig)
-	output, err := command.Output()
+func repositoryDigest(ctx context.Context, files registryClientFiles, taggedReference string) (string, error) {
+	command := exec.CommandContext(ctx, "skopeo", "inspect", "--authfile", files.authFile, "--cert-dir", files.certDir, "--format", "{{.Digest}}", "docker://"+taggedReference)
+	output, err := command.CombinedOutput()
 	if err != nil {
-		return "", errors.New("published image digest is unavailable")
+		return "", commandError("inspect published image", output, err)
 	}
-	var values []string
-	if err := json.Unmarshal(bytes.TrimSpace(output), &values); err != nil {
-		return "", errors.New("published image returned invalid repository digests")
+	digest := strings.TrimSpace(string(output))
+	if !regexp.MustCompile(`^sha256:[0-9a-f]{64}$`).MatchString(digest) {
+		return "", errors.New("published image returned an invalid digest")
 	}
-	for _, value := range values {
-		if strings.HasPrefix(value, prefix) {
-			digest := strings.TrimPrefix(value, prefix)
-			if regexp.MustCompile(`^sha256:[0-9a-f]{64}$`).MatchString(digest) {
-				return digest, nil
-			}
-		}
-	}
-	return "", errors.New("published image digest does not match the target repository")
+	return digest, nil
 }
 
 func removeLocalImage(settings dockerSettings, dockerConfig, reference string) {
@@ -701,43 +741,71 @@ func registryPing(ctx context.Context, endpoint registryEndpoint, credential reg
 		return err
 	}
 	request.SetBasicAuth(credential.Spec.Username, credential.Spec.Password)
-	response, err := registryHTTPClient().Do(request)
+	client, err := registryHTTPClient(endpoint)
+	if err != nil {
+		return err
+	}
+	response, err := client.Do(request)
 	if err != nil {
 		return err
 	}
 	defer response.Body.Close()
+	if response.StatusCode == http.StatusUnauthorized && strings.HasPrefix(strings.ToLower(response.Header.Get("WWW-Authenticate")), "bearer ") {
+		return nil
+	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		return fmt.Errorf("registry API returned %s", response.Status)
 	}
 	return nil
 }
 
-func registryManifest(ctx context.Context, image ociImage, endpoint registryEndpoint, credential registryCredential, _ dockerSettings) error {
-	requestContext, cancel := context.WithTimeout(ctx, 15*time.Second)
-	defer cancel()
-	manifestURL := strings.TrimSuffix(endpoint.Spec.URL, "/") + "/v2/" + image.Spec.Repository + "/manifests/" + image.Spec.Digest
-	request, err := http.NewRequestWithContext(requestContext, http.MethodHead, manifestURL, nil)
+func registryManifest(ctx context.Context, image ociImage, endpoint registryEndpoint, credential registryCredential) error {
+	files, err := prepareRegistryClient(endpoint)
 	if err != nil {
 		return err
 	}
-	request.SetBasicAuth(credential.Spec.Username, credential.Spec.Password)
-	request.Header.Set("Accept", "application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json")
-	response, err := registryHTTPClient().Do(request)
+	defer os.RemoveAll(files.root)
+	if err := registryLogin(ctx, files, endpoint, credential); err != nil {
+		return err
+	}
+	digest, err := repositoryDigest(ctx, files, image.Spec.Reference)
 	if err != nil {
 		return err
 	}
-	defer response.Body.Close()
-	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return fmt.Errorf("registry manifest API returned %s", response.Status)
-	}
-	if digest := response.Header.Get("Docker-Content-Digest"); digest != image.Spec.Digest {
+	if digest != image.Spec.Digest {
 		return errors.New("registry manifest digest does not match the build result")
 	}
 	return nil
 }
 
-func registryHTTPClient() *http.Client {
-	return &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+func registryHTTPClient(endpoint registryEndpoint) (*http.Client, error) {
+	pool, err := registryCertPool(endpoint.Spec.CABundle)
+	if err != nil {
+		return nil, err
+	}
+	return &http.Client{
+		Transport:     &http.Transport{TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: pool}},
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}, nil
+}
+
+func registryCertPool(bundle string) (*x509.CertPool, error) {
+	block, rest := pem.Decode([]byte(bundle))
+	if block == nil || block.Type != "CERTIFICATE" || len(strings.TrimSpace(string(rest))) != 0 {
+		return nil, errors.New("registry certificate authority must contain exactly one PEM certificate")
+	}
+	certificate, err := x509.ParseCertificate(block.Bytes)
+	if err != nil || !certificate.IsCA || time.Now().Before(certificate.NotBefore) || !time.Now().Before(certificate.NotAfter) {
+		return nil, errors.New("registry certificate authority is not valid and active")
+	}
+	pool, err := x509.SystemCertPool()
+	if err != nil {
+		pool = x509.NewCertPool()
+	}
+	if strings.TrimSpace(bundle) == "" || !pool.AppendCertsFromPEM([]byte(bundle)) {
+		return nil, errors.New("registry certificate authority is invalid")
+	}
+	return pool, nil
 }
 
 func commandError(action string, output []byte, err error) error {

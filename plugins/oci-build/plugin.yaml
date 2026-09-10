@@ -3,7 +3,7 @@ kind: Plugin
 metadata:
   id: io.kubephos.build.oci
   name: OCI image build
-  version: 0.1.0
+  version: 0.2.0
   description: Builds an immutable OCI image from an exact Git commit and publishes it to a managed registry.
 spec:
   protocol: v1alpha1

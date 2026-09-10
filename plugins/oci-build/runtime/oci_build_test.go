@@ -2,11 +2,18 @@ package ocibuild
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/json"
+	"encoding/pem"
+	"math/big"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"kubephos.dev/kubephos/internal/domain"
 	"kubephos.dev/kubephos/internal/plugins"
@@ -123,6 +130,20 @@ func TestValidateResolvedRequiresMatchingProjectCredential(t *testing.T) {
 	}
 }
 
+func TestValidateResolvedRequiresVerifiedTLS(t *testing.T) {
+	spec, endpoint, credential := validInputs()
+	endpoint.Spec.Insecure = true
+	endpoint.Spec.URL = "http://harbor.example.test"
+	if err := validateResolved(spec, endpoint, credential); err == nil {
+		t.Fatal("expected insecure registry rejection")
+	}
+	_, endpoint, credential = validInputs()
+	endpoint.Spec.CABundle = "not a certificate"
+	if err := validateResolved(spec, endpoint, credential); err == nil {
+		t.Fatal("expected invalid certificate authority rejection")
+	}
+}
+
 func TestBuildPathsRejectsSymlinkEscape(t *testing.T) {
 	root := t.TempDir()
 	outside := t.TempDir()
@@ -136,6 +157,26 @@ func TestBuildPathsRejectsSymlinkEscape(t *testing.T) {
 	spec.ContextPath = "context"
 	if _, _, err := buildPaths(root, spec); err == nil {
 		t.Fatal("expected escaped context rejection")
+	}
+}
+
+func TestRegistryClientMaterializesOnlyThePublicCA(t *testing.T) {
+	_, endpoint, _ := validInputs()
+	files, err := prepareRegistryClient(endpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(files.root)
+	info, err := os.Stat(files.root)
+	if err != nil || info.Mode().Perm() != 0700 {
+		t.Fatalf("unexpected registry directory permissions: %v %v", info, err)
+	}
+	value, err := os.ReadFile(filepath.Join(files.certDir, "ca.crt"))
+	if err != nil || string(value) != endpoint.Spec.CABundle {
+		t.Fatal("registry CA was not materialized exactly")
+	}
+	if _, err := os.Stat(files.authFile); !os.IsNotExist(err) {
+		t.Fatal("credential file must not exist before authenticated login")
 	}
 }
 
@@ -164,6 +205,7 @@ func validInputs() (Spec, registryEndpoint, registryCredential) {
 	endpoint.Spec.Host = "harbor.example.test"
 	endpoint.Spec.URL = "https://harbor.example.test"
 	endpoint.Spec.APIURL = "https://harbor.example.test/api/v2.0"
+	endpoint.Spec.CABundle = testRegistryCABundle()
 	endpoint.Spec.Projects = []string{"kubephos-dev", "kubephos-releases"}
 	var credential registryCredential
 	credential.APIVersion = artifactAPI
@@ -176,6 +218,20 @@ func validInputs() (Spec, registryEndpoint, registryCredential) {
 	credential.Spec.Project = "kubephos-dev"
 	credential.Spec.Scopes = []string{"pull", "push"}
 	return spec, endpoint, credential
+}
+
+func testRegistryCABundle() string {
+	_, private, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		panic(err)
+	}
+	now := time.Now()
+	template := &x509.Certificate{SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "KubePhos registry test CA"}, NotBefore: now.Add(-time.Minute), NotAfter: now.Add(time.Hour), IsCA: true, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign}
+	der, err := x509.CreateCertificate(rand.Reader, template, template, private.Public(), private)
+	if err != nil {
+		panic(err)
+	}
+	return string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}))
 }
 
 func withSpec(value Spec, mutate func(*Spec)) Spec {

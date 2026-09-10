@@ -4,14 +4,19 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
+	"math/big"
 	"os/exec"
 	"regexp"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"golang.org/x/crypto/ssh"
 
@@ -54,7 +59,7 @@ func TestManagedRegistryLifecycle(t *testing.T) {
 	if err := json.Unmarshal(value, &decoded); err != nil {
 		t.Fatal(err)
 	}
-	if decoded.RegistryEndpoint.Metadata.Version != harborVersion || decoded.RegistryEndpoint.Spec.Host != "10.10.0.12" || decoded.RegistryPushCredential.Metadata.Role != "push" || decoded.RegistryPushCredential.Spec.Project != development || decoded.RegistryManagementCredential.Metadata.Role != "management" {
+	if decoded.RegistryEndpoint.Metadata.Version != harborVersion || decoded.RegistryEndpoint.Spec.Host != "10.10.0.12" || decoded.RegistryEndpoint.Spec.URL != "https://10.10.0.12" || decoded.RegistryEndpoint.Spec.Insecure || validateCABundle(decoded.RegistryEndpoint.Spec.CABundle) != nil || decoded.RegistryPushCredential.Metadata.Role != "push" || decoded.RegistryPushCredential.Spec.Project != development || decoded.RegistryManagementCredential.Metadata.Role != "management" {
 		t.Fatalf("unexpected registry result %#v", decoded)
 	}
 	if decoded.RegistryPushCredential.Spec.Password == "" || decoded.RegistryManagementCredential.Spec.Password == "" || decoded.RegistryPushCredential.Spec.Password == decoded.RegistryManagementCredential.Spec.Password {
@@ -161,13 +166,16 @@ func TestInstallerIsVersionedAndDigestVerified(t *testing.T) {
 	if !strings.Contains(command, "docker-compose-v2") || !strings.Contains(command, "docker compose version") {
 		t.Fatal("installer command does not validate the compose runtime")
 	}
+	if strings.Contains(command, "http://") || strings.Contains(command, "curl -k") || strings.Contains(command, "curl --insecure") || !strings.Contains(command, "subjectAltName=IP:10.10.0.12") || !strings.Contains(command, "--cacert "+tlsPath+"/ca.crt") || !strings.Contains(command, caMarker) {
+		t.Fatal("installer command does not enforce verifiable registry TLS")
+	}
 }
 
 func TestRemoteCommandsHaveValidShellSyntax(t *testing.T) {
 	commands := []string{
 		installPrecheckCommand(),
 		installCommand("marker", "10.10.0.12", "admin-password", "database-password", "robot-secret"),
-		readinessCommand("marker", "admin-password", "robot$name", "robot-secret"),
+		readinessCommand("marker", "10.10.0.12", "admin-password", "robot$name", "robot-secret"),
 		cleanupPrecheckCommand("marker"),
 		cleanupCommand("marker"),
 		cleanupVerifyCommand(),
@@ -230,7 +238,7 @@ func (runner *fakeRunner) Run(_ context.Context, _ machine, _ machineAccess, com
 		} else if runner.robotSecret != "" {
 			secret = runner.robotSecret
 		}
-		return "installation complete\n" + robotMarker + `{"id":7,"name":"robot$kubephos-dev+builder","secret":"` + secret + `"}`, nil
+		return "installation complete\n" + robotMarker + `{"id":7,"name":"robot$kubephos-dev+builder","secret":"` + secret + `"}` + "\n" + caMarker + base64.StdEncoding.EncodeToString(testCABundle()), nil
 	case strings.Contains(command, "the registry ownership marker does not match"):
 		if !runner.installed {
 			return "", errors.New("registry is absent")
@@ -247,4 +255,18 @@ func (runner *fakeRunner) Run(_ context.Context, _ machine, _ machineAccess, com
 	default:
 		return "", errors.New("unexpected command")
 	}
+}
+
+func testCABundle() []byte {
+	_, private, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		panic(err)
+	}
+	now := time.Now()
+	template := &x509.Certificate{SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "KubePhos test CA"}, NotBefore: now.Add(-time.Minute), NotAfter: now.Add(time.Hour), IsCA: true, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign}
+	der, err := x509.CreateCertificate(rand.Reader, template, template, private.Public(), private)
+	if err != nil {
+		panic(err)
+	}
+	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
 }

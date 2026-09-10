@@ -3,8 +3,11 @@ package harbor
 import (
 	"context"
 	"crypto/rand"
+	"crypto/x509"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"net"
 	"regexp"
@@ -27,10 +30,12 @@ const (
 	installPath     = "/opt/harbor"
 	dataPath        = "/srv/kubephos-harbor"
 	logPath         = "/var/log/harbor"
+	tlsPath         = "/opt/harbor/tls"
 	markerFile      = "/var/lib/kubephos/harbor.marker"
 	development     = "kubephos-dev"
 	releases        = "kubephos-releases"
 	robotMarker     = "KUBEPHOS_ROBOT="
+	caMarker        = "KUBEPHOS_CA="
 )
 
 type Plugin struct {
@@ -100,6 +105,7 @@ type registryEndpointSpec struct {
 	Host     string   `json:"host"`
 	URL      string   `json:"url"`
 	APIURL   string   `json:"apiURL"`
+	CABundle string   `json:"caBundle"`
 	Insecure bool     `json:"insecure"`
 	Projects []string `json:"projects"`
 }
@@ -142,7 +148,7 @@ type commandRunner interface {
 
 func (Plugin) Manifest() plugins.Manifest {
 	return plugins.Manifest{
-		ID: pluginID, Name: "Managed OCI registry", Version: "0.1.0",
+		ID: pluginID, Name: "Managed OCI registry", Version: "0.2.0",
 		Description:     "Installs and validates a managed OCI registry on one dedicated machine.",
 		Schema:          json.RawMessage(`{"type":"object","additionalProperties":false,"required":["machineSetRef","machineAccessRef","registryName"],"properties":{"machineSetRef":{"type":"string","title":"Registry machine","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"MachineSet","x-kubephos-artifact-version":"v1alpha1"},"machineAccessRef":{"type":"string","title":"Machine access","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"MachineAccess","x-kubephos-artifact-version":"v1alpha1"},"registryName":{"type":"string","title":"Registry name","pattern":"^[a-z0-9][a-z0-9-]{0,31}$","default":"managed-registry"}}}`),
 		ArtifactInputs:  []domain.ArtifactContract{{Type: "MachineSet", Version: "v1alpha1"}, {Type: "MachineAccess", Version: "v1alpha1"}},
@@ -251,7 +257,7 @@ func (plugin Plugin) Execute(ctx context.Context, step domain.PlanStep, log plug
 	if err != nil {
 		return nil, err
 	}
-	robotValue := extractMarkedValue(output, robotMarker)
+	robotValue := extractMarkedLine(output, robotMarker)
 	var robot robotCreated
 	decodeErr := json.Unmarshal([]byte(robotValue), &robot)
 	if robotValue == "" || decodeErr != nil || robot.ID <= 0 || robot.Name == "" {
@@ -261,12 +267,17 @@ func (plugin Plugin) Execute(ctx context.Context, step domain.PlanStep, log plug
 	if robotPassword == "" {
 		robotPassword = robotSecret
 	}
-	baseURL := "http://" + target.Address
+	caEncoded := extractMarkedLine(output, caMarker)
+	caBytes, decodeErr := base64.StdEncoding.DecodeString(caEncoded)
+	if caEncoded == "" || decodeErr != nil || validateCABundle(string(caBytes)) != nil {
+		return nil, errors.New("managed registry did not return a valid certificate authority")
+	}
+	baseURL := "https://" + target.Address
 	value := result{
 		RegistryEndpoint: registryEndpoint{
 			APIVersion: artifactAPI, Kind: "RegistryEndpoint",
 			Metadata: registryEndpointMetadata{Name: input.RegistryName, Version: harborVersion},
-			Spec:     registryEndpointSpec{Protocol: "oci", Host: target.Address, URL: baseURL, APIURL: baseURL + "/api/v2.0", Insecure: true, Projects: []string{development, releases}},
+			Spec:     registryEndpointSpec{Protocol: "oci", Host: target.Address, URL: baseURL, APIURL: baseURL + "/api/v2.0", CABundle: string(caBytes), Insecure: false, Projects: []string{development, releases}},
 		},
 		RegistryPushCredential: registryCredential{
 			APIVersion: artifactAPI, Kind: "RegistryCredential",
@@ -301,13 +312,13 @@ func (plugin Plugin) Verify(ctx context.Context, step domain.PlanStep, raw json.
 	if err := validateResult(input, target, value); err != nil {
 		return unhealthy(err.Error(), "artifact", "invalid"), nil
 	}
-	if _, err := plugin.runner().Run(ctx, target, access, readinessCommand(input.Marker, value.RegistryManagementCredential.Spec.Password, value.RegistryPushCredential.Spec.Username, value.RegistryPushCredential.Spec.Password)); err != nil {
+	if _, err := plugin.runner().Run(ctx, target, access, readinessCommand(input.Marker, target.Address, value.RegistryManagementCredential.Spec.Password, value.RegistryPushCredential.Spec.Username, value.RegistryPushCredential.Spec.Password)); err != nil {
 		return unhealthy("Managed-registry health gate failed: "+err.Error(), "registry", "unhealthy"), nil
 	}
 	if err := log("info", "Registry health, installed version, managed projects, management access and robot token are verified"); err != nil {
 		return domain.HealthReport{}, err
 	}
-	return domain.HealthReport{Status: domain.HealthHealthy, Summary: "Managed OCI registry is ready", Checks: map[string]string{"health": "healthy", "version": harborVersion, "projects": "2", "robot": "verified", "server": target.Address}}, nil
+	return domain.HealthReport{Status: domain.HealthHealthy, Summary: "Managed OCI registry is ready", Checks: map[string]string{"health": "healthy", "tls": "verified", "version": harborVersion, "projects": "2", "robot": "verified", "server": target.Address}}, nil
 }
 
 func (plugin Plugin) Cleanup(ctx context.Context, step domain.PlanStep, _ json.RawMessage, log plugins.Logger) error {
@@ -381,8 +392,11 @@ func validateArtifacts(machines machineSet, access machineAccess) error {
 
 func validateResult(input stepInput, target machine, value result) error {
 	endpoint := value.RegistryEndpoint
-	if endpoint.APIVersion != artifactAPI || endpoint.Kind != "RegistryEndpoint" || endpoint.Metadata.Name != input.RegistryName || endpoint.Metadata.Version != harborVersion || endpoint.Spec.Protocol != "oci" || endpoint.Spec.Host != target.Address || endpoint.Spec.URL != "http://"+target.Address || endpoint.Spec.APIURL != "http://"+target.Address+"/api/v2.0" || !endpoint.Spec.Insecure || len(endpoint.Spec.Projects) != 2 || endpoint.Spec.Projects[0] != development || endpoint.Spec.Projects[1] != releases {
+	if endpoint.APIVersion != artifactAPI || endpoint.Kind != "RegistryEndpoint" || endpoint.Metadata.Name != input.RegistryName || endpoint.Metadata.Version != harborVersion || endpoint.Spec.Protocol != "oci" || endpoint.Spec.Host != target.Address || endpoint.Spec.URL != "https://"+target.Address || endpoint.Spec.APIURL != "https://"+target.Address+"/api/v2.0" || endpoint.Spec.Insecure || len(endpoint.Spec.Projects) != 2 || endpoint.Spec.Projects[0] != development || endpoint.Spec.Projects[1] != releases {
 		return errors.New("registry endpoint does not match the validated plan")
+	}
+	if err := validateCABundle(endpoint.Spec.CABundle); err != nil {
+		return errors.New("registry certificate authority is invalid")
 	}
 	push := value.RegistryPushCredential
 	if push.APIVersion != artifactAPI || push.Kind != "RegistryCredential" || push.Metadata.Role != "push" || push.Spec.Server != target.Address || push.Spec.Username == "" || push.Spec.Password == "" || push.Spec.Project != development || len(push.Spec.Scopes) != 2 || push.Spec.Scopes[0] != "pull" || push.Spec.Scopes[1] != "push" {
@@ -412,6 +426,7 @@ func installPrecheckCommand() string {
 		{"at least 3.5 GiB of memory is required", "awk '/MemTotal:/ {exit !($2 >= 3500000)}' /proc/meminfo"},
 		{"at least 8 GiB of free disk is required", "df -Pk / | awk 'NR == 2 {exit !($4 >= 8388608)}'"},
 		{"TCP port 80 is already in use", "! sudo ss -ltn 'sport = :80' | grep -q LISTEN"},
+		{"TCP port 443 is already in use", "! sudo ss -ltn 'sport = :443' | grep -q LISTEN"},
 		{"an existing Harbor compose project was detected", "if command -v docker >/dev/null; then test -z \"$(sudo docker ps -aq --filter label=com.docker.compose.project=harbor)\"; fi"},
 		{"the managed Harbor installer is unreachable", "curl -fsSIL --max-time 20 " + shellQuote(installerURL) + " >/dev/null"},
 	}
@@ -431,14 +446,17 @@ func installCommand(marker, address, adminPassword, databasePassword, robotSecre
 	})
 	configurationEdits := []string{
 		"s|^hostname:.*|hostname: " + address + "|",
-		"/^https:/,/^# # Harbor/{s/^/# /}",
+		"s|^#*[[:space:]]*https:|https:|",
+		"s|^#*[[:space:]]*port: 443|  port: 443|",
+		"s|^#*[[:space:]]*certificate:.*|  certificate: " + tlsPath + "/server.crt|",
+		"s|^#*[[:space:]]*private_key:.*|  private_key: " + tlsPath + "/server.key|",
 		"s|^harbor_admin_password:.*|harbor_admin_password: " + adminPassword + "|",
 		"s|^  password: root123$|  password: " + databasePassword + "|",
 		"s|^data_volume:.*|data_volume: " + dataPath + "|",
 	}
 	parts := []string{
 		"sudo apt-get update -q",
-		"sudo DEBIAN_FRONTEND=noninteractive apt-get install -y ca-certificates curl docker.io docker-compose-v2",
+		"sudo DEBIAN_FRONTEND=noninteractive apt-get install -y ca-certificates curl docker.io docker-compose-v2 openssl",
 		"sudo systemctl enable --now docker",
 		"sudo docker compose version >/dev/null",
 		"sudo install -d -m 0755 /var/lib/kubephos",
@@ -447,6 +465,12 @@ func installCommand(marker, address, adminPassword, databasePassword, robotSecre
 		"curl -fsSL " + shellQuote(installerURL) + " -o /tmp/kubephos-harbor.tgz",
 		"printf '%s  %s\\n' " + shellQuote(installerDigest) + " /tmp/kubephos-harbor.tgz | sha256sum -c -",
 		"sudo tar -xzf /tmp/kubephos-harbor.tgz -C /opt",
+		"sudo install -d -m 0700 " + tlsPath,
+		"sudo openssl req -x509 -newkey rsa:3072 -sha256 -nodes -days 3650 -subj '/CN=KubePhos Harbor CA' -addext 'basicConstraints=critical,CA:TRUE' -addext 'keyUsage=critical,keyCertSign,cRLSign' -keyout " + tlsPath + "/ca.key -out " + tlsPath + "/ca.crt",
+		"sudo openssl req -newkey rsa:3072 -sha256 -nodes -subj '/CN=" + address + "' -keyout " + tlsPath + "/server.key -out " + tlsPath + "/server.csr",
+		"printf '%s\\n' 'subjectAltName=IP:" + address + "' 'extendedKeyUsage=serverAuth' | sudo tee " + tlsPath + "/server.ext >/dev/null",
+		"sudo openssl x509 -req -sha256 -days 825 -in " + tlsPath + "/server.csr -CA " + tlsPath + "/ca.crt -CAkey " + tlsPath + "/ca.key -CAcreateserial -extfile " + tlsPath + "/server.ext -out " + tlsPath + "/server.crt",
+		"sudo chmod 0600 " + tlsPath + "/ca.key " + tlsPath + "/server.key",
 		"sudo cp " + installPath + "/harbor.yml.tmpl " + installPath + "/harbor.yml",
 	}
 	for _, edit := range configurationEdits {
@@ -455,16 +479,20 @@ func installCommand(marker, address, adminPassword, databasePassword, robotSecre
 	parts = append(parts,
 		"cd "+installPath+" && sudo ./install.sh",
 		"rm -f /tmp/kubephos-harbor.tgz",
-		"attempt=0; until curl -fsS http://127.0.0.1/api/v2.0/health | grep -q '\"status\":\"healthy\"'; do attempt=$((attempt + 1)); test \"$attempt\" -lt 61; sleep 5; done",
-		"test \"$(curl -sS -o /tmp/kubephos-project.json -w '%{http_code}' -u "+shellQuote("admin:"+adminPassword)+" -H 'Content-Type: application/json' -d "+shellQuote(projectRequest)+" http://127.0.0.1/api/v2.0/projects)\" = 201",
-		"test \"$(curl -sS -o /tmp/kubephos-releases.json -w '%{http_code}' -u "+shellQuote("admin:"+adminPassword)+" -H 'Content-Type: application/json' -d "+shellQuote(releasesRequest)+" http://127.0.0.1/api/v2.0/projects)\" = 201",
+		"attempt=0; until curl --cacert "+tlsPath+"/ca.crt -fsS https://"+address+"/api/v2.0/health | grep -q '\"status\":\"healthy\"'; do attempt=$((attempt + 1)); test \"$attempt\" -lt 61; sleep 5; done",
+		"test \"$(curl --cacert "+tlsPath+"/ca.crt -sS -o /tmp/kubephos-project.json -w '%{http_code}' -u "+shellQuote("admin:"+adminPassword)+" -H 'Content-Type: application/json' -d "+shellQuote(projectRequest)+" https://"+address+"/api/v2.0/projects)\" = 201",
+		"test \"$(curl --cacert "+tlsPath+"/ca.crt -sS -o /tmp/kubephos-releases.json -w '%{http_code}' -u "+shellQuote("admin:"+adminPassword)+" -H 'Content-Type: application/json' -d "+shellQuote(releasesRequest)+" https://"+address+"/api/v2.0/projects)\" = 201",
 		"printf '\\n"+robotMarker+"'",
-		"curl -fsS -u "+shellQuote("admin:"+adminPassword)+" -H 'Content-Type: application/json' -d "+shellQuote(string(robotRequest))+" http://127.0.0.1/api/v2.0/robots",
+		"curl --cacert "+tlsPath+"/ca.crt -fsS -u "+shellQuote("admin:"+adminPassword)+" -H 'Content-Type: application/json' -d "+shellQuote(string(robotRequest))+" https://"+address+"/api/v2.0/robots",
+		"printf '\n"+caMarker+"'",
+		"sudo base64 -w0 "+tlsPath+"/ca.crt",
 	)
 	return strings.Join(parts, " && ")
 }
 
-func readinessCommand(marker, adminPassword, robotName, robotSecret string) string {
+func readinessCommand(marker, address, adminPassword, robotName, robotSecret string) string {
+	baseURL := "https://" + address
+	curl := "curl --cacert " + tlsPath + "/ca.crt -fsS"
 	checks := []struct {
 		name    string
 		command string
@@ -472,11 +500,12 @@ func readinessCommand(marker, adminPassword, robotName, robotSecret string) stri
 		{"the registry ownership marker does not match", "sudo test \"$(sudo cat " + markerFile + ")\" = " + shellQuote(marker)},
 		{"the registry compose definition is missing", "test -f " + installPath + "/docker-compose.yml"},
 		{"one or more registry containers are not running", "test \"$(sudo docker ps -q --filter label=com.docker.compose.project=harbor | wc -l)\" -ge 8"},
-		{"the registry health endpoint is not healthy", "curl -fsS http://127.0.0.1/api/v2.0/health | grep -q '\"status\":\"healthy\"'"},
-		{"the installed registry version does not match the managed profile", "curl -fsS -u " + shellQuote("admin:"+adminPassword) + " http://127.0.0.1/api/v2.0/systeminfo | grep -Fq " + shellQuote(harborVersion)},
-		{"the development project is unavailable to the management identity", "curl -fsS -u " + shellQuote("admin:"+adminPassword) + " 'http://127.0.0.1/api/v2.0/projects?name=" + development + "' | grep -Fq '\"name\":\"" + development + "\"'"},
-		{"the releases project is unavailable to the management identity", "curl -fsS -u " + shellQuote("admin:"+adminPassword) + " 'http://127.0.0.1/api/v2.0/projects?name=" + releases + "' | grep -Fq '\"name\":\"" + releases + "\"'"},
-		{"the registry robot cannot obtain a scoped token", "curl -fsS -u " + shellQuote(robotName+":"+robotSecret) + " 'http://127.0.0.1/service/token?service=harbor-registry&scope=repository%3A" + development + "%2Fkubephos-probe%3Apull%2Cpush' | grep -Fq '\"token\"'"},
+		{"the registry certificate does not match its IP address", "sudo openssl x509 -checkip " + address + " -noout -in " + tlsPath + "/server.crt"},
+		{"the registry health endpoint is not healthy", curl + " " + baseURL + "/api/v2.0/health | grep -q '\"status\":\"healthy\"'"},
+		{"the installed registry version does not match the managed profile", curl + " -u " + shellQuote("admin:"+adminPassword) + " " + baseURL + "/api/v2.0/systeminfo | grep -Fq " + shellQuote(harborVersion)},
+		{"the development project is unavailable to the management identity", curl + " -u " + shellQuote("admin:"+adminPassword) + " '" + baseURL + "/api/v2.0/projects?name=" + development + "' | grep -Fq '\"name\":\"" + development + "\"'"},
+		{"the releases project is unavailable to the management identity", curl + " -u " + shellQuote("admin:"+adminPassword) + " '" + baseURL + "/api/v2.0/projects?name=" + releases + "' | grep -Fq '\"name\":\"" + releases + "\"'"},
+		{"the registry robot cannot obtain a scoped token", curl + " -u " + shellQuote(robotName+":"+robotSecret) + " '" + baseURL + "/service/token?service=harbor-registry&scope=repository%3A" + development + "%2Fkubephos-probe%3Apull%2Cpush' | grep -Fq '\"token\"'"},
 	}
 	return guardedCommands(checks)
 }
@@ -512,12 +541,28 @@ func randomHex(size int) (string, error) {
 	return hex.EncodeToString(value), nil
 }
 
-func extractMarkedValue(value, marker string) string {
+func extractMarkedLine(value, marker string) string {
 	position := strings.LastIndex(value, marker)
 	if position < 0 {
 		return ""
 	}
-	return strings.TrimSpace(value[position+len(marker):])
+	line := value[position+len(marker):]
+	if end := strings.IndexAny(line, "\r\n"); end >= 0 {
+		line = line[:end]
+	}
+	return strings.TrimSpace(line)
+}
+
+func validateCABundle(value string) error {
+	block, rest := pem.Decode([]byte(value))
+	if block == nil || block.Type != "CERTIFICATE" || len(strings.TrimSpace(string(rest))) != 0 {
+		return errors.New("certificate authority must contain exactly one PEM certificate")
+	}
+	certificate, err := x509.ParseCertificate(block.Bytes)
+	if err != nil || !certificate.IsCA || certificate.CheckSignatureFrom(certificate) != nil || time.Now().Before(certificate.NotBefore) || !time.Now().Before(certificate.NotAfter) {
+		return errors.New("certificate authority is not a valid active self-signed CA")
+	}
+	return nil
 }
 
 func shellQuote(value string) string {
