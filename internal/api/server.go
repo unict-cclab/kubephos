@@ -360,11 +360,9 @@ func (s *Server) ready(response http.ResponseWriter, request *http.Request) {
 		writeError(response, http.StatusServiceUnavailable, "not_ready", err.Error())
 		return
 	}
-	if s.runtime != nil {
-		if err := s.runtime.Ready(request.Context()); err != nil {
-			writeError(response, http.StatusServiceUnavailable, "not_ready", "OCI plugin runtime is unavailable: "+err.Error())
-			return
-		}
+	if state, message := s.runtimeHealth(request.Context()); state == "unavailable" {
+		writeError(response, http.StatusServiceUnavailable, "not_ready", "OCI plugin runtime is unavailable: "+message)
+		return
 	}
 	writeJSON(response, http.StatusOK, map[string]string{"status": "healthy"})
 }
@@ -375,16 +373,34 @@ func (s *Server) system(response http.ResponseWriter, request *http.Request) {
 		writeError(response, http.StatusInternalServerError, "database_error", "Could not read platform status.")
 		return
 	}
+	runtimeContext, cancel := context.WithTimeout(request.Context(), 2*time.Second)
+	runtimeState, runtimeMessage := s.runtimeHealth(runtimeContext)
+	cancel()
+	status := "healthy"
+	if runtimeState == "unavailable" {
+		status = "degraded"
+	}
 	writeJSON(response, http.StatusOK, map[string]any{
 		"name":    "KubePhos",
 		"version": s.version,
-		"status":  "healthy",
+		"status":  status,
 		"features": map[string]bool{
-			"ociPluginImport": s.runtime != nil,
+			"ociPluginImport": runtimeState == "healthy",
 		},
-		"stats":     stats,
-		"checkedAt": time.Now().UTC(),
+		"pluginRuntime": map[string]string{"status": runtimeState, "message": runtimeMessage},
+		"stats":         stats,
+		"checkedAt":     time.Now().UTC(),
 	})
+}
+
+func (s *Server) runtimeHealth(ctx context.Context) (string, string) {
+	if s.runtime == nil {
+		return "disabled", "External OCI plugins are not enabled."
+	}
+	if err := s.runtime.Ready(ctx); err != nil {
+		return "unavailable", err.Error()
+	}
+	return "healthy", "The dedicated OCI executor is ready."
 }
 
 func (s *Server) listPlugins(response http.ResponseWriter, _ *http.Request) {

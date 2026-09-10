@@ -350,7 +350,9 @@ export interface LogEntry {
 
 export interface SystemStatus {
   version: string
+  status: string
   features?: {ociPluginImport?: boolean}
+  pluginRuntime?: {status: string; message: string}
   stats: {workspaces: number; activeOperations: number; readyOperations: number; failedOperations: number}
 }
 

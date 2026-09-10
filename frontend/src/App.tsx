@@ -163,12 +163,13 @@ export default function App() {
   if (!session?.authenticated) return <><AuthDialog setupRequired={Boolean(session?.setupRequired)} onAuthenticated={result => {setSession(result); notify(session?.setupRequired ? 'Administrator created.' : 'Signed in.')}} /><ToastRegion items={toasts} dismiss={dismiss} /></>
 
   const [eyebrow, title] = viewMetadata[view]
+  const healthy = connected && data.system?.status === 'healthy'
   return <>
     <div className="app-shell">
       <aside className="sidebar">
         <button className="brand" onClick={() => navigate('overview')} aria-label="KubePhos home"><span className="brand-mark">K</span><span><strong>KubePhos</strong><small>Kubernetes workspace</small></span></button>
         <nav className="navigation" aria-label="Main navigation">{navigation.map(([target, icon, label]) => <button className={`nav-item ${view === target ? 'active' : ''}`} key={target} onClick={() => navigate(target)}><span>{icon}</span>{label}</button>)}</nav>
-        <div className="sidebar-footer"><div className={`health-dot ${connected ? 'healthy' : 'unhealthy'}`} /><span><strong>{connected ? 'All systems healthy' : 'Connection unavailable'}</strong><small>Version {data.system?.version ?? 'dev'}</small></span></div>
+        <div className="sidebar-footer"><div className={`health-dot ${healthy ? 'healthy' : 'unhealthy'}`} /><span><strong>{healthy ? 'All systems healthy' : connected ? 'Platform degraded' : 'Connection unavailable'}</strong><small>Version {data.system?.version ?? 'dev'}</small></span></div>
       </aside>
       <main className="main">
         <header className="topbar"><div><p className="eyebrow">{eyebrow}</p><h1>{title}</h1></div><div className="topbar-actions"><span className="signed-user">{session.user?.username} · {session.user?.role}</span><button className="button secondary" onClick={logout}>Sign out</button><button className="button secondary" disabled={refreshing} onClick={() => load(false)}>{refreshing ? 'Refreshing…' : 'Refresh'}</button><button className="button primary" onClick={() => setModal('workspace')}>New workspace</button></div></header>

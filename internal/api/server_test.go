@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -12,6 +13,26 @@ import (
 	"kubephos.dev/kubephos/internal/domain"
 	"kubephos.dev/kubephos/internal/plugins"
 )
+
+type unavailableRunner struct{}
+
+func (unavailableRunner) Ready(context.Context) error {
+	return errors.New("executor offline")
+}
+func (unavailableRunner) Run(context.Context, string, string, []byte, bool, plugins.Logger) ([]byte, []string, error) {
+	return nil, nil, errors.New("executor offline")
+}
+
+func TestRuntimeHealthDistinguishesDisabledAndUnavailable(t *testing.T) {
+	disabled := &Server{}
+	if state, _ := disabled.runtimeHealth(context.Background()); state != "disabled" {
+		t.Fatalf("expected disabled runtime, got %s", state)
+	}
+	unavailable := &Server{runtime: unavailableRunner{}}
+	if state, message := unavailable.runtimeHealth(context.Background()); state != "unavailable" || message != "executor offline" {
+		t.Fatalf("unexpected runtime health: %s %s", state, message)
+	}
+}
 
 func TestInspectPluginReturnsStaticPreviewWithoutExecutor(t *testing.T) {
 	digest := strings.Repeat("e", 64)
