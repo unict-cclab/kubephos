@@ -260,6 +260,18 @@ type Session struct {
 	User      User
 }
 
+type PluginPackage struct {
+	Sequence         int64     `json:"sequence"`
+	PluginID         string    `json:"pluginId"`
+	Version          string    `json:"version"`
+	Digest           string    `json:"digest"`
+	Descriptor       string    `json:"-"`
+	DescriptorDigest string    `json:"descriptorDigest"`
+	Active           bool      `json:"active"`
+	CreatedAt        time.Time `json:"createdAt"`
+	UpdatedAt        time.Time `json:"updatedAt"`
+}
+
 type Operation struct {
 	ID              string           `json:"id"`
 	WorkspaceID     string           `json:"workspaceId"`

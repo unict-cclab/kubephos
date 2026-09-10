@@ -14,6 +14,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
@@ -31,16 +32,18 @@ import (
 )
 
 type Server struct {
-	store     *storage.Store
-	registry  *plugins.Registry
-	artifacts *artifacts.Client
-	vault     *secrets.Vault
-	runtime   plugins.ContainerRunner
-	version   string
+	store      *storage.Store
+	registry   *plugins.Registry
+	artifacts  *artifacts.Client
+	vault      *secrets.Vault
+	runtime    plugins.ContainerRunner
+	loadPlugin func([]byte) (plugins.Plugin, error)
+	version    string
+	pluginMu   sync.Mutex
 }
 
-func NewServer(store *storage.Store, registry *plugins.Registry, artifactStore *artifacts.Client, vault *secrets.Vault, runtime plugins.ContainerRunner, version, webDirectory string) (http.Handler, error) {
-	server := &Server{store: store, registry: registry, artifacts: artifactStore, vault: vault, runtime: runtime, version: version}
+func NewServer(store *storage.Store, registry *plugins.Registry, artifactStore *artifacts.Client, vault *secrets.Vault, runtime plugins.ContainerRunner, loadPlugin func([]byte) (plugins.Plugin, error), version, webDirectory string) (http.Handler, error) {
+	server := &Server{store: store, registry: registry, artifacts: artifactStore, vault: vault, runtime: runtime, loadPlugin: loadPlugin, version: version}
 	webHandler, err := webui.Handler(webDirectory)
 	if err != nil {
 		return nil, err
@@ -54,6 +57,8 @@ func NewServer(store *storage.Store, registry *plugins.Registry, artifactStore *
 	router.HandleFunc("POST /api/v1/auth/logout", server.authLogout)
 	router.HandleFunc("GET /api/v1/system", server.system)
 	router.HandleFunc("GET /api/v1/plugins", server.listPlugins)
+	router.HandleFunc("POST /api/v1/plugins", server.importPlugin)
+	router.HandleFunc("GET /api/v1/plugin-packages", server.listPluginPackages)
 	router.HandleFunc("GET /api/v1/catalog/applications", server.listCatalogApplications)
 	router.HandleFunc("POST /api/v1/catalog/applications", server.importCatalogApplication)
 	router.HandleFunc("GET /api/v1/credentials", server.listCredentials)
@@ -368,9 +373,12 @@ func (s *Server) system(response http.ResponseWriter, request *http.Request) {
 		return
 	}
 	writeJSON(response, http.StatusOK, map[string]any{
-		"name":      "KubePhos",
-		"version":   s.version,
-		"status":    "healthy",
+		"name":    "KubePhos",
+		"version": s.version,
+		"status":  "healthy",
+		"features": map[string]bool{
+			"ociPluginImport": s.runtime != nil,
+		},
 		"stats":     stats,
 		"checkedAt": time.Now().UTC(),
 	})
@@ -378,6 +386,70 @@ func (s *Server) system(response http.ResponseWriter, request *http.Request) {
 
 func (s *Server) listPlugins(response http.ResponseWriter, _ *http.Request) {
 	writeJSON(response, http.StatusOK, map[string]any{"items": s.registry.Manifests()})
+}
+
+func (s *Server) importPlugin(response http.ResponseWriter, request *http.Request) {
+	if s.runtime == nil || s.loadPlugin == nil {
+		writeError(response, http.StatusServiceUnavailable, "runtime_unavailable", "Configure a dedicated OCI plugin executor before importing external plugins.")
+		return
+	}
+	var input struct {
+		Descriptor string `json:"descriptor"`
+	}
+	if err := decodeJSON(request, &input); err != nil {
+		writeError(response, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	input.Descriptor = strings.TrimSpace(input.Descriptor)
+	if input.Descriptor == "" || len(input.Descriptor) > 512*1024 {
+		writeError(response, http.StatusUnprocessableEntity, "invalid_plugin", "The plugin descriptor must contain between 1 byte and 512 KB.")
+		return
+	}
+	s.pluginMu.Lock()
+	defer s.pluginMu.Unlock()
+	plugin, err := s.loadPlugin([]byte(input.Descriptor))
+	if err != nil {
+		writeError(response, http.StatusUnprocessableEntity, "invalid_plugin", err.Error())
+		return
+	}
+	manifest := plugin.Manifest()
+	if s.registry.IsBundled(manifest.ID) {
+		writeError(response, http.StatusConflict, "plugin_conflict", "A bundled plugin cannot be replaced.")
+		return
+	}
+	descriptorDigest := sha256.Sum256([]byte(input.Descriptor))
+	descriptorFingerprint := "sha256:" + hex.EncodeToString(descriptorDigest[:])
+	current, currentErr := s.store.GetActivePluginPackage(request.Context(), manifest.ID)
+	if currentErr != nil && !errors.Is(currentErr, storage.ErrNotFound) {
+		writeError(response, http.StatusInternalServerError, "database_error", "Could not inspect the installed plugin package.")
+		return
+	}
+	if currentErr == nil && current.Version == manifest.Version && current.Digest == manifest.Runtime.Digest && current.DescriptorDigest != descriptorFingerprint {
+		writeError(response, http.StatusConflict, "plugin_conflict", "Changed descriptors require a new plugin version or image digest.")
+		return
+	}
+	pluginPackage, err := s.store.ActivatePluginPackage(request.Context(), domain.PluginPackage{
+		PluginID: manifest.ID, Version: manifest.Version, Digest: manifest.Runtime.Digest, Descriptor: input.Descriptor,
+		DescriptorDigest: descriptorFingerprint, Active: true,
+	})
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, "database_error", "Could not store plugin package.")
+		return
+	}
+	if err := s.registry.Install(plugin); err != nil {
+		writeError(response, http.StatusConflict, "plugin_conflict", err.Error())
+		return
+	}
+	writeJSON(response, http.StatusCreated, map[string]any{"id": manifest.ID, "manifest": manifest, "package": pluginPackage})
+}
+
+func (s *Server) listPluginPackages(response http.ResponseWriter, request *http.Request) {
+	items, err := s.store.ListPluginPackages(request.Context(), 100)
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, "database_error", "Could not list plugin package history.")
+		return
+	}
+	writeJSON(response, http.StatusOK, map[string]any{"items": items})
 }
 
 func (s *Server) listCatalogApplications(response http.ResponseWriter, request *http.Request) {
@@ -1668,6 +1740,8 @@ func auditTarget(request *http.Request) (string, string, string, bool) {
 			return "experiment.create", "experiment", "", true
 		case "experiment-runs":
 			return "experiment.run.create", "experiment", "", true
+		case "plugins":
+			return "plugin.import", "plugin", "", true
 		}
 	}
 	if len(parts) == 3 && parts[0] == "pipelines" && parts[2] == "runs" {

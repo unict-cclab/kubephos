@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -113,8 +115,12 @@ func serve(configValue config.Config) error {
 	if err != nil {
 		return err
 	}
+	loader := externalPluginLoader(resolver, connectionRuntime(store), catalogRuntime(store), runtime)
+	if err := refreshInstalledPlugins(ctx, store, registry, loader); err != nil {
+		return err
+	}
 	artifactStore := artifacts.New(configValue.ArtifactEndpoint)
-	handler, err := api.NewServer(store, registry, artifactStore, vault, runtime, version, configValue.WebDirectory)
+	handler, err := api.NewServer(store, registry, artifactStore, vault, runtime, loader, version, configValue.WebDirectory)
 	if err != nil {
 		return err
 	}
@@ -150,9 +156,67 @@ func work(configValue config.Config) error {
 	if err != nil {
 		return err
 	}
+	loader := externalPluginLoader(resolver, connectionRuntime(store), catalogRuntime(store), runtime)
+	if err := refreshInstalledPlugins(ctx, store, registry, loader); err != nil {
+		return err
+	}
+	go watchInstalledPlugins(ctx, store, registry, loader)
 	artifactStore := artifacts.New(configValue.ArtifactEndpoint)
 	slog.Info("starting worker", "instance", configValue.InstanceID, "concurrency", configValue.WorkerConcurrency)
 	return engine.NewWorker(store, registry, artifactStore, vault, configValue.InstanceID, configValue.WorkerConcurrency, configValue.WorkerPoll).Run(ctx)
+}
+
+func externalPluginLoader(resolver plugins.SecretResolver, connections plugins.ConnectionResolver, catalogResolver plugins.CatalogResolver, runtime plugins.ContainerRunner) func([]byte) (plugins.Plugin, error) {
+	return func(descriptor []byte) (plugins.Plugin, error) {
+		return plugins.LoadDefinition(descriptor, resolver, connections, catalogResolver, runtime)
+	}
+}
+
+func refreshInstalledPlugins(ctx context.Context, store *storage.Store, registry *plugins.Registry, loader func([]byte) (plugins.Plugin, error)) error {
+	packages, err := store.ListActivePluginPackages(ctx)
+	if err != nil {
+		return err
+	}
+	for _, pluginPackage := range packages {
+		if registry.IsBundled(pluginPackage.PluginID) {
+			return fmt.Errorf("installed plugin %q conflicts with a bundled plugin", pluginPackage.PluginID)
+		}
+		descriptorDigest := sha256.Sum256([]byte(pluginPackage.Descriptor))
+		if pluginPackage.DescriptorDigest != "sha256:"+hex.EncodeToString(descriptorDigest[:]) {
+			return fmt.Errorf("installed plugin %q descriptor integrity check failed", pluginPackage.PluginID)
+		}
+		current, currentErr := registry.Get(pluginPackage.PluginID)
+		if currentErr == nil && current.Manifest().Matches(pluginPackage.Version, pluginPackage.Digest) {
+			continue
+		}
+		plugin, err := loader([]byte(pluginPackage.Descriptor))
+		if err != nil {
+			return fmt.Errorf("load installed plugin %s: %w", pluginPackage.PluginID, err)
+		}
+		manifest := plugin.Manifest()
+		if manifest.ID != pluginPackage.PluginID || !manifest.Matches(pluginPackage.Version, pluginPackage.Digest) {
+			return fmt.Errorf("installed plugin %q metadata does not match its descriptor", pluginPackage.PluginID)
+		}
+		if err := registry.Install(plugin); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func watchInstalledPlugins(ctx context.Context, store *storage.Store, registry *plugins.Registry, loader func([]byte) (plugins.Plugin, error)) {
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if err := refreshInstalledPlugins(ctx, store, registry, loader); err != nil {
+				slog.Error("refresh installed plugins", "error", err)
+			}
+		}
+	}
 }
 
 func credentialRuntime(store *storage.Store, keyFile string) (*secrets.Vault, plugins.SecretResolver, error) {

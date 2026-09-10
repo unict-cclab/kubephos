@@ -119,6 +119,14 @@ func LoadProcess(path string, resolver SecretResolver, connections ConnectionRes
 	if err != nil {
 		return nil, err
 	}
+	return loadDefinition(value, filepath.Dir(path), resolver, connections, catalogResolver, runners...)
+}
+
+func LoadDefinition(value []byte, resolver SecretResolver, connections ConnectionResolver, catalogResolver CatalogResolver, runners ...ContainerRunner) (*Process, error) {
+	return loadDefinition(value, "", resolver, connections, catalogResolver, runners...)
+}
+
+func loadDefinition(value []byte, baseDirectory string, resolver SecretResolver, connections ConnectionResolver, catalogResolver CatalogResolver, runners ...ContainerRunner) (*Process, error) {
 	var definition descriptor
 	decoder := yaml.NewDecoder(bytes.NewReader(value))
 	decoder.KnownFields(true)
@@ -156,9 +164,12 @@ func LoadProcess(path string, resolver SecretResolver, connections ConnectionRes
 	image := definition.Spec.Runtime.Image
 	var runtimeManifest Runtime
 	if definition.Spec.Runtime.Executable != "" {
+		if baseDirectory == "" {
+			return nil, errors.New("imported plugins must use an OCI image runtime")
+		}
 		executable = definition.Spec.Runtime.Executable
 		if !filepath.IsAbs(executable) {
-			executable = filepath.Join(filepath.Dir(path), executable)
+			executable = filepath.Join(baseDirectory, executable)
 		}
 		info, err := os.Stat(executable)
 		if err != nil {

@@ -218,6 +218,40 @@ export function ApplicationDialog({open, close, ...common}: CommonProps & {open:
   </Dialog>
 }
 
+export function PluginDialog({open, close, ...common}: CommonProps & {open: boolean; close: () => void}) {
+  const [file, setFile] = useState<File | null>(null)
+  const [error, setError] = useState('')
+  const [pending, setPending] = useState(false)
+  const submit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    if (!file) return
+    if (file.size > 512 * 1024) {
+      setError('The descriptor cannot exceed 512 KB.')
+      return
+    }
+    setPending(true)
+    setError('')
+    try {
+      await request('/plugins', {method: 'POST', body: JSON.stringify({descriptor: await file.text()})}, common.session.csrfToken)
+      close()
+      await common.onDone('Plugin validated and activated.')
+    } catch (cause) {
+      setError(errorMessage(cause))
+    } finally {
+      setPending(false)
+    }
+  }
+  return <Dialog open={open} onClose={close} title="Import plugin" eyebrow="IMMUTABLE RUNTIME">
+    <form onSubmit={submit}>
+      <label>Plugin descriptor<input type="file" accept=".yaml,.yml,application/yaml" required onChange={event => setFile(event.target.files?.[0] ?? null)} /></label>
+      <p className="field-description">{file ? `${file.name} · ${Math.ceil(file.size / 1024)} KB` : 'Select a plugins.kubephos.io/v1alpha1 descriptor.'}</p>
+      <ValidationCallout text="KubePhos checks the strict schema, immutable image digest, runtime policy and describe handshake before activation." />
+      <p className="form-error">{error}</p>
+      <Actions close={close} pending={pending} label="Validate and activate" />
+    </form>
+  </Dialog>
+}
+
 function Actions({close, pending, label}: {close: () => void; pending: boolean; label: string}) {
   return <div className="modal-actions"><button className="button secondary" type="button" onClick={close}>Cancel</button><button className="button primary" disabled={pending}>{pending ? 'Please wait…' : label}</button></div>
 }

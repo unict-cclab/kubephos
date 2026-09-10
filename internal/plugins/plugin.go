@@ -3,8 +3,10 @@ package plugins
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
+	"sync"
 
 	"kubephos.dev/kubephos/internal/domain"
 )
@@ -74,18 +76,24 @@ type Plugin interface {
 }
 
 type Registry struct {
+	mu      sync.RWMutex
 	plugins map[string]Plugin
+	bundled map[string]bool
 }
 
 func NewRegistry(values ...Plugin) *Registry {
-	registry := &Registry{plugins: map[string]Plugin{}}
+	registry := &Registry{plugins: map[string]Plugin{}, bundled: map[string]bool{}}
 	for _, value := range values {
-		registry.plugins[value.Manifest().ID] = value
+		pluginID := value.Manifest().ID
+		registry.plugins[pluginID] = value
+		registry.bundled[pluginID] = true
 	}
 	return registry
 }
 
 func (r *Registry) Get(pluginID string) (Plugin, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	plugin, ok := r.plugins[pluginID]
 	if !ok {
 		return nil, fmt.Errorf("plugin %q is not installed", pluginID)
@@ -94,10 +102,32 @@ func (r *Registry) Get(pluginID string) (Plugin, error) {
 }
 
 func (r *Registry) Manifests() []Manifest {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	result := make([]Manifest, 0, len(r.plugins))
 	for _, plugin := range r.plugins {
 		result = append(result, plugin.Manifest())
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i].Name < result[j].Name })
 	return result
+}
+
+func (r *Registry) Install(plugin Plugin) error {
+	if plugin == nil || plugin.Manifest().ID == "" {
+		return errors.New("plugin is invalid")
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	pluginID := plugin.Manifest().ID
+	if r.bundled[pluginID] {
+		return fmt.Errorf("bundled plugin %q cannot be replaced", pluginID)
+	}
+	r.plugins[pluginID] = plugin
+	return nil
+}
+
+func (r *Registry) IsBundled(pluginID string) bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.bundled[pluginID]
 }

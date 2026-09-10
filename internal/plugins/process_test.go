@@ -172,6 +172,25 @@ spec:
 	}
 }
 
+func TestLoadDefinitionRejectsImportedExecutable(t *testing.T) {
+	descriptor := `apiVersion: plugins.kubephos.io/v1alpha1
+kind: Plugin
+metadata:
+  id: dev.example.plugin
+  name: Example
+  version: 1.2.3
+spec:
+  protocol: v1alpha1
+  commands: [describe, validate, plan, precheck, execute, verify, status, cancel, cleanup]
+  configurationSchema: {type: object}
+  runtime:
+    executable: example-plugin
+`
+	if _, err := LoadDefinition([]byte(descriptor), nil, nil, nil); err == nil || !strings.Contains(err.Error(), "must use an OCI image") {
+		t.Fatalf("expected imported executable rejection, got %v", err)
+	}
+}
+
 func TestResolveSecretsHonorsDeclaredKinds(t *testing.T) {
 	process := &Process{
 		secretKinds: map[string]bool{"allowed": true},

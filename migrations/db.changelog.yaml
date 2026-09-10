@@ -104,3 +104,10 @@ databaseChangeLog:
         - sqlFile:
             path: changes/015-plugin-runtime-snapshots.sql
             relativeToChangelogFile: true
+  - changeSet:
+      id: 016-plugin-packages
+      author: kubephos
+      changes:
+        - sqlFile:
+            path: changes/016-plugin-packages.sql
+            relativeToChangelogFile: true

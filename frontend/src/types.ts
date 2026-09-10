@@ -54,6 +54,17 @@ export interface Plugin {
   runtime: {kind: string; reference?: string; digest?: string}
 }
 
+export interface PluginPackage {
+	sequence: number
+	pluginId: string
+	version: string
+	digest: string
+	descriptorDigest: string
+	active: boolean
+	createdAt: string
+	updatedAt: string
+}
+
 export interface CredentialDefinition {
   kind: string
   name: string
@@ -339,6 +350,7 @@ export interface LogEntry {
 
 export interface SystemStatus {
   version: string
+  features?: {ociPluginImport?: boolean}
   stats: {workspaces: number; activeOperations: number; readyOperations: number; failedOperations: number}
 }
 
@@ -351,6 +363,7 @@ export interface PlatformData {
   operations: Operation[]
   artifacts: Artifact[]
   plugins: Plugin[]
+  pluginPackages: PluginPackage[]
   applications: Application[]
   credentials: Credential[]
   connections: Connection[]
