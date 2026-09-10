@@ -3,6 +3,7 @@ package plugins
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -54,7 +55,7 @@ func (d *DockerRunner) Ready(ctx context.Context) error {
 	if err := d.validateTLSFiles(); err != nil {
 		return err
 	}
-	arguments := append(d.connectionArguments(), "info", "--format", "{{.ServerVersion}}")
+	arguments := append(d.connectionArguments(), "info", "--format", "{{json .SecurityOptions}}")
 	output, err := exec.CommandContext(ctx, d.binary, arguments...).CombinedOutput()
 	if err != nil {
 		message := strings.TrimSpace(string(output))
@@ -62,6 +63,20 @@ func (d *DockerRunner) Ready(ctx context.Context) error {
 			message = err.Error()
 		}
 		return errors.New(message)
+	}
+	var securityOptions []string
+	if err := json.Unmarshal(bytes.TrimSpace(output), &securityOptions); err != nil {
+		return errors.New("OCI plugin executor returned invalid security information")
+	}
+	rootless := false
+	for _, option := range securityOptions {
+		if option == "name=rootless" || option == "rootless" {
+			rootless = true
+			break
+		}
+	}
+	if !rootless {
+		return errors.New("OCI plugin executor must run in rootless mode")
 	}
 	return nil
 }

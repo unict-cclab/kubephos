@@ -12,7 +12,7 @@ func TestDockerRunnerAppliesIsolation(t *testing.T) {
 	directory := t.TempDir()
 	trace := filepath.Join(directory, "arguments")
 	binary := filepath.Join(directory, "docker")
-	script := "#!/bin/sh\nif [ \"${10}\" = run ]; then\n  printf '%s\\n' \"$@\" > " + trace + "\n  cat >/dev/null\n  printf '%s' '{\"valid\":true}'\n  printf '%s\\n' 'runtime log' >&2\nfi\n"
+	script := "#!/bin/sh\nif [ \"${10}\" = info ]; then\n  printf '%s' '[\"name=seccomp,profile=builtin\",\"name=rootless\"]'\nelif [ \"${10}\" = run ]; then\n  printf '%s\\n' \"$@\" > " + trace + "\n  cat >/dev/null\n  printf '%s' '{\"valid\":true}'\n  printf '%s\\n' 'runtime log' >&2\nfi\n"
 	if err := os.WriteFile(binary, []byte(script), 0755); err != nil {
 		t.Fatal(err)
 	}
@@ -84,5 +84,25 @@ func TestDockerRunnerRequiresRegistryPolicy(t *testing.T) {
 	runner := NewDockerRunner("tcp://runtime:2376", "/ca", "/cert", "/key")
 	if err := ValidateRuntimeImage(runner, "example.test/plugin@sha256:"+strings.Repeat("a", 64)); err == nil || !strings.Contains(err.Error(), "at least one allowed registry") {
 		t.Fatalf("expected missing policy error, got %v", err)
+	}
+}
+
+func TestDockerRunnerRejectsRootfulExecutor(t *testing.T) {
+	directory := t.TempDir()
+	binary := filepath.Join(directory, "docker")
+	if err := os.WriteFile(binary, []byte("#!/bin/sh\nprintf '%s' '[\"name=seccomp,profile=builtin\"]'\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	ca := filepath.Join(directory, "ca.pem")
+	cert := filepath.Join(directory, "cert.pem")
+	key := filepath.Join(directory, "key.pem")
+	for _, path := range []string{ca, cert, key} {
+		if err := os.WriteFile(path, []byte("test"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runner := &DockerRunner{host: "tcp://runtime:2376", binary: binary, ca: ca, cert: cert, key: key, allowedRegistries: map[string]bool{"registry.example.test": true}}
+	if err := runner.Ready(context.Background()); err == nil || !strings.Contains(err.Error(), "rootless") {
+		t.Fatalf("expected rootless executor error, got %v", err)
 	}
 }
