@@ -60,6 +60,7 @@ func NewServer(store *storage.Store, registry *plugins.Registry, artifactStore *
 	router.HandleFunc("POST /api/v1/plugins/inspect", server.inspectPlugin)
 	router.HandleFunc("POST /api/v1/plugins", server.importPlugin)
 	router.HandleFunc("GET /api/v1/plugin-packages", server.listPluginPackages)
+	router.HandleFunc("POST /api/v1/plugin-packages/{sequence}/activate", server.activatePluginPackage)
 	router.HandleFunc("GET /api/v1/catalog/applications", server.listCatalogApplications)
 	router.HandleFunc("POST /api/v1/catalog/applications", server.importCatalogApplication)
 	router.HandleFunc("GET /api/v1/credentials", server.listCredentials)
@@ -476,6 +477,54 @@ func (s *Server) listPluginPackages(response http.ResponseWriter, request *http.
 		return
 	}
 	writeJSON(response, http.StatusOK, map[string]any{"items": items})
+}
+
+func (s *Server) activatePluginPackage(response http.ResponseWriter, request *http.Request) {
+	if s.runtime == nil || s.loadPlugin == nil {
+		writeError(response, http.StatusServiceUnavailable, "runtime_unavailable", "Configure a dedicated OCI plugin executor before activating external plugins.")
+		return
+	}
+	sequence, err := strconv.ParseInt(request.PathValue("sequence"), 10, 64)
+	if err != nil || sequence <= 0 {
+		writeError(response, http.StatusBadRequest, "invalid_package", "Plugin package sequence is invalid.")
+		return
+	}
+	s.pluginMu.Lock()
+	defer s.pluginMu.Unlock()
+	pluginPackage, err := s.store.GetPluginPackage(request.Context(), sequence)
+	if errors.Is(err, storage.ErrNotFound) {
+		writeError(response, http.StatusNotFound, "not_found", "Plugin package not found.")
+		return
+	}
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, "database_error", "Could not read plugin package.")
+		return
+	}
+	descriptorDigest := sha256.Sum256([]byte(pluginPackage.Descriptor))
+	if pluginPackage.DescriptorDigest != "sha256:"+hex.EncodeToString(descriptorDigest[:]) {
+		writeError(response, http.StatusConflict, "integrity_failed", "Plugin descriptor integrity verification failed.")
+		return
+	}
+	plugin, err := s.loadPlugin([]byte(pluginPackage.Descriptor))
+	if err != nil {
+		writeError(response, http.StatusUnprocessableEntity, "invalid_plugin", err.Error())
+		return
+	}
+	manifest := plugin.Manifest()
+	if manifest.ID != pluginPackage.PluginID || !manifest.Matches(pluginPackage.Version, pluginPackage.Digest) || s.registry.IsBundled(manifest.ID) {
+		writeError(response, http.StatusConflict, "plugin_conflict", "Stored plugin metadata no longer matches the validated package.")
+		return
+	}
+	activated, err := s.store.ActivatePluginPackage(request.Context(), pluginPackage)
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, "database_error", "Could not activate plugin package.")
+		return
+	}
+	if err := s.registry.Install(plugin); err != nil {
+		writeError(response, http.StatusConflict, "plugin_conflict", err.Error())
+		return
+	}
+	writeJSON(response, http.StatusOK, activated)
 }
 
 func (s *Server) listCatalogApplications(response http.ResponseWriter, request *http.Request) {
@@ -1775,6 +1824,9 @@ func auditTarget(request *http.Request) (string, string, string, bool) {
 	}
 	if len(parts) == 2 && parts[0] == "plugins" && parts[1] == "inspect" {
 		return "plugin.inspect", "plugin", "", true
+	}
+	if len(parts) == 3 && parts[0] == "plugin-packages" && parts[2] == "activate" {
+		return "plugin.activate", "plugin-package", parts[1], true
 	}
 	if len(parts) == 3 && parts[0] == "pipeline-runs" && parts[2] == "cancel" {
 		return "pipeline.run.cancel", "pipeline-run", parts[1], true

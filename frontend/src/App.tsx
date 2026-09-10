@@ -6,7 +6,7 @@ import {PipelineDialog} from './components/PipelineDialog'
 import {ToastRegion, type ToastMessage} from './components/ToastRegion'
 import {Views} from './components/Views'
 import {WorkspaceFlowDialog} from './components/WorkspaceFlowDialog'
-import type {PlatformData, Session, View, Workspace} from './types'
+import type {PlatformData, PluginPackage, Session, View, Workspace} from './types'
 
 const emptyData: PlatformData = {system: null, workspaces: [], pipelines: [], pipelineRuns: [], experiments: [], operations: [], artifacts: [], plugins: [], pluginPackages: [], applications: [], credentials: [], connections: [], resources: [], audit: []}
 const viewMetadata: Record<View, [string, string]> = {
@@ -119,6 +119,16 @@ export default function App() {
     setSession({authenticated: false, setupRequired: false})
   }
 
+  const activatePlugin = async (pluginPackage: PluginPackage) => {
+    if (!window.confirm(`Activate ${pluginPackage.pluginId} ${pluginPackage.version}? New runs will use this image digest.`)) return
+    try {
+      await request(`/plugin-packages/${pluginPackage.sequence}/activate`, {method: 'POST', body: '{}'}, session?.csrfToken)
+      await afterMutation('Plugin version activated.')
+    } catch (cause) {
+      notify(cause instanceof Error ? cause.message : 'Could not activate the plugin version.', true)
+    }
+  }
+
   const openOperationForm = (selected: Workspace) => {
     if (!data.plugins.length) {
       notify('No plugin is installed.', true)
@@ -166,6 +176,7 @@ export default function App() {
           openOperation={setOperationID}
           importApplication={() => setModal('application')}
           importPlugin={() => setModal('plugin')}
+          activatePlugin={activatePlugin}
           addCredential={() => setModal('credential')}
           addConnection={() => setModal('connection')}
         />

@@ -51,6 +51,19 @@ func (s *Store) GetActivePluginPackage(ctx context.Context, pluginID string) (do
 	return pluginPackage, err
 }
 
+func (s *Store) GetPluginPackage(ctx context.Context, sequence int64) (domain.PluginPackage, error) {
+	var pluginPackage domain.PluginPackage
+	err := s.pool.QueryRow(ctx, `
+		SELECT sequence, plugin_id, version, digest, descriptor, descriptor_digest, active, created_at, updated_at
+		FROM plugin_packages
+		WHERE sequence = $1
+	`, sequence).Scan(&pluginPackage.Sequence, &pluginPackage.PluginID, &pluginPackage.Version, &pluginPackage.Digest, &pluginPackage.Descriptor, &pluginPackage.DescriptorDigest, &pluginPackage.Active, &pluginPackage.CreatedAt, &pluginPackage.UpdatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.PluginPackage{}, ErrNotFound
+	}
+	return pluginPackage, err
+}
+
 func (s *Store) ListActivePluginPackages(ctx context.Context) ([]domain.PluginPackage, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT sequence, plugin_id, version, digest, descriptor, descriptor_digest, active, created_at, updated_at
