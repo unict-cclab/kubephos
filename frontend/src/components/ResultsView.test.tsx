@@ -1,6 +1,6 @@
 import {describe, expect, it} from 'vitest'
-import type {Artifact, TimeSeriesDataset} from '../types'
-import {aggregateMetric, type LoadedDataset} from './ResultsView'
+import type {Artifact, Experiment, TimeSeriesDataset} from '../types'
+import {aggregateMetric, experimentProgress, type LoadedDataset} from './ResultsView'
 
 const artifact: Artifact = {id: 'art_dataset', operationId: 'op_collect', workspaceId: 'ws_dev', name: 'dataset', type: 'TimeSeriesDataset', version: 'v1alpha1', mediaType: 'application/json', digest: 'sha256:value', sizeBytes: 100, sensitive: false, verifiedAt: '2026-09-09T10:00:00Z'}
 
@@ -18,6 +18,16 @@ describe('aggregateMetric', () => {
     const value = loaded('empty', [[1, 2]])
     value.dataset.spec.series[0].metric = 'memory.working_set'
     expect(aggregateMetric([value], 'cpu.cores')).toEqual([])
+  })
+})
+
+describe('experimentProgress', () => {
+  it('counts every terminal trial across variants', () => {
+    const experiment = {variants: [
+      {trials: [{status: 'succeeded'}, {status: 'running'}]},
+      {trials: [{status: 'failed'}, {status: 'canceled'}, {status: 'queued'}]}
+    ]} as Experiment
+    expect(experimentProgress(experiment)).toEqual({completed: 3, total: 5})
   })
 })
 

@@ -11,6 +11,7 @@ interface Props {
   workspaces: Workspace[]
   session: Session
   changed: () => Promise<void>
+  openOperation: (id: string) => void
 }
 
 export interface LoadedDataset {
@@ -28,7 +29,7 @@ export interface AggregateSeries {
 
 const colors = ['#177554', '#3169a8', '#a9660c', '#8b4fa3']
 
-export function ResultsView({artifacts, experiments, operations, workspaces, session, changed}: Props) {
+export function ResultsView({artifacts, experiments, operations, workspaces, session, changed, openOperation}: Props) {
   const available = useMemo(() => artifacts.filter(item => !item.sensitive && item.type === 'TimeSeriesDataset' && item.version === 'v1alpha1').sort((left, right) => right.verifiedAt.localeCompare(left.verifiedAt)), [artifacts])
   const availableKey = available.map(item => `${item.id}:${item.digest}`).join('|')
   const [selected, setSelected] = useState<string[]>([])
@@ -79,16 +80,16 @@ export function ResultsView({artifacts, experiments, operations, workspaces, ses
   const metrics = [...new Set(displayed.flatMap(item => item.dataset.spec.series.map(series => series.metric)))].sort()
   const samples = displayed.reduce((total, item) => total + item.dataset.spec.summary.samples, 0)
   const selectedWorkspaceID = available.find(item => item.id === selected[0])?.workspaceId
-  const compatibleExperiments = experiments.filter(item => item.resultType === 'TimeSeriesDataset' && item.resultVersion === 'v1alpha1')
   const openExperiment = (item: Experiment) => {
     const artifactIDs = item.variants.flatMap(variant => variant.trials.map(trial => trial.resultArtifactId)).filter(id => available.some(artifact => artifact.id === id))
     setActiveExperiment(item.id)
     setSelected(artifactIDs.slice(0, 4))
-    setNotice(artifactIDs.length > 4 ? 'This experiment has more than four trials. Showing the first four.' : '')
+    setNotice(artifactIDs.length > 4 ? 'This experiment has more than four datasets. Showing the first four.' : artifactIDs.length === 0 && item.status === 'succeeded' ? `${item.resultType}/${item.resultVersion} is stored, but has no chart renderer.` : '')
   }
   return <>
     <div className="results-heading"><div><p className="eyebrow">REPEATABLE EVIDENCE</p><h2>Compare collected results</h2><p>Select up to four verified datasets. Use the same variant name for multiple trials, then save the immutable comparison.</p></div><div className="results-heading-actions"><button className="button primary" disabled={selected.length < 2} onClick={() => setSaving(true)}>Save experiment</button><div className="results-count"><strong>{available.length}</strong><span>datasets</span></div></div></div>
-    {compatibleExperiments.length > 0 && <div className="experiment-history"><div className="experiment-history-title"><strong>Experiment history</strong><span>{compatibleExperiments.length} repeatable comparisons</span></div><div className="experiment-cards">{compatibleExperiments.map(item => <button key={item.id} className={activeExperiment === item.id ? 'active' : ''} onClick={() => openExperiment(item)}><span className={`status-dot ${item.status}`} /><span><strong>{item.name}</strong><small>{item.status === 'queued' && item.scheduledFor && new Date(item.scheduledFor).getTime() > Date.now() ? `scheduled ${formatDate(item.scheduledFor)}` : item.status} · {item.variants.length} variants · {item.variants.reduce((total, variant) => total + variant.trials.length, 0)} trials · {formatDate(item.createdAt)}</small></span></button>)}</div></div>}
+    {experiments.length > 0 && <div className="experiment-history"><div className="experiment-history-title"><strong>Experiment history</strong><span>{experiments.length} repeatable comparisons</span></div><div className="experiment-cards">{experiments.map(item => <button key={item.id} className={activeExperiment === item.id ? 'active' : ''} onClick={() => openExperiment(item)}><span className={`status-dot ${item.status}`} /><span><strong>{item.name}</strong><small>{item.status === 'queued' && item.scheduledFor && new Date(item.scheduledFor).getTime() > Date.now() ? `scheduled ${formatDate(item.scheduledFor)}` : item.status} · {item.variants.length} variants · {item.variants.reduce((total, variant) => total + variant.trials.length, 0)} trials · {formatDate(item.createdAt)}</small></span></button>)}</div></div>}
+    {experiment && <ExperimentDetail experiment={experiment} openOperation={openOperation} />}
     {!available.length ? <EmptyResults /> : <div className="results-layout">
       <aside className="dataset-picker" aria-label="Available datasets">
         <div className="dataset-picker-title"><strong>Dataset history</strong><span>{selected.length}/4 selected</span></div>
@@ -124,6 +125,20 @@ export function ResultsView({artifacts, experiments, operations, workspaces, ses
     </div>}
     <SaveExperimentDialog open={saving} close={() => setSaving(false)} selected={selected.map(id => available.find(item => item.id === id)).filter((item): item is Artifact => Boolean(item))} operations={operations} workspaces={workspaces} session={session} changed={changed} />
   </>
+}
+
+function ExperimentDetail({experiment, openOperation}: {experiment: Experiment; openOperation: (id: string) => void}) {
+  const progress = experimentProgress(experiment)
+  return <article className="experiment-detail">
+    <div className="experiment-detail-head"><div><span className={`status-dot ${experiment.status}`} /><span><strong>{experiment.name}</strong><small>{experiment.resultType}/{experiment.resultVersion}{experiment.scheduledFor && experiment.status === 'queued' ? ` · ${formatDate(experiment.scheduledFor)}` : ''}</small></span></div><div><strong>{progress.completed}/{progress.total}</strong><small>trials complete</small></div></div>
+    <div className="experiment-progress"><span style={{width: `${progress.total ? progress.completed / progress.total * 100 : 0}%`}} /></div>
+    <div className="experiment-variants">{experiment.variants.map(variant => <section key={variant.id}><div><strong>{variant.name}</strong><small>{variant.trials.filter(trial => trial.status === 'succeeded').length}/{variant.trials.length} succeeded</small></div>{variant.trials.map(trial => <button type="button" key={trial.id} disabled={!trial.operationId} onClick={() => trial.operationId && openOperation(trial.operationId)}><span className={`status-dot ${trial.status}`} /><span><strong>Trial {trial.position}</strong><small>{trial.error || (trial.operationId ? 'Open logs and health gates' : trial.status === 'queued' ? 'Waiting to start' : trial.status)}</small></span><b>›</b></button>)}</section>)}</div>
+  </article>
+}
+
+export function experimentProgress(experiment: Experiment): {completed: number; total: number} {
+  const trials = experiment.variants.flatMap(variant => variant.trials)
+  return {completed: trials.filter(trial => ['succeeded', 'failed', 'canceled'].includes(trial.status)).length, total: trials.length}
 }
 
 function SaveExperimentDialog({open, close, selected, operations, workspaces, session, changed}: {open: boolean; close: () => void; selected: Artifact[]; operations: Operation[]; workspaces: Workspace[]; session: Session; changed: () => Promise<void>}) {

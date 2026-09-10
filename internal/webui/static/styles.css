@@ -282,6 +282,27 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .experiment-cards strong, .experiment-cards small { display: block; }
 .experiment-cards strong { font-size: 10px; }
 .experiment-cards small { margin-top: 3px; color: var(--muted); font-size: 9px; }
+.experiment-detail { margin-bottom: 14px; border: 1px solid var(--line); border-radius: 15px; padding: 16px; background: var(--surface); }
+.experiment-detail-head { display: flex; align-items: center; justify-content: space-between; gap: 20px; }
+.experiment-detail-head > div:first-child { display: flex; min-width: 0; align-items: center; gap: 10px; }
+.experiment-detail-head strong, .experiment-detail-head small { display: block; }
+.experiment-detail-head strong { font-size: 12px; }
+.experiment-detail-head small { margin-top: 3px; color: var(--muted); font-size: 9px; }
+.experiment-detail-head > div:last-child { text-align: right; }
+.experiment-detail-head > div:last-child strong { font-size: 18px; }
+.experiment-progress { height: 4px; overflow: hidden; margin: 13px 0; border-radius: 99px; background: #e8ede9; }
+.experiment-progress span { display: block; height: 100%; border-radius: inherit; background: var(--green); transition: width .25s ease; }
+.experiment-variants { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; }
+.experiment-variants section { overflow: hidden; border: 1px solid var(--line); border-radius: 10px; background: #fafbf9; }
+.experiment-variants section > div { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 12px; }
+.experiment-variants section > div strong { font-size: 10px; }
+.experiment-variants section > div small { color: var(--muted); font-size: 8px; }
+.experiment-variants button { display: grid; width: 100%; grid-template-columns: 8px 1fr auto; align-items: center; gap: 9px; border: 0; border-top: 1px solid var(--line); padding: 9px 12px; background: #fff; color: inherit; cursor: pointer; text-align: left; }
+.experiment-variants button:disabled { cursor: default; }
+.experiment-variants button strong, .experiment-variants button small { display: block; }
+.experiment-variants button strong { font-size: 9px; }
+.experiment-variants button small { margin-top: 2px; color: var(--muted); font-size: 8px; }
+.experiment-variants button b { color: var(--muted); font-size: 15px; }
 .results-layout { display: grid; grid-template-columns: 290px minmax(0, 1fr); align-items: start; gap: 16px; }
 .dataset-picker { position: sticky; top: 14px; display: grid; overflow: hidden; border: 1px solid var(--line); border-radius: 15px; background: var(--surface); }
 .dataset-picker-title { display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--line); padding: 15px 16px; }

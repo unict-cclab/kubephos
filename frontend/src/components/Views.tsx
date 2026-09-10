@@ -49,7 +49,7 @@ export function Views(props: ViewProps) {
       <PipelinesView pipelines={props.pipelines} runs={props.pipelineRuns} workspaces={props.workspaces} plugins={props.plugins} session={props.session} create={props.createPipeline} changed={props.changed} openOperation={props.openOperation} />
     </section>
     <section className={`view ${props.view === 'results' ? 'active' : ''}`}>
-      <ResultsView artifacts={props.artifacts} experiments={props.experiments} operations={props.operations} workspaces={props.workspaces} session={props.session} changed={props.changed} />
+      <ResultsView artifacts={props.artifacts} experiments={props.experiments} operations={props.operations} workspaces={props.workspaces} session={props.session} changed={props.changed} openOperation={props.openOperation} />
     </section>
     <section className={`view ${props.view === 'catalog' ? 'active' : ''}`}>
       <Heading eyebrow="APPLICATION INTERFACE" title="Application catalog" action={props.isAdmin && <button className="button primary" onClick={props.importApplication}>Import application</button>} />
