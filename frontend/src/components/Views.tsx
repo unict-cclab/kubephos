@@ -1,11 +1,12 @@
 import {formatDate, shortID} from '../lib'
-import type {Application, Artifact, AuditEvent, Connection, Credential, Experiment, InfrastructureResource, Operation, Pipeline, PipelineRun, Plugin, PluginPackage, Session, SystemStatus, View, Workspace} from '../types'
+import type {Application, Artifact, AuditEvent, Connection, Credential, Experiment, InfrastructureResource, Operation, Pipeline, PipelineRun, Plugin, PluginPackage, PluginRuntimeStatus, Session, SystemStatus, View, Workspace} from '../types'
 import {PipelinesView} from './PipelinesView'
 import {ResultsView} from './ResultsView'
 
 interface ViewProps {
   view: View
   system: SystemStatus | null
+  pluginRuntime: PluginRuntimeStatus | null
   workspaces: Workspace[]
   pipelines: Pipeline[]
   pipelineRuns: PipelineRun[]
@@ -30,6 +31,7 @@ interface ViewProps {
   openOperation: (id: string) => void
   importApplication: () => void
   importPlugin: () => void
+  configureRuntime: () => void
   activatePlugin: (pluginPackage: PluginPackage) => Promise<void>
   deactivatePlugin: (pluginPackage: PluginPackage) => Promise<void>
   addCredential: () => void
@@ -63,7 +65,7 @@ export function Views(props: ViewProps) {
     <section className={`view ${props.view === 'plugins' ? 'active' : ''}`}>
       <Heading eyebrow="CAPABILITIES" title="Installed plugins" action={props.isAdmin && <button className="button primary" onClick={props.importPlugin}>Import plugin</button>} />
       <p className="section-copy catalog-copy">{props.system?.features?.ociPluginImport ? 'Every external capability is validated and activated by immutable image digest.' : 'External packages can be reviewed now; activation becomes available when the dedicated OCI executor is healthy.'}</p>
-      {props.system?.pluginRuntime?.status === 'unavailable' && <div className="notice"><strong>OCI executor unavailable</strong><p>{props.system.pluginRuntime.message}</p></div>}
+      <div className={`runtime-card ${props.pluginRuntime?.status ?? 'disabled'}`}><span className="feature-icon">⬡</span><div><p className="eyebrow">ISOLATED EXECUTION</p><h3>{props.pluginRuntime?.configured ? 'Managed OCI runtime' : 'OCI runtime not configured'}</h3><p>{props.pluginRuntime?.message ?? 'Select verified executor and registry artifacts to enable external plugins.'}</p></div><div className="card-actions"><Status value={props.pluginRuntime?.status ?? 'disabled'} />{props.isAdmin && <button className="button secondary compact" onClick={props.configureRuntime}>{props.pluginRuntime?.configured ? 'Manage' : 'Configure'}</button>}</div></div>
       <PluginGrid items={props.plugins} />
       {!!props.pluginPackages.length && <><Heading eyebrow="PACKAGE HISTORY" title="Imported versions" copy="Every activation remains traceable and a prior version can be restored only after all checks pass again." /><div className="credential-list">{props.pluginPackages.map(item => <article className="credential-row" key={item.sequence}><span className="feature-icon">◇</span><div><h3>{item.pluginId} · {item.version}</h3><p>{item.digest.slice(0, 19)} · descriptor {item.descriptorDigest.slice(0, 19)}</p></div>{item.active ? <div className="card-actions"><Status value="Active" /><button className="button secondary compact" onClick={() => props.deactivatePlugin(item)}>Deactivate</button></div> : <button className="button secondary compact" disabled={!props.system?.features?.ociPluginImport} title={props.system?.features?.ociPluginImport ? '' : 'Configure the dedicated OCI executor first'} onClick={() => props.activatePlugin(item)}>Restore</button>}</article>)}</div></>}
     </section>

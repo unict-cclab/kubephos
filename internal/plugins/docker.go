@@ -3,6 +3,7 @@ package plugins
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -22,15 +24,28 @@ const containerOutputLimit = 1 << 20
 type DockerRunner struct {
 	host              string
 	binary            string
+	skopeo            string
 	ca                string
 	cert              string
 	key               string
 	allowedRegistries map[string]bool
+	registryAccess    map[string]RegistryAccess
+}
+
+type RegistryAccess struct {
+	Authority string
+	CABundle  string
+	Username  string
+	Password  string
 }
 
 var registryExpression = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?(?::[0-9]{1,5})?$`)
 
 func NewDockerRunner(host, ca, cert, key string, registries ...string) ContainerRunner {
+	return NewDockerRunnerWithAccess(host, ca, cert, key, registries, nil)
+}
+
+func NewDockerRunnerWithAccess(host, ca, cert, key string, registries []string, access []RegistryAccess) ContainerRunner {
 	host = strings.TrimSpace(host)
 	if host == "" {
 		return nil
@@ -42,7 +57,15 @@ func NewDockerRunner(host, ca, cert, key string, registries ...string) Container
 			allowedRegistries[registry] = true
 		}
 	}
-	return &DockerRunner{host: host, binary: "docker", ca: strings.TrimSpace(ca), cert: strings.TrimSpace(cert), key: strings.TrimSpace(key), allowedRegistries: allowedRegistries}
+	registryAccess := map[string]RegistryAccess{}
+	for _, current := range access {
+		authority := strings.ToLower(strings.TrimSpace(current.Authority))
+		if authority != "" {
+			current.Authority = authority
+			registryAccess[authority] = current
+		}
+	}
+	return &DockerRunner{host: host, binary: "docker", skopeo: "skopeo", ca: strings.TrimSpace(ca), cert: strings.TrimSpace(cert), key: strings.TrimSpace(key), allowedRegistries: allowedRegistries, registryAccess: registryAccess}
 }
 
 func (d *DockerRunner) Ready(ctx context.Context) error {
@@ -56,7 +79,7 @@ func (d *DockerRunner) Ready(ctx context.Context) error {
 		return err
 	}
 	arguments := append(d.connectionArguments(), "info", "--format", "{{json .SecurityOptions}}")
-	output, err := exec.CommandContext(ctx, d.binary, arguments...).CombinedOutput()
+	output, err := limitedCommand(ctx, d.binary, arguments...)
 	if err != nil {
 		message := strings.TrimSpace(string(output))
 		if message == "" {
@@ -81,6 +104,31 @@ func (d *DockerRunner) Ready(ctx context.Context) error {
 	return nil
 }
 
+func (d *DockerRunner) State(ctx context.Context) (string, string) {
+	if err := d.Ready(ctx); err != nil {
+		return "unavailable", err.Error()
+	}
+	return "healthy", "The dedicated OCI executor is ready."
+}
+
+func (d *DockerRunner) Environment(ctx context.Context) ([]string, func(), error) {
+	if err := d.Ready(ctx); err != nil {
+		return nil, func() {}, err
+	}
+	registries := make([]string, 0, len(d.allowedRegistries))
+	for registry := range d.allowedRegistries {
+		registries = append(registries, registry)
+	}
+	sort.Strings(registries)
+	return []string{
+		"KUBEPHOS_PLUGIN_RUNTIME_HOST=" + d.host,
+		"KUBEPHOS_PLUGIN_RUNTIME_CA=" + d.ca,
+		"KUBEPHOS_PLUGIN_RUNTIME_CERT=" + d.cert,
+		"KUBEPHOS_PLUGIN_RUNTIME_KEY=" + d.key,
+		"KUBEPHOS_PLUGIN_ALLOWED_REGISTRIES=" + strings.Join(registries, ","),
+	}, func() {}, nil
+}
+
 func (d *DockerRunner) Run(ctx context.Context, image, command string, payload []byte, network bool, log Logger) ([]byte, []string, error) {
 	if err := d.Ready(ctx); err != nil {
 		return nil, nil, err
@@ -88,17 +136,26 @@ func (d *DockerRunner) Run(ctx context.Context, image, command string, payload [
 	if err := d.ValidateImage(image); err != nil {
 		return nil, nil, err
 	}
+	runtimeImage, removeImage, err := d.prepareImage(ctx, image)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer removeImage()
 	name := strings.ReplaceAll(id.New("kubephos-plugin"), "_", "-")
 	networkMode := "none"
 	if network {
 		networkMode = "bridge"
 	}
+	pullPolicy := "missing"
+	if runtimeImage != image {
+		pullPolicy = "never"
+	}
 	arguments := append(d.connectionArguments(),
-		"run", "--rm", "--name", name, "--pull=missing", "-i",
+		"run", "--rm", "--name", name, "--pull="+pullPolicy, "-i",
 		"--user=65532:65532", "--network="+networkMode, "--read-only", "--cap-drop=ALL",
 		"--security-opt=no-new-privileges", "--memory=256m", "--cpus=0.5", "--pids-limit=64",
 		"--tmpfs=/tmp:rw,noexec,nosuid,size=64m", "--label=io.kubephos.runtime=plugin",
-		image, command,
+		runtimeImage, command,
 	)
 	process := exec.CommandContext(ctx, d.binary, arguments...)
 	process.Stdin = bytes.NewReader(payload)
@@ -125,6 +182,90 @@ func (d *DockerRunner) Run(ctx context.Context, image, command string, payload [
 		return nil, messages, processErr
 	}
 	return stdout.Bytes(), messages, nil
+}
+
+func (d *DockerRunner) prepareImage(ctx context.Context, image string) (string, func(), error) {
+	access, managed := d.registryAccess[imageRegistry(image)]
+	if !managed {
+		return image, func() {}, nil
+	}
+	if strings.TrimSpace(access.CABundle) == "" || access.Username == "" || access.Password == "" {
+		return "", func() {}, errors.New("managed OCI registry access is incomplete")
+	}
+	root, err := os.MkdirTemp("", "kubephos-oci-image-")
+	if err != nil {
+		return "", func() {}, err
+	}
+	cleanup := func() { _ = os.RemoveAll(root) }
+	certificates := filepath.Join(root, "certificates")
+	if err := os.Mkdir(certificates, 0700); err != nil {
+		cleanup()
+		return "", func() {}, err
+	}
+	if err := os.WriteFile(filepath.Join(certificates, "ca.crt"), []byte(access.CABundle), 0600); err != nil {
+		cleanup()
+		return "", func() {}, err
+	}
+	authValue, err := json.Marshal(map[string]any{"auths": map[string]any{access.Authority: map[string]string{"auth": base64.StdEncoding.EncodeToString([]byte(access.Username + ":" + access.Password))}}})
+	if err != nil {
+		cleanup()
+		return "", func() {}, err
+	}
+	authFile := filepath.Join(root, "auth.json")
+	if err := os.WriteFile(authFile, authValue, 0600); err != nil {
+		cleanup()
+		return "", func() {}, err
+	}
+	digest := strings.TrimPrefix(strings.SplitN(image, "@", 2)[1], "sha256:")
+	localReference := "kubephos.local/runtime/plugin-" + digest[:16] + "-" + strings.ReplaceAll(id.New("run"), "_", "-") + ":sealed"
+	archive := filepath.Join(root, "image.tar")
+	copyArguments := []string{"copy", "--retry-times", "3", "--authfile", authFile, "--src-cert-dir", certificates, "docker://" + image, "docker-archive:" + archive + ":" + localReference}
+	skopeo := d.skopeo
+	if skopeo == "" {
+		skopeo = "skopeo"
+	}
+	if output, err := limitedCommand(ctx, skopeo, copyArguments...); err != nil {
+		cleanup()
+		return "", func() {}, fmt.Errorf("stage OCI plugin image: %s", commandMessage(output, err))
+	}
+	if output, err := limitedCommand(ctx, d.binary, append(d.connectionArguments(), "load", "--input", archive)...); err != nil {
+		cleanup()
+		return "", func() {}, fmt.Errorf("load OCI plugin image: %s", commandMessage(output, err))
+	}
+	remove := func() {
+		cleanupContext, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_, _ = limitedCommand(cleanupContext, d.binary, append(d.connectionArguments(), "image", "rm", "-f", localReference)...)
+		cleanup()
+	}
+	if output, err := limitedCommand(ctx, d.binary, append(d.connectionArguments(), "image", "inspect", localReference, "--format", "{{.Id}}")...); err != nil || strings.TrimSpace(string(output)) == "" {
+		remove()
+		return "", func() {}, errors.New("staged OCI plugin image is unavailable on the executor")
+	}
+	return localReference, remove, nil
+}
+
+func limitedCommand(ctx context.Context, name string, arguments ...string) ([]byte, error) {
+	command := exec.CommandContext(ctx, name, arguments...)
+	output := &limitedBuffer{limit: containerOutputLimit}
+	command.Stdout = output
+	command.Stderr = output
+	err := command.Run()
+	if output.exceeded && err == nil {
+		err = errors.New("command output exceeds 1 MiB")
+	}
+	return output.Bytes(), err
+}
+
+func commandMessage(output []byte, err error) string {
+	message := strings.TrimSpace(string(output))
+	if message == "" {
+		message = err.Error()
+	}
+	if len(message) > 4096 {
+		message = message[len(message)-4096:]
+	}
+	return message
 }
 
 func (d *DockerRunner) ValidateImage(image string) error {

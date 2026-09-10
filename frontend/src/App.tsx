@@ -1,6 +1,6 @@
 import {useCallback, useEffect, useMemo, useState} from 'react'
 import {ApiError, request} from './api'
-import {ApplicationDialog, AuthDialog, ConnectionDialog, CredentialDialog, OperationDialog, PluginDialog, WorkspaceDialog} from './components/Forms'
+import {ApplicationDialog, AuthDialog, ConnectionDialog, CredentialDialog, OperationDialog, PluginDialog, RuntimeDialog, WorkspaceDialog} from './components/Forms'
 import {OperationDrawer} from './components/OperationDrawer'
 import {PipelineDialog} from './components/PipelineDialog'
 import {ToastRegion, type ToastMessage} from './components/ToastRegion'
@@ -8,7 +8,7 @@ import {Views} from './components/Views'
 import {WorkspaceFlowDialog} from './components/WorkspaceFlowDialog'
 import type {PlatformData, PluginPackage, Session, View, Workspace} from './types'
 
-const emptyData: PlatformData = {system: null, workspaces: [], pipelines: [], pipelineRuns: [], experiments: [], operations: [], artifacts: [], plugins: [], pluginPackages: [], applications: [], credentials: [], connections: [], resources: [], audit: []}
+const emptyData: PlatformData = {system: null, pluginRuntime: null, workspaces: [], pipelines: [], pipelineRuns: [], experiments: [], operations: [], artifacts: [], plugins: [], pluginPackages: [], applications: [], credentials: [], connections: [], resources: [], audit: []}
 const viewMetadata: Record<View, [string, string]> = {
   overview: ['CONTROL PLANE', 'Overview'],
   workspaces: ['ENVIRONMENTS', 'Workspaces'],
@@ -30,7 +30,7 @@ const navigation: Array<[View, string, string]> = [
   ['infrastructure', '▦', 'Infrastructure']
 ]
 
-type Modal = 'workspace' | 'workspaceFlow' | 'operation' | 'pipeline' | 'credential' | 'connection' | 'application' | 'plugin' | null
+type Modal = 'workspace' | 'workspaceFlow' | 'operation' | 'pipeline' | 'credential' | 'connection' | 'application' | 'plugin' | 'runtime' | null
 
 export default function App() {
   const [session, setSession] = useState<Session | null>(null)
@@ -54,8 +54,9 @@ export default function App() {
     if (!session?.authenticated) return
     setRefreshing(true)
     try {
-      const [system, workspaces, pipelines, pipelineRuns, experiments, operations, artifacts, plugins, pluginPackages, applications, credentials, connections, resources, audit] = await Promise.all([
+      const [system, pluginRuntime, workspaces, pipelines, pipelineRuns, experiments, operations, artifacts, plugins, pluginPackages, applications, credentials, connections, resources, audit] = await Promise.all([
         request<PlatformData['system']>('/system'),
+        request<PlatformData['pluginRuntime']>('/plugin-runtime'),
         request<{items: PlatformData['workspaces']}>('/workspaces'),
         request<{items: PlatformData['pipelines']}>('/pipelines'),
         request<{items: PlatformData['pipelineRuns']}>('/pipeline-runs'),
@@ -70,7 +71,7 @@ export default function App() {
         request<{items: PlatformData['resources']}>('/infrastructure/resources'),
         request<{items: PlatformData['audit']}>('/audit?limit=20')
       ])
-      setData({system, workspaces: workspaces.items, pipelines: pipelines.items, pipelineRuns: pipelineRuns.items, experiments: experiments.items, operations: operations.items, artifacts: artifacts.items, plugins: plugins.items, pluginPackages: pluginPackages.items, applications: applications.items, credentials: credentials.items, connections: connections.items, resources: resources.items, audit: audit.items})
+      setData({system, pluginRuntime, workspaces: workspaces.items, pipelines: pipelines.items, pipelineRuns: pipelineRuns.items, experiments: experiments.items, operations: operations.items, artifacts: artifacts.items, plugins: plugins.items, pluginPackages: pluginPackages.items, applications: applications.items, credentials: credentials.items, connections: connections.items, resources: resources.items, audit: audit.items})
       setConnected(true)
       if (!silent) notify('Everything is up to date.')
     } catch (cause) {
@@ -187,6 +188,7 @@ export default function App() {
           openOperation={setOperationID}
           importApplication={() => setModal('application')}
           importPlugin={() => setModal('plugin')}
+          configureRuntime={() => setModal('runtime')}
           activatePlugin={activatePlugin}
           deactivatePlugin={deactivatePlugin}
           addCredential={() => setModal('credential')}
@@ -202,6 +204,7 @@ export default function App() {
     <ConnectionDialog {...common} open={modal === 'connection'} close={() => setModal(null)} plugins={data.plugins} />
     <ApplicationDialog {...common} open={modal === 'application'} close={() => setModal(null)} />
     <PluginDialog {...common} open={modal === 'plugin'} close={() => setModal(null)} />
+    <RuntimeDialog {...common} open={modal === 'runtime'} close={() => setModal(null)} runtime={data.pluginRuntime} />
     <OperationDrawer operationID={operationID} session={session} plugins={data.plugins} close={() => setOperationID(null)} open={setOperationID} changed={() => load(true)} notify={notify} />
     <ToastRegion items={toasts} dismiss={dismiss} />
   </>

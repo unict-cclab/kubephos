@@ -69,6 +69,14 @@ type ContainerImagePolicy interface {
 	ValidateImage(string) error
 }
 
+type RuntimeEnvironment interface {
+	Environment(context.Context) ([]string, func(), error)
+}
+
+type RuntimeState interface {
+	State(context.Context) (string, string)
+}
+
 func ValidateRuntimeImage(runner ContainerRunner, image string) error {
 	if _, err := validateOCIReference(image); err != nil {
 		return err
@@ -155,7 +163,32 @@ func (r *Registry) ExternalIDs() []string {
 			result = append(result, pluginID)
 		}
 	}
+	sort.Strings(result)
 	return result
+}
+
+func (r *Registry) ReplaceExternal(values []Plugin) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	next := make(map[string]Plugin, len(r.bundled)+len(values))
+	for pluginID := range r.bundled {
+		next[pluginID] = r.plugins[pluginID]
+	}
+	for _, plugin := range values {
+		if plugin == nil || plugin.Manifest().ID == "" {
+			return errors.New("plugin is invalid")
+		}
+		pluginID := plugin.Manifest().ID
+		if r.bundled[pluginID] {
+			return fmt.Errorf("bundled plugin %q cannot be replaced", pluginID)
+		}
+		if _, exists := next[pluginID]; exists {
+			return fmt.Errorf("external plugin %q is duplicated", pluginID)
+		}
+		next[pluginID] = plugin
+	}
+	r.plugins = next
+	return nil
 }
 
 func (r *Registry) Remove(pluginID string) error {

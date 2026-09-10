@@ -7,12 +7,29 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 type recordingContainerRunner struct {
 	image   string
 	command string
 	network bool
+}
+
+type environmentContainerRunner struct {
+	released bool
+}
+
+func (r *environmentContainerRunner) Ready(context.Context) error {
+	return nil
+}
+
+func (r *environmentContainerRunner) Run(context.Context, string, string, []byte, bool, Logger) ([]byte, []string, error) {
+	return nil, nil, nil
+}
+
+func (r *environmentContainerRunner) Environment(context.Context) ([]string, func(), error) {
+	return []string{"KUBEPHOS_PLUGIN_RUNTIME_HOST=tcp://managed:2376"}, func() { r.released = true }, nil
 }
 
 func (r *recordingContainerRunner) Ready(context.Context) error {
@@ -408,6 +425,33 @@ func TestReferenceResolutionExcludesPluginResult(t *testing.T) {
 	collectRefs(value, "cred_", credentialRefs)
 	if !applicationRefs["app:dev.example.input@1.0.0"] || applicationRefs["app:dev.example.output@1.0.0"] || len(credentialRefs) != 0 {
 		t.Fatalf("plugin result leaked into reference resolution: %s", payload)
+	}
+}
+
+func TestBundledPluginRuntimeEnvironmentIsScopedToBuildCommands(t *testing.T) {
+	directory := t.TempDir()
+	executable := filepath.Join(directory, "environment-plugin")
+	script := "#!/bin/sh\nprintf '{\"host\":\"%s\"}' \"${KUBEPHOS_PLUGIN_RUNTIME_HOST:-missing}\"\n"
+	if err := os.WriteFile(executable, []byte(script), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("KUBEPHOS_PLUGIN_RUNTIME_HOST", "tcp://ambient:2376")
+	runner := &environmentContainerRunner{}
+	process := &Process{manifest: Manifest{Permissions: []string{"executor.build"}}, executable: executable, timeout: time.Second, runner: runner}
+	var output map[string]string
+	if err := process.invoke(context.Background(), "precheck", map[string]any{}, &output, nil); err != nil {
+		t.Fatal(err)
+	}
+	if output["host"] != "tcp://managed:2376" || !runner.released {
+		t.Fatalf("managed runtime environment was not scoped correctly: %#v released=%v", output, runner.released)
+	}
+	process.manifest.Permissions = nil
+	output = nil
+	if err := process.invoke(context.Background(), "precheck", map[string]any{}, &output, nil); err != nil {
+		t.Fatal(err)
+	}
+	if output["host"] != "missing" {
+		t.Fatalf("ambient runtime environment leaked to bundled plugin: %#v", output)
 	}
 }
 

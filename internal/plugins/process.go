@@ -453,6 +453,21 @@ func (p *Process) invoke(parent context.Context, command string, input, output a
 		stdout, messages, processErr = p.runner.Run(ctx, p.image, command, payload, contains(p.manifest.Permissions, "network.egress"), log)
 	} else {
 		process := exec.CommandContext(ctx, p.executable, command)
+		process.Env = withoutRuntimeEnvironment(os.Environ())
+		releaseEnvironment := func() {}
+		if contains(p.manifest.Permissions, "executor.build") && (command == "precheck" || command == "execute" || command == "verify") {
+			provider, ok := p.runner.(RuntimeEnvironment)
+			if !ok {
+				return errors.New("dedicated OCI build executor is unavailable")
+			}
+			values, release, err := provider.Environment(ctx)
+			if err != nil {
+				return err
+			}
+			releaseEnvironment = release
+			process.Env = append(process.Env, values...)
+		}
+		defer releaseEnvironment()
 		process.Stdin = bytes.NewReader(payload)
 		output := &limitedBuffer{limit: containerOutputLimit}
 		process.Stdout = output
@@ -487,6 +502,24 @@ func (p *Process) invoke(parent context.Context, command string, input, output a
 		return fmt.Errorf("plugin returned invalid JSON: %w", err)
 	}
 	return nil
+}
+
+func withoutRuntimeEnvironment(values []string) []string {
+	keys := map[string]bool{
+		"KUBEPHOS_PLUGIN_RUNTIME_HOST":       true,
+		"KUBEPHOS_PLUGIN_RUNTIME_CA":         true,
+		"KUBEPHOS_PLUGIN_RUNTIME_CERT":       true,
+		"KUBEPHOS_PLUGIN_RUNTIME_KEY":        true,
+		"KUBEPHOS_PLUGIN_ALLOWED_REGISTRIES": true,
+	}
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		key, _, found := strings.Cut(value, "=")
+		if !found || !keys[key] {
+			result = append(result, value)
+		}
+	}
+	return result
 }
 
 func validateOCIReference(reference string) (string, error) {

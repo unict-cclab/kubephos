@@ -62,3 +62,26 @@ func TestRegistryInstallsAndReplacesExternalPlugin(t *testing.T) {
 		t.Fatal("expected bundled plugin removal rejection")
 	}
 }
+
+func TestRegistryReplacesExternalSetAtomically(t *testing.T) {
+	registry := NewRegistry(manifestPlugin{manifest: Manifest{ID: "bundled", Version: "1.0.0"}})
+	original := manifestPlugin{manifest: Manifest{ID: "original", Version: "1.0.0"}}
+	if err := registry.Install(original); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.ReplaceExternal([]Plugin{manifestPlugin{manifest: Manifest{ID: "next", Version: "2.0.0"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := registry.Get("original"); err == nil {
+		t.Fatal("stale external plugin was preserved")
+	}
+	if plugin, err := registry.Get("next"); err != nil || plugin.Manifest().Version != "2.0.0" {
+		t.Fatalf("replacement was not installed: %#v %v", plugin, err)
+	}
+	if err := registry.ReplaceExternal([]Plugin{manifestPlugin{manifest: Manifest{ID: "bundled", Version: "3.0.0"}}}); err == nil {
+		t.Fatal("expected bundled conflict")
+	}
+	if plugin, err := registry.Get("next"); err != nil || plugin.Manifest().Version != "2.0.0" {
+		t.Fatalf("failed replacement changed registry: %#v %v", plugin, err)
+	}
+}

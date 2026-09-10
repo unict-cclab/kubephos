@@ -250,6 +250,18 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .planned { position: absolute; right: 16px; bottom: 16px; border-radius: 999px; padding: 5px 8px; background: #f0f2ef; color: #7a857d; font-size: 9px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
 .notice { margin-top: 16px; border: 1px solid #cdddcf; border-radius: 13px; padding: 17px 20px; background: #edf6ef; }
 .notice p { margin: 5px 0 0; color: #516158; font-size: 13px; }
+.runtime-card { display: grid; grid-template-columns: 42px 1fr auto; align-items: center; gap: 14px; margin: 18px 0 22px; border: 1px solid var(--line); border-radius: 14px; padding: 17px 19px; background: var(--surface); }
+.runtime-card.healthy { border-color: #b9d7c3; background: #f3f9f4; }
+.runtime-card.unavailable { border-color: #e5c6c4; background: #fff7f6; }
+.runtime-card h3 { margin: 3px 0 0; font-size: 15px; }
+.runtime-card p:not(.eyebrow) { margin: 5px 0 0; color: var(--muted); font-size: 11px; }
+.runtime-registry-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; margin-top: 22px; border-top: 1px solid var(--line); padding-top: 18px; }
+.runtime-registry-heading strong, .runtime-registry-heading small { display: block; }
+.runtime-registry-heading small { margin-top: 4px; color: var(--muted); font-size: 10px; font-weight: 500; }
+.runtime-registry-row { display: grid; grid-template-columns: 1fr 1fr 34px; align-items: end; gap: 12px; }
+.runtime-registry-row label { margin-bottom: 4px; }
+.runtime-remove { margin-bottom: 4px; }
+.runtime-modal { width: min(760px, calc(100% - 30px)); }
 .infrastructure-copy { margin: -8px 0 20px; }
 .credential-heading { margin-top: 38px; }
 .credential-list { display: grid; gap: 9px; }

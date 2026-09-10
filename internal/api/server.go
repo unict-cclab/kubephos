@@ -42,6 +42,15 @@ type Server struct {
 	pluginMu   sync.Mutex
 }
 
+type runtimeConfigurator interface {
+	plugins.ContainerRunner
+	State(context.Context) (string, string)
+	Profile(context.Context) (domain.PluginRuntimeProfile, error)
+	ValidateProfile(context.Context, domain.PluginRuntimeProfile) error
+	ActivateProfile(context.Context, domain.PluginRuntimeProfile) (domain.PluginRuntimeProfile, error)
+	DeactivateProfile(context.Context) error
+}
+
 func NewServer(store *storage.Store, registry *plugins.Registry, artifactStore *artifacts.Client, vault *secrets.Vault, runtime plugins.ContainerRunner, loadPlugin func([]byte) (plugins.Plugin, error), version, webDirectory string) (http.Handler, error) {
 	server := &Server{store: store, registry: registry, artifacts: artifactStore, vault: vault, runtime: runtime, loadPlugin: loadPlugin, version: version}
 	webHandler, err := webui.Handler(webDirectory)
@@ -62,6 +71,10 @@ func NewServer(store *storage.Store, registry *plugins.Registry, artifactStore *
 	router.HandleFunc("GET /api/v1/plugin-packages", server.listPluginPackages)
 	router.HandleFunc("POST /api/v1/plugin-packages/{sequence}/activate", server.activatePluginPackage)
 	router.HandleFunc("POST /api/v1/plugin-packages/{sequence}/deactivate", server.deactivatePluginPackage)
+	router.HandleFunc("GET /api/v1/plugin-runtime", server.getPluginRuntime)
+	router.HandleFunc("POST /api/v1/plugin-runtime/validate", server.validatePluginRuntime)
+	router.HandleFunc("POST /api/v1/plugin-runtime/activate", server.activatePluginRuntime)
+	router.HandleFunc("POST /api/v1/plugin-runtime/deactivate", server.deactivatePluginRuntime)
 	router.HandleFunc("GET /api/v1/catalog/applications", server.listCatalogApplications)
 	router.HandleFunc("POST /api/v1/catalog/applications", server.importCatalogApplication)
 	router.HandleFunc("GET /api/v1/credentials", server.listCredentials)
@@ -394,13 +407,143 @@ func (s *Server) system(response http.ResponseWriter, request *http.Request) {
 }
 
 func (s *Server) runtimeHealth(ctx context.Context) (string, string) {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
 	if s.runtime == nil {
 		return "disabled", "External OCI plugins are not enabled."
+	}
+	if stateful, ok := s.runtime.(plugins.RuntimeState); ok {
+		return stateful.State(ctx)
 	}
 	if err := s.runtime.Ready(ctx); err != nil {
 		return "unavailable", err.Error()
 	}
 	return "healthy", "The dedicated OCI executor is ready."
+}
+
+func (s *Server) getPluginRuntime(response http.ResponseWriter, request *http.Request) {
+	manager, ok := s.runtime.(runtimeConfigurator)
+	if !ok {
+		state, message := s.runtimeHealth(request.Context())
+		writeJSON(response, http.StatusOK, map[string]any{"configured": state != "disabled", "status": state, "message": message})
+		return
+	}
+	profile, err := manager.Profile(request.Context())
+	if errors.Is(err, storage.ErrNotFound) {
+		state, message := manager.State(request.Context())
+		writeJSON(response, http.StatusOK, map[string]any{"configured": false, "status": state, "message": message})
+		return
+	}
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, "database_error", "Could not read the OCI runtime profile.")
+		return
+	}
+	state, message := manager.State(request.Context())
+	writeJSON(response, http.StatusOK, map[string]any{"configured": true, "status": state, "message": message, "profile": profile})
+}
+
+func (s *Server) validatePluginRuntime(response http.ResponseWriter, request *http.Request) {
+	manager, ok := s.runtime.(runtimeConfigurator)
+	if !ok {
+		writeError(response, http.StatusServiceUnavailable, "runtime_unavailable", "Managed OCI runtime configuration is unavailable.")
+		return
+	}
+	var profile domain.PluginRuntimeProfile
+	if err := decodeJSON(request, &profile); err != nil {
+		writeError(response, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	ctx, cancel := context.WithTimeout(request.Context(), 15*time.Second)
+	err := manager.ValidateProfile(ctx, profile)
+	cancel()
+	if err != nil {
+		writeError(response, http.StatusUnprocessableEntity, "runtime_validation_failed", err.Error())
+		return
+	}
+	writeJSON(response, http.StatusOK, map[string]any{"valid": true, "status": "healthy", "message": "Executor mutual TLS, rootless isolation, registry TLS and pull access are healthy."})
+}
+
+func (s *Server) activatePluginRuntime(response http.ResponseWriter, request *http.Request) {
+	manager, ok := s.runtime.(runtimeConfigurator)
+	if !ok {
+		writeError(response, http.StatusServiceUnavailable, "runtime_unavailable", "Managed OCI runtime configuration is unavailable.")
+		return
+	}
+	var profile domain.PluginRuntimeProfile
+	if err := decodeJSON(request, &profile); err != nil {
+		writeError(response, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	s.pluginMu.Lock()
+	defer s.pluginMu.Unlock()
+	previous, previousErr := manager.Profile(request.Context())
+	if previousErr != nil && !errors.Is(previousErr, storage.ErrNotFound) {
+		writeError(response, http.StatusInternalServerError, "database_error", "Could not read the current OCI runtime profile.")
+		return
+	}
+	ctx, cancel := context.WithTimeout(request.Context(), 20*time.Second)
+	profile, err := manager.ActivateProfile(ctx, profile)
+	cancel()
+	if err != nil {
+		writeError(response, http.StatusUnprocessableEntity, "runtime_validation_failed", err.Error())
+		return
+	}
+	if err := s.reloadActivePluginPackages(request.Context()); err != nil {
+		rollbackContext, rollbackCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		var rollbackErr error
+		if previousErr == nil {
+			_, rollbackErr = s.store.SavePluginRuntimeProfile(rollbackContext, previous)
+		} else {
+			rollbackErr = s.store.DeletePluginRuntimeProfile(rollbackContext)
+		}
+		rollbackCancel()
+		if rollbackErr != nil && !errors.Is(rollbackErr, storage.ErrNotFound) {
+			writeError(response, http.StatusInternalServerError, "runtime_rollback_failed", "An installed package failed its runtime handshake and the previous runtime profile could not be restored.")
+			return
+		}
+		writeError(response, http.StatusConflict, "plugin_load_failed", "Runtime activation was rolled back because an installed package failed its handshake: "+err.Error())
+		return
+	}
+	writeJSON(response, http.StatusOK, map[string]any{"configured": true, "status": "healthy", "message": "Managed OCI runtime activated after all health gates passed.", "profile": profile})
+}
+
+func (s *Server) deactivatePluginRuntime(response http.ResponseWriter, request *http.Request) {
+	manager, ok := s.runtime.(runtimeConfigurator)
+	if !ok {
+		writeError(response, http.StatusServiceUnavailable, "runtime_unavailable", "Managed OCI runtime configuration is unavailable.")
+		return
+	}
+	if err := manager.DeactivateProfile(request.Context()); err != nil && !errors.Is(err, storage.ErrNotFound) {
+		writeError(response, http.StatusInternalServerError, "database_error", "Could not deactivate the OCI runtime profile.")
+		return
+	}
+	writeJSON(response, http.StatusOK, map[string]any{"configured": false, "status": "disabled", "message": "External OCI plugins are disabled. Managed infrastructure and artifacts were preserved."})
+}
+
+func (s *Server) reloadActivePluginPackages(ctx context.Context) error {
+	if s.loadPlugin == nil {
+		return errors.New("plugin loader is unavailable")
+	}
+	packages, err := s.store.ListActivePluginPackages(ctx)
+	if err != nil {
+		return err
+	}
+	loaded := make([]plugins.Plugin, 0, len(packages))
+	for _, pluginPackage := range packages {
+		descriptorDigest := sha256.Sum256([]byte(pluginPackage.Descriptor))
+		if pluginPackage.DescriptorDigest != "sha256:"+hex.EncodeToString(descriptorDigest[:]) {
+			return fmt.Errorf("plugin %s descriptor integrity check failed", pluginPackage.PluginID)
+		}
+		plugin, err := s.loadPlugin([]byte(pluginPackage.Descriptor))
+		if err != nil {
+			return err
+		}
+		if plugin.Manifest().ID != pluginPackage.PluginID || !plugin.Manifest().Matches(pluginPackage.Version, pluginPackage.Digest) {
+			return fmt.Errorf("plugin %s metadata does not match its package", pluginPackage.PluginID)
+		}
+		loaded = append(loaded, plugin)
+	}
+	return s.registry.ReplaceExternal(loaded)
 }
 
 func (s *Server) listPlugins(response http.ResponseWriter, _ *http.Request) {
@@ -440,7 +583,7 @@ func (s *Server) inspectPlugin(response http.ResponseWriter, request *http.Reque
 }
 
 func (s *Server) importPlugin(response http.ResponseWriter, request *http.Request) {
-	if s.runtime == nil || s.loadPlugin == nil {
+	if state, _ := s.runtimeHealth(request.Context()); state != "healthy" || s.loadPlugin == nil {
 		writeError(response, http.StatusServiceUnavailable, "runtime_unavailable", "Configure a dedicated OCI plugin executor before importing external plugins.")
 		return
 	}
@@ -512,7 +655,7 @@ func (s *Server) listPluginPackages(response http.ResponseWriter, request *http.
 }
 
 func (s *Server) activatePluginPackage(response http.ResponseWriter, request *http.Request) {
-	if s.runtime == nil || s.loadPlugin == nil {
+	if state, _ := s.runtimeHealth(request.Context()); state != "healthy" || s.loadPlugin == nil {
 		writeError(response, http.StatusServiceUnavailable, "runtime_unavailable", "Configure a dedicated OCI plugin executor before activating external plugins.")
 		return
 	}
@@ -1892,6 +2035,16 @@ func auditTarget(request *http.Request) (string, string, string, bool) {
 	}
 	if len(parts) == 3 && parts[0] == "plugin-packages" && parts[2] == "deactivate" {
 		return "plugin.deactivate", "plugin-package", parts[1], true
+	}
+	if len(parts) == 2 && parts[0] == "plugin-runtime" {
+		switch parts[1] {
+		case "validate":
+			return "plugin-runtime.validate", "plugin-runtime", "default", true
+		case "activate":
+			return "plugin-runtime.activate", "plugin-runtime", "default", true
+		case "deactivate":
+			return "plugin-runtime.deactivate", "plugin-runtime", "default", true
+		}
 	}
 	if len(parts) == 3 && parts[0] == "pipeline-runs" && parts[2] == "cancel" {
 		return "pipeline.run.cancel", "pipeline-run", parts[1], true

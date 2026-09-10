@@ -19,6 +19,7 @@ import (
 	"kubephos.dev/kubephos/internal/catalog"
 	"kubephos.dev/kubephos/internal/config"
 	"kubephos.dev/kubephos/internal/engine"
+	"kubephos.dev/kubephos/internal/pluginruntime"
 	"kubephos.dev/kubephos/internal/plugins"
 	"kubephos.dev/kubephos/internal/secrets"
 	"kubephos.dev/kubephos/internal/storage"
@@ -76,7 +77,7 @@ func pluginMaintenance(configValue config.Config) error {
 		fmt.Printf("PASS %s@%s (%s)\n", manifest.ID, manifest.Version, manifest.Runtime.Reference)
 		return nil
 	}
-	manifest, err := plugins.ValidatePackage(path, pluginRuntime(configValue))
+	manifest, err := plugins.ValidatePackage(path, configuredPluginRuntime(configValue))
 	if err != nil {
 		return err
 	}
@@ -118,7 +119,8 @@ func serve(configValue config.Config) error {
 	if err != nil {
 		return err
 	}
-	runtime := pluginRuntime(configValue)
+	artifactStore := artifacts.New(configValue.ArtifactEndpoint)
+	runtime := pluginruntime.NewManager(store, artifactStore, vault, configuredPluginRuntime(configValue))
 	registry, err := plugins.LoadDirectory(configValue.PluginDirectory, resolver, connectionRuntime(store), catalogRuntime(store), runtime)
 	if err != nil {
 		return err
@@ -127,7 +129,6 @@ func serve(configValue config.Config) error {
 	if err := refreshInstalledPlugins(ctx, store, registry, loader); err != nil {
 		slog.Error("load installed plugins", "error", err)
 	}
-	artifactStore := artifacts.New(configValue.ArtifactEndpoint)
 	handler, err := api.NewServer(store, registry, artifactStore, vault, runtime, loader, version, configValue.WebDirectory)
 	if err != nil {
 		return err
@@ -151,14 +152,13 @@ func work(configValue config.Config) error {
 	if err != nil {
 		return err
 	}
-	runtime := pluginRuntime(configValue)
-	if runtime != nil {
-		readyContext, cancel := context.WithTimeout(ctx, 10*time.Second)
-		runtimeErr := runtime.Ready(readyContext)
-		cancel()
-		if runtimeErr != nil {
-			return fmt.Errorf("OCI plugin runtime: %w", runtimeErr)
-		}
+	artifactStore := artifacts.New(configValue.ArtifactEndpoint)
+	runtime := pluginruntime.NewManager(store, artifactStore, vault, configuredPluginRuntime(configValue))
+	readyContext, cancel := context.WithTimeout(ctx, 10*time.Second)
+	runtimeState, runtimeMessage := runtime.State(readyContext)
+	cancel()
+	if runtimeState == "unavailable" {
+		slog.Warn("OCI plugin runtime unavailable", "error", runtimeMessage)
 	}
 	registry, err := plugins.LoadDirectory(configValue.PluginDirectory, resolver, connectionRuntime(store), catalogRuntime(store), runtime)
 	if err != nil {
@@ -166,10 +166,9 @@ func work(configValue config.Config) error {
 	}
 	loader := externalPluginLoader(resolver, connectionRuntime(store), catalogRuntime(store), runtime)
 	if err := refreshInstalledPlugins(ctx, store, registry, loader); err != nil {
-		return err
+		slog.Error("load installed plugins", "error", err)
 	}
 	go watchInstalledPlugins(ctx, store, registry, loader)
-	artifactStore := artifacts.New(configValue.ArtifactEndpoint)
 	slog.Info("starting worker", "instance", configValue.InstanceID, "concurrency", configValue.WorkerConcurrency)
 	return engine.NewWorker(store, registry, artifactStore, vault, configValue.InstanceID, configValue.WorkerConcurrency, configValue.WorkerPoll).Run(ctx)
 }
@@ -180,7 +179,7 @@ func externalPluginLoader(resolver plugins.SecretResolver, connections plugins.C
 	}
 }
 
-func pluginRuntime(configValue config.Config) plugins.ContainerRunner {
+func configuredPluginRuntime(configValue config.Config) plugins.ContainerRunner {
 	return plugins.NewDockerRunner(configValue.PluginRuntimeHost, configValue.PluginRuntimeCA, configValue.PluginRuntimeCert, configValue.PluginRuntimeKey, configValue.PluginRegistries...)
 }
 
@@ -189,9 +188,8 @@ func refreshInstalledPlugins(ctx context.Context, store *storage.Store, registry
 	if err != nil {
 		return err
 	}
-	active := make(map[string]bool, len(packages))
+	loaded := make([]plugins.Plugin, 0, len(packages))
 	for _, pluginPackage := range packages {
-		active[pluginPackage.PluginID] = true
 		if registry.IsBundled(pluginPackage.PluginID) {
 			return fmt.Errorf("installed plugin %q conflicts with a bundled plugin", pluginPackage.PluginID)
 		}
@@ -201,6 +199,7 @@ func refreshInstalledPlugins(ctx context.Context, store *storage.Store, registry
 		}
 		current, currentErr := registry.Get(pluginPackage.PluginID)
 		if currentErr == nil && current.Manifest().Matches(pluginPackage.Version, pluginPackage.Digest) {
+			loaded = append(loaded, current)
 			continue
 		}
 		plugin, err := loader([]byte(pluginPackage.Descriptor))
@@ -211,18 +210,9 @@ func refreshInstalledPlugins(ctx context.Context, store *storage.Store, registry
 		if manifest.ID != pluginPackage.PluginID || !manifest.Matches(pluginPackage.Version, pluginPackage.Digest) {
 			return fmt.Errorf("installed plugin %q metadata does not match its descriptor", pluginPackage.PluginID)
 		}
-		if err := registry.Install(plugin); err != nil {
-			return err
-		}
+		loaded = append(loaded, plugin)
 	}
-	for _, pluginID := range registry.ExternalIDs() {
-		if !active[pluginID] {
-			if err := registry.Remove(pluginID); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
+	return registry.ReplaceExternal(loaded)
 }
 
 func watchInstalledPlugins(ctx context.Context, store *storage.Store, registry *plugins.Registry, loader func([]byte) (plugins.Plugin, error)) {

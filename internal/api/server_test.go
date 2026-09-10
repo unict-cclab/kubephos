@@ -27,6 +27,34 @@ type policyRunner struct {
 	err error
 }
 
+type configurableRunner struct {
+	profile domain.PluginRuntimeProfile
+	err     error
+}
+
+func (r *configurableRunner) Ready(context.Context) error { return r.err }
+func (r *configurableRunner) Run(context.Context, string, string, []byte, bool, plugins.Logger) ([]byte, []string, error) {
+	return nil, nil, r.err
+}
+func (r *configurableRunner) State(context.Context) (string, string) {
+	if r.err != nil {
+		return "unavailable", r.err.Error()
+	}
+	return "healthy", "ready"
+}
+func (r *configurableRunner) Profile(context.Context) (domain.PluginRuntimeProfile, error) {
+	return r.profile, r.err
+}
+func (r *configurableRunner) ValidateProfile(_ context.Context, profile domain.PluginRuntimeProfile) error {
+	r.profile = profile
+	return r.err
+}
+func (r *configurableRunner) ActivateProfile(_ context.Context, profile domain.PluginRuntimeProfile) (domain.PluginRuntimeProfile, error) {
+	r.profile = profile
+	return profile, r.err
+}
+func (r *configurableRunner) DeactivateProfile(context.Context) error { return r.err }
+
 func (p policyRunner) Ready(context.Context) error {
 	return nil
 }
@@ -123,6 +151,27 @@ spec:
 			}
 			if !body.ExecutorAvailable || body.PolicyAccepted != (runtime.err == nil) || body.PolicyMessage == "" {
 				t.Fatalf("unexpected policy preview: %#v", body)
+			}
+		})
+	}
+}
+
+func TestValidatePluginRuntimeReturnsHealthGateResult(t *testing.T) {
+	profile := domain.PluginRuntimeProfile{EndpointArtifactID: "art_endpoint", CredentialArtifactID: "art_credential", Registries: []domain.PluginRuntimeRegistry{{EndpointArtifactID: "art_registry", CredentialArtifactID: "art_registry_credential"}}}
+	payload, _ := json.Marshal(profile)
+	for name, validationErr := range map[string]error{"healthy": nil, "rejected": errors.New("registry TLS failed")} {
+		t.Run(name, func(t *testing.T) {
+			runtime := &configurableRunner{err: validationErr}
+			request := httptest.NewRequest(http.MethodPost, "/api/v1/plugin-runtime/validate", strings.NewReader(string(payload)))
+			response := httptest.NewRecorder()
+			server := &Server{runtime: runtime}
+			server.validatePluginRuntime(response, request)
+			expected := http.StatusOK
+			if validationErr != nil {
+				expected = http.StatusUnprocessableEntity
+			}
+			if response.Code != expected {
+				t.Fatalf("expected %d, got %d: %s", expected, response.Code, response.Body.String())
 			}
 		})
 	}

@@ -1,7 +1,7 @@
-import {useMemo, useState, type FormEvent} from 'react'
+import {useEffect, useMemo, useState, type FormEvent} from 'react'
 import {ApiError, request} from '../api'
 import {readSchemaValues} from '../lib'
-import type {Application, Artifact, Connection, Credential, CredentialDefinition, Plugin, Session, Workspace} from '../types'
+import type {Application, Artifact, Connection, Credential, CredentialDefinition, Plugin, PluginRuntimeProfile, PluginRuntimeStatus, Session, Workspace} from '../types'
 import {Dialog} from './Dialog'
 import {SchemaFields} from './SchemaFields'
 
@@ -268,12 +268,117 @@ export function PluginDialog({open, close, ...common}: CommonProps & {open: bool
   </Dialog>
 }
 
+export function RuntimeDialog({open, close, runtime, ...common}: CommonProps & {open: boolean; close: () => void; runtime: PluginRuntimeStatus | null}) {
+  const executorEndpoints = common.artifacts.filter(item => !item.sensitive && item.type === 'OCIExecutorEndpoint' && item.version === 'v1alpha1')
+  const executorCredentials = common.artifacts.filter(item => item.sensitive && item.type === 'OCIExecutorCredential' && item.version === 'v1alpha1')
+  const registryEndpoints = common.artifacts.filter(item => !item.sensitive && item.type === 'RegistryEndpoint' && item.version === 'v1alpha1')
+  const registryCredentials = common.artifacts.filter(item => item.sensitive && item.type === 'RegistryCredential' && item.version === 'v1alpha1')
+  const [profile, setProfile] = useState<PluginRuntimeProfile>({endpointArtifactId: '', credentialArtifactId: '', registries: [{endpointArtifactId: '', credentialArtifactId: ''}]})
+  const [validated, setValidated] = useState('')
+  const [message, setMessage] = useState('')
+  const [error, setError] = useState('')
+  const [pending, setPending] = useState(false)
+
+  useEffect(() => {
+    if (!open) return
+    setProfile(runtime?.profile ? {...runtime.profile, registries: runtime.profile.registries.map(item => ({...item}))} : {endpointArtifactId: '', credentialArtifactId: '', registries: [{endpointArtifactId: '', credentialArtifactId: ''}]})
+    setValidated('')
+    setMessage('')
+    setError('')
+  }, [open, runtime])
+
+  const changeProfile = (next: PluginRuntimeProfile) => {
+    setProfile(next)
+    setValidated('')
+    setMessage('')
+    setError('')
+  }
+  const chooseExecutor = (artifactId: string) => {
+    const endpoint = executorEndpoints.find(item => item.id === artifactId)
+    const credential = executorCredentials.find(item => item.operationId === endpoint?.operationId)
+    changeProfile({...profile, endpointArtifactId: artifactId, credentialArtifactId: credential?.id ?? ''})
+  }
+  const chooseRegistry = (index: number, artifactId: string) => {
+    const endpoint = registryEndpoints.find(item => item.id === artifactId)
+    const credential = registryCredentials.find(item => item.operationId === endpoint?.operationId)
+    const registries = profile.registries.map((item, position) => position === index ? {endpointArtifactId: artifactId, credentialArtifactId: credential?.id ?? ''} : item)
+    changeProfile({...profile, registries})
+  }
+  const updateRegistryCredential = (index: number, artifactId: string) => {
+    changeProfile({...profile, registries: profile.registries.map((item, position) => position === index ? {...item, credentialArtifactId: artifactId} : item)})
+  }
+  const availableRegistryEndpoints = (index: number) => {
+    const selected = new Set(profile.registries.filter((_, position) => position !== index).map(item => item.endpointArtifactId))
+    return registryEndpoints.filter(item => !selected.has(item.id))
+  }
+  const submit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    setPending(true)
+    setError('')
+    const payload = JSON.stringify({endpointArtifactId: profile.endpointArtifactId, credentialArtifactId: profile.credentialArtifactId, registries: profile.registries})
+    try {
+      if (validated !== payload) {
+        const result = await request<{message: string}>('/plugin-runtime/validate', {method: 'POST', body: payload}, common.session.csrfToken)
+        setValidated(payload)
+        setMessage(result.message)
+      } else {
+        await request('/plugin-runtime/activate', {method: 'POST', body: payload}, common.session.csrfToken)
+        close()
+        await common.onDone('Managed OCI runtime activated.')
+      }
+    } catch (cause) {
+      setValidated('')
+      setError(errorMessage(cause))
+    } finally {
+      setPending(false)
+    }
+  }
+  const deactivate = async () => {
+    if (!window.confirm('Disable external OCI plugin execution? Executor and registry infrastructure will be preserved.')) return
+    setPending(true)
+    setError('')
+    try {
+      await request('/plugin-runtime/deactivate', {method: 'POST', body: '{}'}, common.session.csrfToken)
+      close()
+      await common.onDone('External OCI plugin execution disabled.')
+    } catch (cause) {
+      setError(errorMessage(cause))
+    } finally {
+      setPending(false)
+    }
+  }
+  const ready = profile.endpointArtifactId && profile.credentialArtifactId && profile.registries.length > 0 && profile.registries.every(item => item.endpointArtifactId && item.credentialArtifactId)
+  return <Dialog open={open} onClose={close} title="Configure OCI runtime" eyebrow="VALIDATED ISOLATION" className="runtime-modal">
+    <form onSubmit={submit}>
+      <p className="auth-copy">Select artifacts produced by the managed executor and registry plugins. KubePhos checks every endpoint, certificate and permission before saving anything.</p>
+      <div className="field-row">
+        <label>Executor endpoint<select value={profile.endpointArtifactId} required onChange={event => chooseExecutor(event.target.value)}><option value="">Select endpoint</option>{executorEndpoints.map(item => <option key={item.id} value={item.id}>{artifactLabel(item)}</option>)}</select></label>
+        <label>Executor credential<select value={profile.credentialArtifactId} required onChange={event => changeProfile({...profile, credentialArtifactId: event.target.value})}><option value="">Select credential</option>{executorCredentials.filter(item => !profile.endpointArtifactId || item.operationId === executorEndpoints.find(endpoint => endpoint.id === profile.endpointArtifactId)?.operationId).map(item => <option key={item.id} value={item.id}>{artifactLabel(item)}</option>)}</select></label>
+      </div>
+      <div className="runtime-registry-heading"><div><strong>Allowed registries</strong><small>External images are accepted only from these verified endpoints.</small></div><button className="text-button" type="button" disabled={profile.registries.length >= 16 || profile.registries.length >= registryEndpoints.length} onClick={() => changeProfile({...profile, registries: [...profile.registries, {endpointArtifactId: '', credentialArtifactId: ''}]})}>Add registry +</button></div>
+      {profile.registries.map((registry, index) => <div className="runtime-registry-row" key={index}>
+        <label>Registry endpoint<select value={registry.endpointArtifactId} required onChange={event => chooseRegistry(index, event.target.value)}><option value="">Select registry</option>{availableRegistryEndpoints(index).map(item => <option key={item.id} value={item.id}>{artifactLabel(item)}</option>)}</select></label>
+        <label>Pull credential<select value={registry.credentialArtifactId} required onChange={event => updateRegistryCredential(index, event.target.value)}><option value="">Select credential</option>{registryCredentials.filter(item => !registry.endpointArtifactId || item.operationId === registryEndpoints.find(endpoint => endpoint.id === registry.endpointArtifactId)?.operationId).map(item => <option key={item.id} value={item.id}>{artifactLabel(item)}</option>)}</select></label>
+        {profile.registries.length > 1 && <button className="icon-button runtime-remove" type="button" aria-label="Remove registry" onClick={() => changeProfile({...profile, registries: profile.registries.filter((_, position) => position !== index)})}>×</button>}
+      </div>)}
+      {!executorEndpoints.length || !registryEndpoints.length ? <div className="validation-item warning">Create and verify a managed executor and registry first. Their artifacts will appear here automatically.</div> : <ValidationCallout text="Validation checks artifact integrity, successful source operations, mTLS, rootless mode, registry TLS and pull access." />}
+      {message && <div className="validation-item">{message}</div>}
+      <p className="form-error">{error}</p>
+      <div className="modal-actions">{runtime?.configured && <button className="button danger" type="button" disabled={pending} onClick={deactivate}>Disable</button>}<button className="button secondary" type="button" onClick={close}>Cancel</button><button className="button primary" disabled={pending || !ready}>{pending ? 'Checking…' : validated === JSON.stringify({endpointArtifactId: profile.endpointArtifactId, credentialArtifactId: profile.credentialArtifactId, registries: profile.registries}) ? 'Activate runtime' : 'Validate configuration'}</button></div>
+    </form>
+  </Dialog>
+}
+
 function Actions({close, pending, label}: {close: () => void; pending: boolean; label: string}) {
   return <div className="modal-actions"><button className="button secondary" type="button" onClick={close}>Cancel</button><button className="button primary" disabled={pending}>{pending ? 'Please wait…' : label}</button></div>
 }
 
 function ValidationCallout({text}: {text: string}) {
   return <div className="validation-callout"><span>✓</span><p><strong>Validated before continuing.</strong> {text}</p></div>
+}
+
+function artifactLabel(artifact: Artifact): string {
+  return `${artifact.name} · ${artifact.id.slice(0, 14)}…`
 }
 
 function credentialDefinitions(plugins: Plugin[]): CredentialDefinition[] {

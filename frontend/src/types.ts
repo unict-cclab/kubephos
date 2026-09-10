@@ -65,6 +65,26 @@ export interface PluginPackage {
 	updatedAt: string
 }
 
+export interface PluginRuntimeRegistry {
+  endpointArtifactId: string
+  credentialArtifactId: string
+}
+
+export interface PluginRuntimeProfile {
+  endpointArtifactId: string
+  credentialArtifactId: string
+  registries: PluginRuntimeRegistry[]
+  createdAt?: string
+  updatedAt?: string
+}
+
+export interface PluginRuntimeStatus {
+  configured: boolean
+  status: string
+  message: string
+  profile?: PluginRuntimeProfile
+}
+
 export interface CredentialDefinition {
   kind: string
   name: string
@@ -358,6 +378,7 @@ export interface SystemStatus {
 
 export interface PlatformData {
   system: SystemStatus | null
+	pluginRuntime: PluginRuntimeStatus | null
   workspaces: Workspace[]
   experiments: Experiment[]
   pipelines: Pipeline[]

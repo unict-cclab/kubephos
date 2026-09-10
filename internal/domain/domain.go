@@ -272,6 +272,19 @@ type PluginPackage struct {
 	UpdatedAt        time.Time `json:"updatedAt"`
 }
 
+type PluginRuntimeRegistry struct {
+	EndpointArtifactID   string `json:"endpointArtifactId"`
+	CredentialArtifactID string `json:"credentialArtifactId"`
+}
+
+type PluginRuntimeProfile struct {
+	EndpointArtifactID   string                  `json:"endpointArtifactId"`
+	CredentialArtifactID string                  `json:"credentialArtifactId"`
+	Registries           []PluginRuntimeRegistry `json:"registries"`
+	CreatedAt            time.Time               `json:"createdAt"`
+	UpdatedAt            time.Time               `json:"updatedAt"`
+}
+
 type Operation struct {
 	ID              string           `json:"id"`
 	WorkspaceID     string           `json:"workspaceId"`
