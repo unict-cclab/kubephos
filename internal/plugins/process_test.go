@@ -3,8 +3,100 @@ package plugins
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"testing"
 )
+
+func TestValidatePackageChecksExecutableHandshake(t *testing.T) {
+	directory := t.TempDir()
+	executable := filepath.Join(directory, "example-plugin")
+	script := `#!/bin/sh
+if [ "$1" != "describe" ]; then
+  exit 1
+fi
+printf '%s' '{"id":"dev.example.plugin","name":"Example","version":"1.2.3","schema":{},"artifactInputs":[{"type":"Input","version":"v1alpha1"}],"artifactOutputs":[{"type":"Output","version":"v1alpha1"}]}'
+`
+	if err := os.WriteFile(executable, []byte(script), 0755); err != nil {
+		t.Fatal(err)
+	}
+	descriptor := `apiVersion: plugins.kubephos.io/v1alpha1
+kind: Plugin
+metadata:
+  id: dev.example.plugin
+  name: Example
+  version: 1.2.3
+spec:
+  protocol: v1alpha1
+  commands: [describe, validate, plan, precheck, execute, verify, status, cancel, cleanup]
+  configurationSchema: {}
+  runtime:
+    executable: example-plugin
+  artifacts:
+    inputs: [{type: Input, version: v1alpha1}]
+    outputs: [{type: Output, version: v1alpha1}]
+`
+	if err := os.WriteFile(filepath.Join(directory, "plugin.yaml"), []byte(descriptor), 0600); err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := ValidatePackage(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if manifest.ID != "dev.example.plugin" || manifest.Version != "1.2.3" {
+		t.Fatalf("unexpected manifest: %#v", manifest)
+	}
+}
+
+func TestValidatePackageRejectsIdentityMismatch(t *testing.T) {
+	directory := t.TempDir()
+	executable := filepath.Join(directory, "example-plugin")
+	script := `#!/bin/sh
+printf '%s' '{"id":"dev.example.other","name":"Example","version":"1.2.3","schema":{}}'
+`
+	if err := os.WriteFile(executable, []byte(script), 0755); err != nil {
+		t.Fatal(err)
+	}
+	descriptor := `apiVersion: plugins.kubephos.io/v1alpha1
+kind: Plugin
+metadata:
+  id: dev.example.plugin
+  name: Example
+  version: 1.2.3
+spec:
+  protocol: v1alpha1
+  commands: [describe, validate, plan, precheck, execute, verify, status, cancel, cleanup]
+  configurationSchema: {}
+  runtime:
+    executable: example-plugin
+`
+	if err := os.WriteFile(filepath.Join(directory, "plugin.yaml"), []byte(descriptor), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ValidatePackage(directory); err == nil {
+		t.Fatal("expected identity mismatch")
+	}
+}
+
+func TestValidatePackageRejectsUnknownDescriptorFields(t *testing.T) {
+	directory := t.TempDir()
+	descriptor := `apiVersion: plugins.kubephos.io/v1alpha1
+kind: Plugin
+metadata:
+  id: dev.example.plugin
+  name: Example
+  version: 1.2.3
+  unexpected: value
+spec:
+  protocol: v1alpha1
+`
+	if err := os.WriteFile(filepath.Join(directory, "plugin.yaml"), []byte(descriptor), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ValidatePackage(directory); err == nil {
+		t.Fatal("expected unknown field error")
+	}
+}
 
 func TestResolveSecretsHonorsDeclaredKinds(t *testing.T) {
 	process := &Process{

@@ -95,13 +95,37 @@ func LoadDirectory(directory string, resolver SecretResolver, connections Connec
 	return NewRegistry(values...), nil
 }
 
+func ValidatePackage(path string) (Manifest, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return Manifest{}, err
+	}
+	if info.IsDir() {
+		path = filepath.Join(path, "plugin.yaml")
+	}
+	plugin, err := LoadProcess(path, nil, nil, nil)
+	if err != nil {
+		return Manifest{}, err
+	}
+	return plugin.Manifest(), nil
+}
+
 func LoadProcess(path string, resolver SecretResolver, connections ConnectionResolver, catalogResolver CatalogResolver) (*Process, error) {
 	value, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
 	var definition descriptor
-	if err := yaml.Unmarshal(value, &definition); err != nil {
+	decoder := yaml.NewDecoder(bytes.NewReader(value))
+	decoder.KnownFields(true)
+	if err := decoder.Decode(&definition); err != nil {
+		return nil, err
+	}
+	var extra any
+	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
+		if err == nil {
+			return nil, errors.New("plugin descriptor must contain one YAML document")
+		}
 		return nil, err
 	}
 	if definition.APIVersion != "plugins.kubephos.io/v1alpha1" || definition.Kind != "Plugin" || definition.Spec.Protocol != "v1alpha1" {
@@ -115,7 +139,7 @@ func LoadProcess(path string, resolver SecretResolver, connections ConnectionRes
 			return nil, errors.New("infrastructure plugins must declare a provider")
 		}
 	}
-	required := []string{"validate", "plan", "precheck", "execute", "verify", "status", "cancel", "cleanup"}
+	required := []string{"describe", "validate", "plan", "precheck", "execute", "verify", "status", "cancel", "cleanup"}
 	for _, command := range required {
 		if !contains(definition.Spec.Commands, command) {
 			return nil, fmt.Errorf("required command %q is missing", command)

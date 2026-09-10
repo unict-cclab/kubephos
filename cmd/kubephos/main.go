@@ -48,12 +48,30 @@ func run() error {
 		return doctor(configValue)
 	case "catalog":
 		return catalogMaintenance(configValue)
+	case "plugin":
+		return pluginMaintenance()
 	case "version":
 		fmt.Println(version)
 		return nil
 	default:
 		return fmt.Errorf("unknown command %q", command)
 	}
+}
+
+func pluginMaintenance() error {
+	if len(os.Args) < 3 || len(os.Args) > 4 || os.Args[2] != "validate" {
+		return errors.New("usage: kubephos plugin validate [path]")
+	}
+	path := "."
+	if len(os.Args) == 4 {
+		path = os.Args[3]
+	}
+	manifest, err := plugins.ValidatePackage(path)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("PASS %s@%s (%s)\n", manifest.ID, manifest.Version, manifest.Name)
+	return nil
 }
 
 func catalogMaintenance(configValue config.Config) error {
