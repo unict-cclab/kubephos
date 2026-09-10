@@ -1,0 +1,95 @@
+apiVersion: plugins.kubephos.io/v1alpha1
+kind: Plugin
+metadata:
+  id: io.kubephos.build.oci
+  name: OCI image build
+  version: 0.1.0
+  description: Builds an immutable OCI image from an exact Git commit and publishes it to a managed registry.
+spec:
+  protocol: v1alpha1
+  commands:
+    - describe
+    - validate
+    - plan
+    - precheck
+    - execute
+    - verify
+    - status
+    - cancel
+    - cleanup
+  configurationSchema:
+    type: object
+    additionalProperties: false
+    required:
+      - registryEndpointRef
+      - registryCredentialRef
+      - repositoryURL
+      - commit
+      - contextPath
+      - dockerfile
+      - imageName
+      - tagSuffix
+    properties:
+      registryEndpointRef:
+        type: string
+        title: Target registry
+        format: kubephos-artifact-ref
+        x-kubephos-artifact-type: RegistryEndpoint
+        x-kubephos-artifact-version: v1alpha1
+      registryCredentialRef:
+        type: string
+        title: Push credential
+        format: kubephos-artifact-ref
+        x-kubephos-artifact-type: RegistryCredential
+        x-kubephos-artifact-version: v1alpha1
+      repositoryURL:
+        type: string
+        title: Git repository
+        pattern: "^https://[^[:space:]]+$"
+        maxLength: 2048
+      commit:
+        type: string
+        title: Full commit SHA
+        pattern: "^[0-9a-f]{40}$"
+      contextPath:
+        type: string
+        title: Build context
+        pattern: "^(\\.|[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*)$"
+        maxLength: 256
+        default: .
+      dockerfile:
+        type: string
+        title: Dockerfile
+        pattern: "^[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*$"
+        maxLength: 256
+        default: Dockerfile
+      imageName:
+        type: string
+        title: Image name
+        pattern: "^[a-z0-9]+(?:[._-][a-z0-9]+)*(?:/[a-z0-9]+(?:[._-][a-z0-9]+)*)*$"
+        maxLength: 255
+      tagSuffix:
+        type: string
+        title: Tag suffix
+        pattern: "^[a-z0-9][a-z0-9.-]{0,31}$"
+        default: dev
+  runtime:
+    executable: oci-build-plugin
+    timeout: 2h
+  artifacts:
+    inputs:
+      - type: RegistryEndpoint
+        version: v1alpha1
+      - type: RegistryCredential
+        version: v1alpha1
+    outputs:
+      - type: OCIImage
+        version: v1alpha1
+  capabilities:
+    - build.oci.execute
+    - build.oci.preflight
+    - lifecycle.cleanup
+  permissions:
+    - network.git.read
+    - registry.push
+    - executor.build
