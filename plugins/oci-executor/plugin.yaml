@@ -1,0 +1,66 @@
+apiVersion: plugins.kubephos.io/v1alpha1
+kind: Plugin
+metadata:
+  id: io.kubephos.executor.oci.rootless
+  name: Managed OCI executor
+  version: 0.1.0
+  description: Installs and validates a dedicated rootless OCI executor with mutual TLS.
+spec:
+  protocol: v1alpha1
+  commands:
+    - describe
+    - validate
+    - plan
+    - precheck
+    - execute
+    - verify
+    - status
+    - cancel
+    - cleanup
+  configurationSchema:
+    type: object
+    additionalProperties: false
+    required:
+      - machineSetRef
+      - machineAccessRef
+      - executorName
+    properties:
+      machineSetRef:
+        type: string
+        title: Executor machine
+        format: kubephos-artifact-ref
+        x-kubephos-artifact-type: MachineSet
+        x-kubephos-artifact-version: v1alpha1
+      machineAccessRef:
+        type: string
+        title: Machine access
+        format: kubephos-artifact-ref
+        x-kubephos-artifact-type: MachineAccess
+        x-kubephos-artifact-version: v1alpha1
+      executorName:
+        type: string
+        title: Executor name
+        pattern: "^[a-z0-9][a-z0-9-]{0,31}$"
+        default: managed-executor
+  runtime:
+    executable: oci-executor-plugin
+    timeout: 45m
+  artifacts:
+    inputs:
+      - type: MachineSet
+        version: v1alpha1
+      - type: MachineAccess
+        version: v1alpha1
+    outputs:
+      - type: OCIExecutorEndpoint
+        version: v1alpha1
+      - type: OCIExecutorCredential
+        version: v1alpha1
+  capabilities:
+    - executor.oci.provision
+    - executor.oci.preflight
+    - executor.oci.cleanup
+    - lifecycle.cleanup
+  permissions:
+    - network.ssh
+    - executor.manage

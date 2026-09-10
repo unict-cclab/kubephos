@@ -33,6 +33,7 @@ RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/harbor-plugin ./cm
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/nfs-csi-plugin ./cmd/nfs-csi-plugin
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/managed-observability-plugin ./cmd/managed-observability-plugin
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/oci-build-plugin ./cmd/oci-build-plugin
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/oci-executor-plugin ./cmd/oci-executor-plugin
 
 FROM alpine:3.23
 
@@ -72,6 +73,8 @@ COPY --from=build /out/managed-observability-plugin /opt/kubephos/plugins/manage
 COPY plugins/managed-observability/plugin.yaml /opt/kubephos/plugins/managed-observability/plugin.yaml
 COPY --from=build /out/oci-build-plugin /opt/kubephos/plugins/oci-build/oci-build-plugin
 COPY plugins/oci-build/plugin.yaml /opt/kubephos/plugins/oci-build/plugin.yaml
+COPY --from=build /out/oci-executor-plugin /opt/kubephos/plugins/oci-executor/oci-executor-plugin
+COPY plugins/oci-executor/plugin.yaml /opt/kubephos/plugins/oci-executor/plugin.yaml
 COPY catalog/applications /opt/kubephos/catalog/applications
 COPY --from=web /src/frontend/dist /opt/kubephos/web
 USER 10001:10001
