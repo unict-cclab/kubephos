@@ -25,4 +25,10 @@ describe('buildFlow', () => {
     const running = {...operation, status: 'verifying'}
     expect(buildFlow('ws_one', [producer], [], [running])[0].state).toBe('active')
   })
+
+  it('keeps generic interactive capabilities ready after prior runs', () => {
+    const controller = {...consumer, id: 'controller', capabilities: ['session.control']}
+    const completed = {...operation, id: 'op_control', pluginId: controller.id}
+    expect(buildFlow('ws_one', [controller], [artifact], [completed])[0]).toMatchObject({state: 'available', interactive: true})
+  })
 })

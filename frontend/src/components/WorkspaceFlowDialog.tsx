@@ -15,6 +15,7 @@ interface Props {
 interface FlowItem {
   plugin: Plugin
   state: 'active' | 'available' | 'executed' | 'waiting'
+  interactive: boolean
   missing: Array<{type: string; version: string}>
   outputs: Artifact[]
 }
@@ -43,7 +44,7 @@ function FlowStat({value, label}: {value: number; label: string}) {
 function FlowRow({item, configure}: {item: FlowItem; configure: (pluginID: string) => void}) {
   const inputText = item.plugin.artifactInputs?.length ? item.plugin.artifactInputs.map(contractName).join(', ') : 'No typed input'
   const outputText = item.plugin.artifactOutputs?.length ? item.plugin.artifactOutputs.map(contractName).join(', ') : 'No typed output'
-  const status = item.state === 'active' ? 'Running' : item.state === 'executed' ? 'Output available' : item.state === 'available' ? 'Available' : 'Waiting'
+  const status = item.state === 'active' ? 'Running' : item.state === 'executed' ? 'Output available' : item.interactive && item.state === 'available' ? 'Interactive' : item.state === 'available' ? 'Available' : 'Waiting'
   return <article className={`flow-row ${item.state}`}>
     <div className="flow-node"><span /></div>
     <div className="flow-copy">
@@ -54,7 +55,7 @@ function FlowRow({item, configure}: {item: FlowItem; configure: (pluginID: strin
       {!!item.missing.length && <small>Waiting for {item.missing.map(contractName).join(', ')}</small>}
       {!!item.outputs.length && <small>{item.outputs.length} verified artifact{item.outputs.length === 1 ? '' : 's'} available</small>}
     </div>
-    <button className="button secondary compact" disabled={item.state === 'waiting' || item.state === 'active'} onClick={() => configure(item.plugin.id)}>{item.state === 'executed' ? 'Run again' : item.state === 'active' ? 'In progress' : item.state === 'waiting' ? 'Needs input' : 'Configure'}</button>
+    <button className="button secondary compact" disabled={item.state === 'waiting' || item.state === 'active'} onClick={() => configure(item.plugin.id)}>{item.interactive && item.state === 'available' ? 'Open control' : item.state === 'executed' ? 'Run again' : item.state === 'active' ? 'In progress' : item.state === 'waiting' ? 'Needs input' : 'Configure'}</button>
   </article>
 }
 
@@ -72,10 +73,11 @@ export function buildFlow(workspaceID: string, plugins: Plugin[], artifacts: Art
       const matchingOperations = workspaceOperations.filter(operation => operation.pluginId === plugin.id)
       const running = matchingOperations.some(operation => activeStates.has(operation.status))
       const executed = matchingOperations.some(operation => operation.status === 'succeeded')
+      const interactive = (plugin.capabilities ?? []).some(capability => capability.endsWith('.control'))
       const operationIDs = new Set(matchingOperations.filter(operation => operation.status === 'succeeded').map(operation => operation.id))
       const outputs = workspaceArtifacts.filter(artifact => operationIDs.has(artifact.operationId) && (plugin.artifactOutputs ?? []).some(contract => artifact.type === contract.type && artifact.version === contract.version))
-      const state = running ? 'active' : executed ? 'executed' : missing.length ? 'waiting' : 'available'
-      return {plugin, state, missing, outputs} satisfies FlowItem
+      const state = running ? 'active' : interactive && !missing.length ? 'available' : executed ? 'executed' : missing.length ? 'waiting' : 'available'
+      return {plugin, state, interactive, missing, outputs} satisfies FlowItem
     })
     .sort((left, right) => flowRank(left.state) - flowRank(right.state) || left.plugin.name.localeCompare(right.plugin.name))
 }
