@@ -61,12 +61,20 @@ func run() error {
 }
 
 func pluginMaintenance(configValue config.Config) error {
-	if len(os.Args) < 3 || len(os.Args) > 4 || os.Args[2] != "validate" {
-		return errors.New("usage: kubephos plugin validate [path]")
+	if len(os.Args) < 3 || len(os.Args) > 4 || (os.Args[2] != "inspect" && os.Args[2] != "validate") {
+		return errors.New("usage: kubephos plugin <inspect|validate> [path]")
 	}
 	path := "."
 	if len(os.Args) == 4 {
 		path = os.Args[3]
+	}
+	if os.Args[2] == "inspect" {
+		manifest, err := plugins.InspectPackage(path)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("PASS %s@%s (%s)\n", manifest.ID, manifest.Version, manifest.Runtime.Reference)
+		return nil
 	}
 	manifest, err := plugins.ValidatePackage(path, pluginRuntime(configValue))
 	if err != nil {

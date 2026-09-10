@@ -114,18 +114,53 @@ func LoadDirectory(directory string, resolver SecretResolver, connections Connec
 }
 
 func ValidatePackage(path string, runners ...ContainerRunner) (Manifest, error) {
-	info, err := os.Stat(path)
+	path, err := descriptorPath(path)
 	if err != nil {
 		return Manifest{}, err
-	}
-	if info.IsDir() {
-		path = filepath.Join(path, "plugin.yaml")
 	}
 	plugin, err := LoadProcess(path, nil, nil, nil, runners...)
 	if err != nil {
 		return Manifest{}, err
 	}
 	return plugin.Manifest(), nil
+}
+
+func InspectPackage(path string) (Manifest, error) {
+	path, err := descriptorPath(path)
+	if err != nil {
+		return Manifest{}, err
+	}
+	value, err := os.ReadFile(path)
+	if err != nil {
+		return Manifest{}, err
+	}
+	return InspectDefinition(value)
+}
+
+func descriptorPath(path string) (string, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return "", err
+	}
+	if !info.IsDir() {
+		return path, nil
+	}
+	candidates := []string{filepath.Join(path, "plugin.yaml"), filepath.Join(path, ".kubephos", "plugin.yaml")}
+	found := []string{}
+	for _, candidate := range candidates {
+		if info, err := os.Stat(candidate); err == nil && info.Mode().IsRegular() {
+			found = append(found, candidate)
+		} else if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return "", err
+		}
+	}
+	if len(found) == 0 {
+		return "", errors.New("plugin descriptor not found; expected plugin.yaml or .kubephos/plugin.yaml")
+	}
+	if len(found) > 1 {
+		return "", errors.New("multiple plugin descriptors found; keep only plugin.yaml or .kubephos/plugin.yaml")
+	}
+	return found[0], nil
 }
 
 func LoadProcess(path string, resolver SecretResolver, connections ConnectionResolver, catalogResolver CatalogResolver, runners ...ContainerRunner) (*Process, error) {

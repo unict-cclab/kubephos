@@ -254,6 +254,52 @@ spec:
 	}
 }
 
+func TestInspectPackageFindsRepositoryDescriptor(t *testing.T) {
+	directory := t.TempDir()
+	packageDirectory := filepath.Join(directory, ".kubephos")
+	if err := os.Mkdir(packageDirectory, 0700); err != nil {
+		t.Fatal(err)
+	}
+	descriptor := `apiVersion: plugins.kubephos.io/v1alpha1
+kind: Plugin
+metadata:
+  id: dev.example.repository
+  name: Repository plugin
+  version: 1.0.0
+spec:
+  protocol: v1alpha1
+  commands: [describe, validate, plan, precheck, execute, verify, status, cancel, cleanup]
+  configurationSchema: {type: object}
+  runtime:
+    image: registry.example.test/plugin@sha256:` + strings.Repeat("a", 64) + `
+`
+	if err := os.WriteFile(filepath.Join(packageDirectory, "plugin.yaml"), []byte(descriptor), 0600); err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := InspectPackage(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if manifest.ID != "dev.example.repository" || manifest.Runtime.Kind != "oci" {
+		t.Fatalf("unexpected manifest: %#v", manifest)
+	}
+}
+
+func TestInspectPackageRejectsAmbiguousDescriptor(t *testing.T) {
+	directory := t.TempDir()
+	if err := os.Mkdir(filepath.Join(directory, ".kubephos"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{filepath.Join(directory, "plugin.yaml"), filepath.Join(directory, ".kubephos", "plugin.yaml")} {
+		if err := os.WriteFile(path, []byte("invalid"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := InspectPackage(directory); err == nil || !strings.Contains(err.Error(), "multiple") {
+		t.Fatalf("expected ambiguity error, got %v", err)
+	}
+}
+
 func TestResolveSecretsHonorsDeclaredKinds(t *testing.T) {
 	process := &Process{
 		secretKinds: map[string]bool{"allowed": true},
