@@ -319,7 +319,7 @@ func (s *Store) CreateCompletedExperiment(ctx context.Context, experiment domain
 
 func (s *Store) ListExperiments(ctx context.Context, limit int) ([]domain.Experiment, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT id, workspace_id, name, description, status, result_type, result_version, created_at, updated_at
+		SELECT id, workspace_id, name, description, status, result_type, result_version, scheduled_for, created_at, updated_at
 		FROM experiments
 		ORDER BY created_at DESC
 		LIMIT $1
@@ -330,7 +330,7 @@ func (s *Store) ListExperiments(ctx context.Context, limit int) ([]domain.Experi
 	result := []domain.Experiment{}
 	for rows.Next() {
 		var experiment domain.Experiment
-		if err := rows.Scan(&experiment.ID, &experiment.WorkspaceID, &experiment.Name, &experiment.Description, &experiment.Status, &experiment.ResultType, &experiment.ResultVersion, &experiment.CreatedAt, &experiment.UpdatedAt); err != nil {
+		if err := rows.Scan(&experiment.ID, &experiment.WorkspaceID, &experiment.Name, &experiment.Description, &experiment.Status, &experiment.ResultType, &experiment.ResultVersion, &experiment.ScheduledFor, &experiment.CreatedAt, &experiment.UpdatedAt); err != nil {
 			rows.Close()
 			return nil, err
 		}

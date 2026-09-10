@@ -106,6 +106,7 @@ type PipelineRun struct {
 	Error            string             `json:"error,omitempty"`
 	CreatedAt        time.Time          `json:"createdAt"`
 	QueuedAt         *time.Time         `json:"queuedAt,omitempty"`
+	ScheduledFor     *time.Time         `json:"scheduledFor,omitempty"`
 	StartedAt        *time.Time         `json:"startedAt,omitempty"`
 	CompletedAt      *time.Time         `json:"completedAt,omitempty"`
 	Stages           []PipelineRunStage `json:"stages"`
@@ -135,6 +136,7 @@ type Experiment struct {
 	ResultType    string              `json:"resultType"`
 	ResultVersion string              `json:"resultVersion"`
 	Variants      []ExperimentVariant `json:"variants"`
+	ScheduledFor  *time.Time          `json:"scheduledFor,omitempty"`
 	CreatedAt     time.Time           `json:"createdAt"`
 	UpdatedAt     time.Time           `json:"updatedAt"`
 }

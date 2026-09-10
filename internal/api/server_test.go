@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"testing"
+	"time"
 
 	"kubephos.dev/kubephos/internal/domain"
 	"kubephos.dev/kubephos/internal/plugins"
@@ -109,6 +110,27 @@ func TestPipelineResultSensitiveUsesResolvedOutput(t *testing.T) {
 	pipeline.Resolution.Stages[0].Plan.Steps[0].Outputs[0].Sensitive = true
 	if !pipelineResultSensitive(pipeline) {
 		t.Fatal("sensitive result was not detected")
+	}
+}
+
+func TestNormalizeScheduledFor(t *testing.T) {
+	now := time.Date(2026, time.September, 10, 12, 0, 0, 0, time.UTC)
+	immediate, err := normalizeScheduledFor(nil, now)
+	if err != nil || !immediate.Equal(now) {
+		t.Fatalf("unexpected immediate schedule: %v %v", immediate, err)
+	}
+	future := now.Add(15 * time.Minute)
+	scheduled, err := normalizeScheduledFor(&future, now)
+	if err != nil || !scheduled.Equal(future) {
+		t.Fatalf("unexpected future schedule: %v %v", scheduled, err)
+	}
+	past := now.Add(-time.Minute)
+	tooFar := now.AddDate(1, 0, 1)
+	if _, err := normalizeScheduledFor(&past, now); err == nil {
+		t.Fatal("past schedule was accepted")
+	}
+	if _, err := normalizeScheduledFor(&tooFar, now); err == nil {
+		t.Fatal("schedule beyond one year was accepted")
 	}
 }
 

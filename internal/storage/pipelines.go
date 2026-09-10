@@ -34,10 +34,10 @@ func (s *Store) CreatePipelineRun(ctx context.Context, run domain.PipelineRun) (
 		return domain.PipelineRun{}, ErrConflict
 	}
 	err = tx.QueryRow(ctx, `
-		INSERT INTO pipeline_runs (id, pipeline_id, workspace_id, name, status, pipeline_hash, result_type, result_version)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-		RETURNING created_at, queued_at
-	`, run.ID, run.PipelineID, run.WorkspaceID, run.Name, domain.OperationQueued, run.PipelineHash, run.ResultType, run.ResultVersion).Scan(&run.CreatedAt, &run.QueuedAt)
+		INSERT INTO pipeline_runs (id, pipeline_id, workspace_id, name, status, pipeline_hash, result_type, result_version, scheduled_for)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, COALESCE($9, now()))
+		RETURNING created_at, queued_at, scheduled_for
+	`, run.ID, run.PipelineID, run.WorkspaceID, run.Name, domain.OperationQueued, run.PipelineHash, run.ResultType, run.ResultVersion, run.ScheduledFor).Scan(&run.CreatedAt, &run.QueuedAt, &run.ScheduledFor)
 	if err != nil {
 		return domain.PipelineRun{}, err
 	}
@@ -66,10 +66,10 @@ func (s *Store) CreatePipelineExperiment(ctx context.Context, experiment domain.
 	}
 	defer tx.Rollback(ctx)
 	err = tx.QueryRow(ctx, `
-		INSERT INTO experiments (id, workspace_id, name, description, status, result_type, result_version)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
+		INSERT INTO experiments (id, workspace_id, name, description, status, result_type, result_version, scheduled_for)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 		RETURNING created_at, updated_at
-	`, experiment.ID, experiment.WorkspaceID, experiment.Name, experiment.Description, domain.OperationQueued, experiment.ResultType, experiment.ResultVersion).Scan(&experiment.CreatedAt, &experiment.UpdatedAt)
+	`, experiment.ID, experiment.WorkspaceID, experiment.Name, experiment.Description, domain.OperationQueued, experiment.ResultType, experiment.ResultVersion, experiment.ScheduledFor).Scan(&experiment.CreatedAt, &experiment.UpdatedAt)
 	if err != nil {
 		return domain.Experiment{}, err
 	}
@@ -109,10 +109,10 @@ func (s *Store) CreatePipelineExperiment(ctx context.Context, experiment domain.
 				return domain.Experiment{}, ErrConflict
 			}
 			err = tx.QueryRow(ctx, `
-				INSERT INTO pipeline_runs (id, pipeline_id, workspace_id, name, status, pipeline_hash, result_type, result_version)
-				VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-				RETURNING created_at, queued_at
-			`, run.ID, run.PipelineID, run.WorkspaceID, run.Name, domain.OperationQueued, run.PipelineHash, run.ResultType, run.ResultVersion).Scan(&run.CreatedAt, &run.QueuedAt)
+				INSERT INTO pipeline_runs (id, pipeline_id, workspace_id, name, status, pipeline_hash, result_type, result_version, scheduled_for)
+				VALUES ($1, $2, $3, $4, $5, $6, $7, $8, COALESCE($9, now()))
+				RETURNING created_at, queued_at, scheduled_for
+			`, run.ID, run.PipelineID, run.WorkspaceID, run.Name, domain.OperationQueued, run.PipelineHash, run.ResultType, run.ResultVersion, run.ScheduledFor).Scan(&run.CreatedAt, &run.QueuedAt, &run.ScheduledFor)
 			if err != nil {
 				return domain.Experiment{}, err
 			}
@@ -147,7 +147,7 @@ func (s *Store) CreatePipelineExperiment(ctx context.Context, experiment domain.
 func (s *Store) ListPipelineRuns(ctx context.Context, limit int) ([]domain.PipelineRun, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT id, pipeline_id, workspace_id, name, status, pipeline_hash, result_type, result_version,
-		       COALESCE(result_artifact_id, ''), cancel_requested, error, created_at, queued_at, started_at, completed_at
+		       COALESCE(result_artifact_id, ''), cancel_requested, error, created_at, queued_at, scheduled_for, started_at, completed_at
 		FROM pipeline_runs
 		ORDER BY created_at DESC
 		LIMIT $1
@@ -182,7 +182,7 @@ func (s *Store) ListPipelineRuns(ctx context.Context, limit int) ([]domain.Pipel
 func (s *Store) GetPipelineRun(ctx context.Context, runID string) (domain.PipelineRun, error) {
 	run, err := scanPipelineRun(s.pool.QueryRow(ctx, `
 		SELECT id, pipeline_id, workspace_id, name, status, pipeline_hash, result_type, result_version,
-		       COALESCE(result_artifact_id, ''), cancel_requested, error, created_at, queued_at, started_at, completed_at
+		       COALESCE(result_artifact_id, ''), cancel_requested, error, created_at, queued_at, scheduled_for, started_at, completed_at
 		FROM pipeline_runs
 		WHERE id = $1
 	`, runID))
@@ -198,7 +198,7 @@ func (s *Store) GetPipelineRun(ctx context.Context, runID string) (domain.Pipeli
 
 func scanPipelineRun(row scanner) (domain.PipelineRun, error) {
 	var run domain.PipelineRun
-	err := row.Scan(&run.ID, &run.PipelineID, &run.WorkspaceID, &run.Name, &run.Status, &run.PipelineHash, &run.ResultType, &run.ResultVersion, &run.ResultArtifactID, &run.CancelRequested, &run.Error, &run.CreatedAt, &run.QueuedAt, &run.StartedAt, &run.CompletedAt)
+	err := row.Scan(&run.ID, &run.PipelineID, &run.WorkspaceID, &run.Name, &run.Status, &run.PipelineHash, &run.ResultType, &run.ResultVersion, &run.ResultArtifactID, &run.CancelRequested, &run.Error, &run.CreatedAt, &run.QueuedAt, &run.ScheduledFor, &run.StartedAt, &run.CompletedAt)
 	return run, err
 }
 
@@ -230,8 +230,8 @@ func (s *Store) ClaimPipelineRun(ctx context.Context, owner string) (domain.Pipe
 		WITH candidate AS (
 			SELECT id
 			FROM pipeline_runs
-			WHERE status IN ($1, $2) AND (lease_until IS NULL OR lease_until < now())
-			ORDER BY created_at
+			WHERE status IN ($1, $2) AND scheduled_for <= now() AND (lease_until IS NULL OR lease_until < now())
+			ORDER BY scheduled_for, created_at
 			FOR UPDATE SKIP LOCKED
 			LIMIT 1
 		)

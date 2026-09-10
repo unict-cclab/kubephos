@@ -90,3 +90,10 @@ databaseChangeLog:
         - sqlFile:
             path: changes/013-automatic-experiments.sql
             relativeToChangelogFile: true
+  - changeSet:
+      id: 014-scheduled-runs
+      author: kubephos
+      changes:
+        - sqlFile:
+            path: changes/014-scheduled-runs.sql
+            relativeToChangelogFile: true

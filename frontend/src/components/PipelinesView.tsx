@@ -46,12 +46,13 @@ function PipelineHeading({create, compare, enabled, canCompare}: {create: () => 
 
 function RunSummary({run, session, changed, openOperation}: {run: PipelineRun; session: Session; changed: () => Promise<void>; openOperation: (id: string) => void}) {
   const active = ['queued', 'running', 'prechecking', 'verifying'].includes(run.status)
+  const scheduled = run.status === 'queued' && Boolean(run.scheduledFor && new Date(run.scheduledFor).getTime() > Date.now())
   const cancel = async () => {
     await request(`/pipeline-runs/${run.id}/cancel`, {method: 'POST', body: '{}'}, session.csrfToken)
     await changed()
   }
   return <div className="pipeline-run">
-    <div className="pipeline-run-head"><div><span className={`status-dot ${run.status}`} /><strong>{run.name}</strong><small>{formatDate(run.createdAt)}</small></div><span className={`status-pill ${run.status}`}>{run.cancelRequested && active ? 'canceling' : run.status}</span>{active && <button className="text-button danger" onClick={cancel}>Cancel</button>}</div>
+    <div className="pipeline-run-head"><div><span className={`status-dot ${run.status}`} /><strong>{run.name}</strong><small>{scheduled && run.scheduledFor ? `Scheduled ${formatDate(run.scheduledFor)}` : formatDate(run.createdAt)}</small></div><span className={`status-pill ${run.status}`}>{run.cancelRequested && active ? 'canceling' : scheduled ? 'scheduled' : run.status}</span>{active && <button className="text-button danger" onClick={cancel}>Cancel</button>}</div>
     <div className="pipeline-run-stages">{run.stages.map(stage => <button type="button" key={stage.id} disabled={!stage.operationId} onClick={() => stage.operationId && openOperation(stage.operationId)}><span className={`status-dot ${stage.status}`} /><span><strong>{stage.title}</strong><small>{stage.operationId ? 'Open logs and health gates' : 'Waiting for prior stage'}</small></span></button>)}</div>
     {run.error && <p className="pipeline-run-error">{run.error}</p>}
   </div>
@@ -60,13 +61,15 @@ function RunSummary({run, session, changed, openOperation}: {run: PipelineRun; s
 function RunDialog({pipeline, close, session, changed}: {pipeline: Pipeline | null; close: () => void; session: Session; changed: () => Promise<void>}) {
   const [pending, setPending] = useState(false)
   const [error, setError] = useState('')
+  const [scheduleLater, setScheduleLater] = useState(false)
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     if (!pipeline) return
     setPending(true)
     setError('')
+    const form = new FormData(event.currentTarget)
     try {
-      await request(`/pipelines/${pipeline.id}/runs`, {method: 'POST', body: JSON.stringify({name: new FormData(event.currentTarget).get('name')})}, session.csrfToken)
+      await request(`/pipelines/${pipeline.id}/runs`, {method: 'POST', body: JSON.stringify({name: form.get('name'), scheduledFor: scheduleLater ? new Date(String(form.get('scheduledFor'))).toISOString() : undefined})}, session.csrfToken)
       close()
       await changed()
     } catch (cause) {
@@ -79,9 +82,10 @@ function RunDialog({pipeline, close, session, changed}: {pipeline: Pipeline | nu
     <form onSubmit={submit} key={pipeline?.id}>
       <p className="field-description">{pipeline?.name} · {pipeline?.resolution.stages.length ?? 0} validated stages</p>
       <label>Run name<input name="name" maxLength={120} defaultValue={pipeline ? `${pipeline.name} · ${new Date().toLocaleString()}` : ''} required autoFocus /></label>
+      <ScheduleFields later={scheduleLater} change={setScheduleLater} />
       <div className="validation-callout"><span>✓</span><p><strong>Version locked.</strong> The saved hash and every plug-in version are checked again before the first stage is queued. Each later stage waits for verified outputs.</p></div>
       <p className="form-error">{error}</p>
-      <div className="modal-actions"><button className="button secondary" type="button" onClick={close}>Cancel</button><button className="button primary" disabled={pending}>{pending ? 'Starting…' : 'Run in background'}</button></div>
+      <div className="modal-actions"><button className="button secondary" type="button" onClick={close}>Cancel</button><button className="button primary" disabled={pending}>{pending ? 'Saving…' : scheduleLater ? 'Schedule run' : 'Run in background'}</button></div>
     </form>
   </Dialog>
 }
@@ -90,6 +94,7 @@ function CompareDialog({open, close, pipelines, workspaces, session, changed}: {
   const [workspaceId, setWorkspaceId] = useState('')
   const [selected, setSelected] = useState<string[]>([])
   const [repetitions, setRepetitions] = useState(1)
+  const [scheduleLater, setScheduleLater] = useState(false)
   const [pending, setPending] = useState(false)
   const [error, setError] = useState('')
   const activeWorkspace = workspaceId || workspaces.find(workspace => compatibleInWorkspace(pipelines, workspace.id).length >= 2)?.id || workspaces[0]?.id || ''
@@ -113,6 +118,7 @@ function CompareDialog({open, close, pipelines, workspaces, session, changed}: {
         name: form.get('name'),
         description: form.get('description'),
         repetitions,
+        scheduledFor: scheduleLater ? new Date(String(form.get('scheduledFor'))).toISOString() : undefined,
         variants: selected.map(id => ({pipelineId: id, name: form.get(`variant-${id}`)}))
       })}, session.csrfToken)
       close()
@@ -129,6 +135,7 @@ function CompareDialog({open, close, pipelines, workspaces, session, changed}: {
       <div className="field-row"><label>Workspace<select value={activeWorkspace} onChange={event => changeWorkspace(event.target.value)}>{workspaces.map(workspace => <option key={workspace.id} value={workspace.id}>{workspace.name}</option>)}</select></label><label>Repetitions<select value={repetitions} onChange={event => setRepetitions(Number(event.target.value))}>{[1, 2, 3, 5, 10].map(value => <option key={value} value={value}>{value} per strategy</option>)}</select></label></div>
       <label>Experiment name<input name="name" maxLength={120} placeholder="Default vs secondary scheduler" required autoFocus /></label>
       <label>Description<textarea name="description" maxLength={500} rows={2} placeholder="What are you comparing?" /></label>
+      <ScheduleFields later={scheduleLater} change={setScheduleLater} />
       <div className="compare-pipelines"><div><strong>Select at least two strategies</strong><small>Only flows with the same result type can be selected together.</small></div>{available.map(pipeline => {
         const checked = selected.includes(pipeline.id)
         const incompatible = Boolean(selectedContract && (pipeline.resolution.result.type !== selectedContract.type || pipeline.resolution.result.version !== selectedContract.version))
@@ -137,9 +144,19 @@ function CompareDialog({open, close, pipelines, workspaces, session, changed}: {
       <div className="experiment-fanout"><span>{selected.length}</span><small>strategies</small><strong>×</strong><span>{repetitions}</span><small>repetitions</small><strong>=</strong><span>{selected.length * repetitions}</span><small>background trials</small></div>
       <div className="validation-callout"><span>✓</span><p><strong>Validated before fan-out.</strong> Workspace, result contract, pipeline hashes and every plug-in version are checked before all trials are created in one database transaction.</p></div>
       <p className="form-error">{error}</p>
-      <div className="modal-actions"><button className="button secondary" type="button" onClick={close}>Cancel</button><button className="button primary" disabled={pending || selected.length < 2 || selected.length * repetitions > 40}>{pending ? 'Creating trials…' : `Start ${selected.length * repetitions} trials`}</button></div>
+      <div className="modal-actions"><button className="button secondary" type="button" onClick={close}>Cancel</button><button className="button primary" disabled={pending || selected.length < 2 || selected.length * repetitions > 40}>{pending ? 'Saving…' : `${scheduleLater ? 'Schedule' : 'Start'} ${selected.length * repetitions} trials`}</button></div>
     </form>
   </Dialog>
+}
+
+function ScheduleFields({later, change}: {later: boolean; change: (value: boolean) => void}) {
+  return <div className="schedule-fields"><label className="checkbox-field"><input type="checkbox" checked={later} onChange={event => change(event.target.checked)} />Schedule for later</label>{later && <label>Start time<input type="datetime-local" name="scheduledFor" min={localDateTime(1)} max={localDateTime(365 * 24 * 60)} defaultValue={localDateTime(5)} required /></label>}</div>
+}
+
+function localDateTime(minutesFromNow: number): string {
+  const value = new Date(Date.now() + minutesFromNow * 60_000)
+  value.setMinutes(value.getMinutes() - value.getTimezoneOffset())
+  return value.toISOString().slice(0, 16)
 }
 
 export function compatibleInWorkspace(pipelines: Pipeline[], workspaceId: string): Pipeline[] {

@@ -185,6 +185,7 @@ export interface Experiment {
   resultType: string
   resultVersion: string
   variants: ExperimentVariant[]
+  scheduledFor?: string
   createdAt: string
   updatedAt: string
 }
@@ -248,6 +249,7 @@ export interface PipelineRun {
   error?: string
   createdAt: string
   queuedAt?: string
+  scheduledFor?: string
   startedAt?: string
   completedAt?: string
   stages: PipelineRunStage[]

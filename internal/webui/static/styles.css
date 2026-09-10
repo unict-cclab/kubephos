@@ -420,6 +420,9 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .experiment-fanout span { color: var(--lime); font-size: 18px; font-weight: 850; }
 .experiment-fanout small { color: #aebbb2; font-size: 9px; font-weight: 700; text-transform: uppercase; }
 .experiment-fanout strong { margin: 0 4px; color: #79867d; }
+.schedule-fields { margin: 16px 0; border: 1px solid var(--line); border-radius: 10px; padding: 11px 13px; background: #fafbf9; }
+.schedule-fields label { margin: 0; }
+.schedule-fields label + label { margin-top: 12px; }
 
 .empty-state { display: grid; min-height: 180px; place-items: center; border: 1px dashed #cbd2cc; border-radius: 14px; padding: 25px; color: var(--muted); text-align: center; }
 .empty-state strong { display: block; margin-bottom: 6px; color: var(--ink); }

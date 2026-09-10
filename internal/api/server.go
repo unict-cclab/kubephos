@@ -241,7 +241,8 @@ func (s *Server) getPipelineRun(response http.ResponseWriter, request *http.Requ
 
 func (s *Server) createPipelineRun(response http.ResponseWriter, request *http.Request) {
 	var input struct {
-		Name string `json:"name"`
+		Name         string     `json:"name"`
+		ScheduledFor *time.Time `json:"scheduledFor"`
 	}
 	if err := decodeJSON(request, &input); err != nil {
 		writeError(response, http.StatusBadRequest, "invalid_request", err.Error())
@@ -250,6 +251,11 @@ func (s *Server) createPipelineRun(response http.ResponseWriter, request *http.R
 	input.Name = strings.TrimSpace(input.Name)
 	if input.Name == "" || len(input.Name) > 120 {
 		writeError(response, http.StatusUnprocessableEntity, "invalid_name", "Run name must contain between 1 and 120 characters.")
+		return
+	}
+	scheduledFor, err := normalizeScheduledFor(input.ScheduledFor, time.Now().UTC())
+	if err != nil {
+		writeError(response, http.StatusUnprocessableEntity, "invalid_schedule", err.Error())
 		return
 	}
 	pipeline, err := s.store.GetPipeline(request.Context(), request.PathValue("id"))
@@ -275,6 +281,7 @@ func (s *Server) createPipelineRun(response http.ResponseWriter, request *http.R
 	run := domain.PipelineRun{
 		ID: id.New("run"), PipelineID: pipeline.ID, WorkspaceID: pipeline.WorkspaceID, Name: input.Name,
 		PipelineHash: pipeline.Hash, ResultType: pipeline.Resolution.Result.Type, ResultVersion: pipeline.Resolution.Result.Version,
+		ScheduledFor: &scheduledFor,
 	}
 	for position, stage := range pipeline.Definition.Stages {
 		run.Stages = append(run.Stages, domain.PipelineRunStage{
@@ -629,11 +636,12 @@ type createExperimentVariantInput struct {
 }
 
 type createPipelineExperimentInput struct {
-	WorkspaceID string                                 `json:"workspaceId"`
-	Name        string                                 `json:"name"`
-	Description string                                 `json:"description"`
-	Repetitions int                                    `json:"repetitions"`
-	Variants    []createPipelineExperimentVariantInput `json:"variants"`
+	WorkspaceID  string                                 `json:"workspaceId"`
+	Name         string                                 `json:"name"`
+	Description  string                                 `json:"description"`
+	Repetitions  int                                    `json:"repetitions"`
+	ScheduledFor *time.Time                             `json:"scheduledFor"`
+	Variants     []createPipelineExperimentVariantInput `json:"variants"`
 }
 
 type createPipelineExperimentVariantInput struct {
@@ -744,6 +752,11 @@ func (s *Server) createPipelineExperiment(response http.ResponseWriter, request 
 		writeError(response, http.StatusUnprocessableEntity, "invalid_experiment", err.Error())
 		return
 	}
+	scheduledFor, err := normalizeScheduledFor(input.ScheduledFor, time.Now().UTC())
+	if err != nil {
+		writeError(response, http.StatusUnprocessableEntity, "invalid_schedule", err.Error())
+		return
+	}
 	if _, err := s.store.GetWorkspace(request.Context(), input.WorkspaceID); errors.Is(err, storage.ErrNotFound) {
 		writeError(response, http.StatusUnprocessableEntity, "invalid_workspace", "Select an existing workspace.")
 		return
@@ -789,6 +802,7 @@ func (s *Server) createPipelineExperiment(response http.ResponseWriter, request 
 	experiment := domain.Experiment{
 		ID: id.New("exp"), WorkspaceID: input.WorkspaceID, Name: input.Name, Description: input.Description,
 		Status: domain.OperationQueued, ResultType: resultType, ResultVersion: resultVersion,
+		ScheduledFor: &scheduledFor,
 	}
 	runs := map[string]domain.PipelineRun{}
 	for variantPosition, requested := range input.Variants {
@@ -804,6 +818,7 @@ func (s *Server) createPipelineExperiment(response http.ResponseWriter, request 
 				Name:   fmt.Sprintf("%s · %s · Trial %d", input.Name, requested.Name, trialPosition),
 				Status: domain.OperationQueued, PipelineHash: pipeline.Hash,
 				ResultType: resultType, ResultVersion: resultVersion,
+				ScheduledFor: &scheduledFor,
 			}
 			for stagePosition, stage := range pipeline.Definition.Stages {
 				run.Stages = append(run.Stages, domain.PipelineRunStage{
@@ -869,6 +884,20 @@ func normalizePipelineExperimentInput(input *createPipelineExperimentInput) erro
 		names[nameKey], pipelineIDs[variant.PipelineID] = true, true
 	}
 	return nil
+}
+
+func normalizeScheduledFor(value *time.Time, now time.Time) (time.Time, error) {
+	if value == nil {
+		return now.UTC(), nil
+	}
+	scheduled := value.UTC()
+	if scheduled.Before(now.Add(-30 * time.Second)) {
+		return time.Time{}, errors.New("scheduled time cannot be in the past")
+	}
+	if scheduled.After(now.AddDate(1, 0, 0)) {
+		return time.Time{}, errors.New("scheduled time cannot be more than one year ahead")
+	}
+	return scheduled, nil
 }
 
 func pipelineResultSensitive(pipeline domain.Pipeline) bool {
