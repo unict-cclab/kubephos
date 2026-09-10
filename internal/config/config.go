@@ -19,6 +19,9 @@ type Config struct {
 	WorkerPoll        time.Duration
 	InstanceID        string
 	PluginRuntimeHost string
+	PluginRuntimeCA   string
+	PluginRuntimeCert string
+	PluginRuntimeKey  string
 }
 
 func Load() Config {
@@ -35,6 +38,9 @@ func Load() Config {
 		WorkerPoll:        duration("KUBEPHOS_WORKER_POLL_INTERVAL", time.Second),
 		InstanceID:        value("KUBEPHOS_INSTANCE_ID", "local"),
 		PluginRuntimeHost: value("KUBEPHOS_PLUGIN_RUNTIME_HOST", ""),
+		PluginRuntimeCA:   value("KUBEPHOS_PLUGIN_RUNTIME_CA", ""),
+		PluginRuntimeCert: value("KUBEPHOS_PLUGIN_RUNTIME_CERT", ""),
+		PluginRuntimeKey:  value("KUBEPHOS_PLUGIN_RUNTIME_KEY", ""),
 	}
 }
 

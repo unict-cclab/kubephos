@@ -4,7 +4,10 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -16,21 +19,28 @@ const containerOutputLimit = 1 << 20
 type DockerRunner struct {
 	host   string
 	binary string
+	ca     string
+	cert   string
+	key    string
 }
 
-func NewDockerRunner(host string) ContainerRunner {
+func NewDockerRunner(host, ca, cert, key string) ContainerRunner {
 	host = strings.TrimSpace(host)
 	if host == "" {
 		return nil
 	}
-	return &DockerRunner{host: host, binary: "docker"}
+	return &DockerRunner{host: host, binary: "docker", ca: strings.TrimSpace(ca), cert: strings.TrimSpace(cert), key: strings.TrimSpace(key)}
 }
 
 func (d *DockerRunner) Ready(ctx context.Context) error {
 	if !strings.HasPrefix(d.host, "tcp://") {
 		return errors.New("OCI plugin runner must use a dedicated TCP endpoint")
 	}
-	output, err := exec.CommandContext(ctx, d.binary, "--host", d.host, "info", "--format", "{{.ServerVersion}}").CombinedOutput()
+	if err := d.validateTLSFiles(); err != nil {
+		return err
+	}
+	arguments := append(d.connectionArguments(), "info", "--format", "{{.ServerVersion}}")
+	output, err := exec.CommandContext(ctx, d.binary, arguments...).CombinedOutput()
 	if err != nil {
 		message := strings.TrimSpace(string(output))
 		if message == "" {
@@ -53,13 +63,13 @@ func (d *DockerRunner) Run(ctx context.Context, image, command string, payload [
 	if network {
 		networkMode = "bridge"
 	}
-	arguments := []string{
-		"--host", d.host, "run", "--rm", "--name", name, "--pull=missing", "-i",
-		"--user=65532:65532", "--network=" + networkMode, "--read-only", "--cap-drop=ALL",
+	arguments := append(d.connectionArguments(),
+		"run", "--rm", "--name", name, "--pull=missing", "-i",
+		"--user=65532:65532", "--network="+networkMode, "--read-only", "--cap-drop=ALL",
 		"--security-opt=no-new-privileges", "--memory=256m", "--cpus=0.5", "--pids-limit=64",
 		"--tmpfs=/tmp:rw,noexec,nosuid,size=64m", "--label=io.kubephos.runtime=plugin",
 		image, command,
-	}
+	)
 	process := exec.CommandContext(ctx, d.binary, arguments...)
 	process.Stdin = bytes.NewReader(payload)
 	stdout := &limitedBuffer{limit: containerOutputLimit}
@@ -77,7 +87,7 @@ func (d *DockerRunner) Run(ctx context.Context, image, command string, payload [
 	messages := <-lines
 	cleanupContext, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	_ = exec.CommandContext(cleanupContext, d.binary, "--host", d.host, "rm", "-f", name).Run()
+	_ = exec.CommandContext(cleanupContext, d.binary, append(d.connectionArguments(), "rm", "-f", name)...).Run()
 	if stdout.exceeded {
 		return nil, messages, errors.New("plugin output exceeds 1 MiB")
 	}
@@ -85,6 +95,31 @@ func (d *DockerRunner) Run(ctx context.Context, image, command string, payload [
 		return nil, messages, processErr
 	}
 	return stdout.Bytes(), messages, nil
+}
+
+func (d *DockerRunner) connectionArguments() []string {
+	return []string{"--host", d.host, "--tlsverify", "--tlscacert", d.ca, "--tlscert", d.cert, "--tlskey", d.key}
+}
+
+func (d *DockerRunner) validateTLSFiles() error {
+	values := []struct {
+		name string
+		path string
+	}{{"CA", d.ca}, {"client certificate", d.cert}, {"client key", d.key}}
+	for _, value := range values {
+		if value.path == "" || !filepath.IsAbs(value.path) {
+			return fmt.Errorf("OCI plugin runtime %s path must be absolute", value.name)
+		}
+		info, err := os.Stat(value.path)
+		if err != nil || !info.Mode().IsRegular() {
+			return fmt.Errorf("OCI plugin runtime %s is unavailable", value.name)
+		}
+	}
+	keyInfo, _ := os.Stat(d.key)
+	if keyInfo.Mode().Perm()&0077 != 0 {
+		return errors.New("OCI plugin runtime client key permissions are too broad")
+	}
+	return nil
 }
 
 type limitedBuffer struct {

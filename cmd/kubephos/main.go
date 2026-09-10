@@ -68,7 +68,7 @@ func pluginMaintenance(configValue config.Config) error {
 	if len(os.Args) == 4 {
 		path = os.Args[3]
 	}
-	manifest, err := plugins.ValidatePackage(path, plugins.NewDockerRunner(configValue.PluginRuntimeHost))
+	manifest, err := plugins.ValidatePackage(path, pluginRuntime(configValue))
 	if err != nil {
 		return err
 	}
@@ -110,7 +110,7 @@ func serve(configValue config.Config) error {
 	if err != nil {
 		return err
 	}
-	runtime := plugins.NewDockerRunner(configValue.PluginRuntimeHost)
+	runtime := pluginRuntime(configValue)
 	registry, err := plugins.LoadDirectory(configValue.PluginDirectory, resolver, connectionRuntime(store), catalogRuntime(store), runtime)
 	if err != nil {
 		return err
@@ -143,7 +143,7 @@ func work(configValue config.Config) error {
 	if err != nil {
 		return err
 	}
-	runtime := plugins.NewDockerRunner(configValue.PluginRuntimeHost)
+	runtime := pluginRuntime(configValue)
 	if runtime != nil {
 		readyContext, cancel := context.WithTimeout(ctx, 10*time.Second)
 		runtimeErr := runtime.Ready(readyContext)
@@ -170,6 +170,10 @@ func externalPluginLoader(resolver plugins.SecretResolver, connections plugins.C
 	return func(descriptor []byte) (plugins.Plugin, error) {
 		return plugins.LoadDefinition(descriptor, resolver, connections, catalogResolver, runtime)
 	}
+}
+
+func pluginRuntime(configValue config.Config) plugins.ContainerRunner {
+	return plugins.NewDockerRunner(configValue.PluginRuntimeHost, configValue.PluginRuntimeCA, configValue.PluginRuntimeCert, configValue.PluginRuntimeKey)
 }
 
 func refreshInstalledPlugins(ctx context.Context, store *storage.Store, registry *plugins.Registry, loader func([]byte) (plugins.Plugin, error)) error {
