@@ -119,14 +119,22 @@ func LoadProcess(path string, resolver SecretResolver, connections ConnectionRes
 	if err != nil {
 		return nil, err
 	}
-	return loadDefinition(value, filepath.Dir(path), resolver, connections, catalogResolver, runners...)
+	return loadDefinition(value, filepath.Dir(path), resolver, connections, catalogResolver, true, runners...)
 }
 
 func LoadDefinition(value []byte, resolver SecretResolver, connections ConnectionResolver, catalogResolver CatalogResolver, runners ...ContainerRunner) (*Process, error) {
-	return loadDefinition(value, "", resolver, connections, catalogResolver, runners...)
+	return loadDefinition(value, "", resolver, connections, catalogResolver, true, runners...)
 }
 
-func loadDefinition(value []byte, baseDirectory string, resolver SecretResolver, connections ConnectionResolver, catalogResolver CatalogResolver, runners ...ContainerRunner) (*Process, error) {
+func InspectDefinition(value []byte) (Manifest, error) {
+	plugin, err := loadDefinition(value, "", nil, nil, nil, false)
+	if err != nil {
+		return Manifest{}, err
+	}
+	return plugin.Manifest(), nil
+}
+
+func loadDefinition(value []byte, baseDirectory string, resolver SecretResolver, connections ConnectionResolver, catalogResolver CatalogResolver, verify bool, runners ...ContainerRunner) (*Process, error) {
 	var definition descriptor
 	decoder := yaml.NewDecoder(bytes.NewReader(value))
 	decoder.KnownFields(true)
@@ -184,7 +192,7 @@ func loadDefinition(value []byte, baseDirectory string, resolver SecretResolver,
 		if err != nil {
 			return nil, err
 		}
-		if len(runners) == 0 || runners[0] == nil {
+		if verify && (len(runners) == 0 || runners[0] == nil) {
 			return nil, errors.New("OCI plugin runner is unavailable")
 		}
 		runtimeManifest = Runtime{Kind: "oci", Reference: image, Digest: digest}
@@ -254,6 +262,9 @@ func loadDefinition(value []byte, baseDirectory string, resolver SecretResolver,
 	}
 	if len(runners) > 0 {
 		plugin.runner = runners[0]
+	}
+	if !verify {
+		return plugin, nil
 	}
 	describeContext, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()

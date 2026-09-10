@@ -191,6 +191,32 @@ spec:
 	}
 }
 
+func TestInspectDefinitionDoesNotRequireRuntime(t *testing.T) {
+	digest := strings.Repeat("d", 64)
+	descriptor := `apiVersion: plugins.kubephos.io/v1alpha1
+kind: Plugin
+metadata:
+  id: dev.example.inspect
+  name: Inspect
+  version: 1.0.0
+spec:
+  protocol: v1alpha1
+  commands: [describe, validate, plan, precheck, execute, verify, status, cancel, cleanup]
+  configurationSchema: {type: object}
+  permissions: [network.egress]
+  capabilities: [example.inspect]
+  runtime:
+    image: registry.example.test/plugin@sha256:` + digest + `
+`
+	manifest, err := InspectDefinition([]byte(descriptor))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if manifest.ID != "dev.example.inspect" || manifest.Runtime.Digest != "sha256:"+digest || len(manifest.Permissions) != 1 {
+		t.Fatalf("unexpected preview: %#v", manifest)
+	}
+}
+
 func TestResolveSecretsHonorsDeclaredKinds(t *testing.T) {
 	process := &Process{
 		secretKinds: map[string]bool{"allowed": true},

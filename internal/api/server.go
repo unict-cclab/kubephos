@@ -57,6 +57,7 @@ func NewServer(store *storage.Store, registry *plugins.Registry, artifactStore *
 	router.HandleFunc("POST /api/v1/auth/logout", server.authLogout)
 	router.HandleFunc("GET /api/v1/system", server.system)
 	router.HandleFunc("GET /api/v1/plugins", server.listPlugins)
+	router.HandleFunc("POST /api/v1/plugins/inspect", server.inspectPlugin)
 	router.HandleFunc("POST /api/v1/plugins", server.importPlugin)
 	router.HandleFunc("GET /api/v1/plugin-packages", server.listPluginPackages)
 	router.HandleFunc("GET /api/v1/catalog/applications", server.listCatalogApplications)
@@ -388,26 +389,35 @@ func (s *Server) listPlugins(response http.ResponseWriter, _ *http.Request) {
 	writeJSON(response, http.StatusOK, map[string]any{"items": s.registry.Manifests()})
 }
 
+func (s *Server) inspectPlugin(response http.ResponseWriter, request *http.Request) {
+	descriptor, ok := decodePluginDescriptor(response, request)
+	if !ok {
+		return
+	}
+	manifest, err := plugins.InspectDefinition([]byte(descriptor))
+	if err != nil {
+		writeError(response, http.StatusUnprocessableEntity, "invalid_plugin", err.Error())
+		return
+	}
+	if s.registry.IsBundled(manifest.ID) {
+		writeError(response, http.StatusConflict, "plugin_conflict", "A bundled plugin cannot be replaced.")
+		return
+	}
+	writeJSON(response, http.StatusOK, map[string]any{"manifest": manifest, "executorAvailable": s.runtime != nil})
+}
+
 func (s *Server) importPlugin(response http.ResponseWriter, request *http.Request) {
 	if s.runtime == nil || s.loadPlugin == nil {
 		writeError(response, http.StatusServiceUnavailable, "runtime_unavailable", "Configure a dedicated OCI plugin executor before importing external plugins.")
 		return
 	}
-	var input struct {
-		Descriptor string `json:"descriptor"`
-	}
-	if err := decodeJSON(request, &input); err != nil {
-		writeError(response, http.StatusBadRequest, "invalid_request", err.Error())
-		return
-	}
-	input.Descriptor = strings.TrimSpace(input.Descriptor)
-	if input.Descriptor == "" || len(input.Descriptor) > 512*1024 {
-		writeError(response, http.StatusUnprocessableEntity, "invalid_plugin", "The plugin descriptor must contain between 1 byte and 512 KB.")
+	descriptor, ok := decodePluginDescriptor(response, request)
+	if !ok {
 		return
 	}
 	s.pluginMu.Lock()
 	defer s.pluginMu.Unlock()
-	plugin, err := s.loadPlugin([]byte(input.Descriptor))
+	plugin, err := s.loadPlugin([]byte(descriptor))
 	if err != nil {
 		writeError(response, http.StatusUnprocessableEntity, "invalid_plugin", err.Error())
 		return
@@ -417,7 +427,7 @@ func (s *Server) importPlugin(response http.ResponseWriter, request *http.Reques
 		writeError(response, http.StatusConflict, "plugin_conflict", "A bundled plugin cannot be replaced.")
 		return
 	}
-	descriptorDigest := sha256.Sum256([]byte(input.Descriptor))
+	descriptorDigest := sha256.Sum256([]byte(descriptor))
 	descriptorFingerprint := "sha256:" + hex.EncodeToString(descriptorDigest[:])
 	current, currentErr := s.store.GetActivePluginPackage(request.Context(), manifest.ID)
 	if currentErr != nil && !errors.Is(currentErr, storage.ErrNotFound) {
@@ -429,7 +439,7 @@ func (s *Server) importPlugin(response http.ResponseWriter, request *http.Reques
 		return
 	}
 	pluginPackage, err := s.store.ActivatePluginPackage(request.Context(), domain.PluginPackage{
-		PluginID: manifest.ID, Version: manifest.Version, Digest: manifest.Runtime.Digest, Descriptor: input.Descriptor,
+		PluginID: manifest.ID, Version: manifest.Version, Digest: manifest.Runtime.Digest, Descriptor: descriptor,
 		DescriptorDigest: descriptorFingerprint, Active: true,
 	})
 	if err != nil {
@@ -441,6 +451,22 @@ func (s *Server) importPlugin(response http.ResponseWriter, request *http.Reques
 		return
 	}
 	writeJSON(response, http.StatusCreated, map[string]any{"id": manifest.ID, "manifest": manifest, "package": pluginPackage})
+}
+
+func decodePluginDescriptor(response http.ResponseWriter, request *http.Request) (string, bool) {
+	var input struct {
+		Descriptor string `json:"descriptor"`
+	}
+	if err := decodeJSON(request, &input); err != nil {
+		writeError(response, http.StatusBadRequest, "invalid_request", err.Error())
+		return "", false
+	}
+	input.Descriptor = strings.TrimSpace(input.Descriptor)
+	if input.Descriptor == "" || len(input.Descriptor) > 512*1024 {
+		writeError(response, http.StatusUnprocessableEntity, "invalid_plugin", "The plugin descriptor must contain between 1 byte and 512 KB.")
+		return "", false
+	}
+	return input.Descriptor, true
 }
 
 func (s *Server) listPluginPackages(response http.ResponseWriter, request *http.Request) {
@@ -1746,6 +1772,9 @@ func auditTarget(request *http.Request) (string, string, string, bool) {
 	}
 	if len(parts) == 3 && parts[0] == "pipelines" && parts[2] == "runs" {
 		return "pipeline.run.create", "pipeline", parts[1], true
+	}
+	if len(parts) == 2 && parts[0] == "plugins" && parts[1] == "inspect" {
+		return "plugin.inspect", "plugin", "", true
 	}
 	if len(parts) == 3 && parts[0] == "pipeline-runs" && parts[2] == "cancel" {
 		return "pipeline.run.cancel", "pipeline-run", parts[1], true

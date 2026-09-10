@@ -59,8 +59,8 @@ export function Views(props: ViewProps) {
       <ApplicationGrid items={props.applications} />
     </section>
     <section className={`view ${props.view === 'plugins' ? 'active' : ''}`}>
-      <Heading eyebrow="CAPABILITIES" title="Installed plugins" action={props.isAdmin && <button className="button primary" onClick={props.importPlugin} disabled={!props.system?.features?.ociPluginImport} title={props.system?.features?.ociPluginImport ? '' : 'Configure the dedicated OCI executor first'}>Import plugin</button>} />
-      <p className="section-copy catalog-copy">{props.system?.features?.ociPluginImport ? 'Every external capability is validated and activated by immutable image digest.' : 'Built-in capabilities are ready. Configure the dedicated OCI executor to import external plugins.'}</p>
+      <Heading eyebrow="CAPABILITIES" title="Installed plugins" action={props.isAdmin && <button className="button primary" onClick={props.importPlugin}>Import plugin</button>} />
+      <p className="section-copy catalog-copy">{props.system?.features?.ociPluginImport ? 'Every external capability is validated and activated by immutable image digest.' : 'External packages can be reviewed now; activation becomes available after the dedicated OCI executor is configured.'}</p>
       <PluginGrid items={props.plugins} />
       {!!props.pluginPackages.length && <><Heading eyebrow="PACKAGE HISTORY" title="Imported versions" copy="Every activation remains traceable by image and descriptor digest." /><div className="credential-list">{props.pluginPackages.map(item => <InfoRow key={item.sequence} icon="◇" title={`${item.pluginId} · ${item.version}`} detail={`${item.digest.slice(0, 19)} · descriptor ${item.descriptorDigest.slice(0, 19)}`} status={item.active ? 'Active' : 'Superseded'} />)}</div></>}
     </section>

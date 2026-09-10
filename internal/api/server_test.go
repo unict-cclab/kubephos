@@ -3,12 +3,51 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
 	"kubephos.dev/kubephos/internal/domain"
 	"kubephos.dev/kubephos/internal/plugins"
 )
+
+func TestInspectPluginReturnsStaticPreviewWithoutExecutor(t *testing.T) {
+	digest := strings.Repeat("e", 64)
+	descriptor := `apiVersion: plugins.kubephos.io/v1alpha1
+kind: Plugin
+metadata:
+  id: dev.example.preview
+  name: Preview
+  version: 1.0.0
+spec:
+  protocol: v1alpha1
+  commands: [describe, validate, plan, precheck, execute, verify, status, cancel, cleanup]
+  configurationSchema: {type: object}
+  permissions: [network.egress]
+  runtime:
+    image: registry.example.test/plugin@sha256:` + digest + `
+`
+	payload, _ := json.Marshal(map[string]string{"descriptor": descriptor})
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/plugins/inspect", strings.NewReader(string(payload)))
+	response := httptest.NewRecorder()
+	server := &Server{registry: plugins.NewRegistry()}
+	server.inspectPlugin(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("expected preview, got %d: %s", response.Code, response.Body.String())
+	}
+	var body struct {
+		Manifest          plugins.Manifest `json:"manifest"`
+		ExecutorAvailable bool             `json:"executorAvailable"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Manifest.ID != "dev.example.preview" || body.ExecutorAvailable {
+		t.Fatalf("unexpected preview: %#v", body)
+	}
+}
 
 func TestResolvedPlanHashIsDeterministic(t *testing.T) {
 	manifest := plugins.Manifest{ID: "test", Version: "1.0.0"}
