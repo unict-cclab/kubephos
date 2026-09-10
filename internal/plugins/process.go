@@ -68,6 +68,11 @@ type Process struct {
 	secretKinds map[string]bool
 }
 
+const pluginLogLineLimit = 16 * 1024
+const pluginLogByteLimit = 1 << 20
+const pluginLogEventLimit = 1000
+const pluginErrorLineLimit = 128
+
 var pluginIDExpression = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9.-]{0,126}[a-z0-9])?$`)
 var providerExpression = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9.-]{0,78}[a-z0-9])?$`)
 var versionExpression = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._+-]{0,127}$`)
@@ -400,13 +405,14 @@ func (p *Process) invoke(parent context.Context, command string, input, output a
 	var stdout []byte
 	var messages []string
 	var processErr error
+	outputExceeded := false
 	if p.image != "" {
 		stdout, messages, processErr = p.runner.Run(ctx, p.image, command, payload, contains(p.manifest.Permissions, "network.egress"), log)
 	} else {
 		process := exec.CommandContext(ctx, p.executable, command)
 		process.Stdin = bytes.NewReader(payload)
-		var output bytes.Buffer
-		process.Stdout = &output
+		output := &limitedBuffer{limit: containerOutputLimit}
+		process.Stdout = output
 		stderr, err := process.StderrPipe()
 		if err != nil {
 			return err
@@ -419,9 +425,13 @@ func (p *Process) invoke(parent context.Context, command string, input, output a
 		processErr = process.Wait()
 		messages = <-lines
 		stdout = output.Bytes()
+		outputExceeded = output.exceeded
 	}
 	if ctx.Err() != nil {
 		return ctx.Err()
+	}
+	if outputExceeded {
+		return errors.New("plugin output exceeds 1 MiB")
 	}
 	if processErr != nil {
 		message := strings.Join(messages, "; ")
@@ -591,13 +601,33 @@ func collectRefs(value any, prefix string, result map[string]bool) {
 }
 
 func scanLines(reader io.Reader, result chan<- []string, log Logger) {
-	lines := []string{}
+	lines := make([]string, 0, pluginErrorLineLimit)
 	scanner := bufio.NewScanner(reader)
+	scanner.Buffer(make([]byte, 4096), pluginLogLineLimit)
+	events := 0
+	bytesLogged := 0
+	truncated := false
 	for scanner.Scan() {
 		line := scanner.Text()
-		lines = append(lines, line)
-		if log != nil {
+		if len(lines) == pluginErrorLineLimit {
+			copy(lines, lines[1:])
+			lines[len(lines)-1] = line
+		} else {
+			lines = append(lines, line)
+		}
+		if log != nil && events < pluginLogEventLimit && bytesLogged+len(line) <= pluginLogByteLimit {
 			_ = log("info", line)
+			events++
+			bytesLogged += len(line)
+		} else if log != nil && !truncated {
+			_ = log("warning", "Plugin log output was truncated after reaching the safety limit.")
+			truncated = true
+		}
+	}
+	if scanner.Err() != nil {
+		_, _ = io.Copy(io.Discard, reader)
+		if log != nil && !truncated {
+			_ = log("warning", "Plugin log output contained a line beyond the safety limit.")
 		}
 	}
 	result <- lines

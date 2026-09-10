@@ -364,3 +364,20 @@ func TestReferenceResolutionExcludesPluginResult(t *testing.T) {
 		t.Fatalf("plugin result leaked into reference resolution: %s", payload)
 	}
 }
+
+func TestScanLinesBoundsLogsAndDiagnosticTail(t *testing.T) {
+	var input strings.Builder
+	for index := 0; index < pluginLogEventLimit+200; index++ {
+		input.WriteString("runtime line\n")
+	}
+	result := make(chan []string, 1)
+	events := 0
+	scanLines(strings.NewReader(input.String()), result, func(_, _ string) error {
+		events++
+		return nil
+	})
+	lines := <-result
+	if len(lines) != pluginErrorLineLimit || events != pluginLogEventLimit+1 {
+		t.Fatalf("unexpected bounded log result: %d lines, %d events", len(lines), events)
+	}
+}
