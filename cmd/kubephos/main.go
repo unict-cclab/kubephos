@@ -117,7 +117,7 @@ func serve(configValue config.Config) error {
 	}
 	loader := externalPluginLoader(resolver, connectionRuntime(store), catalogRuntime(store), runtime)
 	if err := refreshInstalledPlugins(ctx, store, registry, loader); err != nil {
-		return err
+		slog.Error("load installed plugins", "error", err)
 	}
 	artifactStore := artifacts.New(configValue.ArtifactEndpoint)
 	handler, err := api.NewServer(store, registry, artifactStore, vault, runtime, loader, version, configValue.WebDirectory)
@@ -177,7 +177,9 @@ func refreshInstalledPlugins(ctx context.Context, store *storage.Store, registry
 	if err != nil {
 		return err
 	}
+	active := make(map[string]bool, len(packages))
 	for _, pluginPackage := range packages {
+		active[pluginPackage.PluginID] = true
 		if registry.IsBundled(pluginPackage.PluginID) {
 			return fmt.Errorf("installed plugin %q conflicts with a bundled plugin", pluginPackage.PluginID)
 		}
@@ -199,6 +201,13 @@ func refreshInstalledPlugins(ctx context.Context, store *storage.Store, registry
 		}
 		if err := registry.Install(plugin); err != nil {
 			return err
+		}
+	}
+	for _, pluginID := range registry.ExternalIDs() {
+		if !active[pluginID] {
+			if err := registry.Remove(pluginID); err != nil {
+				return err
+			}
 		}
 	}
 	return nil

@@ -49,4 +49,16 @@ func TestRegistryInstallsAndReplacesExternalPlugin(t *testing.T) {
 	if err := registry.Install(manifestPlugin{manifest: Manifest{ID: "bundled", Version: "2.0.0"}}); err == nil {
 		t.Fatal("expected bundled plugin replacement rejection")
 	}
+	if ids := registry.ExternalIDs(); len(ids) != 1 || ids[0] != "external" {
+		t.Fatalf("unexpected external ids: %#v", ids)
+	}
+	if err := registry.Remove("external"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := registry.Get("external"); err == nil {
+		t.Fatal("external plugin was not removed")
+	}
+	if err := registry.Remove("bundled"); err == nil {
+		t.Fatal("expected bundled plugin removal rejection")
+	}
 }

@@ -129,6 +129,16 @@ export default function App() {
     }
   }
 
+  const deactivatePlugin = async (pluginPackage: PluginPackage) => {
+    if (!window.confirm(`Deactivate ${pluginPackage.pluginId} ${pluginPackage.version}? Validated runs that require it will not start.`)) return
+    try {
+      await request(`/plugin-packages/${pluginPackage.sequence}/deactivate`, {method: 'POST', body: '{}'}, session?.csrfToken)
+      await afterMutation('Plugin deactivated. Its history was preserved.')
+    } catch (cause) {
+      notify(cause instanceof Error ? cause.message : 'Could not deactivate the plugin.', true)
+    }
+  }
+
   const openOperationForm = (selected: Workspace) => {
     if (!data.plugins.length) {
       notify('No plugin is installed.', true)
@@ -177,6 +187,7 @@ export default function App() {
           importApplication={() => setModal('application')}
           importPlugin={() => setModal('plugin')}
           activatePlugin={activatePlugin}
+          deactivatePlugin={deactivatePlugin}
           addCredential={() => setModal('credential')}
           addConnection={() => setModal('connection')}
         />

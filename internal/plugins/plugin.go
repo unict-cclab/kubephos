@@ -131,3 +131,25 @@ func (r *Registry) IsBundled(pluginID string) bool {
 	defer r.mu.RUnlock()
 	return r.bundled[pluginID]
 }
+
+func (r *Registry) ExternalIDs() []string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	result := []string{}
+	for pluginID := range r.plugins {
+		if !r.bundled[pluginID] {
+			result = append(result, pluginID)
+		}
+	}
+	return result
+}
+
+func (r *Registry) Remove(pluginID string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.bundled[pluginID] {
+		return fmt.Errorf("bundled plugin %q cannot be removed", pluginID)
+	}
+	delete(r.plugins, pluginID)
+	return nil
+}

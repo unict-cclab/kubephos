@@ -61,6 +61,7 @@ func NewServer(store *storage.Store, registry *plugins.Registry, artifactStore *
 	router.HandleFunc("POST /api/v1/plugins", server.importPlugin)
 	router.HandleFunc("GET /api/v1/plugin-packages", server.listPluginPackages)
 	router.HandleFunc("POST /api/v1/plugin-packages/{sequence}/activate", server.activatePluginPackage)
+	router.HandleFunc("POST /api/v1/plugin-packages/{sequence}/deactivate", server.deactivatePluginPackage)
 	router.HandleFunc("GET /api/v1/catalog/applications", server.listCatalogApplications)
 	router.HandleFunc("POST /api/v1/catalog/applications", server.importCatalogApplication)
 	router.HandleFunc("GET /api/v1/credentials", server.listCredentials)
@@ -525,6 +526,36 @@ func (s *Server) activatePluginPackage(response http.ResponseWriter, request *ht
 		return
 	}
 	writeJSON(response, http.StatusOK, activated)
+}
+
+func (s *Server) deactivatePluginPackage(response http.ResponseWriter, request *http.Request) {
+	sequence, err := strconv.ParseInt(request.PathValue("sequence"), 10, 64)
+	if err != nil || sequence <= 0 {
+		writeError(response, http.StatusBadRequest, "invalid_package", "Plugin package sequence is invalid.")
+		return
+	}
+	s.pluginMu.Lock()
+	defer s.pluginMu.Unlock()
+	pluginPackage, err := s.store.DeactivatePluginPackage(request.Context(), sequence)
+	if errors.Is(err, storage.ErrNotFound) {
+		writeError(response, http.StatusNotFound, "not_found", "Plugin package not found.")
+		return
+	}
+	if errors.Is(err, storage.ErrConflict) {
+		writeError(response, http.StatusConflict, "invalid_transition", "Only the active plugin package can be deactivated.")
+		return
+	}
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, "database_error", "Could not deactivate plugin package.")
+		return
+	}
+	if !s.registry.IsBundled(pluginPackage.PluginID) {
+		if err := s.registry.Remove(pluginPackage.PluginID); err != nil {
+			writeError(response, http.StatusConflict, "plugin_conflict", err.Error())
+			return
+		}
+	}
+	writeJSON(response, http.StatusOK, pluginPackage)
 }
 
 func (s *Server) listCatalogApplications(response http.ResponseWriter, request *http.Request) {
@@ -1827,6 +1858,9 @@ func auditTarget(request *http.Request) (string, string, string, bool) {
 	}
 	if len(parts) == 3 && parts[0] == "plugin-packages" && parts[2] == "activate" {
 		return "plugin.activate", "plugin-package", parts[1], true
+	}
+	if len(parts) == 3 && parts[0] == "plugin-packages" && parts[2] == "deactivate" {
+		return "plugin.deactivate", "plugin-package", parts[1], true
 	}
 	if len(parts) == 3 && parts[0] == "pipeline-runs" && parts[2] == "cancel" {
 		return "pipeline.run.cancel", "pipeline-run", parts[1], true

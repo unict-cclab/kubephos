@@ -107,3 +107,37 @@ func (s *Store) ListPluginPackages(ctx context.Context, limit int) ([]domain.Plu
 	}
 	return result, rows.Err()
 }
+
+func (s *Store) DeactivatePluginPackage(ctx context.Context, sequence int64) (domain.PluginPackage, error) {
+	var pluginID string
+	if err := s.pool.QueryRow(ctx, `SELECT plugin_id FROM plugin_packages WHERE sequence = $1`, sequence).Scan(&pluginID); errors.Is(err, pgx.ErrNoRows) {
+		return domain.PluginPackage{}, ErrNotFound
+	} else if err != nil {
+		return domain.PluginPackage{}, err
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return domain.PluginPackage{}, err
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext($1))`, pluginID); err != nil {
+		return domain.PluginPackage{}, err
+	}
+	var pluginPackage domain.PluginPackage
+	err = tx.QueryRow(ctx, `
+		UPDATE plugin_packages
+		SET active = false, updated_at = now()
+		WHERE sequence = $1 AND active
+		RETURNING sequence, plugin_id, version, digest, '', descriptor_digest, active, created_at, updated_at
+	`, sequence).Scan(&pluginPackage.Sequence, &pluginPackage.PluginID, &pluginPackage.Version, &pluginPackage.Digest, &pluginPackage.Descriptor, &pluginPackage.DescriptorDigest, &pluginPackage.Active, &pluginPackage.CreatedAt, &pluginPackage.UpdatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.PluginPackage{}, ErrConflict
+	}
+	if err != nil {
+		return domain.PluginPackage{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return domain.PluginPackage{}, err
+	}
+	return pluginPackage, nil
+}
