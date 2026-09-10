@@ -3,13 +3,183 @@ package schema
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"math"
 	"net/url"
 	"reflect"
 	"regexp"
 	"strings"
 )
+
+var supportedKeywords = map[string]bool{
+	"type": true, "title": true, "description": true, "default": true, "enum": true,
+	"required": true, "properties": true, "additionalProperties": true, "items": true,
+	"minimum": true, "maximum": true, "minLength": true, "maxLength": true,
+	"minItems": true, "maxItems": true, "pattern": true, "format": true, "writeOnly": true,
+}
+
+func ValidateDefinition(definition json.RawMessage) error {
+	decoder := json.NewDecoder(bytes.NewReader(definition))
+	decoder.UseNumber()
+	var value any
+	if err := decoder.Decode(&value); err != nil {
+		return fmt.Errorf("invalid schema: %w", err)
+	}
+	var extra any
+	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
+		return errors.New("schema must contain one JSON value")
+	}
+	rule, ok := value.(map[string]any)
+	if !ok {
+		return errors.New("schema root must be an object")
+	}
+	return validateRule(rule, "$")
+}
+
+func validateRule(rule map[string]any, path string) error {
+	for keyword := range rule {
+		if !supportedKeywords[keyword] && !strings.HasPrefix(keyword, "x-kubephos-") {
+			return fmt.Errorf("%s.%s is not supported", path, keyword)
+		}
+	}
+	typeName := ""
+	if value, exists := rule["type"]; exists {
+		var ok bool
+		typeName, ok = value.(string)
+		if !ok || !map[string]bool{"object": true, "array": true, "string": true, "boolean": true, "number": true, "integer": true, "null": true}[typeName] {
+			return fmt.Errorf("%s.type is invalid", path)
+		}
+	}
+	properties := map[string]any{}
+	if value, exists := rule["properties"]; exists {
+		var ok bool
+		properties, ok = value.(map[string]any)
+		if !ok || (typeName != "" && typeName != "object") {
+			return fmt.Errorf("%s.properties requires an object schema", path)
+		}
+		for name, property := range properties {
+			propertyRule, ok := property.(map[string]any)
+			if !ok {
+				return fmt.Errorf("%s.properties.%s must be an object", path, name)
+			}
+			if err := validateRule(propertyRule, path+".properties."+name); err != nil {
+				return err
+			}
+		}
+	}
+	if value, exists := rule["required"]; exists {
+		items, ok := value.([]any)
+		if !ok || (typeName != "" && typeName != "object") {
+			return fmt.Errorf("%s.required requires an object schema", path)
+		}
+		seen := map[string]bool{}
+		for _, item := range items {
+			name, ok := item.(string)
+			if !ok || name == "" || seen[name] {
+				return fmt.Errorf("%s.required is invalid", path)
+			}
+			if _, exists := properties[name]; !exists {
+				return fmt.Errorf("%s.required references unknown property %q", path, name)
+			}
+			seen[name] = true
+		}
+	}
+	if value, exists := rule["items"]; exists {
+		itemRule, ok := value.(map[string]any)
+		if !ok || (typeName != "" && typeName != "array") {
+			return fmt.Errorf("%s.items requires an array schema", path)
+		}
+		if err := validateRule(itemRule, path+".items"); err != nil {
+			return err
+		}
+	}
+	if value, exists := rule["pattern"]; exists {
+		pattern, ok := value.(string)
+		if !ok || (typeName != "" && typeName != "string") {
+			return fmt.Errorf("%s.pattern requires a string schema", path)
+		}
+		if _, err := regexp.Compile(pattern); err != nil {
+			return fmt.Errorf("%s.pattern is invalid", path)
+		}
+	}
+	if value, exists := rule["additionalProperties"]; exists {
+		if _, ok := value.(bool); !ok || (typeName != "" && typeName != "object") {
+			return fmt.Errorf("%s.additionalProperties requires an object schema", path)
+		}
+	}
+	if value, exists := rule["enum"]; exists {
+		items, ok := value.([]any)
+		if !ok || len(items) == 0 {
+			return fmt.Errorf("%s.enum must contain at least one value", path)
+		}
+		for _, item := range items {
+			if typeName != "" && !matchesType(typeName, item) {
+				return fmt.Errorf("%s.enum contains a value that does not match type %s", path, typeName)
+			}
+		}
+	}
+	for _, keyword := range []string{"title", "description", "format"} {
+		if value, exists := rule[keyword]; exists {
+			if _, ok := value.(string); !ok {
+				return fmt.Errorf("%s.%s must be a string", path, keyword)
+			}
+		}
+	}
+	if value, exists := rule["writeOnly"]; exists {
+		if _, ok := value.(bool); !ok {
+			return fmt.Errorf("%s.writeOnly must be a boolean", path)
+		}
+	}
+	for _, keyword := range []string{"minimum", "maximum"} {
+		if value, exists := rule[keyword]; exists {
+			if _, ok := number(value); !ok || (typeName != "" && typeName != "integer" && typeName != "number") {
+				return fmt.Errorf("%s.%s requires a numeric schema", path, keyword)
+			}
+		}
+	}
+	if minimum, ok := number(rule["minimum"]); ok {
+		if maximum, exists := number(rule["maximum"]); exists && minimum > maximum {
+			return fmt.Errorf("%s.minimum cannot exceed maximum", path)
+		}
+	}
+	for _, keyword := range []string{"minLength", "maxLength"} {
+		if value, exists := rule[keyword]; exists {
+			if _, ok := nonNegativeInteger(value); !ok || (typeName != "" && typeName != "string") {
+				return fmt.Errorf("%s.%s requires a non-negative integer on a string schema", path, keyword)
+			}
+		}
+	}
+	if minimum, ok := nonNegativeInteger(rule["minLength"]); ok {
+		if maximum, exists := nonNegativeInteger(rule["maxLength"]); exists && minimum > maximum {
+			return fmt.Errorf("%s.minLength cannot exceed maxLength", path)
+		}
+	}
+	for _, keyword := range []string{"minItems", "maxItems"} {
+		if value, exists := rule[keyword]; exists {
+			if _, ok := nonNegativeInteger(value); !ok || (typeName != "" && typeName != "array") {
+				return fmt.Errorf("%s.%s requires a non-negative integer on an array schema", path, keyword)
+			}
+		}
+	}
+	if minimum, ok := nonNegativeInteger(rule["minItems"]); ok {
+		if maximum, exists := nonNegativeInteger(rule["maxItems"]); exists && minimum > maximum {
+			return fmt.Errorf("%s.minItems cannot exceed maxItems", path)
+		}
+	}
+	if value, exists := rule["default"]; exists {
+		if issues := validateValue(rule, value, path+".default"); len(issues) > 0 {
+			return fmt.Errorf("%s: %s", issues[0].Path, issues[0].Message)
+		}
+	}
+	return nil
+}
+
+func nonNegativeInteger(value any) (float64, bool) {
+	current, ok := number(value)
+	return current, ok && current >= 0 && current == math.Trunc(current)
+}
 
 type Issue struct {
 	Path    string `json:"path"`

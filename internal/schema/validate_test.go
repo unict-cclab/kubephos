@@ -37,3 +37,24 @@ func TestValidatePatternsAndOpaqueReferences(t *testing.T) {
 		t.Fatalf("expected 5 issues, got %#v", issues)
 	}
 }
+
+func TestValidateDefinitionAcceptsSupportedSchema(t *testing.T) {
+	definition := json.RawMessage(`{"type":"object","required":["name"],"additionalProperties":false,"properties":{"name":{"type":"string","pattern":"^[a-z]+$","default":"ready"},"replicas":{"type":"integer","minimum":1,"maximum":10,"default":2},"targets":{"type":"array","maxItems":4,"items":{"type":"string"}}}}`)
+	if err := ValidateDefinition(definition); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestValidateDefinitionRejectsUnsupportedAndInvalidRules(t *testing.T) {
+	values := []json.RawMessage{
+		json.RawMessage(`{"type":"object","unknown":true}`),
+		json.RawMessage(`{"type":"object","required":["missing"],"properties":{}}`),
+		json.RawMessage(`{"type":"object","properties":{"name":{"type":"string","pattern":"["}}}`),
+		json.RawMessage(`{"type":"object","properties":{"replicas":{"type":"integer","minimum":2,"default":1}}}`),
+	}
+	for _, value := range values {
+		if err := ValidateDefinition(value); err == nil {
+			t.Fatalf("expected invalid definition: %s", value)
+		}
+	}
+}

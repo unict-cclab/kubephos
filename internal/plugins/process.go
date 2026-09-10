@@ -18,6 +18,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"kubephos.dev/kubephos/internal/domain"
+	"kubephos.dev/kubephos/internal/schema"
 )
 
 type descriptor struct {
@@ -159,9 +160,15 @@ func LoadProcess(path string, resolver SecretResolver, connections ConnectionRes
 	if info.Mode()&0111 == 0 {
 		return nil, fmt.Errorf("plugin executable %s is not executable", executable)
 	}
-	schema, err := json.Marshal(definition.Spec.ConfigurationSchema)
+	schemaDefinition, err := json.Marshal(definition.Spec.ConfigurationSchema)
 	if err != nil {
 		return nil, err
+	}
+	if definition.Spec.ConfigurationSchema["type"] != "object" {
+		return nil, errors.New("plugin configuration schema root must have type object")
+	}
+	if err := schema.ValidateDefinition(schemaDefinition); err != nil {
+		return nil, fmt.Errorf("plugin configuration schema: %w", err)
 	}
 	timeout := 30 * time.Minute
 	if definition.Spec.Runtime.Timeout != "" {
@@ -179,6 +186,12 @@ func LoadProcess(path string, resolver SecretResolver, connections ConnectionRes
 		if err != nil {
 			return nil, err
 		}
+		if value.Schema["type"] != "object" {
+			return nil, fmt.Errorf("credential schema %q root must have type object", value.Kind)
+		}
+		if err := schema.ValidateDefinition(raw); err != nil {
+			return nil, fmt.Errorf("credential schema %q: %w", value.Kind, err)
+		}
 		credentialSchemas = append(credentialSchemas, CredentialSchema{Kind: value.Kind, Name: value.Name, Description: value.Description, Schema: raw})
 	}
 	secretKinds := map[string]bool{}
@@ -194,7 +207,7 @@ func LoadProcess(path string, resolver SecretResolver, connections ConnectionRes
 			Name:              definition.Metadata.Name,
 			Version:           definition.Metadata.Version,
 			Description:       definition.Metadata.Description,
-			Schema:            schema,
+			Schema:            schemaDefinition,
 			CredentialSchemas: credentialSchemas,
 			ArtifactInputs:    definition.Spec.Artifacts.Inputs,
 			ArtifactOutputs:   definition.Spec.Artifacts.Outputs,

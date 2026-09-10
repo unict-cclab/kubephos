@@ -29,7 +29,7 @@ metadata:
 spec:
   protocol: v1alpha1
   commands: [describe, validate, plan, precheck, execute, verify, status, cancel, cleanup]
-  configurationSchema: {}
+  configurationSchema: {type: object}
   runtime:
     executable: example-plugin
   artifacts:
@@ -66,7 +66,7 @@ metadata:
 spec:
   protocol: v1alpha1
   commands: [describe, validate, plan, precheck, execute, verify, status, cancel, cleanup]
-  configurationSchema: {}
+  configurationSchema: {type: object}
   runtime:
     executable: example-plugin
 `
