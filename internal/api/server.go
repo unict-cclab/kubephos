@@ -628,6 +628,9 @@ func (s *Server) importPlugin(response http.ResponseWriter, request *http.Reques
 		writeError(response, http.StatusConflict, "plugin_conflict", err.Error())
 		return
 	}
+	if currentErr == nil && current.Digest != pluginPackage.Digest {
+		s.evictPluginPackage(current)
+	}
 	writeJSON(response, http.StatusCreated, map[string]any{"id": manifest.ID, "manifest": manifest, "package": pluginPackage})
 }
 
@@ -692,6 +695,11 @@ func (s *Server) activatePluginPackage(response http.ResponseWriter, request *ht
 		writeError(response, http.StatusConflict, "plugin_conflict", "Stored plugin metadata no longer matches the validated package.")
 		return
 	}
+	current, currentErr := s.store.GetActivePluginPackage(request.Context(), manifest.ID)
+	if currentErr != nil && !errors.Is(currentErr, storage.ErrNotFound) {
+		writeError(response, http.StatusInternalServerError, "database_error", "Could not inspect the active plugin package.")
+		return
+	}
 	activated, err := s.store.ActivatePluginPackage(request.Context(), pluginPackage)
 	if err != nil {
 		writeError(response, http.StatusInternalServerError, "database_error", "Could not activate plugin package.")
@@ -700,6 +708,9 @@ func (s *Server) activatePluginPackage(response http.ResponseWriter, request *ht
 	if err := s.registry.Install(plugin); err != nil {
 		writeError(response, http.StatusConflict, "plugin_conflict", err.Error())
 		return
+	}
+	if currentErr == nil && current.Digest != activated.Digest {
+		s.evictPluginPackage(current)
 	}
 	writeJSON(response, http.StatusOK, activated)
 }
@@ -731,7 +742,24 @@ func (s *Server) deactivatePluginPackage(response http.ResponseWriter, request *
 			return
 		}
 	}
+	s.evictPluginPackage(pluginPackage)
 	writeJSON(response, http.StatusOK, pluginPackage)
+}
+
+func (s *Server) evictPluginPackage(pluginPackage domain.PluginPackage) {
+	cache, ok := s.runtime.(plugins.ContainerImageCache)
+	if !ok {
+		return
+	}
+	manifest, err := plugins.InspectDefinition([]byte(pluginPackage.Descriptor))
+	if err != nil || manifest.Runtime.Reference == "" {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	if err := cache.EvictImage(ctx, manifest.Runtime.Reference); err != nil {
+		slog.Warn("evict plugin image", "plugin", pluginPackage.PluginID, "digest", pluginPackage.Digest, "error", err)
+	}
 }
 
 func (s *Server) listCatalogApplications(response http.ResponseWriter, request *http.Request) {

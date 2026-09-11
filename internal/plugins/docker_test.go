@@ -111,10 +111,11 @@ func TestDockerRunnerStagesPrivateRegistryImageWithoutDaemonTrust(t *testing.T) 
 	directory := t.TempDir()
 	dockerTrace := filepath.Join(directory, "docker-arguments")
 	skopeoTrace := filepath.Join(directory, "skopeo-arguments")
+	loaded := filepath.Join(directory, "loaded")
 	docker := filepath.Join(directory, "docker")
 	skopeo := filepath.Join(directory, "skopeo")
-	dockerScript := "#!/bin/sh\ncase \"${10}\" in\n  info) printf '%s' '[\"name=rootless\"]' ;;\n  load) printf '%s' loaded ;;\n  image) if [ \"${11}\" = inspect ]; then printf '%s' sha256:image; fi ;;\n  run) printf '%s\\n' \"$@\" > " + dockerTrace + "; cat >/dev/null; printf '%s' '{\"valid\":true}' ;;\nesac\n"
-	skopeoScript := "#!/bin/sh\nprintf '%s\\n' \"$@\" > " + skopeoTrace + "\n"
+	dockerScript := "#!/bin/sh\ncase \"${10}\" in\n  info) printf '%s' '[\"name=rootless\"]' ;;\n  load) touch " + loaded + "; printf '%s' loaded ;;\n  image) if [ \"${11}\" = inspect ] && [ -f " + loaded + " ]; then printf '%s' sha256:image; else exit 1; fi ;;\n  run) printf '%s\\n' \"$@\" > " + dockerTrace + "; cat >/dev/null; printf '%s' '{\"valid\":true}' ;;\nesac\n"
+	skopeoScript := "#!/bin/sh\nprintf '%s\\n' \"$@\" >> " + skopeoTrace + "\n"
 	if err := os.WriteFile(docker, []byte(dockerScript), 0755); err != nil {
 		t.Fatal(err)
 	}
@@ -138,12 +139,18 @@ func TestDockerRunnerStagesPrivateRegistryImageWithoutDaemonTrust(t *testing.T) 
 	if _, _, err := runner.Run(context.Background(), image, "describe", []byte(`{}`), false, nil); err != nil {
 		t.Fatal(err)
 	}
+	if _, _, err := runner.Run(context.Background(), image, "describe", []byte(`{}`), false, nil); err != nil {
+		t.Fatal(err)
+	}
 	skopeoArguments, err := os.ReadFile(skopeoTrace)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(string(skopeoArguments), "docker://"+image) || !strings.Contains(string(skopeoArguments), "--src-cert-dir") || strings.Contains(string(skopeoArguments), "secret") {
 		t.Fatalf("unexpected skopeo arguments: %s", skopeoArguments)
+	}
+	if strings.Count(string(skopeoArguments), "docker://"+image) != 1 {
+		t.Fatalf("expected one registry staging operation: %s", skopeoArguments)
 	}
 	dockerArguments, err := os.ReadFile(dockerTrace)
 	if err != nil {

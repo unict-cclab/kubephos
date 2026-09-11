@@ -69,6 +69,10 @@ type ContainerImagePolicy interface {
 	ValidateImage(string) error
 }
 
+type ContainerImageCache interface {
+	EvictImage(context.Context, string) error
+}
+
 type RuntimeEnvironment interface {
 	Environment(context.Context) ([]string, func(), error)
 }

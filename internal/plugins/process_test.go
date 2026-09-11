@@ -11,9 +11,10 @@ import (
 )
 
 type recordingContainerRunner struct {
-	image   string
-	command string
-	network bool
+	image    string
+	command  string
+	network  bool
+	deadline time.Time
 }
 
 type environmentContainerRunner struct {
@@ -36,10 +37,11 @@ func (r *recordingContainerRunner) Ready(context.Context) error {
 	return nil
 }
 
-func (r *recordingContainerRunner) Run(_ context.Context, image, command string, _ []byte, network bool, _ Logger) ([]byte, []string, error) {
+func (r *recordingContainerRunner) Run(ctx context.Context, image, command string, _ []byte, network bool, _ Logger) ([]byte, []string, error) {
 	r.image = image
 	r.command = command
 	r.network = network
+	r.deadline, _ = ctx.Deadline()
 	return []byte(`{"id":"dev.example.oci","name":"OCI example","version":"2.0.0","schema":{}}`), nil, nil
 }
 
@@ -163,6 +165,10 @@ spec:
 	}
 	if manifest.Runtime.Kind != "oci" || manifest.Runtime.Digest != "sha256:"+digest {
 		t.Fatalf("unexpected runtime: %#v", manifest.Runtime)
+	}
+	remaining := time.Until(runner.deadline)
+	if remaining < 55*time.Second || remaining > pluginHandshakeTimeout {
+		t.Fatalf("unexpected handshake budget: %s", remaining)
 	}
 }
 

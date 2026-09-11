@@ -74,6 +74,7 @@ const pluginLogByteLimit = 1 << 20
 const pluginLogEventLimit = 1000
 const pluginErrorLineLimit = 128
 const pluginErrorMessageLimit = 2048
+const pluginHandshakeTimeout = 60 * time.Second
 
 var pluginIDExpression = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9.-]{0,126}[a-z0-9])?$`)
 var providerExpression = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9.-]{0,78}[a-z0-9])?$`)
@@ -358,7 +359,7 @@ func loadDefinition(value []byte, baseDirectory string, resolver SecretResolver,
 	if !verify {
 		return plugin, nil
 	}
-	describeContext, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	describeContext, cancel := context.WithTimeout(context.Background(), pluginHandshakeTimeout)
 	defer cancel()
 	var described Manifest
 	if err := plugin.invoke(describeContext, "describe", map[string]any{}, &described, nil); err != nil {

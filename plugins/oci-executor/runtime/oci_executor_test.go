@@ -106,7 +106,7 @@ func TestManagedExecutorRejectsInvalidTopology(t *testing.T) {
 
 func TestExecutorInstallIsVersionedRootlessAndMutualTLS(t *testing.T) {
 	command := installCommand("marker", testMachine())
-	required := []string{dockerPackageVersion, dockerKeyFingerprint, aptNetworkOptions, "dockerd-rootless-setuptool.sh install", "socat", "OPENSSL-LISTEN:2376", "UNIX-CONNECT:%t/docker.sock", "kubephos-oci-proxy.service", "journalctl --user -u docker.service", "journalctl --user -u kubephos-oci-proxy.service", "disable --now docker.service docker.socket containerd.service"}
+	required := []string{dockerPackageVersion, dockerKeyFingerprint, aptNetworkOptions, "dockerd-rootless-setuptool.sh install", "socat -t 86400", "OPENSSL-LISTEN:2376", "UNIX-CONNECT:%t/docker.sock", "kubephos-oci-proxy.service", "journalctl --user -u docker.service", "journalctl --user -u kubephos-oci-proxy.service", "disable --now docker.service docker.socket containerd.service"}
 	for _, value := range required {
 		if !strings.Contains(command, value) {
 			t.Fatalf("install command does not contain %q", value)

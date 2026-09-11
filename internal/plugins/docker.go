@@ -192,6 +192,10 @@ func (d *DockerRunner) prepareImage(ctx context.Context, image string) (string, 
 	if strings.TrimSpace(access.CABundle) == "" || access.Username == "" || access.Password == "" {
 		return "", func() {}, errors.New("managed OCI registry access is incomplete")
 	}
+	localReference := cachedImageReference(image)
+	if output, err := limitedCommand(ctx, d.binary, append(d.connectionArguments(), "image", "inspect", localReference, "--format", "{{.Id}}")...); err == nil && strings.TrimSpace(string(output)) != "" {
+		return localReference, func() {}, nil
+	}
 	root, err := os.MkdirTemp("", "kubephos-oci-image-")
 	if err != nil {
 		return "", func() {}, err
@@ -216,8 +220,6 @@ func (d *DockerRunner) prepareImage(ctx context.Context, image string) (string, 
 		cleanup()
 		return "", func() {}, err
 	}
-	digest := strings.TrimPrefix(strings.SplitN(image, "@", 2)[1], "sha256:")
-	localReference := "kubephos.local/runtime/plugin-" + digest[:16] + "-" + strings.ReplaceAll(id.New("run"), "_", "-") + ":sealed"
 	archive := filepath.Join(root, "image.tar")
 	copyArguments := []string{"copy", "--retry-times", "3", "--authfile", authFile, "--src-cert-dir", certificates, "docker://" + image, "docker-archive:" + archive + ":" + localReference}
 	skopeo := d.skopeo
@@ -233,16 +235,38 @@ func (d *DockerRunner) prepareImage(ctx context.Context, image string) (string, 
 		return "", func() {}, fmt.Errorf("load OCI plugin image: %s", commandMessage(output, err))
 	}
 	remove := func() {
+		cleanup()
+	}
+	removeInvalid := func() {
 		cleanupContext, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		_, _ = limitedCommand(cleanupContext, d.binary, append(d.connectionArguments(), "image", "rm", "-f", localReference)...)
 		cleanup()
 	}
 	if output, err := limitedCommand(ctx, d.binary, append(d.connectionArguments(), "image", "inspect", localReference, "--format", "{{.Id}}")...); err != nil || strings.TrimSpace(string(output)) == "" {
-		remove()
+		removeInvalid()
 		return "", func() {}, errors.New("staged OCI plugin image is unavailable on the executor")
 	}
 	return localReference, remove, nil
+}
+
+func (d *DockerRunner) EvictImage(ctx context.Context, image string) error {
+	if err := d.ValidateImage(image); err != nil {
+		return err
+	}
+	if _, managed := d.registryAccess[imageRegistry(image)]; !managed {
+		return nil
+	}
+	output, err := limitedCommand(ctx, d.binary, append(d.connectionArguments(), "image", "rm", "-f", cachedImageReference(image))...)
+	if err != nil && !strings.Contains(strings.ToLower(string(output)), "no such image") {
+		return fmt.Errorf("evict OCI plugin image: %s", commandMessage(output, err))
+	}
+	return nil
+}
+
+func cachedImageReference(image string) string {
+	digest := strings.TrimPrefix(strings.SplitN(image, "@", 2)[1], "sha256:")
+	return "kubephos.local/runtime/plugin-" + digest + ":sealed"
 }
 
 func limitedCommand(ctx context.Context, name string, arguments ...string) ([]byte, error) {

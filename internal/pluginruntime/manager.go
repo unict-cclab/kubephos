@@ -190,6 +190,19 @@ func (m *Manager) ValidateImage(image string) error {
 	return plugins.ValidateRuntimeImage(runner, image)
 }
 
+func (m *Manager) EvictImage(ctx context.Context, image string) error {
+	runner, cleanup, err := m.acquire(ctx)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+	cache, ok := runner.(plugins.ContainerImageCache)
+	if !ok {
+		return nil
+	}
+	return cache.EvictImage(ctx, image)
+}
+
 func (m *Manager) Environment(ctx context.Context) ([]string, func(), error) {
 	runner, cleanup, err := m.acquire(ctx)
 	if err != nil {
