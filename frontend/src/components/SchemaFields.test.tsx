@@ -1,5 +1,7 @@
 import {fireEvent, render, screen} from '@testing-library/react'
 import {describe, expect, it} from 'vitest'
+import {readSchemaValues} from '../lib'
+import type {Application, JsonSchema} from '../types'
 import {SchemaFields} from './SchemaFields'
 
 describe('SchemaFields', () => {
@@ -86,5 +88,22 @@ describe('SchemaFields', () => {
     expect(screen.queryByRole('textbox', {name: 'Content'})).not.toBeInTheDocument()
     fireEvent.change(screen.getByRole('combobox', {name: 'Action'}), {target: {value: 'write'}})
     expect(screen.getByRole('textbox', {name: 'Content'})).toBeInTheDocument()
+  })
+
+  it('renders and reads settings from the selected application contract', () => {
+    const schema: JsonSchema = {type: 'object', required: ['applicationRef'], properties: {
+      applicationRef: {type: 'string', format: 'kubephos-application-ref', title: 'Application'},
+      values: {type: 'object', title: 'Application settings', 'x-kubephos-schema-from-application': 'applicationRef'},
+    }}
+    const applications: Application[] = [{
+      id: 'dev.example.app', reference: 'app:dev.example.app@1.0.0', name: 'Example', version: '1.0.0', description: '', origin: 'imported', digest: 'sha256:test',
+      descriptor: {spec: {valuesSchema: {type: 'object', required: ['replicas'], properties: {replicas: {type: 'integer', title: 'Initial replicas', minimum: 1, maximum: 10}}}, defaults: {replicas: 2}}},
+    }]
+    const {container} = render(<form><SchemaFields schema={schema} applications={applications} artifacts={[]} connections={[]} credentials={[]} /></form>)
+    const replicas = screen.getByRole('spinbutton', {name: 'Initial replicas'})
+    expect(replicas).toHaveValue(2)
+    fireEvent.change(replicas, {target: {value: '4'}})
+    const form = container.querySelector('form')!
+    expect(readSchemaValues(form, schema, 'schema', applications)).toEqual({applicationRef: applications[0].reference, values: {replicas: 4}})
   })
 })

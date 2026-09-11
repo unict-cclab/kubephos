@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -22,6 +23,7 @@ import (
 	"kubephos.dev/kubephos/internal/catalog"
 	"kubephos.dev/kubephos/internal/domain"
 	"kubephos.dev/kubephos/internal/plugins"
+	"kubephos.dev/kubephos/internal/schema"
 )
 
 const maxManifestBytes = 10 * 1024 * 1024
@@ -34,11 +36,13 @@ type Invocation struct {
 type Plugin struct{}
 
 type specification struct {
-	ApplicationRef string `json:"applicationRef"`
+	ApplicationRef string         `json:"applicationRef"`
+	Values         map[string]any `json:"values"`
 }
 
 type stepInput struct {
 	ApplicationRef string             `json:"applicationRef"`
+	Values         map[string]any     `json:"values"`
 	Descriptor     catalog.Descriptor `json:"descriptor"`
 }
 
@@ -46,6 +50,7 @@ type Result struct {
 	ApplicationRef   string            `json:"applicationRef"`
 	SourceRevision   string            `json:"sourceRevision"`
 	ManifestDigest   string            `json:"manifestDigest"`
+	ValuesDigest     string            `json:"valuesDigest"`
 	ManifestSet      ManifestSet       `json:"manifestSet"`
 	WorkloadTargets  []WorkloadTarget  `json:"workloadTargets"`
 	ServiceEndpoints []ServiceEndpoint `json:"serviceEndpoints"`
@@ -62,6 +67,7 @@ type ManifestSet struct {
 type ManifestSetMetadata struct {
 	ApplicationRef string `json:"applicationRef"`
 	Digest         string `json:"digest"`
+	ValuesDigest   string `json:"valuesDigest"`
 }
 
 type ManifestSetSpec struct {
@@ -146,7 +152,7 @@ func (Plugin) Manifest() plugins.Manifest {
 		Name:        "Application package materializer",
 		Version:     "0.2.0",
 		Description: "Resolves, materializes and verifies a pinned application package and its declared interface.",
-		Schema:      json.RawMessage(`{"type":"object","required":["applicationRef"],"additionalProperties":false,"properties":{"applicationRef":{"type":"string","title":"Application","description":"Immutable application version from the catalog.","format":"kubephos-application-ref"}}}`),
+		Schema:      json.RawMessage(`{"type":"object","required":["applicationRef"],"additionalProperties":false,"properties":{"applicationRef":{"type":"string","title":"Application","description":"Immutable application version from the catalog.","format":"kubephos-application-ref"},"values":{"type":"object","title":"Application settings","description":"Validated settings declared by the selected application.","x-kubephos-schema-from-application":"applicationRef"}}}`),
 		ArtifactOutputs: []domain.ArtifactContract{
 			{Type: "ManifestSet", Version: "v1alpha1"},
 			{Type: "WorkloadTargets", Version: "v1alpha1"},
@@ -179,7 +185,7 @@ func (Plugin) Plan(ctx context.Context, invocation Invocation) (domain.Plan, err
 	if err != nil {
 		return domain.Plan{}, err
 	}
-	input, err := json.Marshal(stepInput{ApplicationRef: spec.ApplicationRef, Descriptor: descriptor})
+	input, err := json.Marshal(stepInput{ApplicationRef: spec.ApplicationRef, Values: spec.Values, Descriptor: descriptor})
 	if err != nil {
 		return domain.Plan{}, err
 	}
@@ -212,7 +218,14 @@ func (Plugin) Precheck(ctx context.Context, step domain.PlanStep, log plugins.Lo
 	if len(manifest) == 0 {
 		return domain.HealthReport{Status: domain.HealthUnhealthy, Summary: "Manifest entrypoint is empty", Checks: map[string]string{"entrypoint": "empty"}}, nil
 	}
-	return domain.HealthReport{Status: domain.HealthHealthy, Summary: "Pinned source and entrypoint are reachable", Checks: map[string]string{"source": "reachable", "revision": "resolved", "entrypoint": "present"}}, nil
+	manifest, err = applyOverlays(manifest, input.Descriptor.Spec.Overlays, input.Values)
+	if err != nil {
+		return domain.HealthReport{Status: domain.HealthUnhealthy, Summary: err.Error(), Checks: map[string]string{"overlays": "invalid"}}, nil
+	}
+	if _, _, err := partitionManifest(manifest, input.Descriptor); err != nil {
+		return domain.HealthReport{Status: domain.HealthUnhealthy, Summary: err.Error(), Checks: map[string]string{"manifest": "invalid"}}, nil
+	}
+	return domain.HealthReport{Status: domain.HealthHealthy, Summary: "Pinned source, settings and overlays are valid", Checks: map[string]string{"source": "reachable", "revision": "resolved", "entrypoint": "present", "values": "valid", "overlays": fmt.Sprintf("%d valid", len(input.Descriptor.Spec.Overlays))}}, nil
 }
 
 func (Plugin) Execute(ctx context.Context, step domain.PlanStep, log plugins.Logger) (json.RawMessage, error) {
@@ -230,6 +243,10 @@ func (Plugin) Execute(ctx context.Context, step domain.PlanStep, log plugins.Log
 	if !utf8.Valid(manifest) {
 		return nil, errors.New("manifest entrypoint is not valid UTF-8")
 	}
+	manifest, err = applyOverlays(manifest, input.Descriptor.Spec.Overlays, input.Values)
+	if err != nil {
+		return nil, err
+	}
 	applicationManifest, loadProfiles, err := partitionManifest(manifest, input.Descriptor)
 	if err != nil {
 		return nil, err
@@ -240,6 +257,10 @@ func (Plugin) Execute(ctx context.Context, step domain.PlanStep, log plugins.Log
 	}
 	digest := sha256.Sum256(applicationManifest)
 	digestValue := "sha256:" + hex.EncodeToString(digest[:])
+	valuesDigest, err := digestJSON(input.Values)
+	if err != nil {
+		return nil, err
+	}
 	loadDigest, err := digestJSON(loadProfiles)
 	if err != nil {
 		return nil, err
@@ -248,10 +269,11 @@ func (Plugin) Execute(ctx context.Context, step domain.PlanStep, log plugins.Log
 		ApplicationRef: input.ApplicationRef,
 		SourceRevision: input.Descriptor.Spec.Package.Revision,
 		ManifestDigest: digestValue,
+		ValuesDigest:   valuesDigest,
 		ManifestSet: ManifestSet{
 			APIVersion: "artifacts.kubephos.dev/v1alpha1",
 			Kind:       "ManifestSet",
-			Metadata:   ManifestSetMetadata{ApplicationRef: input.ApplicationRef, Digest: digestValue},
+			Metadata:   ManifestSetMetadata{ApplicationRef: input.ApplicationRef, Digest: digestValue, ValuesDigest: valuesDigest},
 			Spec: ManifestSetSpec{
 				Renderer: input.Descriptor.Spec.Package.Format,
 				Content:  string(applicationManifest),
@@ -288,13 +310,17 @@ func (Plugin) Verify(ctx context.Context, step domain.PlanStep, raw json.RawMess
 	if err := json.Unmarshal(raw, &result); err != nil {
 		return domain.HealthReport{Status: domain.HealthUnhealthy, Summary: "Inspection result is invalid", Checks: map[string]string{"result": "invalid"}}, nil
 	}
-	if result.ApplicationRef != input.ApplicationRef || result.SourceRevision != input.Descriptor.Spec.Package.Revision || len(result.WorkloadTargets) != len(input.Descriptor.Spec.Interface.Components) || !strings.HasPrefix(result.ManifestDigest, "sha256:") {
+	valuesDigest, err := digestJSON(input.Values)
+	if err != nil {
+		return domain.HealthReport{}, err
+	}
+	if result.ApplicationRef != input.ApplicationRef || result.SourceRevision != input.Descriptor.Spec.Package.Revision || result.ValuesDigest != valuesDigest || len(result.WorkloadTargets) != len(input.Descriptor.Spec.Interface.Components) || !strings.HasPrefix(result.ManifestDigest, "sha256:") {
 		return domain.HealthReport{Status: domain.HealthUnhealthy, Summary: "Inspection result does not match the validated application", Checks: map[string]string{"identity": "mismatch"}}, nil
 	}
 	manifestDigest := sha256.Sum256([]byte(result.ManifestSet.Spec.Content))
 	actualDigest := "sha256:" + hex.EncodeToString(manifestDigest[:])
 	if result.ManifestSet.APIVersion != "artifacts.kubephos.dev/v1alpha1" || result.ManifestSet.Kind != "ManifestSet" ||
-		result.ManifestSet.Metadata.ApplicationRef != input.ApplicationRef || result.ManifestSet.Metadata.Digest != actualDigest || result.ManifestDigest != actualDigest ||
+		result.ManifestSet.Metadata.ApplicationRef != input.ApplicationRef || result.ManifestSet.Metadata.Digest != actualDigest || result.ManifestSet.Metadata.ValuesDigest != valuesDigest || result.ManifestDigest != actualDigest ||
 		len(result.ManifestSet.Spec.Content) > maxManifestBytes || !utf8.ValidString(result.ManifestSet.Spec.Content) ||
 		result.ManifestSet.Spec.Renderer != input.Descriptor.Spec.Package.Format ||
 		result.ManifestSet.Spec.Source.Type != input.Descriptor.Spec.Package.Type || result.ManifestSet.Spec.Source.Repository != input.Descriptor.Spec.Package.Repository ||
@@ -345,6 +371,11 @@ func resolve(invocation Invocation) (specification, catalog.Descriptor, error) {
 	if err := json.Unmarshal(raw, &descriptor); err != nil {
 		return specification{}, catalog.Descriptor{}, errors.New("catalog descriptor is invalid")
 	}
+	values, err := resolveValues(descriptor.Spec.ValuesSchema, descriptor.Spec.Defaults, spec.Values)
+	if err != nil {
+		return specification{}, catalog.Descriptor{}, err
+	}
+	spec.Values = values
 	return spec, descriptor, nil
 }
 
@@ -353,10 +384,55 @@ func decodeStep(step domain.PlanStep) (stepInput, error) {
 	if err := json.Unmarshal(step.Input, &input); err != nil {
 		return stepInput{}, err
 	}
-	if input.ApplicationRef == "" || input.Descriptor.Metadata.ID == "" {
+	if input.ApplicationRef == "" || input.Descriptor.Metadata.ID == "" || input.Values == nil {
 		return stepInput{}, errors.New("step input is incomplete")
 	}
 	return input, nil
+}
+
+func resolveValues(definition, defaults, supplied map[string]any) (map[string]any, error) {
+	resolved := cloneObject(defaults)
+	mergeObjects(resolved, supplied)
+	rawDefinition, err := json.Marshal(definition)
+	if err != nil {
+		return nil, errors.New("application values schema is invalid")
+	}
+	rawValues, err := json.Marshal(resolved)
+	if err != nil {
+		return nil, errors.New("application settings are invalid")
+	}
+	issues, err := schema.Validate(rawDefinition, rawValues)
+	if err != nil {
+		return nil, errors.New("application values schema is invalid")
+	}
+	if len(issues) > 0 {
+		return nil, fmt.Errorf("application settings do not satisfy valuesSchema at %s: %s", issues[0].Path, issues[0].Message)
+	}
+	return resolved, nil
+}
+
+func cloneObject(value map[string]any) map[string]any {
+	result := map[string]any{}
+	for key, item := range value {
+		if nested, ok := item.(map[string]any); ok {
+			result[key] = cloneObject(nested)
+		} else {
+			result[key] = item
+		}
+	}
+	return result
+}
+
+func mergeObjects(target, source map[string]any) {
+	for key, item := range source {
+		nested, nestedOK := item.(map[string]any)
+		current, currentOK := target[key].(map[string]any)
+		if nestedOK && currentOK {
+			mergeObjects(current, nested)
+			continue
+		}
+		target[key] = item
+	}
 }
 
 func fetchManifest(ctx context.Context, source catalog.Package) ([]byte, error) {
@@ -386,6 +462,183 @@ func fetchManifest(ctx context.Context, source catalog.Package) ([]byte, error) 
 		return nil, fmt.Errorf("manifest exceeds %d bytes", maxManifestBytes)
 	}
 	return manifest, nil
+}
+
+func applyOverlays(manifest []byte, overlays []catalog.Overlay, values map[string]any) ([]byte, error) {
+	if len(overlays) == 0 {
+		return manifest, nil
+	}
+	documents := []map[string]any{}
+	decoder := yaml.NewDecoder(bytes.NewReader(manifest))
+	for {
+		var document map[string]any
+		err := decoder.Decode(&document)
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return nil, fmt.Errorf("decode overlay target manifest: %w", err)
+		}
+		if len(document) > 0 {
+			documents = append(documents, document)
+		}
+	}
+	for position, overlay := range overlays {
+		matched := -1
+		for index, document := range documents {
+			metadata, _ := document["metadata"].(map[string]any)
+			if fmt.Sprint(document["apiVersion"]) == overlay.Target.APIVersion && fmt.Sprint(document["kind"]) == overlay.Target.Kind && fmt.Sprint(metadata["name"]) == overlay.Target.Name {
+				if matched >= 0 {
+					return nil, fmt.Errorf("overlay %d target %s is duplicated", position, overlay.Target.Name)
+				}
+				matched = index
+			}
+		}
+		if matched < 0 {
+			return nil, fmt.Errorf("overlay %d target %s is missing", position, overlay.Target.Name)
+		}
+		var current any = documents[matched]
+		for _, operation := range overlay.Operations {
+			var value any
+			if operation.Operation != "remove" {
+				var ok bool
+				value, ok = overlayValue(values, operation.ValueFrom)
+				if !ok {
+					return nil, fmt.Errorf("overlay value %s is unavailable", operation.ValueFrom)
+				}
+			}
+			updated, err := applyOverlayOperation(current, pointerTokens(operation.Path), operation.Operation, value)
+			if err != nil {
+				return nil, fmt.Errorf("apply overlay %d path %s: %w", position, operation.Path, err)
+			}
+			current = updated
+		}
+		document, ok := current.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("overlay %d replaced the resource root", position)
+		}
+		documents[matched] = document
+	}
+	result := []byte{}
+	for _, document := range documents {
+		encoded, err := yaml.Marshal(document)
+		if err != nil {
+			return nil, fmt.Errorf("encode overlaid manifest: %w", err)
+		}
+		result = appendManifestDocument(result, encoded)
+		if len(result) > maxManifestBytes {
+			return nil, fmt.Errorf("overlaid manifest exceeds %d bytes", maxManifestBytes)
+		}
+	}
+	return result, nil
+}
+
+func overlayValue(root map[string]any, pointer string) (any, bool) {
+	var current any = root
+	for _, token := range pointerTokens(pointer) {
+		object, ok := current.(map[string]any)
+		if !ok {
+			return nil, false
+		}
+		current, ok = object[token]
+		if !ok {
+			return nil, false
+		}
+	}
+	return current, true
+}
+
+func pointerTokens(pointer string) []string {
+	raw := strings.Split(strings.TrimPrefix(pointer, "/"), "/")
+	result := make([]string, len(raw))
+	for index, token := range raw {
+		result[index] = strings.ReplaceAll(strings.ReplaceAll(token, "~1", "/"), "~0", "~")
+	}
+	return result
+}
+
+func applyOverlayOperation(current any, tokens []string, operation string, value any) (any, error) {
+	if len(tokens) == 0 {
+		return nil, errors.New("overlay path cannot replace the document root")
+	}
+	token := tokens[0]
+	if len(tokens) == 1 {
+		switch container := current.(type) {
+		case map[string]any:
+			_, exists := container[token]
+			switch operation {
+			case "add":
+				container[token] = value
+			case "replace":
+				if !exists {
+					return nil, errors.New("replace target does not exist")
+				}
+				container[token] = value
+			case "remove":
+				if !exists {
+					return nil, errors.New("remove target does not exist")
+				}
+				delete(container, token)
+			}
+			return container, nil
+		case []any:
+			if token == "-" && operation == "add" {
+				return append(container, value), nil
+			}
+			index, err := strconv.Atoi(token)
+			if err != nil || index < 0 {
+				return nil, errors.New("array index is invalid")
+			}
+			switch operation {
+			case "add":
+				if index > len(container) {
+					return nil, errors.New("array add index is out of range")
+				}
+				container = append(container, nil)
+				copy(container[index+1:], container[index:])
+				container[index] = value
+			case "replace":
+				if index >= len(container) {
+					return nil, errors.New("array replace index is out of range")
+				}
+				container[index] = value
+			case "remove":
+				if index >= len(container) {
+					return nil, errors.New("array remove index is out of range")
+				}
+				container = append(container[:index], container[index+1:]...)
+			}
+			return container, nil
+		default:
+			return nil, errors.New("overlay parent is not an object or array")
+		}
+	}
+	switch container := current.(type) {
+	case map[string]any:
+		child, exists := container[token]
+		if !exists {
+			return nil, errors.New("overlay parent path does not exist")
+		}
+		updated, err := applyOverlayOperation(child, tokens[1:], operation, value)
+		if err != nil {
+			return nil, err
+		}
+		container[token] = updated
+		return container, nil
+	case []any:
+		index, err := strconv.Atoi(token)
+		if err != nil || index < 0 || index >= len(container) {
+			return nil, errors.New("overlay array path is out of range")
+		}
+		updated, err := applyOverlayOperation(container[index], tokens[1:], operation, value)
+		if err != nil {
+			return nil, err
+		}
+		container[index] = updated
+		return container, nil
+	default:
+		return nil, errors.New("overlay path crosses a scalar value")
+	}
 }
 
 func partitionManifest(manifest []byte, descriptor catalog.Descriptor) ([]byte, []LoadProfile, error) {

@@ -26,6 +26,9 @@ export interface SchemaProperty {
   minLength?: number
   maxLength?: number
   writeOnly?: boolean
+  required?: string[]
+  properties?: Record<string, SchemaProperty>
+  additionalProperties?: boolean
   'x-kubephos-provider'?: string
   'x-kubephos-secret-kind'?: string
   'x-kubephos-required-trait'?: string
@@ -33,6 +36,7 @@ export interface SchemaProperty {
   'x-kubephos-artifact-version'?: string
   'x-kubephos-primary-action'?: boolean
   'x-kubephos-multiline'?: boolean
+  'x-kubephos-schema-from-application'?: string
   'x-kubephos-visible-when'?: {property: string; values: Array<string | number | boolean>}
 }
 
@@ -324,6 +328,8 @@ export interface Application {
     spec?: {
       package?: {type?: string; format?: string}
       interface?: {components?: ApplicationComponent[]; endpoints?: unknown[]; loadDrivers?: unknown[]}
+      valuesSchema?: JsonSchema
+      defaults?: Record<string, unknown>
     }
   }
 }

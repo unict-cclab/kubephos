@@ -74,6 +74,32 @@ func TestParseRejectsInvalidDefaults(t *testing.T) {
 	}
 }
 
+func TestParseValidatesDeclarativeOverlays(t *testing.T) {
+	overlay := `  overlays:
+    - target: {apiVersion: apps/v1, kind: Deployment, name: api}
+      operations:
+        - op: replace
+          path: /spec/replicas
+          valueFrom: /replicas
+`
+	raw := strings.Replace(validDescriptor, "  defaults:\n    replicas: 1", "  defaults:\n    replicas: 1\n"+overlay, 1)
+	application, err := Parse([]byte(raw), "imported")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if application.Descriptor == nil || !strings.Contains(string(application.Descriptor), `"overlays"`) {
+		t.Fatal("validated overlay is missing from the canonical descriptor")
+	}
+	unsafe := strings.Replace(raw, "/spec/replicas", "/metadata/name", 1)
+	if _, err := Parse([]byte(unsafe), "imported"); err == nil {
+		t.Fatal("expected identity-changing overlay rejection")
+	}
+	unknown := strings.Replace(raw, "name: api}", "name: missing}", 1)
+	if _, err := Parse([]byte(unknown), "imported"); err == nil {
+		t.Fatal("expected undeclared overlay target rejection")
+	}
+}
+
 func TestParseAcceptsRepositoryRoot(t *testing.T) {
 	raw := strings.Replace(validDescriptor, "path: deploy", "path: .", 1)
 	if _, err := Parse([]byte(raw), "imported"); err != nil {

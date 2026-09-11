@@ -60,7 +60,7 @@ export function PipelineDialog({open, close, session, workspaces, plugins, appli
       const stageID = `stage-${index + 1}`
       const virtual = virtualArtifacts(stages.slice(0, index), plugins)
       const byID = new Map(virtual.map(item => [item.id, item]))
-      const spec = readSchemaValues(form, plugin.schema, `pipeline-${stage.key}`)
+		const spec = readSchemaValues(form, plugin.schema, `pipeline-${stage.key}`, applications)
       const bindings: PipelineBinding[] = []
       for (const [name, property] of Object.entries(plugin.schema.properties ?? {})) {
         if (property.format !== 'kubephos-artifact-ref') continue

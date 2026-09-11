@@ -523,6 +523,10 @@ label small { color: #8d978f; font-weight: 500; }
 .field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
 .schema-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 0 14px; }
 .schema-fields .wide { grid-column: 1 / -1; }
+.dynamic-schema { margin: 8px 0 14px; padding: 14px; border: 1px solid var(--line); border-radius: 12px; background: color-mix(in srgb, var(--panel) 82%, transparent); }
+.dynamic-schema > div:first-child { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 6px; }
+.dynamic-schema > div:first-child small { color: var(--muted); text-align: right; }
+.dynamic-schema > .schema-fields { margin-top: 8px; }
 .checkbox-field { display: flex; align-items: center; gap: 9px; }
 .checkbox-field input { width: auto; }
 details { border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; }

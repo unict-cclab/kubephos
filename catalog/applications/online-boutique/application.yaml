@@ -3,7 +3,7 @@ kind: Application
 metadata:
   id: dev.kubephos.online-boutique
   name: Online Boutique
-  version: 0.10.5-kubephos.1
+  version: 0.10.5-kubephos.3
   description: Cloud-native microservices demo with declared workload targets and a public frontend.
 spec:
   package:
@@ -75,5 +75,18 @@ spec:
   valuesSchema:
     type: object
     additionalProperties: false
-    properties: {}
-  defaults: {}
+    properties:
+      frontendReplicas:
+        type: integer
+        title: Frontend replicas
+        description: Initial frontend replicas before any autoscaler takes control.
+        minimum: 1
+        maximum: 20
+  defaults:
+    frontendReplicas: 1
+  overlays:
+    - target: {apiVersion: apps/v1, kind: Deployment, name: frontend}
+      operations:
+        - op: add
+          path: /spec/replicas
+          valueFrom: /frontendReplicas

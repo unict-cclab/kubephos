@@ -110,3 +110,43 @@ func TestPlanDeclaresTypedInterfaceArtifacts(t *testing.T) {
 		t.Fatalf("unexpected artifact types: %#v", plan.Steps[0].Outputs)
 	}
 }
+
+func TestApplyOverlaysUsesValidatedApplicationValues(t *testing.T) {
+	manifest := []byte(`apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api
+spec:
+  replicas: 1
+  template:
+    spec:
+      containers:
+        - name: api
+          image: example.test/api:1
+`)
+	overlays := []catalog.Overlay{{
+		Target: catalog.Workload{APIVersion: "apps/v1", Kind: "Deployment", Name: "api"},
+		Operations: []catalog.OverlayOperation{
+			{Operation: "replace", Path: "/spec/replicas", ValueFrom: "/replicas"},
+			{Operation: "replace", Path: "/spec/template/spec/containers/0/image", ValueFrom: "/image"},
+		},
+	}}
+	result, err := applyOverlays(manifest, overlays, map[string]any{"replicas": 3, "image": "example.test/api:2"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(result), "replicas: 3") || !strings.Contains(string(result), "example.test/api:2") {
+		t.Fatalf("overlay values were not applied: %s", result)
+	}
+}
+
+func TestResolveValuesMergesDefaultsAndRejectsUnknownSettings(t *testing.T) {
+	definition := map[string]any{"type": "object", "additionalProperties": false, "required": []any{"replicas"}, "properties": map[string]any{"replicas": map[string]any{"type": "integer", "minimum": 1}}}
+	values, err := resolveValues(definition, map[string]any{"replicas": 1}, map[string]any{"replicas": 4})
+	if err != nil || values["replicas"] != 4 {
+		t.Fatalf("unexpected resolved values %#v %v", values, err)
+	}
+	if _, err := resolveValues(definition, map[string]any{"replicas": 1}, map[string]any{"unknown": true}); err == nil {
+		t.Fatal("expected unknown setting rejection")
+	}
+}

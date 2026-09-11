@@ -28,6 +28,11 @@ spec:
         title: Application
         description: Immutable application version from the catalog.
         format: kubephos-application-ref
+      values:
+        type: object
+        title: Application settings
+        description: Validated settings declared by the selected application.
+        x-kubephos-schema-from-application: applicationRef
   runtime:
     executable: application-inspector-plugin
     timeout: 10m

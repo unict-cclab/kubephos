@@ -13,7 +13,7 @@ interface SchemaFieldsProps {
 }
 
 export function SchemaFields({schema, prefix = 'schema', values = {}, applications, artifacts, connections, credentials}: SchemaFieldsProps) {
-  const initialValues = schemaValues(schema, values)
+	const initialValues = schemaValues(schema, values, applications)
   const signature = JSON.stringify({schema, initialValues})
   return <SchemaFieldSet key={signature} schema={schema} prefix={prefix} initialValues={initialValues} applications={applications} artifacts={artifacts} connections={connections} credentials={credentials} />
 }
@@ -31,7 +31,8 @@ function SchemaFieldSet({schema, prefix = 'schema', initialValues, applications,
       name={name}
       prefix={prefix}
       property={property}
-      value={currentValues[name]}
+		value={currentValues[name]}
+		formValues={currentValues}
       required={required.has(name)}
       onValue={value => setCurrentValues(current => ({...current, [name]: value}))}
       applications={applications}
@@ -47,15 +48,29 @@ interface SchemaFieldProps extends Omit<SchemaFieldsProps, 'schema'> {
   property: SchemaProperty
   value?: unknown
   required: boolean
-  onValue: (value: unknown) => void
+	onValue: (value: unknown) => void
+	formValues: Record<string, unknown>
 }
 
-function SchemaField({name, prefix, property, value, required, onValue, applications, artifacts, connections, credentials}: SchemaFieldProps) {
+function SchemaField({name, prefix, property, value, required, onValue, formValues, applications, artifacts, connections, credentials}: SchemaFieldProps) {
   const title = property.title ?? humanize(name)
   const fieldName = `${prefix}.${name}`
   const wide = ['string', 'object', 'array'].includes(property.type ?? 'string') ? 'wide' : ''
-  const hint = property.description && <small>{property.description}</small>
-  let choices: Array<{value: string; label: string}> | null = null
+	const hint = property.description && <small>{property.description}</small>
+	let choices: Array<{value: string; label: string}> | null = null
+	const schemaSource = property['x-kubephos-schema-from-application']
+	if (schemaSource) {
+		const application = applications.find(item => item.reference === formValues[schemaSource])
+		const dynamicSchema = application?.descriptor.spec?.valuesSchema
+		if (!application || !dynamicSchema) return <div className="dynamic-schema wide"><strong>{title}</strong><small>Select an application to configure its validated settings.</small></div>
+		const defaults = application.descriptor.spec?.defaults ?? {}
+		return <div className="dynamic-schema wide" key={application.reference}><div><strong>{title}</strong>{hint}</div><SchemaFieldSet schema={dynamicSchema} prefix={fieldName} initialValues={schemaValues(dynamicSchema, defaults, applications)} applications={applications} artifacts={artifacts} connections={connections} credentials={credentials} /></div>
+	}
+	if (property.type === 'object' && property.properties) {
+		const nestedSchema: JsonSchema = {type: 'object', required: property.required, properties: property.properties}
+		const nestedValues = typeof value === 'object' && value && !Array.isArray(value) ? value as Record<string, unknown> : {}
+		return <div className="dynamic-schema wide"><div><strong>{title}</strong>{hint}</div><SchemaFieldSet schema={nestedSchema} prefix={fieldName} initialValues={schemaValues(nestedSchema, nestedValues, applications)} applications={applications} artifacts={artifacts} connections={connections} credentials={credentials} /></div>
+	}
 
   if (property.format === 'kubephos-connection-ref') {
     const provider = property['x-kubephos-provider']
@@ -107,12 +122,13 @@ function SchemaField({name, prefix, property, value, required, onValue, applicat
   />{hint}</label>
 }
 
-function schemaValues(schema: JsonSchema, values: Record<string, unknown>): Record<string, unknown> {
+function schemaValues(schema: JsonSchema, values: Record<string, unknown>, applications: Application[]): Record<string, unknown> {
   const result: Record<string, unknown> = {}
   for (const [name, property] of Object.entries(schema.properties ?? {})) {
     if (values[name] !== undefined) result[name] = values[name]
-    else if (property.default !== undefined) result[name] = property.default
-    else if (property.enum?.length) result[name] = property.enum[0]
+		else if (property.default !== undefined) result[name] = property.default
+		else if (property.enum?.length) result[name] = property.enum[0]
+		else if (property.format === 'kubephos-application-ref' && applications.length) result[name] = applications[0].reference
   }
   return result
 }

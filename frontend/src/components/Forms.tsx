@@ -90,7 +90,7 @@ export function OperationDialog({workspace, plugins, initialPluginID, initialSpe
         workspaceId: workspace.id,
         pluginId: selected.id,
         title: new FormData(form).get('title'),
-        spec: readSchemaValues(form, selected.schema)
+		spec: readSchemaValues(form, selected.schema, 'schema', common.applications)
       })}, common.session.csrfToken)
       close()
       await common.onDone('Validation passed. Review the plan before starting.')

@@ -51,6 +51,7 @@ type Spec struct {
 	Interface    Interface      `json:"interface" yaml:"interface"`
 	ValuesSchema map[string]any `json:"valuesSchema" yaml:"valuesSchema"`
 	Defaults     map[string]any `json:"defaults" yaml:"defaults"`
+	Overlays     []Overlay      `json:"overlays,omitempty" yaml:"overlays,omitempty"`
 }
 
 type Package struct {
@@ -97,6 +98,17 @@ type LoadDriver struct {
 	Selector       map[string]string `json:"selector" yaml:"selector"`
 	TargetEndpoint string            `json:"targetEndpoint" yaml:"targetEndpoint"`
 	Replicas       int               `json:"replicas" yaml:"replicas"`
+}
+
+type Overlay struct {
+	Target     Workload           `json:"target" yaml:"target"`
+	Operations []OverlayOperation `json:"operations" yaml:"operations"`
+}
+
+type OverlayOperation struct {
+	Operation string `json:"op" yaml:"op"`
+	Path      string `json:"path" yaml:"path"`
+	ValueFrom string `json:"valueFrom,omitempty" yaml:"valueFrom,omitempty"`
 }
 
 func LoadDirectory(root string) ([]domain.CatalogApplication, error) {
@@ -299,6 +311,9 @@ func validate(descriptor Descriptor, origin string) error {
 	if err != nil {
 		return fmt.Errorf("spec.valuesSchema is invalid: %w", err)
 	}
+	if err := schema.ValidateDefinition(schemaValue); err != nil {
+		return fmt.Errorf("spec.valuesSchema is invalid: %w", err)
+	}
 	defaults, err := json.Marshal(descriptor.Spec.Defaults)
 	if err != nil {
 		return fmt.Errorf("spec.defaults is invalid: %w", err)
@@ -310,7 +325,95 @@ func validate(descriptor Descriptor, origin string) error {
 	if len(issues) > 0 {
 		return fmt.Errorf("spec.defaults does not satisfy valuesSchema at %s: %s", issues[0].Path, issues[0].Message)
 	}
+	if err := validateOverlays(descriptor); err != nil {
+		return err
+	}
 	return nil
+}
+
+func validateOverlays(descriptor Descriptor) error {
+	targets := map[string]bool{}
+	for _, component := range descriptor.Spec.Interface.Components {
+		targets[workloadKey(component.Workload)] = true
+	}
+	for _, driver := range descriptor.Spec.Interface.LoadDrivers {
+		targets[workloadKey(driver.Workload)] = true
+	}
+	for _, endpoint := range descriptor.Spec.Interface.Endpoints {
+		targets["v1|Service|"+endpoint.Service] = true
+	}
+	for position, overlay := range descriptor.Spec.Overlays {
+		path := fmt.Sprintf("spec.overlays[%d]", position)
+		if !targets[workloadKey(overlay.Target)] {
+			return fmt.Errorf("%s.target must reference a declared workload or service", path)
+		}
+		if len(overlay.Operations) == 0 || len(overlay.Operations) > 64 {
+			return fmt.Errorf("%s.operations must contain between 1 and 64 entries", path)
+		}
+		seen := map[string]bool{}
+		for operationPosition, operation := range overlay.Operations {
+			operationPath := fmt.Sprintf("%s.operations[%d]", path, operationPosition)
+			if operation.Operation != "add" && operation.Operation != "replace" && operation.Operation != "remove" {
+				return fmt.Errorf("%s.op must be add, replace or remove", operationPath)
+			}
+			if !safeOverlayPath(operation.Path) || seen[operation.Path] {
+				return fmt.Errorf("%s.path is invalid or duplicated", operationPath)
+			}
+			seen[operation.Path] = true
+			if operation.Operation == "remove" {
+				if operation.ValueFrom != "" {
+					return fmt.Errorf("%s.valueFrom is not allowed for remove", operationPath)
+				}
+				continue
+			}
+			if !validJSONPointer(operation.ValueFrom) {
+				return fmt.Errorf("%s.valueFrom must be a valid JSON pointer", operationPath)
+			}
+			if _, ok := pointerValue(descriptor.Spec.Defaults, operation.ValueFrom); !ok {
+				return fmt.Errorf("%s.valueFrom must resolve in spec.defaults", operationPath)
+			}
+		}
+	}
+	return nil
+}
+
+func workloadKey(value Workload) string {
+	return value.APIVersion + "|" + value.Kind + "|" + value.Name
+}
+
+func safeOverlayPath(value string) bool {
+	if !validJSONPointer(value) {
+		return false
+	}
+	return strings.HasPrefix(value, "/spec/") || strings.HasPrefix(value, "/metadata/labels/") || strings.HasPrefix(value, "/metadata/annotations/")
+}
+
+func validJSONPointer(value string) bool {
+	if !strings.HasPrefix(value, "/") || len(value) > 512 {
+		return false
+	}
+	for position := 0; position < len(value); position++ {
+		if value[position] == '~' && (position+1 >= len(value) || value[position+1] != '0' && value[position+1] != '1') {
+			return false
+		}
+	}
+	return true
+}
+
+func pointerValue(root map[string]any, pointer string) (any, bool) {
+	var current any = root
+	for _, token := range strings.Split(strings.TrimPrefix(pointer, "/"), "/") {
+		token = strings.ReplaceAll(strings.ReplaceAll(token, "~1", "/"), "~0", "~")
+		object, ok := current.(map[string]any)
+		if !ok {
+			return nil, false
+		}
+		current, ok = object[token]
+		if !ok {
+			return nil, false
+		}
+	}
+	return current, true
 }
 
 func validatePackage(value Package, origin string) error {

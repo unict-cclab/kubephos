@@ -1,4 +1,4 @@
-import type {JsonSchema, SchemaProperty} from './types'
+import type {Application, JsonSchema, SchemaProperty} from './types'
 
 export function formatDate(value: string): string {
   return new Intl.DateTimeFormat(undefined, {dateStyle: 'medium', timeStyle: 'short'}).format(new Date(value))
@@ -17,10 +17,23 @@ export function humanize(value: string): string {
   return value.replace(/([a-z])([A-Z])/g, '$1 $2').replace(/^./, letter => letter.toUpperCase())
 }
 
-export function readSchemaValues(form: HTMLFormElement, schema: JsonSchema, prefix = 'schema'): Record<string, unknown> {
-  const result: Record<string, unknown> = {}
-  for (const [name, property] of Object.entries(schema.properties ?? {})) {
-    const field = form.elements.namedItem(`${prefix}.${name}`)
+export function readSchemaValues(form: HTMLFormElement, schema: JsonSchema, prefix = 'schema', applications: Application[] = []): Record<string, unknown> {
+	const result: Record<string, unknown> = {}
+	for (const [name, property] of Object.entries(schema.properties ?? {})) {
+		const schemaSource = property['x-kubephos-schema-from-application']
+		if (schemaSource) {
+			const source = form.elements.namedItem(`${prefix}.${schemaSource}`)
+			const reference = source instanceof HTMLInputElement || source instanceof HTMLTextAreaElement || source instanceof HTMLSelectElement ? source.value : ''
+			const application = applications.find(item => item.reference === reference)
+			const dynamicSchema = application?.descriptor.spec?.valuesSchema
+			if (dynamicSchema) result[name] = readSchemaValues(form, dynamicSchema, `${prefix}.${name}`, applications)
+			continue
+		}
+		if (property.type === 'object' && property.properties) {
+			result[name] = readSchemaValues(form, property, `${prefix}.${name}`, applications)
+			continue
+		}
+		const field = form.elements.namedItem(`${prefix}.${name}`)
     if (!(field instanceof HTMLInputElement || field instanceof HTMLTextAreaElement || field instanceof HTMLSelectElement)) continue
     const value = readValue(field, property)
     if (value !== undefined) result[name] = value
