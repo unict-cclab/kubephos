@@ -314,26 +314,71 @@ func (plugin Plugin) Precheck(ctx context.Context, step domain.PlanStep, log plu
 	if _, err := runner.Run(ctx, cluster.Spec.Kubeconfig, manifest, "apply", "--dry-run=client", "--validate=true", "-f", "-"); err != nil {
 		return unhealthy("Scheduler component manifests failed schema validation: "+err.Error(), "schema", "rejected"), nil
 	}
-	for _, target := range binding.Spec.Targets {
-		workload, err := readWorkload(ctx, runner, cluster.Spec.Kubeconfig, application.Spec.Namespace, target)
-		if err != nil {
-			return unhealthy(err.Error(), "target", target.ID), nil
+	if category, target, err := precheckTargets(ctx, runner, cluster.Spec.Kubeconfig, application.Spec.Namespace, input, binding.Spec.Targets); err != nil {
+		value := target
+		if category == "admission" {
+			value = "rejected"
 		}
-		if err := validateUnboundWorkload(workload, target); err != nil {
-			return unhealthy(err.Error(), "target", target.ID), nil
-		}
-		if err := verifyTargetPods(ctx, runner, cluster.Spec.Kubeconfig, application.Spec.Namespace, target, effectiveScheduler(workload.Spec.Template.Spec.SchedulerName)); err != nil {
-			return unhealthy(fmt.Sprintf("Target %s is not healthy before scheduler mutation: %v", target.ID, err), "target-health", target.ID), nil
-		}
-		patch, err := bindPatch(input, workload.Spec.Template.Spec.SchedulerName)
-		if err != nil {
-			return domain.HealthReport{}, err
-		}
-		if _, err := runner.Run(ctx, cluster.Spec.Kubeconfig, patch, "patch", resourceName(target), "-n", application.Spec.Namespace, "--type=merge", "--dry-run=server", "-p", string(patch)); err != nil {
-			return unhealthy(fmt.Sprintf("Target %s failed server-side patch validation: %v", target.ID, err), "admission", "rejected"), nil
-		}
+		return unhealthy(err.Error(), category, value), nil
 	}
 	return domain.HealthReport{Status: domain.HealthHealthy, Summary: "The scheduler installation and every workload binding passed preflight", Checks: map[string]string{"api": "ready", "authorization": "cluster-admin", "application": "owned", "admission": "accepted", "targets": fmt.Sprint(len(binding.Spec.Targets)), "version": schedulerVersion}}, nil
+}
+
+func precheckTargets(ctx context.Context, runner commandRunner, kubeconfig, namespace string, input stepInput, targets []workloadTarget) (string, string, error) {
+	type targetResult struct {
+		id       string
+		category string
+		err      error
+	}
+	results := make(chan targetResult, len(targets))
+	var group sync.WaitGroup
+	for _, target := range targets {
+		target := target
+		group.Add(1)
+		go func() {
+			defer group.Done()
+			workload, err := readWorkload(ctx, runner, kubeconfig, namespace, target)
+			if err != nil {
+				results <- targetResult{target.ID, "target", err}
+				return
+			}
+			if err := validateUnboundWorkload(workload, target); err != nil {
+				results <- targetResult{target.ID, "target", err}
+				return
+			}
+			if err := verifyTargetPods(ctx, runner, kubeconfig, namespace, target, effectiveScheduler(workload.Spec.Template.Spec.SchedulerName)); err != nil {
+				results <- targetResult{target.ID, "target-health", fmt.Errorf("target %s is not healthy before scheduler mutation: %w", target.ID, err)}
+				return
+			}
+			patch, err := bindPatch(input, workload.Spec.Template.Spec.SchedulerName)
+			if err != nil {
+				results <- targetResult{target.ID, "target", err}
+				return
+			}
+			if _, err := runner.Run(ctx, kubeconfig, patch, "patch", resourceName(target), "-n", namespace, "--type=merge", "--dry-run=server", "-p", string(patch)); err != nil {
+				results <- targetResult{target.ID, "admission", fmt.Errorf("target %s failed server-side patch validation: %w", target.ID, err)}
+				return
+			}
+			results <- targetResult{id: target.ID}
+		}()
+	}
+	group.Wait()
+	close(results)
+	failures := []targetResult{}
+	for result := range results {
+		if result.err != nil {
+			failures = append(failures, result)
+		}
+	}
+	if len(failures) == 0 {
+		return "", "", nil
+	}
+	sort.Slice(failures, func(left, right int) bool { return failures[left].id < failures[right].id })
+	messages := make([]string, 0, len(failures))
+	for _, failure := range failures {
+		messages = append(messages, failure.err.Error())
+	}
+	return failures[0].category, failures[0].id, errors.New(strings.Join(messages, "; "))
 }
 
 func (plugin Plugin) Execute(ctx context.Context, step domain.PlanStep, log plugins.Logger) (json.RawMessage, error) {
