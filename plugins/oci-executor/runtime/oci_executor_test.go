@@ -115,6 +115,9 @@ func TestExecutorInstallIsVersionedRootlessAndMutualTLS(t *testing.T) {
 	if strings.Contains(command, ":2375") || strings.Contains(command, "--tls=false") {
 		t.Fatal("install command exposes an insecure Docker endpoint")
 	}
+	if !strings.Contains(command, "&& { attempt=0; until timeout 10 docker") || !strings.Contains(command, `test "$attempt" -lt 61 || exit 1`) {
+		t.Fatal("executor readiness retries are not bounded or chained to successful installation")
+	}
 }
 
 func TestExecutorRemoteCommandsHaveValidShellSyntax(t *testing.T) {

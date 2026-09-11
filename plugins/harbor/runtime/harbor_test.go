@@ -169,6 +169,9 @@ func TestInstallerIsVersionedAndDigestVerified(t *testing.T) {
 	if strings.Contains(command, "http://") || strings.Contains(command, "curl -k") || strings.Contains(command, "curl --insecure") || !strings.Contains(command, "subjectAltName=IP:10.10.0.12") || !strings.Contains(command, "--cacert "+tlsPath+"/ca.crt") || !strings.Contains(command, caMarker) {
 		t.Fatal("installer command does not enforce verifiable registry TLS")
 	}
+	if !strings.Contains(command, "&& { attempt=0; until curl --connect-timeout 3 --max-time 10") || !strings.Contains(command, `test "$attempt" -lt 61 || exit 1`) {
+		t.Fatal("registry readiness retries are not bounded or chained to successful installation")
+	}
 }
 
 func TestRemoteCommandsHaveValidShellSyntax(t *testing.T) {

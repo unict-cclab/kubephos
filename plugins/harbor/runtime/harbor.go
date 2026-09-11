@@ -479,7 +479,7 @@ func installCommand(marker, address, adminPassword, databasePassword, robotSecre
 	parts = append(parts,
 		"cd "+installPath+" && sudo ./install.sh",
 		"rm -f /tmp/kubephos-harbor.tgz",
-		"attempt=0; until curl --cacert "+tlsPath+"/ca.crt -fsS https://"+address+"/api/v2.0/health | grep -q '\"status\":\"healthy\"'; do attempt=$((attempt + 1)); test \"$attempt\" -lt 61; sleep 5; done",
+		"{ attempt=0; until curl --connect-timeout 3 --max-time 10 --cacert "+tlsPath+"/ca.crt -fsS https://"+address+"/api/v2.0/health | grep -q '\"status\":\"healthy\"'; do attempt=$((attempt + 1)); test \"$attempt\" -lt 61 || exit 1; sleep 5; done; }",
 		"test \"$(curl --cacert "+tlsPath+"/ca.crt -sS -o /tmp/kubephos-project.json -w '%{http_code}' -u "+shellQuote("admin:"+adminPassword)+" -H 'Content-Type: application/json' -d "+shellQuote(projectRequest)+" https://"+address+"/api/v2.0/projects)\" = 201",
 		"test \"$(curl --cacert "+tlsPath+"/ca.crt -sS -o /tmp/kubephos-releases.json -w '%{http_code}' -u "+shellQuote("admin:"+adminPassword)+" -H 'Content-Type: application/json' -d "+shellQuote(releasesRequest)+" https://"+address+"/api/v2.0/projects)\" = 201",
 		"printf '\\n"+robotMarker+"'",
