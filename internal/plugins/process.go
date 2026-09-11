@@ -14,6 +14,7 @@ import (
 	"reflect"
 	"regexp"
 	"strings"
+	"syscall"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -454,6 +455,17 @@ func (p *Process) invoke(parent context.Context, command string, input, output a
 		stdout, messages, processErr = p.runner.Run(ctx, p.image, command, payload, contains(p.manifest.Permissions, "network.egress"), log)
 	} else {
 		process := exec.CommandContext(ctx, p.executable, command)
+		process.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+		process.Cancel = func() error {
+			if process.Process == nil {
+				return os.ErrProcessDone
+			}
+			if err := syscall.Kill(-process.Process.Pid, syscall.SIGKILL); errors.Is(err, syscall.ESRCH) {
+				return os.ErrProcessDone
+			} else {
+				return err
+			}
+		}
 		process.Env = withoutRuntimeEnvironment(os.Environ())
 		releaseEnvironment := func() {}
 		if contains(p.manifest.Permissions, "executor.build") && (command == "precheck" || command == "execute" || command == "verify") {

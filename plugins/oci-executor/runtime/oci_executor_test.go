@@ -24,7 +24,7 @@ import (
 
 func TestManagedExecutorLifecycle(t *testing.T) {
 	runner := &fakeRunner{}
-	plugin := Plugin{Runner: runner}
+	plugin := Plugin{Runner: runner, endpointVerifier: func(context.Context, machine, executorCredential) error { return nil }}
 	spec := json.RawMessage(`{"machineSetRef":"art_machines","machineAccessRef":"art_access","executorName":"build-executor"}`)
 	if report := plugin.Validate(context.Background(), Invocation{Input: spec}); !report.Valid {
 		t.Fatalf("unexpected validation failure: %#v", report.Issues)
@@ -106,7 +106,7 @@ func TestManagedExecutorRejectsInvalidTopology(t *testing.T) {
 
 func TestExecutorInstallIsVersionedRootlessAndMutualTLS(t *testing.T) {
 	command := installCommand("marker", testMachine())
-	required := []string{dockerPackageVersion, dockerKeyFingerprint, "dockerd-rootless-setuptool.sh install", "DOCKERD_ROOTLESS_ROOTLESSKIT_FLAGS", "--tlsverify", "--tlscacert", "--tlscert", "--tlskey", "tcp://10.10.0.13:2376", "disable --now docker.service docker.socket containerd.service"}
+	required := []string{dockerPackageVersion, dockerKeyFingerprint, aptNetworkOptions, "dockerd-rootless-setuptool.sh install", "socat", "OPENSSL-LISTEN:2376", "UNIX-CONNECT:%t/docker.sock", "kubephos-oci-proxy.service", "journalctl --user -u docker.service", "journalctl --user -u kubephos-oci-proxy.service", "disable --now docker.service docker.socket containerd.service"}
 	for _, value := range required {
 		if !strings.Contains(command, value) {
 			t.Fatalf("install command does not contain %q", value)
@@ -115,17 +115,19 @@ func TestExecutorInstallIsVersionedRootlessAndMutualTLS(t *testing.T) {
 	if strings.Contains(command, ":2375") || strings.Contains(command, "--tls=false") {
 		t.Fatal("install command exposes an insecure Docker endpoint")
 	}
-	if !strings.Contains(command, "&& { attempt=0; until timeout 10 docker") || !strings.Contains(command, `test "$attempt" -lt 61 || exit 1`) {
+	if strings.Contains(command, "dockerd-rootless.sh -H unix://%t/docker.sock -H tcp://") {
+		t.Fatal("rootless daemon must not expose a plaintext TCP listener")
+	}
+	if !strings.Contains(command, "&& { attempt=0; until sudo -u") || !strings.Contains(command, `test "$attempt" -lt 61 || exit 1`) {
 		t.Fatal("executor readiness retries are not bounded or chained to successful installation")
 	}
 }
 
 func TestExecutorRemoteCommandsHaveValidShellSyntax(t *testing.T) {
-	credential := testCredential(t)
 	commands := []string{
 		installPrecheckCommand("ubuntu"),
 		installCommand("marker", testMachine()),
-		readinessCommand("marker", testMachine(), credential),
+		readinessCommand("marker", testMachine()),
 		cleanupPrecheckCommand("marker", "ubuntu"),
 		cleanupCommand("marker", "ubuntu"),
 		cleanupVerifyCommand("ubuntu"),

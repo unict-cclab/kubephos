@@ -10,8 +10,12 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"errors"
+	"fmt"
+	"io"
 	"net"
+	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -28,6 +32,7 @@ const (
 	dockerVersion        = "29.8.0"
 	dockerPackageVersion = "5:29.8.0-1~ubuntu.24.04~noble"
 	dockerKeyFingerprint = "9DC858229FC7DD38854AE2D88D81803C0EBFCD88"
+	aptNetworkOptions    = "-o Acquire::Retries=4 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20"
 	markerFile           = "/var/lib/kubephos/oci-executor.marker"
 	dockerKeyPath        = "/etc/apt/keyrings/docker.asc"
 	dockerSourcePath     = "/etc/apt/sources.list.d/docker.sources"
@@ -38,7 +43,8 @@ const (
 )
 
 type Plugin struct {
-	Runner commandRunner
+	Runner           commandRunner
+	endpointVerifier func(context.Context, machine, executorCredential) error
 }
 
 type Invocation struct {
@@ -282,8 +288,11 @@ func (plugin Plugin) Verify(ctx context.Context, step domain.PlanStep, raw json.
 	if err := validateResult(input, target, value); err != nil {
 		return unhealthy(err.Error(), "artifact", "invalid"), nil
 	}
-	if _, err := plugin.runner().Run(ctx, target, access, readinessCommand(input.Marker, target, value.ExecutorCredential)); err != nil {
+	if _, err := plugin.runner().Run(ctx, target, access, readinessCommand(input.Marker, target)); err != nil {
 		return unhealthy("OCI-executor health gate failed: "+err.Error(), "executor", "unhealthy"), nil
+	}
+	if err := plugin.verifyEndpoint(ctx, target, value.ExecutorCredential); err != nil {
+		return unhealthy("OCI-executor remote TLS gate failed: "+err.Error(), "executor", "unreachable"), nil
 	}
 	if err := log("info", "Executor version, rootless isolation, mutual TLS and remote API are verified"); err != nil {
 		return domain.HealthReport{}, err
@@ -309,6 +318,13 @@ func (plugin Plugin) runner() commandRunner {
 		return plugin.Runner
 	}
 	return &sshRunner{client: pluginssh.New()}
+}
+
+func (plugin Plugin) verifyEndpoint(ctx context.Context, target machine, credential executorCredential) error {
+	if plugin.endpointVerifier != nil {
+		return plugin.endpointVerifier(ctx, target, credential)
+	}
+	return verifyRemoteEndpoint(ctx, target, credential)
 }
 
 func resolve(step domain.PlanStep) (stepInput, machineSet, machineAccess, error) {
@@ -416,7 +432,7 @@ func installPrecheckCommand(user string) string {
 		{"an existing Docker installation was detected", "! command -v docker >/dev/null && test ! -e /var/run/docker.sock"},
 		{"the executor ownership marker already exists", "test ! -e " + markerFile},
 		{"the Docker repository configuration already exists", "test ! -e " + dockerKeyPath + " && test ! -e " + dockerSourcePath},
-		{"the rootless service configuration already exists", "executor_home=$(getent passwd " + shellQuote(user) + " | cut -d: -f6) && test -n \"$executor_home\" && test ! -e \"$executor_home/.config/systemd/user/docker.service\" && test ! -e \"$executor_home/.local/share/docker\""},
+		{"the rootless service configuration already exists", "executor_home=$(getent passwd " + shellQuote(user) + " | cut -d: -f6) && test -n \"$executor_home\" && test ! -e \"$executor_home/.config/systemd/user/docker.service\" && test ! -e \"$executor_home/.config/systemd/user/kubephos-oci-proxy.service\" && test ! -e \"$executor_home/.local/share/docker\""},
 		{"unprivileged user namespaces are disabled", "test ! -e /proc/sys/kernel/unprivileged_userns_clone || test \"$(cat /proc/sys/kernel/unprivileged_userns_clone)\" = 1"},
 		{"no user namespaces are available", "test ! -e /proc/sys/user/max_user_namespaces || test \"$(cat /proc/sys/user/max_user_namespaces)\" -gt 0"},
 		{"at least 2 CPU cores are required", "test \"$(nproc)\" -ge 2"},
@@ -431,19 +447,20 @@ func installPrecheckCommand(user string) string {
 func installCommand(marker string, target machine) string {
 	user := shellQuote(target.SSHUser)
 	address := target.Address
-	serviceOverride := "[Service]\nEnvironment=\"DOCKERD_ROOTLESS_ROOTLESSKIT_FLAGS=-p 0.0.0.0:2376:2376/tcp\"\nExecStart=\nExecStart=/usr/bin/dockerd-rootless.sh -H unix://%t/docker.sock -H tcp://0.0.0.0:2376 --tlsverify --tlscacert=%h/.config/docker/tls/ca.pem --tlscert=%h/.config/docker/tls/server-cert.pem --tlskey=%h/.config/docker/tls/server-key.pem\n"
+	serviceOverride := "[Service]\nExecStart=\nExecStart=/usr/bin/dockerd-rootless.sh -H unix://%t/docker.sock\n"
+	proxyUnit := "[Unit]\nDescription=KubePhos OCI mTLS proxy\nAfter=docker.service\nRequires=docker.service\n\n[Service]\nExecStart=/usr/bin/socat OPENSSL-LISTEN:2376,reuseaddr,fork,cert=%h/.config/docker/tls/server-cert.pem,key=%h/.config/docker/tls/server-key.pem,cafile=%h/.config/docker/tls/ca.pem,verify=1 UNIX-CONNECT:%t/docker.sock\nRestart=always\nRestartSec=2\n\n[Install]\nWantedBy=default.target\n"
 	serverExtensions := "subjectAltName=IP:" + address + "\nextendedKeyUsage=serverAuth\n"
 	clientExtensions := "extendedKeyUsage=clientAuth\n"
 	parts := []string{
-		"sudo apt-get update -q",
-		"sudo DEBIAN_FRONTEND=noninteractive apt-get install -y ca-certificates curl gnupg uidmap dbus-user-session slirp4netns fuse-overlayfs",
+		"sudo apt-get " + aptNetworkOptions + " update -q",
+		"sudo DEBIAN_FRONTEND=noninteractive apt-get " + aptNetworkOptions + " install -y ca-certificates curl gnupg uidmap dbus-user-session slirp4netns fuse-overlayfs socat",
 		"curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /tmp/kubephos-docker.asc",
 		"test \"$(gpg --show-keys --with-colons /tmp/kubephos-docker.asc | awk -F: '$1 == \"fpr\" {print $10; exit}')\" = " + dockerKeyFingerprint,
 		"sudo install -m 0644 /tmp/kubephos-docker.asc " + dockerKeyPath,
 		"printf '%s\\n' 'Types: deb' 'URIs: https://download.docker.com/linux/ubuntu' 'Suites: noble' 'Components: stable' 'Architectures: amd64' 'Signed-By: " + dockerKeyPath + "' | sudo tee " + dockerSourcePath + " >/dev/null",
-		"sudo apt-get update -q",
+		"sudo apt-get " + aptNetworkOptions + " update -q",
 		"apt-cache madison docker-ce | awk '{print $3}' | grep -Fxq " + shellQuote(dockerPackageVersion),
-		"sudo DEBIAN_FRONTEND=noninteractive apt-get install -y docker-ce=" + shellQuote(dockerPackageVersion) + " docker-ce-cli=" + shellQuote(dockerPackageVersion) + " containerd.io docker-buildx-plugin docker-ce-rootless-extras=" + shellQuote(dockerPackageVersion),
+		"sudo DEBIAN_FRONTEND=noninteractive apt-get " + aptNetworkOptions + " install -y docker-ce=" + shellQuote(dockerPackageVersion) + " docker-ce-cli=" + shellQuote(dockerPackageVersion) + " containerd.io docker-buildx-plugin docker-ce-rootless-extras=" + shellQuote(dockerPackageVersion),
 		"sudo systemctl disable --now docker.service docker.socket containerd.service",
 		"sudo rm -f /var/run/docker.sock",
 		"sudo install -d -m 0755 /var/lib/kubephos",
@@ -466,12 +483,15 @@ func installCommand(marker string, target machine) string {
 		"printf '%s' " + shellQuote(clientExtensions) + " | sudo tee \"$executor_home/.config/docker/tls/client.ext\" >/dev/null",
 		"sudo openssl x509 -req -sha256 -days 825 -in \"$executor_home/.config/docker/tls/client.csr\" -CA \"$executor_home/.config/docker/tls/ca.pem\" -CAkey \"$executor_home/.config/docker/tls/ca-key.pem\" -CAcreateserial -extfile \"$executor_home/.config/docker/tls/client.ext\" -out \"$executor_home/.config/docker/tls/client-cert.pem\"",
 		"printf '%s' " + shellQuote(serviceOverride) + " | sudo -u " + user + " tee \"$executor_home/.config/systemd/user/docker.service.d/kubephos.conf\" >/dev/null",
+		"printf '%s' " + shellQuote(proxyUnit) + " | sudo -u " + user + " tee \"$executor_home/.config/systemd/user/kubephos-oci-proxy.service\" >/dev/null",
 		"sudo chown -R " + user + ":" + user + " \"$executor_home/.config/docker\" \"$executor_home/.config/systemd/user\"",
 		"sudo chmod 0600 \"$executor_home/.config/docker/tls/ca-key.pem\" \"$executor_home/.config/docker/tls/server-key.pem\" \"$executor_home/.config/docker/tls/client-key.pem\"",
 		"sudo -u " + user + " env XDG_RUNTIME_DIR=\"$executor_runtime\" DBUS_SESSION_BUS_ADDRESS=unix:path=\"$executor_runtime/bus\" systemctl --user daemon-reload",
-		"sudo -u " + user + " env XDG_RUNTIME_DIR=\"$executor_runtime\" DBUS_SESSION_BUS_ADDRESS=unix:path=\"$executor_runtime/bus\" systemctl --user restart docker.service",
-		"{ attempt=0; until timeout 10 docker --host tcp://" + address + ":2376 --tlsverify --tlscacert \"$executor_home/.config/docker/tls/ca.pem\" --tlscert \"$executor_home/.config/docker/tls/client-cert.pem\" --tlskey \"$executor_home/.config/docker/tls/client-key.pem\" info --format '{{json .SecurityOptions}}' | grep -q rootless; do attempt=$((attempt + 1)); test \"$attempt\" -lt 61 || exit 1; sleep 2; done; }",
-		"test \"$(docker --host tcp://" + address + ":2376 --tlsverify --tlscacert \"$executor_home/.config/docker/tls/ca.pem\" --tlscert \"$executor_home/.config/docker/tls/client-cert.pem\" --tlskey \"$executor_home/.config/docker/tls/client-key.pem\" version --format '{{.Server.Version}}')\" = " + dockerVersion,
+		"sudo -u " + user + " env XDG_RUNTIME_DIR=\"$executor_runtime\" DBUS_SESSION_BUS_ADDRESS=unix:path=\"$executor_runtime/bus\" systemctl --user restart docker.service || { sudo -u " + user + " env XDG_RUNTIME_DIR=\"$executor_runtime\" DBUS_SESSION_BUS_ADDRESS=unix:path=\"$executor_runtime/bus\" systemctl --user status docker.service --no-pager; sudo -u " + user + " env XDG_RUNTIME_DIR=\"$executor_runtime\" DBUS_SESSION_BUS_ADDRESS=unix:path=\"$executor_runtime/bus\" journalctl --user -u docker.service --no-pager -n 80; exit 1; }",
+		"{ attempt=0; until sudo -u " + user + " env XDG_RUNTIME_DIR=\"$executor_runtime\" docker --host unix://\"$executor_runtime/docker.sock\" info --format '{{json .SecurityOptions}}' | grep -q rootless; do attempt=$((attempt + 1)); test \"$attempt\" -lt 61 || exit 1; sleep 2; done; }",
+		"test \"$(sudo -u " + user + " env XDG_RUNTIME_DIR=\"$executor_runtime\" docker --host unix://\"$executor_runtime/docker.sock\" version --format '{{.Server.Version}}')\" = " + dockerVersion,
+		"sudo -u " + user + " env XDG_RUNTIME_DIR=\"$executor_runtime\" DBUS_SESSION_BUS_ADDRESS=unix:path=\"$executor_runtime/bus\" systemctl --user enable --now kubephos-oci-proxy.service || { sudo -u " + user + " env XDG_RUNTIME_DIR=\"$executor_runtime\" DBUS_SESSION_BUS_ADDRESS=unix:path=\"$executor_runtime/bus\" systemctl --user status kubephos-oci-proxy.service --no-pager; sudo -u " + user + " env XDG_RUNTIME_DIR=\"$executor_runtime\" DBUS_SESSION_BUS_ADDRESS=unix:path=\"$executor_runtime/bus\" journalctl --user -u kubephos-oci-proxy.service --no-pager -n 80; exit 1; }",
+		"{ attempt=0; until sudo ss -ltn 'sport = :2376' | grep -q LISTEN; do attempt=$((attempt + 1)); test \"$attempt\" -lt 31 || exit 1; sleep 1; done; }",
 		"printf '\\n" + caMarker + "'",
 		"sudo base64 -w0 \"$executor_home/.config/docker/tls/ca.pem\"",
 		"printf '\\n" + certMarker + "'",
@@ -483,12 +503,9 @@ func installCommand(marker string, target machine) string {
 	return strings.Join(parts, " && ")
 }
 
-func readinessCommand(marker string, target machine, credential executorCredential) string {
-	ca := base64.StdEncoding.EncodeToString([]byte(credential.Spec.CA))
-	certificate := base64.StdEncoding.EncodeToString([]byte(credential.Spec.Certificate))
-	privateKey := base64.StdEncoding.EncodeToString([]byte(credential.Spec.PrivateKey))
-	prefix := "umask 077; verify_dir=$(mktemp -d /tmp/kubephos-executor-verify.XXXXXX); trap 'rm -rf \"$verify_dir\"' EXIT; printf '%s' " + shellQuote(ca) + " | base64 -d >\"$verify_dir/ca.pem\"; printf '%s' " + shellQuote(certificate) + " | base64 -d >\"$verify_dir/cert.pem\"; printf '%s' " + shellQuote(privateKey) + " | base64 -d >\"$verify_dir/key.pem\""
-	docker := "docker --host tcp://" + target.Address + ":2376 --tlsverify --tlscacert \"$verify_dir/ca.pem\" --tlscert \"$verify_dir/cert.pem\" --tlskey \"$verify_dir/key.pem\""
+func readinessCommand(marker string, target machine) string {
+	user := shellQuote(target.SSHUser)
+	docker := "sudo -u " + user + " env XDG_RUNTIME_DIR=\"$executor_runtime\" docker --host unix://\"$executor_runtime/docker.sock\""
 	checks := []struct {
 		name    string
 		command string
@@ -499,7 +516,38 @@ func readinessCommand(marker string, target machine, credential executorCredenti
 		{"the executor version does not match the managed profile", "test \"$(" + docker + " version --format '{{.Server.Version}}')\" = " + dockerVersion},
 		{"the executor is not rootless", docker + " info --format '{{json .SecurityOptions}}' | grep -q rootless"},
 	}
-	return prefix + "; " + guardedCommands(checks)
+	return "executor_uid=$(id -u " + user + ") && executor_runtime=/run/user/$executor_uid && " + guardedCommands(checks)
+}
+
+func verifyRemoteEndpoint(ctx context.Context, target machine, credential executorCredential) error {
+	pair, err := tls.X509KeyPair([]byte(credential.Spec.Certificate), []byte(credential.Spec.PrivateKey))
+	if err != nil {
+		return errors.New("client identity is invalid")
+	}
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM([]byte(credential.Spec.CA)) {
+		return errors.New("executor CA is invalid")
+	}
+	transport := &http.Transport{
+		TLSClientConfig: &tls.Config{Certificates: []tls.Certificate{pair}, RootCAs: pool, ServerName: target.Address, MinVersion: tls.VersionTLS12},
+		DialContext:     (&net.Dialer{Timeout: 5 * time.Second}).DialContext,
+	}
+	defer transport.CloseIdleConnections()
+	client := &http.Client{Transport: transport, Timeout: 10 * time.Second}
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://"+net.JoinHostPort(target.Address, strconv.Itoa(executorPort))+"/_ping", nil)
+	if err != nil {
+		return err
+	}
+	response, err := client.Do(request)
+	if err != nil {
+		return fmt.Errorf("remote API handshake failed: %w", err)
+	}
+	defer response.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(response.Body, 16))
+	if err != nil || response.StatusCode != http.StatusOK || strings.TrimSpace(string(body)) != "OK" {
+		return errors.New("remote API did not return the Docker ping response")
+	}
+	return nil
 }
 
 func cleanupPrecheckCommand(marker, user string) string {
@@ -507,11 +555,11 @@ func cleanupPrecheckCommand(marker, user string) string {
 }
 
 func cleanupCommand(marker, user string) string {
-	return "if test ! -e " + markerFile + "; then exit 0; fi && sudo test \"$(sudo cat " + markerFile + ")\" = " + shellQuote(marker) + " && executor_uid=$(id -u " + shellQuote(user) + ") && executor_home=$(getent passwd " + shellQuote(user) + " | cut -d: -f6) && executor_runtime=/run/user/$executor_uid && { sudo -u " + shellQuote(user) + " env HOME=\"$executor_home\" XDG_RUNTIME_DIR=\"$executor_runtime\" DBUS_SESSION_BUS_ADDRESS=unix:path=\"$executor_runtime/bus\" PATH=/usr/bin:/bin dockerd-rootless-setuptool.sh uninstall --force >/dev/null 2>&1 || true; } && sudo rm -rf -- \"$executor_home/.local/share/docker\" \"$executor_home/.config/docker\" \"$executor_home/.config/systemd/user/docker.service\" \"$executor_home/.config/systemd/user/docker.service.d\" && sudo rm -f " + markerFile + " " + dockerSourcePath + " " + dockerKeyPath + " && sudo apt-get purge -y docker-ce docker-ce-cli docker-ce-rootless-extras docker-buildx-plugin containerd.io >/dev/null && sudo apt-get update -q"
+	return "if test ! -e " + markerFile + "; then exit 0; fi && sudo test \"$(sudo cat " + markerFile + ")\" = " + shellQuote(marker) + " && executor_uid=$(id -u " + shellQuote(user) + ") && executor_home=$(getent passwd " + shellQuote(user) + " | cut -d: -f6) && executor_runtime=/run/user/$executor_uid && { sudo -u " + shellQuote(user) + " env XDG_RUNTIME_DIR=\"$executor_runtime\" DBUS_SESSION_BUS_ADDRESS=unix:path=\"$executor_runtime/bus\" systemctl --user disable --now kubephos-oci-proxy.service >/dev/null 2>&1 || true; } && { sudo -u " + shellQuote(user) + " env HOME=\"$executor_home\" XDG_RUNTIME_DIR=\"$executor_runtime\" DBUS_SESSION_BUS_ADDRESS=unix:path=\"$executor_runtime/bus\" PATH=/usr/bin:/bin dockerd-rootless-setuptool.sh uninstall --force >/dev/null 2>&1 || true; } && sudo rm -rf -- \"$executor_home/.local/share/docker\" \"$executor_home/.config/docker\" \"$executor_home/.config/systemd/user/docker.service\" \"$executor_home/.config/systemd/user/docker.service.d\" && sudo rm -f " + markerFile + " " + dockerSourcePath + " " + dockerKeyPath + " && sudo apt-get " + aptNetworkOptions + " purge -y docker-ce docker-ce-cli docker-ce-rootless-extras docker-buildx-plugin containerd.io >/dev/null && sudo apt-get " + aptNetworkOptions + " update -q"
 }
 
 func cleanupVerifyCommand(user string) string {
-	return "executor_home=$(getent passwd " + shellQuote(user) + " | cut -d: -f6) && test ! -e " + markerFile + " && test ! -e " + dockerSourcePath + " && test ! -e " + dockerKeyPath + " && test ! -e \"$executor_home/.config/systemd/user/docker.service\" && test ! -e \"$executor_home/.local/share/docker\" && ! sudo ss -ltn 'sport = :2376' | grep -q LISTEN"
+	return "executor_home=$(getent passwd " + shellQuote(user) + " | cut -d: -f6) && test ! -e " + markerFile + " && test ! -e " + dockerSourcePath + " && test ! -e " + dockerKeyPath + " && test ! -e \"$executor_home/.config/systemd/user/docker.service\" && test ! -e \"$executor_home/.config/systemd/user/kubephos-oci-proxy.service\" && test ! -e \"$executor_home/.local/share/docker\" && ! sudo ss -ltn 'sport = :2376' | grep -q LISTEN"
 }
 
 func guardedCommands(checks []struct {
