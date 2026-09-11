@@ -132,6 +132,17 @@ func validateRule(rule map[string]any, path string) error {
 			return fmt.Errorf("%s.writeOnly must be a boolean", path)
 		}
 	}
+	if value, exists := rule["x-kubephos-primary-action"]; exists {
+		enabled, ok := value.(bool)
+		if !ok {
+			return fmt.Errorf("%s.x-kubephos-primary-action must be a boolean", path)
+		}
+		if enabled {
+			if _, ok := rule["enum"].([]any); !ok || (typeName != "string" && typeName != "integer" && typeName != "number") {
+				return fmt.Errorf("%s.x-kubephos-primary-action requires a string or numeric enum", path)
+			}
+		}
+	}
 	for _, keyword := range []string{"minimum", "maximum"} {
 		if value, exists := rule[keyword]; exists {
 			if _, ok := number(value); !ok || (typeName != "" && typeName != "integer" && typeName != "number") {

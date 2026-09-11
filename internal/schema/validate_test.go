@@ -58,3 +58,14 @@ func TestValidateDefinitionRejectsUnsupportedAndInvalidRules(t *testing.T) {
 		}
 	}
 }
+
+func TestValidateDefinitionChecksPrimaryActions(t *testing.T) {
+	valid := json.RawMessage(`{"type":"object","properties":{"action":{"type":"string","enum":["start","stop"],"x-kubephos-primary-action":true}}}`)
+	if err := ValidateDefinition(valid); err != nil {
+		t.Fatalf("expected primary action to be valid: %v", err)
+	}
+	invalid := json.RawMessage(`{"type":"object","properties":{"action":{"type":"string","x-kubephos-primary-action":true}}}`)
+	if err := ValidateDefinition(invalid); err == nil {
+		t.Fatal("expected primary action without enum to fail")
+	}
+}

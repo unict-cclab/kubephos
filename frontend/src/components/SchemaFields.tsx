@@ -4,13 +4,14 @@ import {humanize} from '../lib'
 interface SchemaFieldsProps {
   schema: JsonSchema
   prefix?: string
+  values?: Record<string, unknown>
   applications: Application[]
   artifacts: Artifact[]
   connections: Connection[]
   credentials: Credential[]
 }
 
-export function SchemaFields({schema, prefix = 'schema', applications, artifacts, connections, credentials}: SchemaFieldsProps) {
+export function SchemaFields({schema, prefix = 'schema', values = {}, applications, artifacts, connections, credentials}: SchemaFieldsProps) {
   const required = new Set(schema.required ?? [])
   return <div className="schema-fields">
     {Object.entries(schema.properties ?? {}).map(([name, property]) => <SchemaField
@@ -18,6 +19,7 @@ export function SchemaFields({schema, prefix = 'schema', applications, artifacts
       name={name}
       prefix={prefix}
       property={property}
+      value={values[name]}
       required={required.has(name)}
       applications={applications}
       artifacts={artifacts}
@@ -30,10 +32,11 @@ export function SchemaFields({schema, prefix = 'schema', applications, artifacts
 interface SchemaFieldProps extends Omit<SchemaFieldsProps, 'schema'> {
   name: string
   property: SchemaProperty
+  value?: unknown
   required: boolean
 }
 
-function SchemaField({name, prefix, property, required, applications, artifacts, connections, credentials}: SchemaFieldProps) {
+function SchemaField({name, prefix, property, value, required, applications, artifacts, connections, credentials}: SchemaFieldProps) {
   const title = property.title ?? humanize(name)
   const fieldName = `${prefix}.${name}`
   const wide = ['string', 'object', 'array'].includes(property.type ?? 'string') ? 'wide' : ''
@@ -62,23 +65,23 @@ function SchemaField({name, prefix, property, required, applications, artifacts,
   }
 
   if (choices) {
-    return <label className={wide}>{title}<select name={fieldName} required={required} disabled={!choices.length} defaultValue={String(property.default ?? choices[0]?.value ?? '')}>
+    return <label className={wide}>{title}<select name={fieldName} required={required} disabled={!choices.length} defaultValue={String(value ?? property.default ?? choices[0]?.value ?? '')}>
       {choices.length ? choices.map(choice => <option key={choice.value} value={choice.value}>{choice.label}</option>) : <option value="">No compatible value available</option>}
     </select>{hint}</label>
   }
   if (property.type === 'boolean') {
-    return <label className="checkbox-field wide"><input name={fieldName} type="checkbox" defaultChecked={Boolean(property.default)} />{title}{hint}</label>
+    return <label className="checkbox-field wide"><input name={fieldName} type="checkbox" defaultChecked={Boolean(value ?? property.default)} />{title}{hint}</label>
   }
   if (property.type === 'object' || property.type === 'array') {
-    const value = property.default === undefined ? '' : JSON.stringify(property.default, null, 2)
-    return <label className="wide">{title}<textarea name={fieldName} rows={4} required={required} defaultValue={value} />{hint}</label>
+    const serialized = value === undefined && property.default === undefined ? '' : JSON.stringify(value ?? property.default, null, 2)
+    return <label className="wide">{title}<textarea name={fieldName} rows={4} required={required} defaultValue={serialized} />{hint}</label>
   }
   const numeric = property.type === 'integer' || property.type === 'number'
   return <label className={wide}>{title}<input
     name={fieldName}
     type={numeric ? 'number' : property.writeOnly ? 'password' : 'text'}
     required={required}
-    defaultValue={property.default === undefined ? '' : String(property.default)}
+    defaultValue={value === undefined && property.default === undefined ? '' : String(value ?? property.default)}
     min={property.minimum}
     max={property.maximum}
     minLength={property.minLength}

@@ -45,4 +45,17 @@ describe('SchemaFields', () => {
     expect(screen.getByRole('combobox', {name: 'Machines'})).toHaveValue('art_machines')
     expect(screen.getAllByRole('option')).toHaveLength(1)
   })
+
+  it('prefills schema fields from a generic action preset', () => {
+    render(<form><SchemaFields
+      schema={{type: 'object', properties: {action: {type: 'string', title: 'Action', enum: ['start', 'stop'], default: 'start'}, replicas: {type: 'integer', title: 'Replicas', default: 1}}}}
+      values={{action: 'stop', replicas: 4}}
+      applications={[]}
+      artifacts={[]}
+      connections={[]}
+      credentials={[]}
+    /></form>)
+    expect(screen.getByRole('combobox', {name: 'Action'})).toHaveValue('stop')
+    expect(screen.getByRole('spinbutton', {name: 'Replicas'})).toHaveValue(4)
+  })
 })

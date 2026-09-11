@@ -31,6 +31,7 @@ export interface SchemaProperty {
   'x-kubephos-required-trait'?: string
   'x-kubephos-artifact-type'?: string
   'x-kubephos-artifact-version'?: string
+  'x-kubephos-primary-action'?: boolean
 }
 
 export interface JsonSchema {

@@ -56,6 +56,7 @@ spec:
       action:
         type: string
         title: Action
+        x-kubephos-primary-action: true
         enum:
           - start
           - stop

@@ -501,6 +501,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .contract-line span { margin-right: 6px; border-radius: 4px; padding: 3px 5px; background: #edf1ed; color: var(--green); font-family: Inter, ui-sans-serif, sans-serif; font-size: 8px; font-weight: 900; }
 .flow-copy > small { display: block; margin-top: 7px; color: #89938c; font-size: 9px; }
 .flow-row > .button { align-self: center; }
+.quick-actions { display: flex; align-self: center; gap: 6px; border: 1px solid var(--line); border-radius: 11px; padding: 5px; background: #f7f9f7; }
+.quick-actions .button { min-width: 58px; text-transform: capitalize; }
 .auth-modal::backdrop { background: #111814; }
 .auth-modal h2 { margin: 6px 0 8px; font-size: 28px; }
 .auth-brand { display: flex; align-items: center; gap: 11px; margin-bottom: 24px; }
@@ -610,6 +612,7 @@ summary { color: var(--muted); font-size: 12px; font-weight: 750; cursor: pointe
   .flow-stats div { flex: 1; min-width: 0; }
   .flow-row { grid-template-columns: 18px 1fr; }
   .flow-row > .button { grid-column: 2; justify-self: start; }
+  .quick-actions { grid-column: 2; justify-self: start; flex-wrap: wrap; }
   .audit-row { grid-template-columns: 42px 1fr auto; }
   .audit-row time { display: none; }
   .results-heading { align-items: stretch; flex-direction: column; }

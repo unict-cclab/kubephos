@@ -166,12 +166,12 @@ func (d *DockerRunner) Run(ctx context.Context, image, command string, payload [
 		return nil, nil, err
 	}
 	lines := make(chan []string, 1)
-	go scanLines(stderr, lines, log)
 	if err := process.Start(); err != nil {
 		return nil, nil, err
 	}
-	processErr := process.Wait()
+	go scanLines(stderr, lines, log)
 	messages := <-lines
+	processErr := process.Wait()
 	cleanupContext, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	_ = exec.CommandContext(cleanupContext, d.binary, append(d.connectionArguments(), "rm", "-f", name)...).Run()

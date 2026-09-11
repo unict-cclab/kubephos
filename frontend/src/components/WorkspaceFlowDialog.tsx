@@ -9,7 +9,7 @@ interface Props {
   artifacts: Artifact[]
   operations: Operation[]
   close: () => void
-  configure: (pluginID: string) => void
+  configure: (pluginID: string, preset?: Record<string, unknown>) => void
 }
 
 interface FlowItem {
@@ -41,10 +41,11 @@ function FlowStat({value, label}: {value: number; label: string}) {
   return <div><strong>{value}</strong><span>{label}</span></div>
 }
 
-function FlowRow({item, configure}: {item: FlowItem; configure: (pluginID: string) => void}) {
+function FlowRow({item, configure}: {item: FlowItem; configure: (pluginID: string, preset?: Record<string, unknown>) => void}) {
   const inputText = item.plugin.artifactInputs?.length ? item.plugin.artifactInputs.map(contractName).join(', ') : 'No typed input'
   const outputText = item.plugin.artifactOutputs?.length ? item.plugin.artifactOutputs.map(contractName).join(', ') : 'No typed output'
   const status = item.state === 'active' ? 'Running' : item.state === 'executed' ? 'Output available' : item.interactive && item.state === 'available' ? 'Interactive' : item.state === 'available' ? 'Available' : 'Waiting'
+  const primaryAction = Object.entries(item.plugin.schema.properties ?? {}).find(([, property]) => property['x-kubephos-primary-action'] && property.enum?.length)
   return <article className={`flow-row ${item.state}`}>
     <div className="flow-node"><span /></div>
     <div className="flow-copy">
@@ -55,7 +56,7 @@ function FlowRow({item, configure}: {item: FlowItem; configure: (pluginID: strin
       {!!item.missing.length && <small>Waiting for {item.missing.map(contractName).join(', ')}</small>}
       {!!item.outputs.length && <small>{item.outputs.length} verified artifact{item.outputs.length === 1 ? '' : 's'} available</small>}
     </div>
-    <button className="button secondary compact" disabled={item.state === 'waiting' || item.state === 'active'} onClick={() => configure(item.plugin.id)}>{item.interactive && item.state === 'available' ? 'Open control' : item.state === 'executed' ? 'Run again' : item.state === 'active' ? 'In progress' : item.state === 'waiting' ? 'Needs input' : 'Configure'}</button>
+    {primaryAction && item.state === 'available' ? <div className="quick-actions" aria-label={`${item.plugin.name} controls`}>{primaryAction[1].enum?.map(value => <button type="button" className="button secondary compact" key={String(value)} onClick={() => configure(item.plugin.id, {[primaryAction[0]]: value})}>{String(value)}</button>)}</div> : <button className="button secondary compact" disabled={item.state === 'waiting' || item.state === 'active'} onClick={() => configure(item.plugin.id)}>{item.interactive && item.state === 'available' ? 'Open control' : item.state === 'executed' ? 'Run again' : item.state === 'active' ? 'In progress' : item.state === 'waiting' ? 'Needs input' : 'Configure'}</button>}
   </article>
 }
 

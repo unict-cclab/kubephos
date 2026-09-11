@@ -476,12 +476,12 @@ func (p *Process) invoke(parent context.Context, command string, input, output a
 			return err
 		}
 		lines := make(chan []string, 1)
-		go scanLines(stderr, lines, log)
 		if err := process.Start(); err != nil {
 			return err
 		}
-		processErr = process.Wait()
+		go scanLines(stderr, lines, log)
 		messages = <-lines
+		processErr = process.Wait()
 		stdout = output.Bytes()
 		outputExceeded = output.exceeded
 	}

@@ -42,6 +42,7 @@ export default function App() {
   const [modal, setModal] = useState<Modal>(null)
   const [workspace, setWorkspace] = useState<Workspace | null>(null)
   const [operationPluginID, setOperationPluginID] = useState<string | undefined>()
+  const [operationPreset, setOperationPreset] = useState<Record<string, unknown>>({})
   const [operationID, setOperationID] = useState<string | null>(null)
   const [toasts, setToasts] = useState<ToastMessage[]>([])
 
@@ -147,6 +148,7 @@ export default function App() {
     }
     setWorkspace(selected)
     setOperationPluginID(undefined)
+    setOperationPreset({})
     setModal('operation')
   }
 
@@ -155,8 +157,9 @@ export default function App() {
     setModal('workspaceFlow')
   }
 
-  const configureWorkspaceCapability = (pluginID: string) => {
+  const configureWorkspaceCapability = (pluginID: string, preset: Record<string, unknown> = {}) => {
     setOperationPluginID(pluginID)
+    setOperationPreset(preset)
     setModal('operation')
   }
 
@@ -199,7 +202,7 @@ export default function App() {
     <WorkspaceDialog {...common} open={modal === 'workspace'} close={() => setModal(null)} />
     <PipelineDialog open={modal === 'pipeline'} close={() => setModal(null)} session={session} workspaces={data.workspaces} plugins={data.plugins} applications={data.applications} artifacts={data.artifacts} connections={data.connections} credentials={data.credentials} changed={() => afterMutation('Pipeline validated and saved.')} />
     <WorkspaceFlowDialog open={modal === 'workspaceFlow'} close={() => setModal(null)} workspace={workspace} plugins={data.plugins} artifacts={data.artifacts} operations={data.operations} configure={configureWorkspaceCapability} />
-    <OperationDialog key={`${workspace?.id ?? ''}-${operationPluginID ?? 'advanced'}`} {...common} initialPluginID={operationPluginID} open={modal === 'operation'} close={() => setModal(null)} workspace={workspace} plugins={data.plugins} onCreated={async id => {await load(true); setOperationID(id)}} />
+    <OperationDialog key={`${workspace?.id ?? ''}-${operationPluginID ?? 'advanced'}-${JSON.stringify(operationPreset)}`} {...common} initialPluginID={operationPluginID} initialSpec={operationPreset} open={modal === 'operation'} close={() => setModal(null)} workspace={workspace} plugins={data.plugins} onCreated={async id => {await load(true); setOperationID(id)}} />
     <CredentialDialog {...common} open={modal === 'credential'} close={() => setModal(null)} plugins={data.plugins} />
     <ConnectionDialog {...common} open={modal === 'connection'} close={() => setModal(null)} plugins={data.plugins} />
     <ApplicationDialog {...common} open={modal === 'application'} close={() => setModal(null)} />

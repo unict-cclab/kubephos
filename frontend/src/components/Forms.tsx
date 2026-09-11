@@ -74,7 +74,7 @@ export function WorkspaceDialog({open, close, ...common}: CommonProps & {open: b
   </Dialog>
 }
 
-export function OperationDialog({workspace, plugins, initialPluginID, open, close, onCreated, ...common}: CommonProps & {workspace: Workspace | null; plugins: Plugin[]; initialPluginID?: string; open: boolean; close: () => void; onCreated: (id: string) => Promise<void>}) {
+export function OperationDialog({workspace, plugins, initialPluginID, initialSpec = {}, open, close, onCreated, ...common}: CommonProps & {workspace: Workspace | null; plugins: Plugin[]; initialPluginID?: string; initialSpec?: Record<string, unknown>; open: boolean; close: () => void; onCreated: (id: string) => Promise<void>}) {
 	const [pluginID, setPluginID] = useState(initialPluginID ?? '')
   const [error, setError] = useState('')
   const [pending, setPending] = useState(false)
@@ -106,13 +106,20 @@ export function OperationDialog({workspace, plugins, initialPluginID, open, clos
       <label>Capability<select name="pluginId" value={selected?.id ?? ''} onChange={event => setPluginID(event.target.value)} required>
         {plugins.map(plugin => <option key={plugin.id} value={plugin.id}>{plugin.name} · {plugin.version}</option>)}
       </select></label>
-      <label>Operation name<input name="title" maxLength={120} defaultValue={selected?.name ?? ''} required /></label>
-      {selected && <SchemaFields schema={selected.schema} applications={common.applications} artifacts={common.artifacts.filter(item => item.workspaceId === workspace?.id)} connections={common.connections} credentials={common.credentials} />}
+      <label>Operation name<input name="title" maxLength={120} defaultValue={operationTitle(selected, initialSpec)} required /></label>
+      {selected && <SchemaFields schema={selected.schema} values={selected.id === initialPluginID ? initialSpec : {}} applications={common.applications} artifacts={common.artifacts.filter(item => item.workspaceId === workspace?.id)} connections={common.connections} credentials={common.credentials} />}
       <ValidationCallout text="KubePhos validates every input and shows the resolved plan before it can be queued." />
       <p className="form-error">{error}</p>
       <Actions close={close} pending={pending} label="Validate plan" />
     </form>
   </Dialog>
+}
+
+function operationTitle(plugin: Plugin | undefined, initialSpec: Record<string, unknown>): string {
+  if (!plugin) return ''
+  const primary = Object.entries(plugin.schema.properties ?? {}).find(([, property]) => property['x-kubephos-primary-action'])
+  const value = primary ? initialSpec[primary[0]] : undefined
+  return typeof value === 'string' && value ? `${value.slice(0, 1).toUpperCase()}${value.slice(1)} · ${plugin.name}` : plugin.name
 }
 
 export function CredentialDialog({open, close, plugins, ...common}: CommonProps & {open: boolean; close: () => void; plugins: Plugin[]}) {
