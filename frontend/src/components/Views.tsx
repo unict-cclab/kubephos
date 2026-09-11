@@ -39,6 +39,7 @@ interface ViewProps {
   addCredential: () => void
   addConnection: () => void
   openInfrastructureCapability: (workspace: Workspace, pluginID: string) => void
+  openTerminal: (workspace: Workspace) => void
 }
 
 export function Views(props: ViewProps) {
@@ -168,6 +169,7 @@ function ApplicationGrid({items}: {items: Application[]}) {
 
 function Infrastructure(props: ViewProps) {
   const accessPlugins = infrastructureControls(props.plugins)
+  const terminalAvailable = props.plugins.some(plugin => plugin.capabilities?.includes('infrastructure.ssh.terminal'))
   const [workspaceID, setWorkspaceID] = useState(props.workspaces[0]?.id ?? '')
   useEffect(() => {
     if (!props.workspaces.some(workspace => workspace.id === workspaceID)) setWorkspaceID(props.workspaces[0]?.id ?? '')
@@ -178,7 +180,7 @@ function Infrastructure(props: ViewProps) {
     <p className="section-copy infrastructure-copy">Managed access without remembering addresses or opening another terminal.</p>
     <Heading eyebrow="AUDITED TOOLS" title="Interactive access" copy="Every available tool is contributed by a plugin and still follows validation, confirmation and health gates." />
     <div className="console-toolbar"><label>Workspace<select value={workspaceID} onChange={event => setWorkspaceID(event.target.value)} disabled={!props.workspaces.length}>{props.workspaces.length ? props.workspaces.map(workspace => <option value={workspace.id} key={workspace.id}>{workspace.name}</option>) : <option value="">Create a workspace first</option>}</select></label></div>
-    <div className="workspace-grid">{accessPlugins.length ? accessPlugins.map(plugin => <article className="feature-card" key={plugin.id}><span className="feature-icon">›_</span><div><h3>{plugin.name}</h3><p>{plugin.description}</p><small>{plugin.capabilities?.filter(capability => capability.endsWith('.control')).join(' · ')}</small></div><button className="button secondary compact" disabled={!selectedWorkspace} onClick={() => selectedWorkspace && props.openInfrastructureCapability(selectedWorkspace, plugin.id)}>Open</button></article>) : <Empty title="No interactive access plugin">Install a conforming plugin that declares an infrastructure control capability.</Empty>}</div>
+    <div className="workspace-grid">{terminalAvailable && <article className="feature-card terminal-card"><span className="feature-icon">$_</span><div><h3>Managed terminal</h3><p>Open an interactive SSH session to a running machine from verified artifacts.</p><small>infrastructure.ssh.terminal</small></div><button className="button secondary compact" disabled={!selectedWorkspace} onClick={() => selectedWorkspace && props.openTerminal(selectedWorkspace)}>Open</button></article>}{accessPlugins.length ? accessPlugins.map(plugin => <article className="feature-card" key={plugin.id}><span className="feature-icon">›_</span><div><h3>{plugin.name}</h3><p>{plugin.description}</p><small>{plugin.capabilities?.filter(capability => capability.endsWith('.control')).join(' · ')}</small></div><button className="button secondary compact" disabled={!selectedWorkspace} onClick={() => selectedWorkspace && props.openInfrastructureCapability(selectedWorkspace, plugin.id)}>Open</button></article>) : !terminalAvailable && <Empty title="No interactive access plugin">Install a conforming plugin that declares an infrastructure control capability.</Empty>}</div>
     <Heading eyebrow="REUSABLE ACCESS" title="Provider connections" copy="Validate infrastructure access once, then select it in every compatible operation." />
     <div className="credential-list">{props.connections.length ? props.connections.map(item => <InfoRow key={item.id} icon="↗" title={item.name} detail={`${item.provider} · ${item.pluginId}`} status="Validated" />) : <Empty title="No provider connections">Add and validate a reusable infrastructure connection.</Empty>}</div>
     <Heading eyebrow="OWNERSHIP BOUNDARY" title="Resource inventory" copy="Discovered resources remain protected until KubePhos can prove ownership." />

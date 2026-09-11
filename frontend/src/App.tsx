@@ -1,4 +1,4 @@
-import {useCallback, useEffect, useMemo, useState} from 'react'
+import {lazy, Suspense, useCallback, useEffect, useMemo, useState} from 'react'
 import {ApiError, request} from './api'
 import {ApplicationDialog, AuthDialog, ConnectionDialog, CredentialDialog, OperationDialog, PluginDialog, RuntimeDialog, WorkspaceDialog} from './components/Forms'
 import {OperationDrawer} from './components/OperationDrawer'
@@ -7,6 +7,8 @@ import {ToastRegion, type ToastMessage} from './components/ToastRegion'
 import {Views} from './components/Views'
 import {WorkspaceFlowDialog} from './components/WorkspaceFlowDialog'
 import type {PlatformData, PluginPackage, Session, View, Workspace} from './types'
+
+const TerminalDialog = lazy(() => import('./components/TerminalDialog').then(module => ({default: module.TerminalDialog})))
 
 const emptyData: PlatformData = {system: null, pluginRuntime: null, workspaces: [], pipelines: [], pipelineRuns: [], experiments: [], operations: [], artifacts: [], plugins: [], pluginPackages: [], pluginImports: [], applications: [], credentials: [], connections: [], resources: [], audit: []}
 const viewMetadata: Record<View, [string, string]> = {
@@ -30,7 +32,7 @@ const navigation: Array<[View, string, string]> = [
   ['infrastructure', '▦', 'Infrastructure']
 ]
 
-type Modal = 'workspace' | 'workspaceFlow' | 'operation' | 'pipeline' | 'credential' | 'connection' | 'application' | 'plugin' | 'runtime' | null
+type Modal = 'workspace' | 'workspaceFlow' | 'operation' | 'pipeline' | 'credential' | 'connection' | 'application' | 'plugin' | 'runtime' | 'terminal' | null
 
 export default function App() {
   const [session, setSession] = useState<Session | null>(null)
@@ -205,6 +207,7 @@ export default function App() {
           addCredential={() => setModal('credential')}
           addConnection={() => setModal('connection')}
           openInfrastructureCapability={openInfrastructureCapability}
+          openTerminal={selected => {setWorkspace(selected); setModal('terminal')}}
         />
       </main>
     </div>
@@ -217,6 +220,7 @@ export default function App() {
     <ApplicationDialog {...common} open={modal === 'application'} close={() => setModal(null)} />
     <PluginDialog {...common} open={modal === 'plugin'} close={() => setModal(null)} />
     <RuntimeDialog {...common} open={modal === 'runtime'} close={() => setModal(null)} runtime={data.pluginRuntime} />
+    {modal === 'terminal' && <Suspense fallback={null}><TerminalDialog open close={() => setModal(null)} session={session} workspaces={data.workspaces} initialWorkspace={workspace} /></Suspense>}
     <OperationDrawer operationID={operationID} session={session} plugins={data.plugins} close={() => setOperationID(null)} open={setOperationID} changed={() => load(true)} notify={notify} />
     <ToastRegion items={toasts} dismiss={dismiss} />
   </>

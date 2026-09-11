@@ -262,6 +262,17 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .runtime-registry-row label { margin-bottom: 4px; }
 .runtime-remove { margin-bottom: 4px; }
 .runtime-modal { width: min(760px, calc(100% - 30px)); }
+.terminal-modal { width: min(1100px, calc(100% - 28px)); max-height: calc(100vh - 24px); }
+.terminal-modal .modal-content { padding: 22px; }
+.terminal-toolbar { display: grid; grid-template-columns: minmax(180px, 1fr) minmax(180px, 1fr) auto; align-items: end; gap: 12px; }
+.terminal-toolbar label { margin: 0; }
+.terminal-toolbar .button { height: 40px; margin-bottom: 4px; }
+.terminal-status { display: flex; align-items: center; gap: 8px; margin: 12px 1px 9px; color: var(--muted); font-size: 10px; }
+.terminal-status > span { width: 8px; height: 8px; border-radius: 50%; background: #929b94; }
+.terminal-status > span.connected { background: var(--green); box-shadow: 0 0 0 3px rgba(23,117,84,.14); }
+.terminal-viewport { height: min(58vh, 590px); min-height: 330px; overflow: hidden; border: 1px solid #243229; border-radius: 12px; padding: 10px; background: #0d1410; box-shadow: inset 0 0 35px rgba(0,0,0,.24); }
+.terminal-viewport .xterm { height: 100%; }
+.terminal-safety { margin: 10px 2px 0; color: var(--muted); font-size: 10px; line-height: 1.45; }
 .infrastructure-copy { margin: -8px 0 20px; }
 .console-toolbar { display: flex; justify-content: flex-end; margin: -16px 0 14px; }
 .console-toolbar label { min-width: 250px; margin: 0; }
@@ -664,4 +675,7 @@ summary { color: var(--muted); font-size: 12px; font-weight: 750; cursor: pointe
   .compare-pipelines > label { grid-template-columns: 20px 1fr; }
   .compare-pipelines > label > input:last-child:not([type="checkbox"]) { grid-column: 2; }
   .experiment-fanout { flex-wrap: wrap; }
+  .terminal-toolbar { grid-template-columns: 1fr; }
+  .terminal-toolbar .button { justify-self: start; }
+  .terminal-viewport { min-height: 280px; height: 52vh; }
 }

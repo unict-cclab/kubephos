@@ -26,6 +26,7 @@ import (
 	"kubephos.dev/kubephos/internal/domain"
 	"kubephos.dev/kubephos/internal/id"
 	"kubephos.dev/kubephos/internal/plugins"
+	"kubephos.dev/kubephos/internal/pluginssh"
 	"kubephos.dev/kubephos/internal/schema"
 	"kubephos.dev/kubephos/internal/secrets"
 	"kubephos.dev/kubephos/internal/storage"
@@ -34,14 +35,18 @@ import (
 )
 
 type Server struct {
-	store      *storage.Store
-	registry   *plugins.Registry
-	artifacts  *artifacts.Client
-	vault      *secrets.Vault
-	runtime    plugins.ContainerRunner
-	loadPlugin func([]byte) (plugins.Plugin, error)
-	version    string
-	pluginMu   sync.Mutex
+	store          *storage.Store
+	registry       *plugins.Registry
+	artifacts      *artifacts.Client
+	vault          *secrets.Vault
+	runtime        plugins.ContainerRunner
+	loadPlugin     func([]byte) (plugins.Plugin, error)
+	version        string
+	pluginMu       sync.Mutex
+	terminalMu     sync.Mutex
+	terminals      map[string]terminalTicket
+	terminalActive map[string]int
+	terminalSSH    *pluginssh.Client
 }
 
 type runtimeConfigurator interface {
@@ -54,7 +59,7 @@ type runtimeConfigurator interface {
 }
 
 func NewServer(store *storage.Store, registry *plugins.Registry, artifactStore *artifacts.Client, vault *secrets.Vault, runtime plugins.ContainerRunner, loadPlugin func([]byte) (plugins.Plugin, error), version, webDirectory string) (http.Handler, error) {
-	server := &Server{store: store, registry: registry, artifacts: artifactStore, vault: vault, runtime: runtime, loadPlugin: loadPlugin, version: version}
+	server := &Server{store: store, registry: registry, artifacts: artifactStore, vault: vault, runtime: runtime, loadPlugin: loadPlugin, version: version, terminals: map[string]terminalTicket{}, terminalActive: map[string]int{}, terminalSSH: pluginssh.New()}
 	webHandler, err := webui.Handler(webDirectory)
 	if err != nil {
 		return nil, err
@@ -86,6 +91,9 @@ func NewServer(store *storage.Store, registry *plugins.Registry, artifactStore *
 	router.HandleFunc("GET /api/v1/connections", server.listConnections)
 	router.HandleFunc("POST /api/v1/connections", server.createConnection)
 	router.HandleFunc("GET /api/v1/infrastructure/resources", server.listInfrastructureResources)
+	router.HandleFunc("GET /api/v1/terminal-targets", server.listTerminalTargets)
+	router.HandleFunc("POST /api/v1/terminals", server.createTerminal)
+	router.HandleFunc("GET /api/v1/terminals/{id}/connect", server.connectTerminal)
 	router.HandleFunc("GET /api/v1/audit", server.listAuditEvents)
 	router.HandleFunc("GET /api/v1/workspaces", server.listWorkspaces)
 	router.HandleFunc("POST /api/v1/workspaces", server.createWorkspace)
@@ -2073,6 +2081,8 @@ func auditTarget(request *http.Request) (string, string, string, bool) {
 			return "experiment.run.create", "experiment", "", true
 		case "plugins":
 			return "plugin.import", "plugin", "", true
+		case "terminals":
+			return "terminal.ticket.create", "ssh-terminal", "", true
 		}
 	}
 	if len(parts) == 3 && parts[0] == "pipelines" && parts[2] == "runs" {

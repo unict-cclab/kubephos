@@ -78,6 +78,22 @@ func TestRuntimeHealthDistinguishesDisabledAndUnavailable(t *testing.T) {
 	}
 }
 
+func TestTerminalSessionLimits(t *testing.T) {
+	server := &Server{terminalActive: map[string]int{}}
+	for index := 0; index < 4; index++ {
+		if !server.acquireTerminal("user-one") {
+			t.Fatalf("session %d should be accepted", index+1)
+		}
+	}
+	if server.acquireTerminal("user-one") {
+		t.Fatal("fifth session for one user must be rejected")
+	}
+	server.releaseTerminal("user-one")
+	if !server.acquireTerminal("user-one") {
+		t.Fatal("released capacity should be reusable")
+	}
+}
+
 func TestInspectPluginReturnsStaticPreviewWithoutExecutor(t *testing.T) {
 	digest := strings.Repeat("e", 64)
 	descriptor := `apiVersion: plugins.kubephos.io/v1alpha1

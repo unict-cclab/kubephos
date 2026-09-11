@@ -80,6 +80,7 @@ spec:
         version: v1alpha1
   capabilities:
     - infrastructure.ssh.control
+    - infrastructure.ssh.terminal
     - infrastructure.ssh.preflight
   permissions:
     - network.ssh
