@@ -343,6 +343,9 @@ func (plugin TopologyPlugin) Execute(ctx context.Context, step domain.PlanStep, 
 		}
 		created = append(created, planned)
 	}
+	if err := verifyTopologyGuestAddresses(ctx, connection, input, 90*time.Second, log); err != nil {
+		return nil, errors.Join(err, cleanupTopology(context.WithoutCancel(ctx), connection, input, log))
+	}
 	result, err := topologyExecutionResult(ctx, connection, input, privateKey, publicKey, plugin.sshAccess())
 	if err != nil {
 		return nil, errors.Join(err, cleanupTopology(context.WithoutCancel(ctx), connection, input, log))
@@ -544,7 +547,7 @@ func createTopologyMachine(ctx context.Context, connection *client, input topolo
 }
 
 func topologyExecutionResult(ctx context.Context, connection *client, input topologyStepInput, privateKey, publicKey string, access sshAccess) (topologyResult, error) {
-	if err := verifyTopologySSH(ctx, input, privateKey, 5*time.Minute, access); err != nil {
+	if err := verifyTopologySSH(ctx, input, privateKey, 3*time.Minute, access); err != nil {
 		return topologyResult{}, err
 	}
 	resources := make([]domain.DiscoveredResource, 0, len(input.Machines))
@@ -564,6 +567,38 @@ func topologyExecutionResult(ctx context.Context, connection *client, input topo
 		MachineSet:    machineSet{APIVersion: "artifacts.kubephos.dev/v1alpha1", Kind: "MachineSet", Metadata: machineSetMetadata{Name: name}, Spec: machineSetSpec{Provider: "proxmox", ConnectionRef: input.ConnectionRef, NetworkCIDR: networkCIDR(input.Machines[0].Address, input.PrefixLength), Machines: machines}},
 		MachineAccess: machineAccess{APIVersion: "artifacts.kubephos.dev/v1alpha1", Kind: "MachineAccess", Metadata: machineAccessMetadata{Name: name}, Spec: machineAccessSpec{Algorithm: "ssh-ed25519", PublicKey: publicKey, PrivateKey: privateKey}},
 	}, nil
+}
+
+func verifyTopologyGuestAddresses(ctx context.Context, connection *client, input topologyStepInput, timeout time.Duration, log plugins.Logger) error {
+	type result struct {
+		planned plannedMachine
+		address string
+		err     error
+	}
+	results := make(chan result, len(input.Machines))
+	for _, planned := range input.Machines {
+		planned := planned
+		go func() {
+			address, err := connection.waitIPv4(ctx, input.Node, planned.VMID, timeout)
+			results <- result{planned: planned, address: address, err: err}
+		}()
+	}
+	var failures []error
+	for range input.Machines {
+		current := <-results
+		if current.err != nil {
+			failures = append(failures, fmt.Errorf("guest agent address for VM %d is unavailable: %w", current.planned.VMID, current.err))
+			continue
+		}
+		if current.address != current.planned.Address {
+			failures = append(failures, fmt.Errorf("guest agent reported %s for VM %d instead of planned address %s", current.address, current.planned.VMID, current.planned.Address))
+			continue
+		}
+		if err := log("info", fmt.Sprintf("Guest agent verified VM %d at %s", current.planned.VMID, current.address)); err != nil {
+			failures = append(failures, err)
+		}
+	}
+	return errors.Join(failures...)
 }
 
 func validateTopologyResult(input topologyStepInput, result topologyResult) error {
