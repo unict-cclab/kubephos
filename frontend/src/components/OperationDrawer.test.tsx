@@ -18,7 +18,7 @@ describe('OperationDrawer', () => {
     const fetch = vi.fn(async (input: RequestInfo | URL) => {
       const path = String(input)
       if (path.endsWith('/logs')) return new Response(JSON.stringify({items: []}), {status: 200})
-      if (path.endsWith('/download')) return new Response(JSON.stringify({items: ['one', 'two']}), {status: 200})
+      if (path.endsWith('/download')) return new Response(JSON.stringify({items: [{name: 'one', size: 10}, {name: 'two', size: 20}]}), {status: 200})
       return new Response(JSON.stringify(operation), {status: 200})
     })
     vi.stubGlobal('fetch', fetch)
@@ -26,7 +26,9 @@ describe('OperationDrawer', () => {
 
     fireEvent.click(await screen.findByRole('button', {name: 'Preview'}))
 
-    expect(await screen.findByText(/"one"/)).toBeInTheDocument()
+    expect(await screen.findByRole('columnheader', {name: 'Name'})).toBeInTheDocument()
+    expect(screen.getByRole('cell', {name: 'one'})).toBeInTheDocument()
+    expect(screen.getByText('Raw JSON')).toBeInTheDocument()
     expect(screen.getByText(/protected/)).toBeInTheDocument()
     expect(screen.getAllByRole('button', {name: 'Preview'})).toHaveLength(1)
   })

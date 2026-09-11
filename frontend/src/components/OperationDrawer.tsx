@@ -2,6 +2,7 @@ import {useCallback, useEffect, useState} from 'react'
 import {request} from '../api'
 import {formatBytes, formatDate, shortID} from '../lib'
 import type {Artifact, LogEntry, Operation, Plugin, Session} from '../types'
+import {JsonPreview} from './JsonPreview'
 import {Status} from './Views'
 
 interface Props {
@@ -133,7 +134,7 @@ export function OperationDrawer({operationID, session, plugins, close, open, cha
         {!!operation.artifacts?.length && <><p className="eyebrow">VERIFIED ARTIFACTS</p><div className="artifact-list">{operation.artifacts.map(artifact => artifact.sensitive
           ? <div className="artifact-row" key={artifact.id}><span>⌁</span><div><strong>{artifact.name}</strong><small>{artifact.type}/{artifact.version} · protected</small></div></div>
           : <div className="artifact-row" key={artifact.id}><span>◇</span><div><strong>{artifact.name}</strong><small>{artifact.type}/{artifact.version} · {formatBytes(artifact.sizeBytes)} · {artifact.digest.slice(0, 20)}…</small></div><div className="artifact-actions">{artifact.mediaType === 'application/json' && <button className="text-button" disabled={pending} onClick={() => previewArtifact(artifact)}>Preview</button>}<a className="text-button" href={`/api/v1/artifacts/${artifact.id}/download`}>Download</a></div></div>)}</div></>}
-        {preview && <section className="artifact-preview"><div><p className="eyebrow">ARTIFACT PREVIEW</p><button className="icon-button" onClick={() => setPreview(null)} aria-label="Close artifact preview">×</button></div><h3>{preview.artifact.name}</h3><pre>{JSON.stringify(preview.value, null, 2)}</pre></section>}
+        {preview && <section className="artifact-preview"><div className="artifact-preview-header"><p className="eyebrow">ARTIFACT PREVIEW</p><button className="icon-button" onClick={() => setPreview(null)} aria-label="Close artifact preview">×</button></div><h3>{preview.artifact.name}</h3><JsonPreview value={preview.value} /></section>}
         <p className="eyebrow">LIVE LOGS</p>
         <div className="log-console">{logs.length ? logs.map(log => <div className={`log-line ${log.level}`} key={log.sequence}><span className="time">{new Date(log.createdAt).toLocaleTimeString()}</span><span className="source">{log.source}</span><span className="message">{log.message}</span></div>) : <div className="log-empty">Waiting for logs…</div>}</div>
       </>}
