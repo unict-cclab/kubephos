@@ -172,6 +172,9 @@ func TestInstallerIsVersionedAndDigestVerified(t *testing.T) {
 	if !strings.Contains(command, "&& { attempt=0; until curl --connect-timeout 3 --max-time 10") || !strings.Contains(command, `test "$attempt" -lt 61 || exit 1`) {
 		t.Fatal("registry readiness retries are not bounded or chained to successful installation")
 	}
+	if !strings.Contains(command, "install -d -m 0755 "+tlsPath) || !strings.Contains(command, "chmod 0600 "+tlsPath+"/ca.key "+tlsPath+"/server.key") || !strings.Contains(command, "test -r "+tlsPath+"/ca.crt") || !strings.Contains(command, "openssl verify -CAfile "+tlsPath+"/ca.crt") {
+		t.Fatal("registry TLS permissions and local certificate preflight are incomplete")
+	}
 }
 
 func TestRemoteCommandsHaveValidShellSyntax(t *testing.T) {

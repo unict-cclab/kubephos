@@ -465,12 +465,15 @@ func installCommand(marker, address, adminPassword, databasePassword, robotSecre
 		"curl -fsSL " + shellQuote(installerURL) + " -o /tmp/kubephos-harbor.tgz",
 		"printf '%s  %s\\n' " + shellQuote(installerDigest) + " /tmp/kubephos-harbor.tgz | sha256sum -c -",
 		"sudo tar -xzf /tmp/kubephos-harbor.tgz -C /opt",
-		"sudo install -d -m 0700 " + tlsPath,
+		"sudo install -d -m 0755 " + tlsPath,
 		"sudo openssl req -x509 -newkey rsa:3072 -sha256 -nodes -days 3650 -subj '/CN=KubePhos Harbor CA' -addext 'basicConstraints=critical,CA:TRUE' -addext 'keyUsage=critical,keyCertSign,cRLSign' -keyout " + tlsPath + "/ca.key -out " + tlsPath + "/ca.crt",
 		"sudo openssl req -newkey rsa:3072 -sha256 -nodes -subj '/CN=" + address + "' -keyout " + tlsPath + "/server.key -out " + tlsPath + "/server.csr",
 		"printf '%s\\n' 'subjectAltName=IP:" + address + "' 'extendedKeyUsage=serverAuth' | sudo tee " + tlsPath + "/server.ext >/dev/null",
 		"sudo openssl x509 -req -sha256 -days 825 -in " + tlsPath + "/server.csr -CA " + tlsPath + "/ca.crt -CAkey " + tlsPath + "/ca.key -CAcreateserial -extfile " + tlsPath + "/server.ext -out " + tlsPath + "/server.crt",
 		"sudo chmod 0600 " + tlsPath + "/ca.key " + tlsPath + "/server.key",
+		"sudo chmod 0644 " + tlsPath + "/ca.crt " + tlsPath + "/server.crt",
+		"test -r " + tlsPath + "/ca.crt",
+		"openssl verify -CAfile " + tlsPath + "/ca.crt " + tlsPath + "/server.crt >/dev/null",
 		"sudo cp " + installPath + "/harbor.yml.tmpl " + installPath + "/harbor.yml",
 	}
 	for _, edit := range configurationEdits {
