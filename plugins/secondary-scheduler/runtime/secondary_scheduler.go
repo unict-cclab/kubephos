@@ -38,6 +38,7 @@ type Plugin struct {
 	Runner            commandRunner
 	StabilityChecks   int
 	StabilityInterval time.Duration
+	StabilityTimeout  time.Duration
 }
 
 type Invocation struct {
@@ -841,29 +842,44 @@ func (plugin Plugin) waitForTargetStable(ctx context.Context, runner commandRunn
 	if interval <= 0 {
 		interval = 15 * time.Second
 	}
-	for check := 0; check < checks; check++ {
+	timeout := plugin.StabilityTimeout
+	if timeout <= 0 {
+		timeout = 5 * time.Minute
+	}
+	deadline := time.NewTimer(timeout)
+	defer deadline.Stop()
+	consecutive := 0
+	var lastErr error
+	for {
 		workload, err := readWorkload(ctx, runner, kubeconfig, namespace, target)
 		if err != nil {
-			return err
-		}
-		if workload.Spec.Template.Metadata.Annotations[ownershipKey] != input.Marker || workload.Spec.Template.Spec.SchedulerName != input.SchedulerName {
+			lastErr = err
+		} else if workload.Spec.Template.Metadata.Annotations[ownershipKey] != input.Marker || workload.Spec.Template.Spec.SchedulerName != input.SchedulerName {
 			return errors.New("workload template lost its scheduler binding")
-		}
-		if err := verifyTargetPods(ctx, runner, kubeconfig, namespace, target, input.SchedulerName); err != nil {
-			return err
-		}
-		if check+1 == checks {
-			continue
+		} else if err := verifyTargetPods(ctx, runner, kubeconfig, namespace, target, input.SchedulerName); err != nil {
+			lastErr = err
+			consecutive = 0
+		} else {
+			lastErr = nil
+			consecutive++
+			if consecutive >= checks {
+				return nil
+			}
 		}
 		timer := time.NewTimer(interval)
 		select {
 		case <-ctx.Done():
 			timer.Stop()
 			return ctx.Err()
+		case <-deadline.C:
+			timer.Stop()
+			if lastErr == nil {
+				lastErr = errors.New("required consecutive stability samples were not reached")
+			}
+			return fmt.Errorf("stability window expired after %s: %w", timeout, lastErr)
 		case <-timer.C:
 		}
 	}
-	return nil
 }
 
 func verifyTargetPods(ctx context.Context, runner commandRunner, kubeconfig, namespace string, target workloadTarget, scheduler string) error {

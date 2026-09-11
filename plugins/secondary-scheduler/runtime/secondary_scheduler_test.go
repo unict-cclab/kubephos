@@ -9,6 +9,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"kubephos.dev/kubephos/internal/domain"
 )
@@ -78,6 +79,20 @@ func TestPrecheckRejectsUnhealthyTarget(t *testing.T) {
 	health, err := plugin.Precheck(context.Background(), step, discardLog)
 	if err != nil || health.Status != domain.HealthUnhealthy || health.Checks["target-health"] != "frontend" {
 		t.Fatalf("expected unhealthy target rejection %#v %v", health, err)
+	}
+}
+
+func TestExecuteToleratesTransientPodReadiness(t *testing.T) {
+	runner := &fakeRunner{}
+	plugin := Plugin{Runner: runner, StabilityChecks: 2, StabilityInterval: 1, StabilityTimeout: time.Second}
+	step := plannedStep(t)
+	health, err := plugin.Precheck(context.Background(), step, discardLog)
+	if err != nil || health.Status != domain.HealthHealthy {
+		t.Fatalf("precheck failed %#v %v", health, err)
+	}
+	runner.transientFailures = 1
+	if _, err := plugin.Execute(context.Background(), step, discardLog); err != nil {
+		t.Fatalf("transient readiness must recover within the stability window: %v", err)
 	}
 }
 
@@ -188,6 +203,7 @@ type fakeRunner struct {
 	workloadOwner     string
 	previous          string
 	unhealthyPods     bool
+	transientFailures int
 }
 
 func (runner *fakeRunner) Run(_ context.Context, _ string, stdin []byte, args ...string) (string, error) {
@@ -283,8 +299,11 @@ func (runner *fakeRunner) Run(_ context.Context, _ string, stdin []byte, args ..
 	}
 	if strings.HasPrefix(command, "get pods -n kubephos-app-one ") {
 		status := "True"
-		if runner.unhealthyPods {
+		if runner.unhealthyPods || runner.workloadScheduler != "" && runner.transientFailures > 0 {
 			status = "False"
+			if runner.transientFailures > 0 {
+				runner.transientFailures--
+			}
 		}
 		value, _ := json.Marshal(map[string]any{"items": []map[string]any{{"spec": map[string]string{"schedulerName": effectiveScheduler(runner.workloadScheduler), "nodeName": "worker-1"}, "status": map[string]any{"conditions": []map[string]string{{"type": "Ready", "status": status}}}}}})
 		return string(value), nil
