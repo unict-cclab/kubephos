@@ -10,7 +10,9 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"mime"
 	"net/http"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -1838,11 +1840,24 @@ func (s *Server) downloadArtifact(response http.ResponseWriter, request *http.Re
 		return
 	}
 	response.Header().Set("Content-Type", artifact.MediaType)
-	response.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", artifact.Name+".json"))
+	response.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": artifactFilename(artifact)}))
 	response.Header().Set("X-Content-Type-Options", "nosniff")
 	if _, err := response.Write(value); err != nil {
 		slog.Error("stream artifact", "artifact", artifact.ID, "error", err)
 	}
+}
+
+func artifactFilename(artifact domain.Artifact) string {
+	name := strings.TrimSpace(artifact.Name)
+	if filepath.Ext(name) != "" {
+		return name
+	}
+	mediaType := strings.TrimSpace(strings.SplitN(artifact.MediaType, ";", 2)[0])
+	extensions, _ := mime.ExtensionsByType(mediaType)
+	if len(extensions) > 0 {
+		return name + extensions[0]
+	}
+	return name
 }
 
 func resolvedPlanHash(manifest plugins.Manifest, spec json.RawMessage, plan domain.Plan) (string, error) {

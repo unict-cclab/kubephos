@@ -163,6 +163,13 @@ export default function App() {
     setModal('operation')
   }
 
+  const openInfrastructureCapability = (selected: Workspace, pluginID: string) => {
+    setWorkspace(selected)
+    setOperationPluginID(pluginID)
+    setOperationPreset({})
+    setModal('operation')
+  }
+
   if (checkingSession) return <div className="startup-screen"><span className="brand-mark">K</span><strong>Starting KubePhos…</strong></div>
   if (!session?.authenticated) return <><AuthDialog setupRequired={Boolean(session?.setupRequired)} onAuthenticated={result => {setSession(result); notify(session?.setupRequired ? 'Administrator created.' : 'Signed in.')}} /><ToastRegion items={toasts} dismiss={dismiss} /></>
 
@@ -196,6 +203,7 @@ export default function App() {
           deactivatePlugin={deactivatePlugin}
           addCredential={() => setModal('credential')}
           addConnection={() => setModal('connection')}
+          openInfrastructureCapability={openInfrastructureCapability}
         />
       </main>
     </div>

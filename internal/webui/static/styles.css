@@ -263,6 +263,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .runtime-remove { margin-bottom: 4px; }
 .runtime-modal { width: min(760px, calc(100% - 30px)); }
 .infrastructure-copy { margin: -8px 0 20px; }
+.console-toolbar { display: flex; justify-content: flex-end; margin: -16px 0 14px; }
+.console-toolbar label { min-width: 250px; margin: 0; }
 .credential-heading { margin-top: 38px; }
 .credential-list { display: grid; gap: 9px; }
 .credential-row { display: grid; grid-template-columns: 42px 1fr auto; align-items: center; gap: 14px; border: 1px solid var(--line); border-radius: 13px; padding: 15px 17px; background: var(--surface); }
@@ -558,6 +560,15 @@ summary { color: var(--muted); font-size: 12px; font-weight: 750; cursor: pointe
 .artifact-row strong, .artifact-row small { display: block; }
 .artifact-row strong { font-size: 12px; }
 .artifact-row small { margin-top: 3px; color: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 9px; }
+.artifact-row > div:nth-child(2) { min-width: 0; flex: 1; }
+.artifact-actions { display: flex; align-items: center; gap: 10px; }
+.artifact-actions .text-button { font-size: 9px; }
+.artifact-preview { margin: 13px 0 22px; border: 1px solid #cfd8d1; border-radius: 12px; overflow: hidden; background: #f7f9f7; }
+.artifact-preview > div { display: flex; align-items: center; justify-content: space-between; padding: 10px 12px 0; }
+.artifact-preview > div .eyebrow { margin: 0; }
+.artifact-preview .icon-button { width: 28px; height: 28px; font-size: 17px; }
+.artifact-preview h3 { margin: 2px 12px 10px; font-size: 12px; }
+.artifact-preview pre { max-height: 340px; margin: 0; overflow: auto; border-top: 1px solid #dbe2dc; padding: 14px; background: #101713; color: #dce7df; font-size: 10px; line-height: 1.55; white-space: pre-wrap; word-break: break-word; }
 .log-console { min-height: 220px; max-height: 360px; overflow: auto; border-radius: 12px; padding: 15px; background: #111814; color: #b9c6bd; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; line-height: 1.65; }
 .log-line { display: grid; grid-template-columns: 75px 72px 1fr; gap: 9px; }
 .log-line .time { color: #65746a; }

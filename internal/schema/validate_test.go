@@ -69,3 +69,14 @@ func TestValidateDefinitionChecksPrimaryActions(t *testing.T) {
 		t.Fatal("expected primary action without enum to fail")
 	}
 }
+
+func TestValidateDefinitionChecksMultilineFields(t *testing.T) {
+	valid := json.RawMessage(`{"type":"object","properties":{"command":{"type":"string","x-kubephos-multiline":true}}}`)
+	if err := ValidateDefinition(valid); err != nil {
+		t.Fatalf("expected multiline field to be valid: %v", err)
+	}
+	invalid := json.RawMessage(`{"type":"object","properties":{"command":{"type":"integer","x-kubephos-multiline":true}}}`)
+	if err := ValidateDefinition(invalid); err == nil {
+		t.Fatal("expected multiline non-string field to fail")
+	}
+}

@@ -143,6 +143,12 @@ func validateRule(rule map[string]any, path string) error {
 			}
 		}
 	}
+	if value, exists := rule["x-kubephos-multiline"]; exists {
+		enabled, ok := value.(bool)
+		if !ok || enabled && typeName != "string" {
+			return fmt.Errorf("%s.x-kubephos-multiline requires a boolean string schema", path)
+		}
+	}
 	for _, keyword := range []string{"minimum", "maximum"} {
 		if value, exists := rule[keyword]; exists {
 			if _, ok := number(value); !ok || (typeName != "" && typeName != "integer" && typeName != "number") {

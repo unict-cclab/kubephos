@@ -202,6 +202,15 @@ func TestResolvedPlanHashIsDeterministic(t *testing.T) {
 	}
 }
 
+func TestArtifactFilenamePreservesOrDerivesExtension(t *testing.T) {
+	if value := artifactFilename(domain.Artifact{Name: "comparison", MediaType: "image/svg+xml"}); value != "comparison.svg" {
+		t.Fatalf("unexpected derived filename %q", value)
+	}
+	if value := artifactFilename(domain.Artifact{Name: "raw.csv", MediaType: "text/csv"}); value != "raw.csv" {
+		t.Fatalf("unexpected preserved filename %q", value)
+	}
+}
+
 func TestNormalizeAndValidateExperimentInput(t *testing.T) {
 	input := createExperimentInput{
 		WorkspaceID: " ws_dev ",

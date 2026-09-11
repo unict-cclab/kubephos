@@ -58,4 +58,17 @@ describe('SchemaFields', () => {
     expect(screen.getByRole('combobox', {name: 'Action'})).toHaveValue('stop')
     expect(screen.getByRole('spinbutton', {name: 'Replicas'})).toHaveValue(4)
   })
+
+  it('renders multiline strings declared by a plugin', () => {
+    render(<form><SchemaFields
+      schema={{type: 'object', properties: {command: {type: 'string', title: 'Command', 'x-kubephos-multiline': true}}}}
+      values={{command: 'one\ntwo'}}
+      applications={[]}
+      artifacts={[]}
+      connections={[]}
+      credentials={[]}
+    /></form>)
+    expect(screen.getByRole('textbox', {name: 'Command'}).tagName).toBe('TEXTAREA')
+    expect(screen.getByRole('textbox', {name: 'Command'})).toHaveValue('one\ntwo')
+  })
 })

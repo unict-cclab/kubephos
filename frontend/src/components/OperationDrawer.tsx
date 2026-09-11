@@ -1,7 +1,7 @@
 import {useCallback, useEffect, useState} from 'react'
 import {request} from '../api'
 import {formatBytes, formatDate, shortID} from '../lib'
-import type {LogEntry, Operation, Plugin, Session} from '../types'
+import type {Artifact, LogEntry, Operation, Plugin, Session} from '../types'
 import {Status} from './Views'
 
 interface Props {
@@ -18,6 +18,7 @@ export function OperationDrawer({operationID, session, plugins, close, open, cha
   const [operation, setOperation] = useState<Operation | null>(null)
   const [logs, setLogs] = useState<LogEntry[]>([])
   const [pending, setPending] = useState(false)
+  const [preview, setPreview] = useState<{artifact: Artifact; value: unknown} | null>(null)
 
   const load = useCallback(async () => {
     if (!operationID) return
@@ -32,6 +33,7 @@ export function OperationDrawer({operationID, session, plugins, close, open, cha
   useEffect(() => {
     setOperation(null)
     setLogs([])
+    setPreview(null)
     if (!operationID) return
     load().catch(cause => notify(cause instanceof Error ? cause.message : 'Could not open operation.', true))
   }, [load, notify, operationID])
@@ -99,6 +101,19 @@ export function OperationDrawer({operationID, session, plugins, close, open, cha
     }
   }
 
+  const previewArtifact = async (artifact: Artifact) => {
+    setPending(true)
+    try {
+      const response = await fetch(`/api/v1/artifacts/${artifact.id}/download`)
+      if (!response.ok) throw new Error('Could not open the artifact preview.')
+      setPreview({artifact, value: await response.json()})
+    } catch (cause) {
+      notify(cause instanceof Error ? cause.message : 'Could not open the artifact preview.', true)
+    } finally {
+      setPending(false)
+    }
+  }
+
   const canQueue = operation?.status === 'ready'
   const canCancel = operation && ['ready', 'queued', 'prechecking', 'running', 'verifying'].includes(operation.status)
   const canCleanup = operation && terminal(operation.status) && !operation.plan.steps.some(step => step.cleanup) && plugins.find(plugin => plugin.id === operation.pluginId)?.capabilities?.includes('lifecycle.cleanup')
@@ -117,7 +132,8 @@ export function OperationDrawer({operationID, session, plugins, close, open, cha
         <div className="step-list">{operation.steps.map((step, index) => <div className="step-row" key={step.id}><span className="step-index">{step.position}</span><div><h4>{step.name}</h4><p>{step.error || step.health?.summary || effectSummary(operation, index)}</p></div><Status value={step.status} /></div>)}</div>
         {!!operation.artifacts?.length && <><p className="eyebrow">VERIFIED ARTIFACTS</p><div className="artifact-list">{operation.artifacts.map(artifact => artifact.sensitive
           ? <div className="artifact-row" key={artifact.id}><span>⌁</span><div><strong>{artifact.name}</strong><small>{artifact.type}/{artifact.version} · protected</small></div></div>
-          : <a className="artifact-row" href={`/api/v1/artifacts/${artifact.id}/download`} key={artifact.id}><span>↓</span><div><strong>{artifact.name}</strong><small>{artifact.type}/{artifact.version} · {formatBytes(artifact.sizeBytes)} · {artifact.digest.slice(0, 20)}…</small></div></a>)}</div></>}
+          : <div className="artifact-row" key={artifact.id}><span>◇</span><div><strong>{artifact.name}</strong><small>{artifact.type}/{artifact.version} · {formatBytes(artifact.sizeBytes)} · {artifact.digest.slice(0, 20)}…</small></div><div className="artifact-actions">{artifact.mediaType === 'application/json' && <button className="text-button" disabled={pending} onClick={() => previewArtifact(artifact)}>Preview</button>}<a className="text-button" href={`/api/v1/artifacts/${artifact.id}/download`}>Download</a></div></div>)}</div></>}
+        {preview && <section className="artifact-preview"><div><p className="eyebrow">ARTIFACT PREVIEW</p><button className="icon-button" onClick={() => setPreview(null)} aria-label="Close artifact preview">×</button></div><h3>{preview.artifact.name}</h3><pre>{JSON.stringify(preview.value, null, 2)}</pre></section>}
         <p className="eyebrow">LIVE LOGS</p>
         <div className="log-console">{logs.length ? logs.map(log => <div className={`log-line ${log.level}`} key={log.sequence}><span className="time">{new Date(log.createdAt).toLocaleTimeString()}</span><span className="source">{log.source}</span><span className="message">{log.message}</span></div>) : <div className="log-empty">Waiting for logs…</div>}</div>
       </>}

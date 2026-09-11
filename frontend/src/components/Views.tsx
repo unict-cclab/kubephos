@@ -1,3 +1,4 @@
+import {useEffect, useState} from 'react'
 import {formatDate, shortID} from '../lib'
 import type {Application, Artifact, AuditEvent, Connection, Credential, Experiment, InfrastructureResource, Operation, Pipeline, PipelineRun, Plugin, PluginPackage, PluginRuntimeStatus, Session, SystemStatus, View, Workspace} from '../types'
 import {PipelinesView} from './PipelinesView'
@@ -36,6 +37,7 @@ interface ViewProps {
   deactivatePlugin: (pluginPackage: PluginPackage) => Promise<void>
   addCredential: () => void
   addConnection: () => void
+  openInfrastructureCapability: (workspace: Workspace, pluginID: string) => void
 }
 
 export function Views(props: ViewProps) {
@@ -157,14 +159,18 @@ function ApplicationGrid({items}: {items: Application[]}) {
 }
 
 function Infrastructure(props: ViewProps) {
+  const accessPlugins = infrastructureControls(props.plugins)
+  const [workspaceID, setWorkspaceID] = useState(props.workspaces[0]?.id ?? '')
+  useEffect(() => {
+    if (!props.workspaces.some(workspace => workspace.id === workspaceID)) setWorkspaceID(props.workspaces[0]?.id ?? '')
+  }, [props.workspaces, workspaceID])
+  const selectedWorkspace = props.workspaces.find(workspace => workspace.id === workspaceID)
   return <>
     <Heading eyebrow="ONE ACCESS POINT" title="Infrastructure Console" action={<div className="topbar-actions">{props.isAdmin && <><button className="button secondary" onClick={props.addCredential}>Add credential</button><button className="button primary" onClick={props.addConnection}>Add connection</button></>}</div>} />
     <p className="section-copy infrastructure-copy">Managed access without remembering addresses or opening another terminal.</p>
-    <div className="workspace-grid">
-      <Feature icon="▣" title="Container Registry">Browse Harbor projects, images, tags and immutable digests.</Feature>
-      <Feature icon="▤" title="Shared Storage">Explore NFS shares, upload data and protect destructive actions.</Feature>
-      <Feature icon="›_" title="Secure Shell">Open audited, short-lived SSH sessions directly in the browser.</Feature>
-    </div>
+    <Heading eyebrow="AUDITED TOOLS" title="Interactive access" copy="Every available tool is contributed by a plugin and still follows validation, confirmation and health gates." />
+    <div className="console-toolbar"><label>Workspace<select value={workspaceID} onChange={event => setWorkspaceID(event.target.value)} disabled={!props.workspaces.length}>{props.workspaces.length ? props.workspaces.map(workspace => <option value={workspace.id} key={workspace.id}>{workspace.name}</option>) : <option value="">Create a workspace first</option>}</select></label></div>
+    <div className="workspace-grid">{accessPlugins.length ? accessPlugins.map(plugin => <article className="feature-card" key={plugin.id}><span className="feature-icon">›_</span><div><h3>{plugin.name}</h3><p>{plugin.description}</p><small>{plugin.capabilities?.filter(capability => capability.endsWith('.control')).join(' · ')}</small></div><button className="button secondary compact" disabled={!selectedWorkspace} onClick={() => selectedWorkspace && props.openInfrastructureCapability(selectedWorkspace, plugin.id)}>Open</button></article>) : <Empty title="No interactive access plugin">Install a conforming plugin that declares an infrastructure control capability.</Empty>}</div>
     <Heading eyebrow="REUSABLE ACCESS" title="Provider connections" copy="Validate infrastructure access once, then select it in every compatible operation." />
     <div className="credential-list">{props.connections.length ? props.connections.map(item => <InfoRow key={item.id} icon="↗" title={item.name} detail={`${item.provider} · ${item.pluginId}`} status="Validated" />) : <Empty title="No provider connections">Add and validate a reusable infrastructure connection.</Empty>}</div>
     <Heading eyebrow="OWNERSHIP BOUNDARY" title="Resource inventory" copy="Discovered resources remain protected until KubePhos can prove ownership." />
@@ -177,8 +183,8 @@ function Infrastructure(props: ViewProps) {
   </>
 }
 
-function Feature({icon, title, children}: {icon: string; title: string; children: React.ReactNode}) {
-  return <article className="feature-card"><span className="feature-icon">{icon}</span><div><h3>{title}</h3><p>{children}</p></div><span className="planned">Planned</span></article>
+export function infrastructureControls(plugins: Plugin[]): Plugin[] {
+  return plugins.filter(plugin => (plugin.capabilities ?? []).some(capability => capability.startsWith('infrastructure.') && capability.endsWith('.control')))
 }
 
 function InfoRow({icon, title, detail, status}: {icon: string; title: string; detail: string; status: string}) {

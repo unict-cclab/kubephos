@@ -76,6 +76,9 @@ function SchemaField({name, prefix, property, value, required, applications, art
     const serialized = value === undefined && property.default === undefined ? '' : JSON.stringify(value ?? property.default, null, 2)
     return <label className="wide">{title}<textarea name={fieldName} rows={4} required={required} defaultValue={serialized} />{hint}</label>
   }
+  if (property.type === 'string' && property['x-kubephos-multiline']) {
+    return <label className="wide">{title}<textarea name={fieldName} rows={5} required={required} defaultValue={value === undefined && property.default === undefined ? '' : String(value ?? property.default)} minLength={property.minLength} maxLength={property.maxLength} />{hint}</label>
+  }
   const numeric = property.type === 'integer' || property.type === 'number'
   return <label className={wide}>{title}<input
     name={fieldName}
