@@ -35,7 +35,9 @@ const (
 )
 
 type Plugin struct {
-	Runner commandRunner
+	Runner            commandRunner
+	StabilityChecks   int
+	StabilityInterval time.Duration
 }
 
 type Invocation struct {
@@ -320,6 +322,9 @@ func (plugin Plugin) Precheck(ctx context.Context, step domain.PlanStep, log plu
 		if err := validateUnboundWorkload(workload, target); err != nil {
 			return unhealthy(err.Error(), "target", target.ID), nil
 		}
+		if err := verifyTargetPods(ctx, runner, cluster.Spec.Kubeconfig, application.Spec.Namespace, target, effectiveScheduler(workload.Spec.Template.Spec.SchedulerName)); err != nil {
+			return unhealthy(fmt.Sprintf("Target %s is not healthy before scheduler mutation: %v", target.ID, err), "target-health", target.ID), nil
+		}
 		patch, err := bindPatch(input, workload.Spec.Template.Spec.SchedulerName)
 		if err != nil {
 			return domain.HealthReport{}, err
@@ -381,6 +386,10 @@ func (plugin Plugin) Execute(ctx context.Context, step domain.PlanStep, log plug
 		}
 		if _, err := runner.Run(ctx, cluster.Spec.Kubeconfig, nil, "patch", resourceName(target), "-n", application.Spec.Namespace, "--type=merge", "-p", string(patch)); err != nil {
 			return nil, fmt.Errorf("bind workload %s: %w", target.ID, err)
+		}
+		if err := plugin.waitForTargetStable(ctx, runner, cluster.Spec.Kubeconfig, application.Spec.Namespace, target, input); err != nil {
+			_ = logTargetDiagnostics(ctx, runner, cluster.Spec.Kubeconfig, application.Spec.Namespace, target, log)
+			return nil, fmt.Errorf("workload %s did not stabilize on scheduler %s: %w", target.ID, input.SchedulerName, err)
 		}
 	}
 	value := result{SchedulerDeployment: schedulerDeployment{
@@ -753,21 +762,9 @@ func verifyTargets(ctx context.Context, runner commandRunner, kubeconfig, namesp
 				results <- targetResult{target.ID, err}
 				return
 			}
-			value, err := runner.Run(ctx, kubeconfig, nil, "get", "pods", "-n", namespace, "-l", selectorValue(target.Selector), "-o", "json")
-			if err != nil {
+			if err := verifyTargetPods(ctx, runner, kubeconfig, namespace, target, input.SchedulerName); err != nil {
 				results <- targetResult{target.ID, err}
 				return
-			}
-			var pods podList
-			if err := json.Unmarshal([]byte(value), &pods); err != nil || len(pods.Items) == 0 {
-				results <- targetResult{target.ID, errors.New("selected workload has no Pods")}
-				return
-			}
-			for _, pod := range pods.Items {
-				if pod.Spec.SchedulerName != input.SchedulerName || pod.Spec.NodeName == "" || !podReady(pod.Status.Conditions) {
-					results <- targetResult{target.ID, errors.New("a selected Pod is not ready on the managed scheduler")}
-					return
-				}
 			}
 			results <- targetResult{id: target.ID}
 		}()
@@ -783,6 +780,91 @@ func verifyTargets(ctx context.Context, runner commandRunner, kubeconfig, namesp
 	if len(issues) > 0 {
 		sort.Strings(issues)
 		return errors.New(strings.Join(issues, "; "))
+	}
+	return nil
+}
+
+func (plugin Plugin) waitForTargetStable(ctx context.Context, runner commandRunner, kubeconfig, namespace string, target workloadTarget, input stepInput) error {
+	if _, err := runner.Run(ctx, kubeconfig, nil, "rollout", "status", resourceName(target), "-n", namespace, "--timeout=10m"); err != nil {
+		return err
+	}
+	checks := plugin.StabilityChecks
+	if checks <= 0 {
+		checks = 2
+	}
+	interval := plugin.StabilityInterval
+	if interval <= 0 {
+		interval = 15 * time.Second
+	}
+	for check := 0; check < checks; check++ {
+		workload, err := readWorkload(ctx, runner, kubeconfig, namespace, target)
+		if err != nil {
+			return err
+		}
+		if workload.Spec.Template.Metadata.Annotations[ownershipKey] != input.Marker || workload.Spec.Template.Spec.SchedulerName != input.SchedulerName {
+			return errors.New("workload template lost its scheduler binding")
+		}
+		if err := verifyTargetPods(ctx, runner, kubeconfig, namespace, target, input.SchedulerName); err != nil {
+			return err
+		}
+		if check+1 == checks {
+			continue
+		}
+		timer := time.NewTimer(interval)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
+	return nil
+}
+
+func verifyTargetPods(ctx context.Context, runner commandRunner, kubeconfig, namespace string, target workloadTarget, scheduler string) error {
+	value, err := runner.Run(ctx, kubeconfig, nil, "get", "pods", "-n", namespace, "-l", selectorValue(target.Selector), "-o", "json")
+	if err != nil {
+		return err
+	}
+	var pods podList
+	if err := json.Unmarshal([]byte(value), &pods); err != nil {
+		return fmt.Errorf("decode selected Pods: %w", err)
+	}
+	if len(pods.Items) == 0 {
+		return errors.New("selected workload has no Pods")
+	}
+	for _, pod := range pods.Items {
+		if pod.Spec.SchedulerName != scheduler || pod.Spec.NodeName == "" || !podReady(pod.Status.Conditions) {
+			return fmt.Errorf("a selected Pod is not ready on scheduler %s", scheduler)
+		}
+	}
+	return nil
+}
+
+func effectiveScheduler(value string) string {
+	if value == "" {
+		return "default-scheduler"
+	}
+	return value
+}
+
+func logTargetDiagnostics(ctx context.Context, runner commandRunner, kubeconfig, namespace string, target workloadTarget, log plugins.Logger) error {
+	checks := []struct {
+		name string
+		args []string
+	}{
+		{"Pod inventory", []string{"get", "pods", "-n", namespace, "-l", selectorValue(target.Selector), "-o", "wide"}},
+		{"Pod description", []string{"describe", "pods", "-n", namespace, "-l", selectorValue(target.Selector)}},
+		{"Pod logs", []string{"logs", "-n", namespace, "-l", selectorValue(target.Selector), "--all-containers=true", "--tail=100"}},
+	}
+	for _, check := range checks {
+		value, err := runner.Run(ctx, kubeconfig, nil, check.args...)
+		if err != nil {
+			value = err.Error()
+		}
+		if err := log("warning", fmt.Sprintf("Target %s %s:\n%s", target.ID, check.name, strings.TrimSpace(value))); err != nil {
+			return err
+		}
 	}
 	return nil
 }

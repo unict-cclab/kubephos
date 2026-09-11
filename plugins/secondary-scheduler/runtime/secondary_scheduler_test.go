@@ -15,7 +15,7 @@ import (
 
 func TestSecondarySchedulerLifecycle(t *testing.T) {
 	runner := &fakeRunner{}
-	plugin := Plugin{Runner: runner}
+	plugin := Plugin{Runner: runner, StabilityChecks: 2, StabilityInterval: 1}
 	spec := json.RawMessage(`{"clusterConnectionRef":"art_cluster","applicationDeploymentRef":"art_application","targetBindingRef":"art_binding"}`)
 	report := plugin.Validate(context.Background(), Invocation{Input: spec})
 	if !report.Valid {
@@ -69,6 +69,15 @@ func TestSecondarySchedulerLifecycle(t *testing.T) {
 	}
 	if runner.workloadScheduler != "" || runner.workloadOwner != "" || runner.installed {
 		t.Fatalf("scheduler cleanup did not restore the workload %#v", runner)
+	}
+}
+
+func TestPrecheckRejectsUnhealthyTarget(t *testing.T) {
+	plugin := Plugin{Runner: &fakeRunner{unhealthyPods: true}}
+	step := plannedStep(t)
+	health, err := plugin.Precheck(context.Background(), step, discardLog)
+	if err != nil || health.Status != domain.HealthUnhealthy || health.Checks["target-health"] != "frontend" {
+		t.Fatalf("expected unhealthy target rejection %#v %v", health, err)
 	}
 }
 
@@ -178,6 +187,7 @@ type fakeRunner struct {
 	workloadScheduler string
 	workloadOwner     string
 	previous          string
+	unhealthyPods     bool
 }
 
 func (runner *fakeRunner) Run(_ context.Context, _ string, stdin []byte, args ...string) (string, error) {
@@ -272,7 +282,11 @@ func (runner *fakeRunner) Run(_ context.Context, _ string, stdin []byte, args ..
 		return "ready", nil
 	}
 	if strings.HasPrefix(command, "get pods -n kubephos-app-one ") {
-		value, _ := json.Marshal(map[string]any{"items": []map[string]any{{"spec": map[string]string{"schedulerName": runner.workloadScheduler, "nodeName": "worker-1"}, "status": map[string]any{"conditions": []map[string]string{{"type": "Ready", "status": "True"}}}}}})
+		status := "True"
+		if runner.unhealthyPods {
+			status = "False"
+		}
+		value, _ := json.Marshal(map[string]any{"items": []map[string]any{{"spec": map[string]string{"schedulerName": effectiveScheduler(runner.workloadScheduler), "nodeName": "worker-1"}, "status": map[string]any{"conditions": []map[string]string{{"type": "Ready", "status": status}}}}}})
 		return string(value), nil
 	}
 	if strings.HasPrefix(command, "delete --ignore-not-found") {
