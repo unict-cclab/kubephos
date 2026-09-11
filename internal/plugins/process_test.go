@@ -471,3 +471,17 @@ func TestScanLinesBoundsLogsAndDiagnosticTail(t *testing.T) {
 		t.Fatalf("unexpected bounded log result: %d lines, %d events", len(lines), events)
 	}
 }
+
+func TestPluginErrorMessageUsesBoundedFinalCause(t *testing.T) {
+	message := pluginErrorMessage([]string{"setup detail", "diagnostic detail", " final cause "}, context.DeadlineExceeded)
+	if message != "final cause" {
+		t.Fatalf("unexpected error message %q", message)
+	}
+	message = pluginErrorMessage([]string{strings.Repeat("x", pluginErrorMessageLimit+100)}, nil)
+	if len(message) != pluginErrorMessageLimit {
+		t.Fatalf("error message was not bounded: %d", len(message))
+	}
+	if fallback := pluginErrorMessage(nil, context.DeadlineExceeded); fallback != context.DeadlineExceeded.Error() {
+		t.Fatalf("unexpected fallback %q", fallback)
+	}
+}

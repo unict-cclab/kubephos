@@ -418,7 +418,10 @@ func (plugin Plugin) Execute(ctx context.Context, step domain.PlanStep, log plug
 	if err := log("info", fmt.Sprintf("Binding %d validated workloads to scheduler %s", len(binding.Spec.Targets), input.SchedulerName)); err != nil {
 		return nil, err
 	}
-	for _, target := range binding.Spec.Targets {
+	for index, target := range binding.Spec.Targets {
+		if err := log("info", fmt.Sprintf("Updating workload %d/%d: %s", index+1, len(binding.Spec.Targets), target.ID)); err != nil {
+			return nil, err
+		}
 		workload, err := readWorkload(ctx, runner, cluster.Spec.Kubeconfig, application.Spec.Namespace, target)
 		if err != nil {
 			return nil, err
@@ -436,6 +439,9 @@ func (plugin Plugin) Execute(ctx context.Context, step domain.PlanStep, log plug
 		if err := plugin.waitForTargetStable(ctx, runner, cluster.Spec.Kubeconfig, application.Spec.Namespace, target, input); err != nil {
 			_ = logTargetDiagnostics(ctx, runner, cluster.Spec.Kubeconfig, application.Spec.Namespace, target, log)
 			return nil, fmt.Errorf("workload %s did not stabilize on scheduler %s: %w", target.ID, input.SchedulerName, err)
+		}
+		if err := log("info", fmt.Sprintf("Workload %d/%d is stable: %s", index+1, len(binding.Spec.Targets), target.ID)); err != nil {
+			return nil, err
 		}
 	}
 	value := result{SchedulerDeployment: schedulerDeployment{

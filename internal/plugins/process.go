@@ -72,6 +72,7 @@ const pluginLogLineLimit = 16 * 1024
 const pluginLogByteLimit = 1 << 20
 const pluginLogEventLimit = 1000
 const pluginErrorLineLimit = 128
+const pluginErrorMessageLimit = 2048
 
 var pluginIDExpression = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9.-]{0,126}[a-z0-9])?$`)
 var providerExpression = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9.-]{0,78}[a-z0-9])?$`)
@@ -492,16 +493,29 @@ func (p *Process) invoke(parent context.Context, command string, input, output a
 		return errors.New("plugin output exceeds 1 MiB")
 	}
 	if processErr != nil {
-		message := strings.Join(messages, "; ")
-		if message == "" {
-			message = processErr.Error()
-		}
-		return errors.New(message)
+		return errors.New(pluginErrorMessage(messages, processErr))
 	}
 	if err := json.Unmarshal(stdout, output); err != nil {
 		return fmt.Errorf("plugin returned invalid JSON: %w", err)
 	}
 	return nil
+}
+
+func pluginErrorMessage(messages []string, fallback error) string {
+	message := ""
+	for index := len(messages) - 1; index >= 0; index-- {
+		if value := strings.TrimSpace(messages[index]); value != "" {
+			message = value
+			break
+		}
+	}
+	if message == "" && fallback != nil {
+		message = fallback.Error()
+	}
+	if len(message) > pluginErrorMessageLimit {
+		message = message[:pluginErrorMessageLimit]
+	}
+	return message
 }
 
 func withoutRuntimeEnvironment(values []string) []string {
