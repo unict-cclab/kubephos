@@ -495,7 +495,7 @@ func (plugin Plugin) Cleanup(ctx context.Context, step domain.PlanStep, _ json.R
 	if err := validateCleanupOwnership(ctx, runner, cluster.Spec.Kubeconfig, input, application.Spec.Namespace, binding.Spec.Targets); err != nil {
 		return err
 	}
-	for _, target := range binding.Spec.Targets {
+	for index, target := range binding.Spec.Targets {
 		workload, err := readWorkload(ctx, runner, cluster.Spec.Kubeconfig, application.Spec.Namespace, target)
 		if err != nil {
 			if isNotFound(err) {
@@ -506,6 +506,9 @@ func (plugin Plugin) Cleanup(ctx context.Context, step domain.PlanStep, _ json.R
 		if workload.Spec.Template.Metadata.Annotations[ownershipKey] != input.Marker {
 			continue
 		}
+		if err := log("info", fmt.Sprintf("Restoring workload %d/%d: %s", index+1, len(binding.Spec.Targets), target.ID)); err != nil {
+			return err
+		}
 		patch, err := restorePatch(workload.Spec.Template.Metadata.Annotations[previousKey])
 		if err != nil {
 			return err
@@ -515,6 +518,9 @@ func (plugin Plugin) Cleanup(ctx context.Context, step domain.PlanStep, _ json.R
 		}
 		if _, err := runner.Run(ctx, cluster.Spec.Kubeconfig, nil, "rollout", "status", resourceName(target), "-n", application.Spec.Namespace, "--timeout=10m"); err != nil {
 			return fmt.Errorf("restored workload %s did not become ready: %w", target.ID, err)
+		}
+		if err := log("info", fmt.Sprintf("Workload %d/%d restored: %s", index+1, len(binding.Spec.Targets), target.ID)); err != nil {
+			return err
 		}
 	}
 	manifest, err := schedulerManifest(input)
