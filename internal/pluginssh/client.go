@@ -71,11 +71,17 @@ func (c *Client) Run(ctx context.Context, target Target, privateKey, command str
 	}
 	completed := make(chan result, 1)
 	go func() {
-		value, err := session.CombinedOutput(command)
+		value, err := session.CombinedOutput(cancellableCommand(command))
 		completed <- result{value: value, err: err}
 	}()
 	select {
 	case <-ctx.Done():
+		_ = session.Signal(ssh.SIGTERM)
+		select {
+		case <-completed:
+		case <-time.After(2 * time.Second):
+			_ = session.Signal(ssh.SIGKILL)
+		}
 		_ = client.Close()
 		return "", ctx.Err()
 	case value := <-completed:
@@ -88,4 +94,8 @@ func (c *Client) Run(ctx context.Context, target Target, privateKey, command str
 		}
 		return output, nil
 	}
+}
+
+func cancellableCommand(command string) string {
+	return "trap 'trap - TERM INT HUP; /usr/bin/kill -TERM -- -$$' TERM INT HUP; ( " + command + " ) & kubephos_remote_pid=$!; wait \"$kubephos_remote_pid\""
 }
