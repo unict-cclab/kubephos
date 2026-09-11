@@ -35,6 +35,8 @@ RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/managed-observabil
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/oci-build-plugin ./cmd/oci-build-plugin
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/oci-executor-plugin ./cmd/oci-executor-plugin
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/ssh-command-plugin ./cmd/ssh-command-plugin
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/harbor-browser-plugin ./cmd/harbor-browser-plugin
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/nfs-browser-plugin ./cmd/nfs-browser-plugin
 
 FROM alpine:3.23
 
@@ -78,6 +80,10 @@ COPY --from=build /out/oci-executor-plugin /opt/kubephos/plugins/oci-executor/oc
 COPY plugins/oci-executor/plugin.yaml /opt/kubephos/plugins/oci-executor/plugin.yaml
 COPY --from=build /out/ssh-command-plugin /opt/kubephos/plugins/ssh-command/ssh-command-plugin
 COPY plugins/ssh-command/plugin.yaml /opt/kubephos/plugins/ssh-command/plugin.yaml
+COPY --from=build /out/harbor-browser-plugin /opt/kubephos/plugins/harbor-browser/harbor-browser-plugin
+COPY plugins/harbor-browser/plugin.yaml /opt/kubephos/plugins/harbor-browser/plugin.yaml
+COPY --from=build /out/nfs-browser-plugin /opt/kubephos/plugins/nfs-browser/nfs-browser-plugin
+COPY plugins/nfs-browser/plugin.yaml /opt/kubephos/plugins/nfs-browser/plugin.yaml
 COPY catalog/applications /opt/kubephos/catalog/applications
 COPY --from=web /src/frontend/dist /opt/kubephos/web
 USER 10001:10001

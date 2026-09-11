@@ -1,0 +1,71 @@
+apiVersion: plugins.kubephos.io/v1alpha1
+kind: Plugin
+metadata:
+  id: io.kubephos.storage.nfs.browser
+  name: NFS data browser
+  version: 0.1.0
+  description: Lists, reads, writes and deletes bounded files inside a verified managed NFS export.
+spec:
+  protocol: v1alpha1
+  provider: nfs
+  commands: [describe, validate, plan, precheck, execute, verify, status, cancel, cleanup]
+  configurationSchema:
+    type: object
+    additionalProperties: false
+    required: [machineSetRef, machineAccessRef, sharedStorageEndpointRef, action, path, content, protectOutput]
+    properties:
+      machineSetRef:
+        type: string
+        title: Storage machine
+        format: kubephos-artifact-ref
+        x-kubephos-artifact-type: MachineSet
+        x-kubephos-artifact-version: v1alpha1
+      machineAccessRef:
+        type: string
+        title: Machine access
+        format: kubephos-artifact-ref
+        x-kubephos-artifact-type: MachineAccess
+        x-kubephos-artifact-version: v1alpha1
+      sharedStorageEndpointRef:
+        type: string
+        title: Managed NFS export
+        format: kubephos-artifact-ref
+        x-kubephos-artifact-type: SharedStorageEndpoint
+        x-kubephos-artifact-version: v1alpha1
+      action:
+        type: string
+        title: Action
+        x-kubephos-primary-action: true
+        enum: [list, read, write, delete]
+        default: list
+      path:
+        type: string
+        title: Relative path
+        description: Dot selects the export root; parent traversal and absolute paths are rejected.
+        minLength: 1
+        maxLength: 512
+        default: .
+      content:
+        type: string
+        title: File content
+        description: Used only by write and limited to 128 KiB.
+        maxLength: 131072
+        default: ""
+        x-kubephos-multiline: true
+      protectOutput:
+        type: boolean
+        title: Protect result
+        description: Keep enabled when names or file content may be private.
+        default: true
+  runtime:
+    executable: nfs-browser-plugin
+    timeout: 5m
+  artifacts:
+    inputs:
+      - {type: MachineSet, version: v1alpha1}
+      - {type: MachineAccess, version: v1alpha1}
+      - {type: SharedStorageEndpoint, version: v1alpha1}
+    outputs:
+      - {type: SharedStorageView, version: v1alpha1}
+  capabilities: [infrastructure.storage.control, infrastructure.storage.preflight]
+  permissions: [network.ssh, storage.read, storage.manage]

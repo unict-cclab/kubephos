@@ -1,0 +1,84 @@
+apiVersion: plugins.kubephos.io/v1alpha1
+kind: Plugin
+metadata:
+  id: io.kubephos.registry.harbor.browser
+  name: Harbor registry browser
+  version: 0.1.0
+  description: Browses and manages a verified Harbor registry through its managed API artifacts.
+spec:
+  protocol: v1alpha1
+  provider: harbor
+  commands:
+    - describe
+    - validate
+    - plan
+    - precheck
+    - execute
+    - verify
+    - status
+    - cancel
+    - cleanup
+  configurationSchema:
+    type: object
+    additionalProperties: false
+    required:
+      - registryEndpointRef
+      - registryCredentialRef
+      - action
+    properties:
+      registryEndpointRef:
+        type: string
+        title: Managed registry
+        format: kubephos-artifact-ref
+        x-kubephos-artifact-type: RegistryEndpoint
+        x-kubephos-artifact-version: v1alpha1
+      registryCredentialRef:
+        type: string
+        title: Management access
+        format: kubephos-artifact-ref
+        x-kubephos-artifact-type: RegistryCredential
+        x-kubephos-artifact-version: v1alpha1
+      action:
+        type: string
+        title: Action
+        x-kubephos-primary-action: true
+        enum:
+          - list-projects
+          - list-repositories
+          - list-artifacts
+          - delete-artifact
+        default: list-projects
+      project:
+        type: string
+        title: Project
+        description: Required when browsing repositories or artifacts.
+        maxLength: 255
+      repository:
+        type: string
+        title: Repository
+        description: Required when browsing or deleting artifacts.
+        maxLength: 255
+      reference:
+        type: string
+        title: Tag or digest
+        description: Required only when deleting one artifact.
+        maxLength: 255
+  runtime:
+    executable: harbor-browser-plugin
+    timeout: 5m
+  artifacts:
+    inputs:
+      - type: RegistryEndpoint
+        version: v1alpha1
+      - type: RegistryCredential
+        version: v1alpha1
+    outputs:
+      - type: RegistryView
+        version: v1alpha1
+  capabilities:
+    - infrastructure.registry.control
+    - infrastructure.registry.preflight
+  permissions:
+    - network.egress
+    - registry.read
+    - registry.manage
