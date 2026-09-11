@@ -70,6 +70,8 @@ func NewServer(store *storage.Store, registry *plugins.Registry, artifactStore *
 	router.HandleFunc("GET /api/v1/plugins", server.listPlugins)
 	router.HandleFunc("POST /api/v1/plugins/inspect", server.inspectPlugin)
 	router.HandleFunc("POST /api/v1/plugins", server.importPlugin)
+	router.HandleFunc("GET /api/v1/plugin-imports", server.listPluginImports)
+	router.HandleFunc("GET /api/v1/plugin-imports/{id}", server.getPluginImport)
 	router.HandleFunc("GET /api/v1/plugin-packages", server.listPluginPackages)
 	router.HandleFunc("POST /api/v1/plugin-packages/{sequence}/activate", server.activatePluginPackage)
 	router.HandleFunc("POST /api/v1/plugin-packages/{sequence}/deactivate", server.deactivatePluginPackage)
@@ -593,45 +595,29 @@ func (s *Server) importPlugin(response http.ResponseWriter, request *http.Reques
 	if !ok {
 		return
 	}
-	s.pluginMu.Lock()
-	defer s.pluginMu.Unlock()
-	plugin, err := s.loadPlugin([]byte(descriptor))
+	manifest, err := plugins.InspectDefinition([]byte(descriptor))
 	if err != nil {
 		writeError(response, http.StatusUnprocessableEntity, "invalid_plugin", err.Error())
 		return
 	}
-	manifest := plugin.Manifest()
 	if s.registry.IsBundled(manifest.ID) {
 		writeError(response, http.StatusConflict, "plugin_conflict", "A bundled plugin cannot be replaced.")
 		return
 	}
+	if err := plugins.ValidateRuntimeImage(s.runtime, manifest.Runtime.Reference); err != nil {
+		writeError(response, http.StatusUnprocessableEntity, "invalid_plugin", err.Error())
+		return
+	}
 	descriptorDigest := sha256.Sum256([]byte(descriptor))
 	descriptorFingerprint := "sha256:" + hex.EncodeToString(descriptorDigest[:])
-	current, currentErr := s.store.GetActivePluginPackage(request.Context(), manifest.ID)
-	if currentErr != nil && !errors.Is(currentErr, storage.ErrNotFound) {
-		writeError(response, http.StatusInternalServerError, "database_error", "Could not inspect the installed plugin package.")
-		return
-	}
-	if currentErr == nil && current.Version == manifest.Version && current.Digest == manifest.Runtime.Digest && current.DescriptorDigest != descriptorFingerprint {
-		writeError(response, http.StatusConflict, "plugin_conflict", "Changed descriptors require a new plugin version or image digest.")
-		return
-	}
-	pluginPackage, err := s.store.ActivatePluginPackage(request.Context(), domain.PluginPackage{
-		PluginID: manifest.ID, Version: manifest.Version, Digest: manifest.Runtime.Digest, Descriptor: descriptor,
-		DescriptorDigest: descriptorFingerprint, Active: true,
+	job, err := s.store.CreatePluginImportJob(request.Context(), domain.PluginImportJob{
+		ID: id.New("pimport"), Descriptor: descriptor, DescriptorDigest: descriptorFingerprint,
 	})
 	if err != nil {
-		writeError(response, http.StatusInternalServerError, "database_error", "Could not store plugin package.")
+		writeError(response, http.StatusInternalServerError, "database_error", "Could not queue the plugin import.")
 		return
 	}
-	if err := s.registry.Install(plugin); err != nil {
-		writeError(response, http.StatusConflict, "plugin_conflict", err.Error())
-		return
-	}
-	if currentErr == nil && current.Digest != pluginPackage.Digest {
-		s.evictPluginPackage(current)
-	}
-	writeJSON(response, http.StatusCreated, map[string]any{"id": manifest.ID, "manifest": manifest, "package": pluginPackage})
+	writeJSON(response, http.StatusAccepted, job)
 }
 
 func decodePluginDescriptor(response http.ResponseWriter, request *http.Request) (string, bool) {
@@ -648,6 +634,28 @@ func decodePluginDescriptor(response http.ResponseWriter, request *http.Request)
 		return "", false
 	}
 	return input.Descriptor, true
+}
+
+func (s *Server) listPluginImports(response http.ResponseWriter, request *http.Request) {
+	items, err := s.store.ListPluginImportJobs(request.Context(), 50)
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, "database_error", "Could not list plugin import jobs.")
+		return
+	}
+	writeJSON(response, http.StatusOK, map[string]any{"items": items})
+}
+
+func (s *Server) getPluginImport(response http.ResponseWriter, request *http.Request) {
+	job, err := s.store.GetPluginImportJob(request.Context(), request.PathValue("id"))
+	if errors.Is(err, storage.ErrNotFound) {
+		writeError(response, http.StatusNotFound, "not_found", "Plugin import job not found.")
+		return
+	}
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, "database_error", "Could not read the plugin import job.")
+		return
+	}
+	writeJSON(response, http.StatusOK, job)
 }
 
 func (s *Server) listPluginPackages(response http.ResponseWriter, request *http.Request) {

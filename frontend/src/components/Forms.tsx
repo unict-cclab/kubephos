@@ -257,7 +257,7 @@ export function PluginDialog({open, close, ...common}: CommonProps & {open: bool
       }
       await request('/plugins', {method: 'POST', body: JSON.stringify({descriptor: value})}, common.session.csrfToken)
       dismiss()
-      await common.onDone('Plugin validated and activated.')
+      await common.onDone('Plugin import queued. Progress is visible in the Plugins view.')
     } catch (cause) {
       setError(errorMessage(cause))
     } finally {
@@ -270,7 +270,7 @@ export function PluginDialog({open, close, ...common}: CommonProps & {open: bool
       <p className="field-description">{file ? `${file.name} · ${Math.ceil(file.size / 1024)} KB` : 'Select a plugins.kubephos.io/v1alpha1 descriptor.'}</p>
       {preview ? <div className="notice"><strong>{preview.manifest.name} · {preview.manifest.version}</strong><p>{preview.manifest.id}</p><p className="digest">{preview.manifest.runtime.reference}</p><p>{preview.manifest.permissions?.length ? `Permissions: ${preview.manifest.permissions.join(', ')}` : 'No permissions requested.'}</p><p>{preview.manifest.capabilities?.length ? `Capabilities: ${preview.manifest.capabilities.join(', ')}` : 'No capabilities declared.'}</p><p className={preview.policyAccepted ? 'field-description' : 'form-error'}>{preview.policyMessage}</p></div> : <ValidationCallout text="The first step parses the strict contract and shows image, digest, permissions and capabilities without executing the plugin." />}
       <p className="form-error">{error}</p>
-      <div className="modal-actions"><button className="button secondary" type="button" onClick={dismiss}>Cancel</button><button className="button primary" disabled={pending || Boolean(preview && (!preview.executorAvailable || !preview.policyAccepted))}>{pending ? 'Please wait…' : preview ? 'Run checks and activate' : 'Review plugin'}</button></div>
+      <div className="modal-actions"><button className="button secondary" type="button" onClick={dismiss}>Cancel</button><button className="button primary" disabled={pending || Boolean(preview && (!preview.executorAvailable || !preview.policyAccepted))}>{pending ? 'Queuing…' : preview ? 'Queue validation and activation' : 'Review plugin'}</button></div>
     </form>
   </Dialog>
 }

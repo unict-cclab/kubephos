@@ -8,7 +8,7 @@ import {Views} from './components/Views'
 import {WorkspaceFlowDialog} from './components/WorkspaceFlowDialog'
 import type {PlatformData, PluginPackage, Session, View, Workspace} from './types'
 
-const emptyData: PlatformData = {system: null, pluginRuntime: null, workspaces: [], pipelines: [], pipelineRuns: [], experiments: [], operations: [], artifacts: [], plugins: [], pluginPackages: [], applications: [], credentials: [], connections: [], resources: [], audit: []}
+const emptyData: PlatformData = {system: null, pluginRuntime: null, workspaces: [], pipelines: [], pipelineRuns: [], experiments: [], operations: [], artifacts: [], plugins: [], pluginPackages: [], pluginImports: [], applications: [], credentials: [], connections: [], resources: [], audit: []}
 const viewMetadata: Record<View, [string, string]> = {
   overview: ['CONTROL PLANE', 'Overview'],
   workspaces: ['ENVIRONMENTS', 'Workspaces'],
@@ -55,7 +55,7 @@ export default function App() {
     if (!session?.authenticated) return
     setRefreshing(true)
     try {
-      const [system, pluginRuntime, workspaces, pipelines, pipelineRuns, experiments, operations, artifacts, plugins, pluginPackages, applications, credentials, connections, resources, audit] = await Promise.all([
+      const [system, pluginRuntime, workspaces, pipelines, pipelineRuns, experiments, operations, artifacts, plugins, pluginPackages, pluginImports, applications, credentials, connections, resources, audit] = await Promise.all([
         request<PlatformData['system']>('/system'),
         request<PlatformData['pluginRuntime']>('/plugin-runtime'),
         request<{items: PlatformData['workspaces']}>('/workspaces'),
@@ -66,13 +66,14 @@ export default function App() {
         request<{items: PlatformData['artifacts']}>('/artifacts?limit=500'),
         request<{items: PlatformData['plugins']}>('/plugins'),
         request<{items: PlatformData['pluginPackages']}>('/plugin-packages'),
+        request<{items: PlatformData['pluginImports']}>('/plugin-imports'),
         request<{items: PlatformData['applications']}>('/catalog/applications'),
         request<{items: PlatformData['credentials']}>('/credentials'),
         request<{items: PlatformData['connections']}>('/connections'),
         request<{items: PlatformData['resources']}>('/infrastructure/resources'),
         request<{items: PlatformData['audit']}>('/audit?limit=20')
       ])
-      setData({system, pluginRuntime, workspaces: workspaces.items, pipelines: pipelines.items, pipelineRuns: pipelineRuns.items, experiments: experiments.items, operations: operations.items, artifacts: artifacts.items, plugins: plugins.items, pluginPackages: pluginPackages.items, applications: applications.items, credentials: credentials.items, connections: connections.items, resources: resources.items, audit: audit.items})
+      setData({system, pluginRuntime, workspaces: workspaces.items, pipelines: pipelines.items, pipelineRuns: pipelineRuns.items, experiments: experiments.items, operations: operations.items, artifacts: artifacts.items, plugins: plugins.items, pluginPackages: pluginPackages.items, pluginImports: pluginImports.items, applications: applications.items, credentials: credentials.items, connections: connections.items, resources: resources.items, audit: audit.items})
       setConnected(true)
       if (!silent) notify('Everything is up to date.')
     } catch (cause) {

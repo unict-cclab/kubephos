@@ -218,11 +218,11 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .status-dot { width: 8px; height: 8px; flex: 0 0 auto; border-radius: 50%; background: #aeb8b1; }
 .status-dot.succeeded, .status-dot.ready { background: var(--green); }
 .status-dot.failed, .status-dot.canceled { background: var(--red); }
-.status-dot.queued, .status-dot.prechecking, .status-dot.running, .status-dot.verifying { background: var(--blue); box-shadow: 0 0 0 3px rgba(49,105,168,.12); }
+.status-dot.queued, .status-dot.prechecking, .status-dot.running, .status-dot.verifying, .status-dot.inspecting, .status-dot.validating, .status-dot.activating { background: var(--blue); box-shadow: 0 0 0 3px rgba(49,105,168,.12); }
 .status-pill { border-radius: 999px; padding: 5px 8px; background: #eef1ee; color: var(--muted); font-size: 8px; font-weight: 850; text-transform: uppercase; }
 .status-pill.succeeded { background: #e8f5ee; color: var(--green); }
 .status-pill.failed, .status-pill.canceled { background: #fae9e8; color: var(--red); }
-.status-pill.queued, .status-pill.running, .status-pill.prechecking, .status-pill.verifying { background: #e9f0f8; color: var(--blue); }
+.status-pill.queued, .status-pill.running, .status-pill.prechecking, .status-pill.verifying, .status-pill.inspecting, .status-pill.validating, .status-pill.activating { background: #e9f0f8; color: var(--blue); }
 
 .workspace-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 15px; }
 .catalog-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 15px; margin-top: 20px; }
@@ -270,6 +270,9 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .credential-row { display: grid; grid-template-columns: 42px 1fr auto; align-items: center; gap: 14px; border: 1px solid var(--line); border-radius: 13px; padding: 15px 17px; background: var(--surface); }
 .credential-row h3, .resource-row h3, .audit-row h3 { margin: 0; font-size: 14px; }
 .credential-row p, .resource-row p, .audit-row p, .field-description { margin: 4px 0 0; color: var(--muted); font-size: 11px; }
+.import-progress { width: min(420px, 100%); height: 5px; margin-top: 9px; overflow: hidden; border-radius: 999px; background: #e8ebee; }
+.import-progress span { display: block; height: 100%; border-radius: inherit; background: var(--blue); transition: width .3s ease; }
+.import-row:has(.status-pill.failed) .import-progress span { background: var(--red); }
 .resource-row { display: grid; grid-template-columns: 42px 1fr auto; align-items: center; gap: 14px; border: 1px solid var(--line); border-radius: 13px; padding: 15px 17px; background: var(--surface); }
 .resource-badges { display: flex; align-items: center; gap: 7px; }
 .protection { border-radius: 999px; padding: 6px 9px; background: #f4ece1; color: #805921; font-size: 10px; font-weight: 800; letter-spacing: .05em; text-transform: uppercase; }

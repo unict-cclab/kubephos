@@ -19,6 +19,7 @@ import (
 	"kubephos.dev/kubephos/internal/catalog"
 	"kubephos.dev/kubephos/internal/config"
 	"kubephos.dev/kubephos/internal/engine"
+	"kubephos.dev/kubephos/internal/pluginimports"
 	"kubephos.dev/kubephos/internal/pluginruntime"
 	"kubephos.dev/kubephos/internal/plugins"
 	"kubephos.dev/kubephos/internal/secrets"
@@ -129,6 +130,7 @@ func serve(configValue config.Config) error {
 	if err := refreshInstalledPlugins(ctx, store, registry, loader); err != nil {
 		slog.Error("load installed plugins", "error", err)
 	}
+	go watchInstalledPlugins(ctx, store, registry, loader)
 	handler, err := api.NewServer(store, registry, artifactStore, vault, runtime, loader, version, configValue.WebDirectory)
 	if err != nil {
 		return err
@@ -169,6 +171,7 @@ func work(configValue config.Config) error {
 		slog.Error("load installed plugins", "error", err)
 	}
 	go watchInstalledPlugins(ctx, store, registry, loader)
+	go pluginimports.NewWorker(store, registry, runtime, loader, configValue.InstanceID+"-plugin-import", configValue.WorkerPoll).Run(ctx)
 	slog.Info("starting worker", "instance", configValue.InstanceID, "concurrency", configValue.WorkerConcurrency)
 	return engine.NewWorker(store, registry, artifactStore, vault, configValue.InstanceID, configValue.WorkerConcurrency, configValue.WorkerPoll).Run(ctx)
 }

@@ -72,6 +72,24 @@ export interface PluginPackage {
 	updatedAt: string
 }
 
+export interface PluginImportJob {
+  id: string
+  status: 'queued' | 'inspecting' | 'validating' | 'activating' | 'succeeded' | 'failed'
+  progress: number
+  message: string
+  error?: string
+  descriptorDigest: string
+  manifest?: Plugin
+  pluginId?: string
+  version?: string
+  digest?: string
+  packageSequence?: number
+  createdAt: string
+  startedAt?: string
+  completedAt?: string
+  updatedAt: string
+}
+
 export interface PluginRuntimeRegistry {
   endpointArtifactId: string
   credentialArtifactId: string
@@ -396,6 +414,7 @@ export interface PlatformData {
   artifacts: Artifact[]
   plugins: Plugin[]
   pluginPackages: PluginPackage[]
+  pluginImports: PluginImportJob[]
   applications: Application[]
   credentials: Credential[]
   connections: Connection[]

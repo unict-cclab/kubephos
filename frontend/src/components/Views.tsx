@@ -1,6 +1,6 @@
 import {useEffect, useState} from 'react'
 import {formatDate, shortID} from '../lib'
-import type {Application, Artifact, AuditEvent, Connection, Credential, Experiment, InfrastructureResource, Operation, Pipeline, PipelineRun, Plugin, PluginPackage, PluginRuntimeStatus, Session, SystemStatus, View, Workspace} from '../types'
+import type {Application, Artifact, AuditEvent, Connection, Credential, Experiment, InfrastructureResource, Operation, Pipeline, PipelineRun, Plugin, PluginImportJob, PluginPackage, PluginRuntimeStatus, Session, SystemStatus, View, Workspace} from '../types'
 import {PipelinesView} from './PipelinesView'
 import {ResultsView} from './ResultsView'
 
@@ -16,6 +16,7 @@ interface ViewProps {
   experiments: Experiment[]
   plugins: Plugin[]
   pluginPackages: PluginPackage[]
+  pluginImports: PluginImportJob[]
   applications: Application[]
   credentials: Credential[]
   connections: Connection[]
@@ -69,12 +70,19 @@ export function Views(props: ViewProps) {
       <p className="section-copy catalog-copy">{props.system?.features?.ociPluginImport ? 'Every external capability is validated and activated by immutable image digest.' : 'External packages can be reviewed now; activation becomes available when the dedicated OCI executor is healthy.'}</p>
       <div className={`runtime-card ${props.pluginRuntime?.status ?? 'disabled'}`}><span className="feature-icon">⬡</span><div><p className="eyebrow">ISOLATED EXECUTION</p><h3>{props.pluginRuntime?.configured ? 'Managed OCI runtime' : 'OCI runtime not configured'}</h3><p>{props.pluginRuntime?.message ?? 'Select verified executor and registry artifacts to enable external plugins.'}</p></div><div className="card-actions"><Status value={props.pluginRuntime?.status ?? 'disabled'} />{props.isAdmin && <button className="button secondary compact" onClick={props.configureRuntime}>{props.pluginRuntime?.configured ? 'Manage' : 'Configure'}</button>}</div></div>
       <PluginGrid items={props.plugins} />
+      {!!props.pluginImports.length && <><Heading eyebrow="IMPORT QUEUE" title="Package validation" copy="Imports run in the background and activate only after every gate passes." /><div className="credential-list">{props.pluginImports.slice(0, 10).map(item => <PluginImportRow key={item.id} item={item} />)}</div></>}
       {!!props.pluginPackages.length && <><Heading eyebrow="PACKAGE HISTORY" title="Imported versions" copy="Every activation remains traceable and a prior version can be restored only after all checks pass again." /><div className="credential-list">{props.pluginPackages.map(item => <article className="credential-row" key={item.sequence}><span className="feature-icon">◇</span><div><h3>{item.pluginId} · {item.version}</h3><p>{item.digest.slice(0, 19)} · descriptor {item.descriptorDigest.slice(0, 19)}</p></div>{item.active ? <div className="card-actions"><Status value="Active" /><button className="button secondary compact" onClick={() => props.deactivatePlugin(item)}>Deactivate</button></div> : <button className="button secondary compact" disabled={!props.system?.features?.ociPluginImport} title={props.system?.features?.ociPluginImport ? '' : 'Configure the dedicated OCI executor first'} onClick={() => props.activatePlugin(item)}>Restore</button>}</article>)}</div></>}
     </section>
     <section className={`view ${props.view === 'infrastructure' ? 'active' : ''}`}>
       <Infrastructure {...props} />
     </section>
   </>
+}
+
+function PluginImportRow({item}: {item: PluginImportJob}) {
+  const title = item.pluginId ? `${item.pluginId}${item.version ? ` · ${item.version}` : ''}` : `Package ${shortID(item.id)}`
+  const detail = item.error || item.message
+  return <article className="credential-row import-row"><span className="feature-icon">⇣</span><div><h3>{title}</h3><p>{detail}</p><div className="import-progress" role="progressbar" aria-label={`${title} import progress`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={item.progress}><span style={{width: `${item.progress}%`}} /></div></div><Status value={item.status} /></article>
 }
 
 function Overview(props: ViewProps) {

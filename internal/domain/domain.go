@@ -272,6 +272,25 @@ type PluginPackage struct {
 	UpdatedAt        time.Time `json:"updatedAt"`
 }
 
+type PluginImportJob struct {
+	ID               string          `json:"id"`
+	Status           string          `json:"status"`
+	Progress         int             `json:"progress"`
+	Message          string          `json:"message"`
+	Error            string          `json:"error,omitempty"`
+	Descriptor       string          `json:"-"`
+	DescriptorDigest string          `json:"descriptorDigest"`
+	Manifest         json.RawMessage `json:"manifest,omitempty"`
+	PluginID         string          `json:"pluginId,omitempty"`
+	Version          string          `json:"version,omitempty"`
+	Digest           string          `json:"digest,omitempty"`
+	PackageSequence  *int64          `json:"packageSequence,omitempty"`
+	CreatedAt        time.Time       `json:"createdAt"`
+	StartedAt        *time.Time      `json:"startedAt,omitempty"`
+	CompletedAt      *time.Time      `json:"completedAt,omitempty"`
+	UpdatedAt        time.Time       `json:"updatedAt"`
+}
+
 type PluginRuntimeRegistry struct {
 	EndpointArtifactID   string `json:"endpointArtifactId"`
 	CredentialArtifactID string `json:"credentialArtifactId"`
