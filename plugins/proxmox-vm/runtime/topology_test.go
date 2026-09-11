@@ -120,6 +120,29 @@ func TestTopologyRollsBackCreatedMachinesOnPartialFailure(t *testing.T) {
 	}
 }
 
+func TestTopologyRejectsAnUnreachableGatewayBeforeSSH(t *testing.T) {
+	server, state := newTopologyServer(t, 0)
+	defer server.Close()
+	state.guestExecExitCode = 3
+	invocation, _ := topologyInvocation(server.URL, false)
+	plugin := TopologyPlugin{SSH: fakeSSHAccess{}}
+	plan, err := plugin.Plan(context.Background(), invocation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = plugin.Execute(context.Background(), plan.Steps[0], invocation.Secrets, invocation.Connections, func(string, string) error { return nil })
+	if err == nil || !strings.Contains(err.Error(), "gateway 10.10.0.1 is unreachable") {
+		t.Fatalf("expected gateway rejection, got %v", err)
+	}
+	state.lock.Lock()
+	defer state.lock.Unlock()
+	for id := 9000; id <= 9002; id++ {
+		if state.machines[id].exists {
+			t.Fatalf("VM %d was not rolled back after gateway rejection", id)
+		}
+	}
+}
+
 func TestTopologySupportsExplicitVerifiedCleanup(t *testing.T) {
 	server, state := newTopologyServer(t, 0)
 	defer server.Close()
@@ -241,10 +264,11 @@ func TestTopologyCleanupIsIdempotent(t *testing.T) {
 }
 
 type topologyServerState struct {
-	lock     sync.Mutex
-	machines map[int]*topologyServerMachine
-	writes   []string
-	failVMID int
+	lock              sync.Mutex
+	machines          map[int]*topologyServerMachine
+	writes            []string
+	failVMID          int
+	guestExecExitCode int
 }
 
 type topologyServerMachine struct {
@@ -336,7 +360,7 @@ func newTopologyServer(t *testing.T, failVMID int) (*httptest.Server, *topologyS
 		case request.Method == http.MethodGet && request.URL.Path == "/api2/json/nodes":
 			_, _ = response.Write([]byte(`{"data":[{"node":"pve","status":"online"}]}`))
 		case request.Method == http.MethodGet && request.URL.Path == "/api2/json/access/permissions":
-			_, _ = response.Write([]byte(`{"data":{"/":{"Datastore.AllocateSpace":1,"VM.Allocate":1,"VM.Clone":1,"VM.Config.CPU":1,"VM.Config.Disk":1,"VM.Config.Memory":1,"VM.Config.Options":1,"VM.PowerMgmt":1}}}`))
+			_, _ = response.Write([]byte(`{"data":{"/":{"Datastore.AllocateSpace":1,"VM.Allocate":1,"VM.Clone":1,"VM.Config.CPU":1,"VM.Config.Disk":1,"VM.Config.Memory":1,"VM.Config.Options":1,"VM.GuestAgent.Unrestricted":1,"VM.PowerMgmt":1}}}`))
 		case request.Method == http.MethodGet && request.URL.Path == "/api2/json/nodes/pve/qemu/8000/config":
 			_, _ = response.Write([]byte(`{"data":{"name":"template","boot":"order=scsi0;ide2","scsi0":"local-lvm:base-8000-disk-0,size=8G"}}`))
 		case request.Method == http.MethodPost && request.URL.Path == "/api2/json/nodes/pve/qemu/8000/clone":
@@ -402,7 +426,7 @@ func newTopologyServer(t *testing.T, failVMID int) (*httptest.Server, *topologyS
 		case request.Method == http.MethodPost && strings.HasSuffix(request.URL.Path, "/agent/exec"):
 			_ = request.ParseForm()
 			command := request.Form["command"]
-			if len(command) != 3 || command[0] != "/bin/sh" || command[1] != "-c" {
+			if len(command) < 3 || command[0] != "/bin/sh" || command[1] != "-c" {
 				http.Error(response, "unexpected guest command", http.StatusBadRequest)
 				return
 			}
@@ -412,7 +436,12 @@ func newTopologyServer(t *testing.T, failVMID int) (*httptest.Server, *topologyS
 				http.Error(response, "unexpected process identifier", http.StatusBadRequest)
 				return
 			}
-			_, _ = response.Write([]byte(`{"data":{"exited":1,"exitcode":0,"out-data":"ssh-services:\nactive"}}`))
+			output := "device=eth0 neighbor=10.10.0.1 dev eth0 lladdr 00:11:22:33:44:55 REACHABLE\nssh-services:\nactive"
+			if state.guestExecExitCode == 0 {
+				_, _ = response.Write([]byte(fmt.Sprintf(`{"data":{"exited":1,"exitcode":0,"out-data":%q}}`, output)))
+			} else {
+				_, _ = response.Write([]byte(fmt.Sprintf(`{"data":{"exited":1,"exitcode":%d,"out-data":%q}}`, state.guestExecExitCode, output)))
+			}
 		case request.Method == http.MethodDelete && strings.Contains(request.URL.Path, "/qemu/"):
 			id := topologyRequestVMID(request.URL.Path)
 			machine := state.machines[id]

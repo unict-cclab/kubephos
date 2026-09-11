@@ -197,7 +197,7 @@ func (TopologyPlugin) Validate(ctx context.Context, invocation Invocation) domai
 	if err != nil {
 		return invalidReport(report, "connectionRef", fmt.Sprintf("Token permissions cannot be verified: %v", err))
 	}
-	for _, privilege := range []string{"Datastore.AllocateSpace", "VM.Allocate", "VM.Clone", "VM.Config.CPU", "VM.Config.Disk", "VM.Config.Memory", "VM.Config.Options", "VM.PowerMgmt"} {
+	for _, privilege := range []string{"Datastore.AllocateSpace", "VM.Allocate", "VM.Clone", "VM.Config.CPU", "VM.Config.Disk", "VM.Config.Memory", "VM.Config.Options", "VM.GuestAgent.Unrestricted", "VM.PowerMgmt"} {
 		if !hasPrivilege(permissions, privilege) {
 			return invalidReport(report, "connectionRef", fmt.Sprintf("Token is missing required privilege %s.", privilege))
 		}
@@ -358,6 +358,9 @@ func (plugin TopologyPlugin) Execute(ctx context.Context, step domain.PlanStep, 
 		created = append(created, planned)
 	}
 	if err := verifyTopologyGuestAddresses(ctx, connection, input, 90*time.Second, log); err != nil {
+		return nil, errors.Join(err, cleanupTopology(context.WithoutCancel(ctx), connection, input, log))
+	}
+	if err := verifyTopologyGateways(ctx, connection, input, log); err != nil {
 		return nil, errors.Join(err, cleanupTopology(context.WithoutCancel(ctx), connection, input, log))
 	}
 	result, err := topologyExecutionResult(ctx, connection, input, privateKey, publicKey, plugin.sshAccess(), log)
@@ -653,6 +656,37 @@ func (c *client) guestExec(ctx context.Context, node string, vmid int, command [
 		case <-time.After(500 * time.Millisecond):
 		}
 	}
+}
+
+func verifyTopologyGateways(ctx context.Context, connection *client, input topologyStepInput, log plugins.Logger) error {
+	type result struct {
+		vmid   int
+		output string
+		err    error
+	}
+	results := make(chan result, len(input.Machines))
+	command := []string{"/bin/sh", "-c", "device=$(ip -4 route get \"$1\" | awk '{for (i=1; i<=NF; i++) if ($i == \"dev\") {print $(i+1); exit}}'); test -n \"$device\" || exit 2; ping -c 1 -W 2 \"$1\" >/dev/null 2>&1 || true; neighbor=$(ip neigh show \"$1\" dev \"$device\"); printf 'device=%s neighbor=%s\\n' \"$device\" \"$neighbor\"; test -n \"$neighbor\" || exit 3; case \"$neighbor\" in *FAILED*|*INCOMPLETE*) exit 4;; esac", "kubephos-gateway", input.Gateway}
+	for _, planned := range input.Machines {
+		planned := planned
+		go func() {
+			probeContext, cancel := context.WithTimeout(ctx, 10*time.Second)
+			defer cancel()
+			output, err := connection.guestExec(probeContext, input.Node, planned.VMID, command)
+			results <- result{vmid: planned.VMID, output: output, err: err}
+		}()
+	}
+	var failures []error
+	for range input.Machines {
+		current := <-results
+		if current.err != nil {
+			failures = append(failures, fmt.Errorf("gateway %s is unreachable from VM %d: %w", input.Gateway, current.vmid, current.err))
+			continue
+		}
+		if err := log("info", fmt.Sprintf("Gateway %s verified from VM %d (%s)", input.Gateway, current.vmid, current.output)); err != nil {
+			failures = append(failures, err)
+		}
+	}
+	return errors.Join(failures...)
 }
 
 func verifyTopologyGuestAddresses(ctx context.Context, connection *client, input topologyStepInput, timeout time.Duration, log plugins.Logger) error {
