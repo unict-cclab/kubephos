@@ -19,6 +19,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"syscall"
 	"time"
 
 	"kubephos.dev/kubephos/internal/domain"
@@ -449,7 +450,6 @@ func (systemBuildRunner) Build(ctx context.Context, spec Spec, endpoint registry
 	if err != nil {
 		return ociImage{}, err
 	}
-	defer os.RemoveAll(directory)
 	if err := log("info", "Fetching immutable source commit "+spec.Commit[:12]); err != nil {
 		return ociImage{}, err
 	}
@@ -477,12 +477,16 @@ func (systemBuildRunner) Build(ctx context.Context, spec Spec, endpoint registry
 	}
 	dockerConfig, err := os.MkdirTemp("", "kubephos-docker-config-")
 	if err != nil {
+		os.RemoveAll(directory)
 		return ociImage{}, err
 	}
-	defer os.RemoveAll(dockerConfig)
 	repository := credential.Spec.Project + "/" + spec.ImageName
 	taggedReference := endpoint.Spec.Host + "/" + repository + ":" + tag(spec)
-	defer removeLocalImage(settings, dockerConfig, taggedReference)
+	defer func() {
+		removeLocalImage(settings, dockerConfig, taggedReference)
+		os.RemoveAll(dockerConfig)
+		os.RemoveAll(directory)
+	}()
 	registryFiles, err := prepareRegistryClient(endpoint)
 	if err != nil {
 		return ociImage{}, err
@@ -671,6 +675,18 @@ func runLogged(ctx context.Context, arguments []string, dockerConfig string, log
 
 func runLoggedProgram(ctx context.Context, program string, arguments, environment []string, log plugins.Logger) error {
 	command := exec.CommandContext(ctx, program, arguments...)
+	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	command.Cancel = func() error {
+		if command.Process == nil {
+			return os.ErrProcessDone
+		}
+		if err := syscall.Kill(-command.Process.Pid, syscall.SIGTERM); errors.Is(err, syscall.ESRCH) {
+			return os.ErrProcessDone
+		} else {
+			return err
+		}
+	}
+	command.WaitDelay = 5 * time.Second
 	command.Env = append(os.Environ(), environment...)
 	reader, writer, err := os.Pipe()
 	if err != nil {
@@ -724,7 +740,7 @@ func repositoryDigest(ctx context.Context, files registryClientFiles, taggedRefe
 }
 
 func removeLocalImage(settings dockerSettings, dockerConfig, reference string) {
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	command := exec.CommandContext(ctx, "docker", dockerArguments(settings, "image", "rm", "--force", reference)...)
 	command.Env = append(os.Environ(), "DOCKER_CONFIG="+dockerConfig)

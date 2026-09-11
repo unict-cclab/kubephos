@@ -323,6 +323,45 @@ func TestInspectPackageRejectsAmbiguousDescriptor(t *testing.T) {
 	}
 }
 
+func TestCanceledInvocationAllowsPluginCleanup(t *testing.T) {
+	directory := t.TempDir()
+	executable := filepath.Join(directory, "cancel-plugin")
+	marker := filepath.Join(directory, "active.tmp")
+	script := "#!/bin/sh\ntrap 'rm -f \"" + marker + "\"; exit 143' TERM\ntouch \"" + marker + "\"\nsleep 30\n"
+	if err := os.WriteFile(executable, []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	plugin := &Process{executable: executable, timeout: time.Minute}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		var output map[string]any
+		done <- plugin.invoke(ctx, "execute", map[string]any{}, &output, nil)
+	}()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(marker); err == nil {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if _, err := os.Stat(marker); err != nil {
+		t.Fatal("plugin process did not start")
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("expected canceled invocation")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("plugin cancellation timed out")
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("plugin cleanup did not run: %v", err)
+	}
+}
+
 func TestResolveSecretsHonorsDeclaredKinds(t *testing.T) {
 	process := &Process{
 		secretKinds: map[string]bool{"allowed": true},

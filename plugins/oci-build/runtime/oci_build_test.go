@@ -8,10 +8,13 @@ import (
 	"crypto/x509/pkix"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"math/big"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -187,6 +190,60 @@ func TestGitHostPolicyDefaultsToGitHub(t *testing.T) {
 	}
 	if err := validateGitHost("https://github.com.evil/repository.git"); err == nil {
 		t.Fatal("expected deceptive source host rejection")
+	}
+}
+
+func TestLoggedPushCancellationTerminatesChildrenAndCleansState(t *testing.T) {
+	directory := t.TempDir()
+	program := filepath.Join(directory, "skopeo")
+	pidFile := filepath.Join(directory, "child.pid")
+	marker := filepath.Join(directory, "push.tmp")
+	script := `#!/bin/sh
+trap 'kill "$child" 2>/dev/null; wait "$child" 2>/dev/null; rm -f "$2"; exit 143' TERM
+sleep 30 &
+child=$!
+printf '%s' "$child" > "$1"
+touch "$2"
+wait "$child"
+`
+	if err := os.WriteFile(program, []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- runLoggedProgram(ctx, program, []string{pidFile, marker}, nil, discardLog)
+	}()
+	var child int
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		value, err := os.ReadFile(pidFile)
+		if err == nil {
+			child, err = strconv.Atoi(string(value))
+			if err != nil {
+				t.Fatal(err)
+			}
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if child == 0 {
+		t.Fatal("push process did not start")
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("expected canceled push")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("push cancellation timed out")
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("temporary push state remains: %v", err)
+	}
+	if err := syscall.Kill(child, 0); !errors.Is(err, syscall.ESRCH) {
+		t.Fatalf("push child remains alive: %v", err)
 	}
 }
 

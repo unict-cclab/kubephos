@@ -461,12 +461,13 @@ func (p *Process) invoke(parent context.Context, command string, input, output a
 			if process.Process == nil {
 				return os.ErrProcessDone
 			}
-			if err := syscall.Kill(-process.Process.Pid, syscall.SIGKILL); errors.Is(err, syscall.ESRCH) {
+			if err := syscall.Kill(-process.Process.Pid, syscall.SIGTERM); errors.Is(err, syscall.ESRCH) {
 				return os.ErrProcessDone
 			} else {
 				return err
 			}
 		}
+		process.WaitDelay = 10 * time.Second
 		process.Env = withoutRuntimeEnvironment(os.Environ())
 		releaseEnvironment := func() {}
 		if contains(p.manifest.Permissions, "executor.build") && (command == "precheck" || command == "execute" || command == "verify") {
