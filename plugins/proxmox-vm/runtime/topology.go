@@ -74,6 +74,20 @@ type plannedMachine struct {
 	Address string `json:"address"`
 }
 
+type guestExecStart struct {
+	PID int `json:"pid"`
+}
+
+type guestExecStatus struct {
+	Exited       int    `json:"exited"`
+	ExitCode     *int   `json:"exitcode"`
+	Signal       *int   `json:"signal"`
+	OutData      string `json:"out-data"`
+	ErrData      string `json:"err-data"`
+	OutTruncated int    `json:"out-truncated"`
+	ErrTruncated int    `json:"err-truncated"`
+}
+
 type topologyResult struct {
 	Resources     []domain.DiscoveredResource `json:"resources"`
 	MachineSet    machineSet                  `json:"machineSet"`
@@ -346,7 +360,7 @@ func (plugin TopologyPlugin) Execute(ctx context.Context, step domain.PlanStep, 
 	if err := verifyTopologyGuestAddresses(ctx, connection, input, 90*time.Second, log); err != nil {
 		return nil, errors.Join(err, cleanupTopology(context.WithoutCancel(ctx), connection, input, log))
 	}
-	result, err := topologyExecutionResult(ctx, connection, input, privateKey, publicKey, plugin.sshAccess())
+	result, err := topologyExecutionResult(ctx, connection, input, privateKey, publicKey, plugin.sshAccess(), log)
 	if err != nil {
 		return nil, errors.Join(err, cleanupTopology(context.WithoutCancel(ctx), connection, input, log))
 	}
@@ -546,9 +560,15 @@ func createTopologyMachine(ctx context.Context, connection *client, input topolo
 	return connection.waitTask(ctx, input.Node, upid)
 }
 
-func topologyExecutionResult(ctx context.Context, connection *client, input topologyStepInput, privateKey, publicKey string, access sshAccess) (topologyResult, error) {
-	if err := verifyTopologySSH(ctx, input, privateKey, 3*time.Minute, access); err != nil {
-		return topologyResult{}, err
+func topologyExecutionResult(ctx context.Context, connection *client, input topologyStepInput, privateKey, publicKey string, access sshAccess, log plugins.Logger) (topologyResult, error) {
+	if err := verifyTopologySSH(ctx, input, privateKey, 20*time.Second, access); err != nil {
+		if logErr := log("warning", "SSH is not ready after the initial probe; collecting guest diagnostics"); logErr != nil {
+			return topologyResult{}, errors.Join(err, logErr)
+		}
+		collectTopologyGuestDiagnostics(ctx, connection, input, log)
+		if err := verifyTopologySSH(ctx, input, privateKey, 160*time.Second, access); err != nil {
+			return topologyResult{}, err
+		}
 	}
 	resources := make([]domain.DiscoveredResource, 0, len(input.Machines))
 	machines := make([]machine, 0, len(input.Machines))
@@ -567,6 +587,72 @@ func topologyExecutionResult(ctx context.Context, connection *client, input topo
 		MachineSet:    machineSet{APIVersion: "artifacts.kubephos.dev/v1alpha1", Kind: "MachineSet", Metadata: machineSetMetadata{Name: name}, Spec: machineSetSpec{Provider: "proxmox", ConnectionRef: input.ConnectionRef, NetworkCIDR: networkCIDR(input.Machines[0].Address, input.PrefixLength), Machines: machines}},
 		MachineAccess: machineAccess{APIVersion: "artifacts.kubephos.dev/v1alpha1", Kind: "MachineAccess", Metadata: machineAccessMetadata{Name: name}, Spec: machineAccessSpec{Algorithm: "ssh-ed25519", PublicKey: publicKey, PrivateKey: privateKey}},
 	}, nil
+}
+
+func collectTopologyGuestDiagnostics(ctx context.Context, connection *client, input topologyStepInput, log plugins.Logger) {
+	type result struct {
+		vmid   int
+		output string
+		err    error
+	}
+	results := make(chan result, len(input.Machines))
+	command := []string{"/bin/sh", "-c", "printf 'ssh-services:\\n'; systemctl is-active ssh 2>&1 || systemctl is-active sshd 2>&1; printf '\\ncloud-init:\\n'; cloud-init status --long 2>&1; printf '\\nlisteners:\\n'; ss -ltn 2>&1; printf '\\nroutes:\\n'; ip -4 route 2>&1; printf '\\naddresses:\\n'; ip -br -4 address 2>&1; printf '\\nssh-journal:\\n'; journalctl -u ssh -u sshd -n 30 --no-pager 2>&1"}
+	for _, planned := range input.Machines {
+		planned := planned
+		go func() {
+			diagnosticContext, cancel := context.WithTimeout(ctx, 20*time.Second)
+			defer cancel()
+			output, err := connection.guestExec(diagnosticContext, input.Node, planned.VMID, command)
+			results <- result{vmid: planned.VMID, output: output, err: err}
+		}()
+	}
+	for range input.Machines {
+		current := <-results
+		if current.err != nil {
+			_ = log("warning", fmt.Sprintf("Guest diagnostics for VM %d are unavailable: %v", current.vmid, current.err))
+			continue
+		}
+		_ = log("warning", fmt.Sprintf("Guest diagnostics for VM %d:\n%s", current.vmid, current.output))
+	}
+}
+
+func (c *client) guestExec(ctx context.Context, node string, vmid int, command []string) (string, error) {
+	if len(command) == 0 {
+		return "", errors.New("guest command is empty")
+	}
+	var started guestExecStart
+	path := fmt.Sprintf("/api2/json/nodes/%s/qemu/%d/agent/exec", url.PathEscape(node), vmid)
+	if err := c.request(ctx, http.MethodPost, path, url.Values{"command": command}, &started); err != nil {
+		return "", err
+	}
+	if started.PID <= 0 {
+		return "", errors.New("guest agent returned an invalid process identifier")
+	}
+	for {
+		var status guestExecStatus
+		statusPath := fmt.Sprintf("/api2/json/nodes/%s/qemu/%d/agent/exec-status?pid=%d", url.PathEscape(node), vmid, started.PID)
+		if err := c.request(ctx, http.MethodGet, statusPath, nil, &status); err != nil {
+			return "", err
+		}
+		if status.Exited != 0 {
+			output := strings.TrimSpace(strings.Join([]string{status.OutData, status.ErrData}, "\n"))
+			if len(output) > 64<<10 {
+				output = output[:64<<10] + "\n[diagnostic output truncated]"
+			}
+			if status.ExitCode != nil && *status.ExitCode != 0 {
+				return output, fmt.Errorf("guest diagnostic exited with code %d: %s", *status.ExitCode, output)
+			}
+			if status.Signal != nil {
+				return output, fmt.Errorf("guest diagnostic terminated by signal %d: %s", *status.Signal, output)
+			}
+			return output, nil
+		}
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case <-time.After(500 * time.Millisecond):
+		}
+	}
 }
 
 func verifyTopologyGuestAddresses(ctx context.Context, connection *client, input topologyStepInput, timeout time.Duration, log plugins.Logger) error {

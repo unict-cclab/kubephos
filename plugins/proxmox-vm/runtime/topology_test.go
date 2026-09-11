@@ -266,6 +266,50 @@ func (fakeSSHAccess) Wait(context.Context, string, string, string, time.Duration
 	return nil
 }
 
+type initialFailureSSHAccess struct {
+	lock  sync.Mutex
+	calls int
+}
+
+func (access *initialFailureSSHAccess) Wait(context.Context, string, string, string, time.Duration) error {
+	access.lock.Lock()
+	defer access.lock.Unlock()
+	access.calls++
+	if access.calls <= 3 {
+		return fmt.Errorf("initial SSH probe failed")
+	}
+	return nil
+}
+
+func TestTopologyCollectsGuestDiagnosticsBeforeRetryingSSH(t *testing.T) {
+	server, _ := newTopologyServer(t, 0)
+	defer server.Close()
+	invocation, _ := topologyInvocation(server.URL, false)
+	access := &initialFailureSSHAccess{}
+	plugin := TopologyPlugin{SSH: access}
+	plan, err := plugin.Plan(context.Background(), invocation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var logs []string
+	_, err = plugin.Execute(context.Background(), plan.Steps[0], invocation.Secrets, invocation.Connections, func(_ string, message string) error {
+		logs = append(logs, message)
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(logs, "\n")
+	if !strings.Contains(joined, "collecting guest diagnostics") || !strings.Contains(joined, "Guest diagnostics for VM 9000") || !strings.Contains(joined, "ssh-services:") {
+		t.Fatalf("diagnostics were not logged: %s", joined)
+	}
+	access.lock.Lock()
+	defer access.lock.Unlock()
+	if access.calls != 6 {
+		t.Fatalf("expected initial and final SSH probes for three machines, got %d", access.calls)
+	}
+}
+
 func newTopologyServer(t *testing.T, failVMID int) (*httptest.Server, *topologyServerState) {
 	t.Helper()
 	state := &topologyServerState{machines: map[int]*topologyServerMachine{}, failVMID: failVMID}
@@ -355,6 +399,20 @@ func newTopologyServer(t *testing.T, failVMID int) (*httptest.Server, *topologyS
 			id := topologyRequestVMID(request.URL.Path)
 			address := fmt.Sprintf("10.10.0.%d", id-8990)
 			_, _ = response.Write([]byte(fmt.Sprintf(`{"data":{"result":[{"name":"eth0","ip-addresses":[{"ip-address":%q,"ip-address-type":"ipv4"}]}]}}`, address)))
+		case request.Method == http.MethodPost && strings.HasSuffix(request.URL.Path, "/agent/exec"):
+			_ = request.ParseForm()
+			command := request.Form["command"]
+			if len(command) != 3 || command[0] != "/bin/sh" || command[1] != "-c" {
+				http.Error(response, "unexpected guest command", http.StatusBadRequest)
+				return
+			}
+			_, _ = response.Write([]byte(`{"data":{"pid":42}}`))
+		case request.Method == http.MethodGet && strings.HasSuffix(request.URL.Path, "/agent/exec-status"):
+			if request.URL.Query().Get("pid") != "42" {
+				http.Error(response, "unexpected process identifier", http.StatusBadRequest)
+				return
+			}
+			_, _ = response.Write([]byte(`{"data":{"exited":1,"exitcode":0,"out-data":"ssh-services:\nactive"}}`))
 		case request.Method == http.MethodDelete && strings.Contains(request.URL.Path, "/qemu/"):
 			id := topologyRequestVMID(request.URL.Path)
 			machine := state.machines[id]
