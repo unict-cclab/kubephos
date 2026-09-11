@@ -81,6 +81,66 @@ func TestHarborBrowserVerifiesDeletion(t *testing.T) {
 	}
 }
 
+func TestHarborBrowserRunsAndVerifiesGarbageCollection(t *testing.T) {
+	client := &fakeClient{}
+	plugin := Plugin{Client: client}
+	spec := json.RawMessage(`{"registryEndpointRef":"art_endpoint","registryCredentialRef":"art_management","action":"run-garbage-collection"}`)
+	report := plugin.Validate(context.Background(), Invocation{Input: spec})
+	if !report.Valid || len(report.Issues) != 1 || report.Issues[0].Level != "warning" {
+		t.Fatalf("unexpected validation report %#v", report)
+	}
+	plan, err := plugin.Plan(context.Background(), spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !plan.Steps[0].Mutating {
+		t.Fatal("expected garbage collection to be mutating")
+	}
+	step := plan.Steps[0]
+	step.ResolvedInputs = testArtifacts(t)
+	health, err := plugin.Precheck(context.Background(), step, func(string, string) error { return nil })
+	if err != nil || health.Status != domain.HealthHealthy {
+		t.Fatalf("garbage collection precheck failed %#v %v", health, err)
+	}
+	value, err := plugin.Execute(context.Background(), step, func(string, string) error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	health, err = plugin.Verify(context.Background(), step, value, func(string, string) error { return nil })
+	if err != nil || health.Status != domain.HealthHealthy || health.Checks["garbageCollection"] != "verified" {
+		t.Fatalf("garbage collection verification failed %#v %v", health, err)
+	}
+	if !containsRequest(client.requests, "POST /system/gc/schedule") || !containsRequest(client.requests, "GET /system/gc/42") {
+		t.Fatalf("unexpected requests %#v", client.requests)
+	}
+	if !strings.Contains(string(client.bodies[0]), `"delete_untagged":false`) || !strings.Contains(string(client.bodies[0]), `"dry_run":false`) {
+		t.Fatalf("unsafe garbage collection defaults %s", client.bodies[0])
+	}
+}
+
+func TestHarborBrowserPreviewsGarbageCollectionWithoutDeletingData(t *testing.T) {
+	client := &fakeClient{}
+	plugin := Plugin{Client: client}
+	spec := json.RawMessage(`{"registryEndpointRef":"art_endpoint","registryCredentialRef":"art_management","action":"preview-garbage-collection"}`)
+	plan, err := plugin.Plan(context.Background(), spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	step := plan.Steps[0]
+	step.ResolvedInputs = testArtifacts(t)
+	value, err := plugin.Execute(context.Background(), step, func(string, string) error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	health, err := plugin.Verify(context.Background(), step, value, func(string, string) error { return nil })
+	if err != nil || health.Status != domain.HealthHealthy {
+		t.Fatalf("garbage collection preview failed %#v %v", health, err)
+	}
+	if !strings.Contains(string(client.bodies[0]), `"dry_run":true`) {
+		t.Fatalf("preview is not a dry run %s", client.bodies[0])
+	}
+}
+
 func TestHarborBrowserRequiresActionCoordinates(t *testing.T) {
 	values := []json.RawMessage{
 		json.RawMessage(`{"registryEndpointRef":"art_endpoint","registryCredentialRef":"art_management","action":"list-repositories","project":""}`),
@@ -113,23 +173,33 @@ func testArtifacts(t *testing.T) map[string]domain.ResolvedArtifact {
 
 type fakeClient struct {
 	requests []string
+	bodies   [][]byte
 }
 
-func (client *fakeClient) Do(_ context.Context, _ registryEndpoint, _ registryCredential, method, path string) ([]byte, int, error) {
+func (client *fakeClient) Do(_ context.Context, _ registryEndpoint, _ registryCredential, method, path string, body []byte) (apiResponse, error) {
 	client.requests = append(client.requests, method+" "+path)
+	if len(body) > 0 {
+		client.bodies = append(client.bodies, append([]byte(nil), body...))
+	}
 	if path == "/health" {
-		return []byte(`{"status":"healthy"}`), http.StatusOK, nil
+		return apiResponse{Body: []byte(`{"status":"healthy"}`), Status: http.StatusOK}, nil
+	}
+	if method == http.MethodPost && path == "/system/gc/schedule" {
+		return apiResponse{Status: http.StatusCreated, Header: http.Header{"Location": []string{"/api/v2.0/system/gc/42"}}}, nil
+	}
+	if path == "/system/gc/42" {
+		return apiResponse{Body: []byte(`{"id":42,"job_name":"GARBAGE_COLLECTION","job_status":"Success"}`), Status: http.StatusOK}, nil
 	}
 	if method == http.MethodDelete {
-		return nil, http.StatusOK, nil
+		return apiResponse{Status: http.StatusOK}, nil
 	}
 	if strings.Contains(path, "/artifacts/") && !strings.Contains(path, "?") {
-		return []byte(`{"errors":[{"code":"NOT_FOUND"}]}`), http.StatusNotFound, nil
+		return apiResponse{Body: []byte(`{"errors":[{"code":"NOT_FOUND"}]}`), Status: http.StatusNotFound}, nil
 	}
 	if strings.Contains(path, "/artifacts?") {
-		return []byte(`[{"digest":"sha256:test","tags":[{"name":"git-test"}]}]`), http.StatusOK, nil
+		return apiResponse{Body: []byte(`[{"digest":"sha256:test","tags":[{"name":"git-test"}]}]`), Status: http.StatusOK}, nil
 	}
-	return []byte(`[]`), http.StatusOK, nil
+	return apiResponse{Body: []byte(`[]`), Status: http.StatusOK}, nil
 }
 
 func containsRequest(values []string, expected string) bool {

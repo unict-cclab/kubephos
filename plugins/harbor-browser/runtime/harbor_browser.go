@@ -1,6 +1,7 @@
 package harborbrowser
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
@@ -94,19 +95,33 @@ type registryViewSpec struct {
 	Data       json.RawMessage `json:"data"`
 }
 
+type gcHistory struct {
+	ID         int64  `json:"id"`
+	JobStatus  string `json:"job_status"`
+	JobName    string `json:"job_name"`
+	CreationAt string `json:"creation_time"`
+	UpdateAt   string `json:"update_time"`
+}
+
 type result struct {
 	RegistryView registryView `json:"registryView"`
 }
 
+type apiResponse struct {
+	Body   []byte
+	Status int
+	Header http.Header
+}
+
 type apiClient interface {
-	Do(context.Context, registryEndpoint, registryCredential, string, string) ([]byte, int, error)
+	Do(context.Context, registryEndpoint, registryCredential, string, string, []byte) (apiResponse, error)
 }
 
 func (Plugin) Manifest() plugins.Manifest {
 	return plugins.Manifest{
 		ID: pluginID, Provider: "harbor", Name: "Harbor registry browser", Version: "0.1.0",
 		Description:     "Browses and manages a verified Harbor registry through its managed API artifacts.",
-		Schema:          json.RawMessage(`{"type":"object","additionalProperties":false,"required":["registryEndpointRef","registryCredentialRef","action"],"properties":{"registryEndpointRef":{"type":"string","title":"Managed registry","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"RegistryEndpoint","x-kubephos-artifact-version":"v1alpha1"},"registryCredentialRef":{"type":"string","title":"Management access","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"RegistryCredential","x-kubephos-artifact-version":"v1alpha1"},"action":{"type":"string","title":"Action","x-kubephos-primary-action":true,"enum":["list-projects","list-repositories","list-artifacts","delete-artifact"],"default":"list-projects"},"project":{"type":"string","title":"Project","description":"Required when browsing repositories or artifacts.","maxLength":255,"x-kubephos-visible-when":{"property":"action","values":["list-repositories","list-artifacts","delete-artifact"]}},"repository":{"type":"string","title":"Repository","description":"Required when browsing or deleting artifacts.","maxLength":255,"x-kubephos-visible-when":{"property":"action","values":["list-artifacts","delete-artifact"]}},"reference":{"type":"string","title":"Tag or digest","description":"Required only when deleting one artifact.","maxLength":255,"x-kubephos-visible-when":{"property":"action","values":["delete-artifact"]}}}}`),
+		Schema:          json.RawMessage(`{"type":"object","additionalProperties":false,"required":["registryEndpointRef","registryCredentialRef","action"],"properties":{"registryEndpointRef":{"type":"string","title":"Managed registry","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"RegistryEndpoint","x-kubephos-artifact-version":"v1alpha1"},"registryCredentialRef":{"type":"string","title":"Management access","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"RegistryCredential","x-kubephos-artifact-version":"v1alpha1"},"action":{"type":"string","title":"Action","x-kubephos-primary-action":true,"enum":["list-projects","list-repositories","list-artifacts","list-garbage-collection","preview-garbage-collection","run-garbage-collection","delete-artifact"],"default":"list-projects"},"project":{"type":"string","title":"Project","description":"Required when browsing repositories or artifacts.","maxLength":255,"x-kubephos-visible-when":{"property":"action","values":["list-repositories","list-artifacts","delete-artifact"]}},"repository":{"type":"string","title":"Repository","description":"Required when browsing or deleting artifacts.","maxLength":255,"x-kubephos-visible-when":{"property":"action","values":["list-artifacts","delete-artifact"]}},"reference":{"type":"string","title":"Tag or digest","description":"Required only when deleting one artifact.","maxLength":255,"x-kubephos-visible-when":{"property":"action","values":["delete-artifact"]}}}}`),
 		ArtifactInputs:  []domain.ArtifactContract{{Type: "RegistryEndpoint", Version: "v1alpha1"}, {Type: "RegistryCredential", Version: "v1alpha1"}},
 		ArtifactOutputs: []domain.ArtifactContract{{Type: "RegistryView", Version: "v1alpha1"}},
 		Capabilities:    []string{"infrastructure.registry.control", "infrastructure.registry.preflight"},
@@ -134,6 +149,10 @@ func (Plugin) Validate(ctx context.Context, invocation Invocation) domain.Valida
 	}
 	if spec.Action == "delete-artifact" {
 		report.Issues = append(report.Issues, domain.ValidationIssue{Level: "warning", Message: "The selected registry artifact will be deleted. Review the exact project, repository, reference and plan hash before starting."})
+	} else if spec.Action == "run-garbage-collection" {
+		report.Issues = append(report.Issues, domain.ValidationIssue{Level: "warning", Message: "Harbor will permanently reclaim unreferenced blobs. Active image manifests and untagged artifacts are preserved."})
+	} else if spec.Action == "preview-garbage-collection" {
+		report.Issues = append(report.Issues, domain.ValidationIssue{Level: "info", Message: "Harbor will calculate reclaimable storage without deleting registry data."})
 	} else {
 		report.Issues = append(report.Issues, domain.ValidationIssue{Level: "info", Message: "The registry request is read-only and will be repeated only after TLS, health and management access pass."})
 	}
@@ -154,7 +173,7 @@ func (Plugin) Plan(ctx context.Context, raw json.RawMessage) (domain.Plan, error
 		return domain.Plan{}, err
 	}
 	return domain.Plan{PluginID: pluginID, Steps: []domain.PlanStep{{
-		ID: "registry-" + spec.Action, Name: actionTitle(spec.Action), Input: input, Mutating: spec.Action == "delete-artifact",
+		ID: "registry-" + spec.Action, Name: actionTitle(spec.Action), Input: input, Mutating: spec.Action == "delete-artifact" || spec.Action == "preview-garbage-collection" || spec.Action == "run-garbage-collection",
 		ArtifactInputs: []domain.ArtifactInput{
 			{Name: "registry-endpoint", Type: "RegistryEndpoint", Version: "v1alpha1", ArtifactID: spec.RegistryEndpointRef},
 			{Name: "registry-credential", Type: "RegistryCredential", Version: "v1alpha1", ArtifactID: spec.RegistryCredentialRef},
@@ -178,13 +197,26 @@ func (plugin Plugin) Precheck(ctx context.Context, step domain.PlanStep, log plu
 		return domain.HealthReport{}, err
 	}
 	client := plugin.client()
-	value, status, err := client.Do(ctx, endpoint, credential, http.MethodGet, "/health")
-	if err != nil || status != http.StatusOK || !healthy(value) {
+	response, err := client.Do(ctx, endpoint, credential, http.MethodGet, "/health", nil)
+	if err != nil || response.Status != http.StatusOK || !healthy(response.Body) {
 		return unhealthy("Managed registry health check failed", "health", "unhealthy"), nil
 	}
-	_, status, err = client.Do(ctx, endpoint, credential, http.MethodGet, "/projects?page=1&page_size=1")
-	if err != nil || status != http.StatusOK {
+	response, err = client.Do(ctx, endpoint, credential, http.MethodGet, "/projects?page=1&page_size=1", nil)
+	if err != nil || response.Status != http.StatusOK {
 		return unhealthy("Registry management access check failed", "management", "denied"), nil
+	}
+	if spec.Action == "preview-garbage-collection" || spec.Action == "run-garbage-collection" {
+		response, err = client.Do(ctx, endpoint, credential, http.MethodGet, "/system/gc?page=1&page_size=1&sort=-creation_time", nil)
+		if err != nil || response.Status != http.StatusOK || !json.Valid(response.Body) {
+			return unhealthy("Garbage collection history is unavailable", "garbageCollection", "unavailable"), nil
+		}
+		var history []gcHistory
+		if err := json.Unmarshal(response.Body, &history); err != nil {
+			return unhealthy("Garbage collection history is invalid", "garbageCollection", "invalid"), nil
+		}
+		if len(history) > 0 && (history[0].JobStatus == "Pending" || history[0].JobStatus == "Running") {
+			return unhealthy("Another garbage collection job is already active", "garbageCollection", "busy"), nil
+		}
 	}
 	return domain.HealthReport{Status: domain.HealthHealthy, Summary: "Registry is healthy and management access is verified", Checks: map[string]string{"tls": "verified", "health": "healthy", "management": "verified", "action": spec.Action}}, nil
 }
@@ -194,21 +226,28 @@ func (plugin Plugin) Execute(ctx context.Context, step domain.PlanStep, log plug
 	if err != nil {
 		return nil, err
 	}
-	method, requestPath := actionRequest(spec)
 	if err := log("info", actionTitle(spec.Action)); err != nil {
 		return nil, err
 	}
-	data, status, err := plugin.client().Do(ctx, endpoint, credential, method, requestPath)
+	var data json.RawMessage
+	if spec.Action == "preview-garbage-collection" || spec.Action == "run-garbage-collection" {
+		data, err = plugin.runGarbageCollection(ctx, endpoint, credential, spec.Action == "preview-garbage-collection", log)
+	} else {
+		method, requestPath := actionRequest(spec)
+		var response apiResponse
+		response, err = plugin.client().Do(ctx, endpoint, credential, method, requestPath, nil)
+		if err == nil && response.Status != http.StatusOK {
+			err = fmt.Errorf("registry action returned HTTP %d", response.Status)
+		}
+		data = response.Body
+		if spec.Action == "delete-artifact" && err == nil {
+			data = json.RawMessage(`{"deleted":true}`)
+		}
+	}
 	if err != nil {
 		return nil, err
 	}
-	expected := http.StatusOK
-	if status != expected {
-		return nil, fmt.Errorf("registry action returned HTTP %d", status)
-	}
-	if spec.Action == "delete-artifact" {
-		data = json.RawMessage(`{"deleted":true}`)
-	} else if !json.Valid(data) {
+	if !json.Valid(data) {
 		return nil, errors.New("registry returned invalid JSON")
 	}
 	value := result{RegistryView: registryView{
@@ -232,17 +271,27 @@ func (plugin Plugin) Verify(ctx context.Context, step domain.PlanStep, raw json.
 		return unhealthy("Registry view artifact does not match the validated request", "artifact", "invalid"), nil
 	}
 	client := plugin.client()
-	healthValue, status, err := client.Do(ctx, endpoint, credential, http.MethodGet, "/health")
-	if err != nil || status != http.StatusOK || !healthy(healthValue) {
+	healthResponse, err := client.Do(ctx, endpoint, credential, http.MethodGet, "/health", nil)
+	if err != nil || healthResponse.Status != http.StatusOK || !healthy(healthResponse.Body) {
 		return unhealthy("Registry became unhealthy after the requested action", "health", "unhealthy"), nil
 	}
 	checks := map[string]string{"health": "healthy", "tls": "verified", "action": "completed"}
 	if spec.Action == "delete-artifact" {
-		_, status, err = client.Do(ctx, endpoint, credential, http.MethodGet, artifactPath(spec))
-		if err != nil || status != http.StatusNotFound {
+		response, requestErr := client.Do(ctx, endpoint, credential, http.MethodGet, artifactPath(spec), nil)
+		if requestErr != nil || response.Status != http.StatusNotFound {
 			return unhealthy("Deleted registry artifact is still available", "deletion", "unverified"), nil
 		}
 		checks["deletion"] = "verified"
+	} else if spec.Action == "preview-garbage-collection" || spec.Action == "run-garbage-collection" {
+		var history gcHistory
+		if err := json.Unmarshal(value.RegistryView.Spec.Data, &history); err != nil || history.ID <= 0 || history.JobStatus != "Success" {
+			return unhealthy("Garbage collection result is incomplete", "garbageCollection", "unverified"), nil
+		}
+		response, requestErr := client.Do(ctx, endpoint, credential, http.MethodGet, fmt.Sprintf("/system/gc/%d", history.ID), nil)
+		if requestErr != nil || response.Status != http.StatusOK || !successfulGarbageCollection(response.Body, history.ID) {
+			return unhealthy("Harbor did not confirm garbage collection completion", "garbageCollection", "unverified"), nil
+		}
+		checks["garbageCollection"] = "verified"
 	}
 	if err := log("info", "Registry action result and post-condition are verified"); err != nil {
 		return domain.HealthReport{}, err
@@ -254,6 +303,76 @@ func (Plugin) Cleanup(context.Context, domain.PlanStep, json.RawMessage, plugins
 	return nil
 }
 
+func (plugin Plugin) runGarbageCollection(ctx context.Context, endpoint registryEndpoint, credential registryCredential, dryRun bool, log plugins.Logger) (json.RawMessage, error) {
+	payload, err := json.Marshal(map[string]any{"schedule": map[string]string{"type": "Manual"}, "parameters": map[string]any{"delete_untagged": false, "dry_run": dryRun, "workers": 1}})
+	if err != nil {
+		return nil, err
+	}
+	response, err := plugin.client().Do(ctx, endpoint, credential, http.MethodPost, "/system/gc/schedule", payload)
+	if err != nil {
+		return nil, err
+	}
+	if response.Status != http.StatusCreated {
+		return nil, fmt.Errorf("garbage collection schedule returned HTTP %d", response.Status)
+	}
+	id, err := garbageCollectionID(response.Header.Get("Location"))
+	if err != nil {
+		return nil, err
+	}
+	if err := log("info", fmt.Sprintf("Harbor accepted garbage collection job %d", id)); err != nil {
+		return nil, err
+	}
+	lastStatus := ""
+	for {
+		response, err = plugin.client().Do(ctx, endpoint, credential, http.MethodGet, fmt.Sprintf("/system/gc/%d", id), nil)
+		if err != nil {
+			return nil, err
+		}
+		if response.Status != http.StatusOK {
+			return nil, fmt.Errorf("garbage collection status returned HTTP %d", response.Status)
+		}
+		var history gcHistory
+		if err := json.Unmarshal(response.Body, &history); err != nil || history.ID != id {
+			return nil, errors.New("garbage collection returned an invalid job record")
+		}
+		if history.JobStatus != lastStatus {
+			if err := log("info", "Garbage collection status: "+history.JobStatus); err != nil {
+				return nil, err
+			}
+			lastStatus = history.JobStatus
+		}
+		switch history.JobStatus {
+		case "Success":
+			return response.Body, nil
+		case "Error", "Stopped":
+			return nil, fmt.Errorf("garbage collection finished with status %s", history.JobStatus)
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(2 * time.Second):
+		}
+	}
+}
+
+func garbageCollectionID(location string) (int64, error) {
+	value := strings.TrimSpace(strings.TrimSuffix(location, "/"))
+	position := strings.LastIndex(value, "/")
+	if position < 0 || position == len(value)-1 {
+		return 0, errors.New("Harbor did not return a garbage collection job location")
+	}
+	var id int64
+	if _, err := fmt.Sscan(value[position+1:], &id); err != nil || id <= 0 {
+		return 0, errors.New("Harbor returned an invalid garbage collection job location")
+	}
+	return id, nil
+}
+
+func successfulGarbageCollection(value []byte, expectedID int64) bool {
+	var history gcHistory
+	return json.Unmarshal(value, &history) == nil && history.ID == expectedID && history.JobStatus == "Success"
+}
+
 type validationError struct {
 	path    string
 	message string
@@ -263,6 +382,8 @@ func validateAction(spec Spec) *validationError {
 	normalize(&spec)
 	switch spec.Action {
 	case "list-projects":
+		return nil
+	case "list-garbage-collection", "preview-garbage-collection", "run-garbage-collection":
 		return nil
 	case "list-repositories":
 		if !nameExpression.MatchString(spec.Project) || strings.Contains(spec.Project, "/") {
@@ -345,6 +466,8 @@ func actionRequest(spec Spec) (string, string) {
 		return http.MethodGet, "/projects/" + component(spec.Project) + "/repositories?page=1&page_size=100"
 	case "list-artifacts":
 		return http.MethodGet, artifactCollectionPath(spec) + "?page=1&page_size=100&with_tag=true"
+	case "list-garbage-collection":
+		return http.MethodGet, "/system/gc?page=1&page_size=100&sort=-creation_time"
 	default:
 		return http.MethodDelete, artifactPath(spec)
 	}
@@ -367,7 +490,7 @@ func repositoryComponent(value string) string {
 }
 
 func actionTitle(action string) string {
-	return map[string]string{"list-projects": "List Harbor projects", "list-repositories": "List Harbor repositories", "list-artifacts": "List Harbor artifacts", "delete-artifact": "Delete Harbor artifact"}[action]
+	return map[string]string{"list-projects": "List Harbor projects", "list-repositories": "List Harbor repositories", "list-artifacts": "List Harbor artifacts", "list-garbage-collection": "List Harbor garbage collection jobs", "preview-garbage-collection": "Preview Harbor garbage collection", "run-garbage-collection": "Run Harbor garbage collection", "delete-artifact": "Delete Harbor artifact"}[action]
 }
 
 func healthy(value []byte) bool {
@@ -386,33 +509,36 @@ func (plugin Plugin) client() apiClient {
 
 type httpAPIClient struct{}
 
-func (httpAPIClient) Do(ctx context.Context, endpoint registryEndpoint, credential registryCredential, method, requestPath string) ([]byte, int, error) {
+func (httpAPIClient) Do(ctx context.Context, endpoint registryEndpoint, credential registryCredential, method, requestPath string, body []byte) (apiResponse, error) {
 	pool := x509.NewCertPool()
 	if !pool.AppendCertsFromPEM([]byte(endpoint.Spec.CABundle)) {
-		return nil, 0, errors.New("registry certificate authority is invalid")
+		return apiResponse{}, errors.New("registry certificate authority is invalid")
 	}
 	transport := &http.Transport{TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: pool}}
 	client := &http.Client{Transport: transport, Timeout: 20 * time.Second}
 	defer transport.CloseIdleConnections()
-	request, err := http.NewRequestWithContext(ctx, method, endpoint.Spec.APIURL+requestPath, nil)
+	request, err := http.NewRequestWithContext(ctx, method, endpoint.Spec.APIURL+requestPath, bytes.NewReader(body))
 	if err != nil {
-		return nil, 0, err
+		return apiResponse{}, err
 	}
 	request.SetBasicAuth(credential.Spec.Username, credential.Spec.Password)
 	request.Header.Set("Accept", "application/json")
+	if len(body) > 0 {
+		request.Header.Set("Content-Type", "application/json")
+	}
 	response, err := client.Do(request)
 	if err != nil {
-		return nil, 0, err
+		return apiResponse{}, err
 	}
 	defer response.Body.Close()
 	value, err := io.ReadAll(io.LimitReader(response.Body, responseSizeLimit+1))
 	if err != nil {
-		return nil, response.StatusCode, err
+		return apiResponse{Status: response.StatusCode, Header: response.Header.Clone()}, err
 	}
 	if len(value) > responseSizeLimit {
-		return nil, response.StatusCode, errors.New("registry response exceeds 2 MiB")
+		return apiResponse{Status: response.StatusCode, Header: response.Header.Clone()}, errors.New("registry response exceeds 768 KiB")
 	}
-	return value, response.StatusCode, nil
+	return apiResponse{Body: value, Status: response.StatusCode, Header: response.Header.Clone()}, nil
 }
 
 func invalid(report domain.ValidationReport, path, message string) domain.ValidationReport {

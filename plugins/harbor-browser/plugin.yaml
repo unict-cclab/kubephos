@@ -46,6 +46,9 @@ spec:
           - list-projects
           - list-repositories
           - list-artifacts
+          - list-garbage-collection
+          - preview-garbage-collection
+          - run-garbage-collection
           - delete-artifact
         default: list-projects
       project:
