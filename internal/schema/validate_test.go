@@ -80,3 +80,23 @@ func TestValidateDefinitionChecksMultilineFields(t *testing.T) {
 		t.Fatal("expected multiline non-string field to fail")
 	}
 }
+
+func TestValidateDefinitionAcceptsConditionalVisibility(t *testing.T) {
+	definition := json.RawMessage(`{"type":"object","required":["action"],"properties":{"action":{"type":"string","enum":["list","write"]},"content":{"type":"string","x-kubephos-visible-when":{"property":"action","values":["write"]}}}}`)
+	if err := ValidateDefinition(definition); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestValidateDefinitionRejectsInvalidConditionalVisibility(t *testing.T) {
+	definitions := []json.RawMessage{
+		json.RawMessage(`{"type":"object","required":["action","content"],"properties":{"action":{"type":"string","enum":["list","write"]},"content":{"type":"string","x-kubephos-visible-when":{"property":"action","values":["write"]}}}}`),
+		json.RawMessage(`{"type":"object","properties":{"action":{"type":"string","enum":["list","write"]},"content":{"type":"string","x-kubephos-visible-when":{"property":"missing","values":["write"]}}}}`),
+		json.RawMessage(`{"type":"object","properties":{"action":{"type":"string","enum":["list","write"]},"content":{"type":"string","x-kubephos-visible-when":{"property":"action","values":["delete"]}}}}`),
+	}
+	for _, definition := range definitions {
+		if err := ValidateDefinition(definition); err == nil {
+			t.Fatalf("expected conditional visibility failure for %s", definition)
+		}
+	}
+}

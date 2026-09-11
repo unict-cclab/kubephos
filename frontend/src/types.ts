@@ -33,6 +33,7 @@ export interface SchemaProperty {
   'x-kubephos-artifact-version'?: string
   'x-kubephos-primary-action'?: boolean
   'x-kubephos-multiline'?: boolean
+  'x-kubephos-visible-when'?: {property: string; values: Array<string | number | boolean>}
 }
 
 export interface JsonSchema {

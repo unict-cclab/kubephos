@@ -69,6 +69,7 @@ func validateRule(rule map[string]any, path string) error {
 			}
 		}
 	}
+	requiredNames := map[string]bool{}
 	if value, exists := rule["required"]; exists {
 		items, ok := value.([]any)
 		if !ok || (typeName != "" && typeName != "object") {
@@ -84,6 +85,20 @@ func validateRule(rule map[string]any, path string) error {
 				return fmt.Errorf("%s.required references unknown property %q", path, name)
 			}
 			seen[name] = true
+			requiredNames[name] = true
+		}
+	}
+	for name, property := range properties {
+		propertyRule, _ := property.(map[string]any)
+		condition, exists := propertyRule["x-kubephos-visible-when"]
+		if !exists {
+			continue
+		}
+		if requiredNames[name] {
+			return fmt.Errorf("%s.properties.%s cannot be required when conditionally visible", path, name)
+		}
+		if err := validateVisibilityCondition(condition, name, properties, path+".properties."+name+".x-kubephos-visible-when"); err != nil {
+			return err
 		}
 	}
 	if value, exists := rule["items"]; exists {
@@ -191,6 +206,43 @@ func validateRule(rule map[string]any, path string) error {
 		}
 	}
 	return nil
+}
+
+func validateVisibilityCondition(value any, fieldName string, properties map[string]any, currentPath string) error {
+	condition, ok := value.(map[string]any)
+	if !ok || len(condition) != 2 {
+		return fmt.Errorf("%s must contain property and values", currentPath)
+	}
+	propertyName, propertyOK := condition["property"].(string)
+	values, valuesOK := condition["values"].([]any)
+	if !propertyOK || propertyName == "" || propertyName == fieldName || !valuesOK || len(values) == 0 {
+		return fmt.Errorf("%s is invalid", currentPath)
+	}
+	controllerValue, exists := properties[propertyName]
+	controller, controllerOK := controllerValue.(map[string]any)
+	if !exists || !controllerOK {
+		return fmt.Errorf("%s references unknown property %q", currentPath, propertyName)
+	}
+	controllerType, _ := controller["type"].(string)
+	options, optionsOK := controller["enum"].([]any)
+	if !optionsOK {
+		return fmt.Errorf("%s requires an enum controller", currentPath)
+	}
+	for _, current := range values {
+		if controllerType != "" && !matchesType(controllerType, current) || !containsValue(options, current) {
+			return fmt.Errorf("%s contains a value outside the controller enum", currentPath)
+		}
+	}
+	return nil
+}
+
+func containsValue(values []any, expected any) bool {
+	for _, value := range values {
+		if reflect.DeepEqual(value, expected) || fmt.Sprint(value) == fmt.Sprint(expected) {
+			return true
+		}
+	}
+	return false
 }
 
 func nonNegativeInteger(value any) (float64, bool) {

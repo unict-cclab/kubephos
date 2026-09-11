@@ -1,4 +1,4 @@
-import {render, screen} from '@testing-library/react'
+import {fireEvent, render, screen} from '@testing-library/react'
 import {describe, expect, it} from 'vitest'
 import {SchemaFields} from './SchemaFields'
 
@@ -70,5 +70,21 @@ describe('SchemaFields', () => {
     /></form>)
     expect(screen.getByRole('textbox', {name: 'Command'}).tagName).toBe('TEXTAREA')
     expect(screen.getByRole('textbox', {name: 'Command'})).toHaveValue('one\ntwo')
+  })
+
+  it('shows fields only for the selected schema action', () => {
+    render(<form><SchemaFields
+      schema={{type: 'object', properties: {
+        action: {type: 'string', title: 'Action', enum: ['list', 'write'], default: 'list'},
+        content: {type: 'string', title: 'Content', 'x-kubephos-visible-when': {property: 'action', values: ['write']}},
+      }}}
+      applications={[]}
+      artifacts={[]}
+      connections={[]}
+      credentials={[]}
+    /></form>)
+    expect(screen.queryByRole('textbox', {name: 'Content'})).not.toBeInTheDocument()
+    fireEvent.change(screen.getByRole('combobox', {name: 'Action'}), {target: {value: 'write'}})
+    expect(screen.getByRole('textbox', {name: 'Content'})).toBeInTheDocument()
   })
 })

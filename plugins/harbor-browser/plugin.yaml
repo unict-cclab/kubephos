@@ -53,16 +53,25 @@ spec:
         title: Project
         description: Required when browsing repositories or artifacts.
         maxLength: 255
+        x-kubephos-visible-when:
+          property: action
+          values: [list-repositories, list-artifacts, delete-artifact]
       repository:
         type: string
         title: Repository
         description: Required when browsing or deleting artifacts.
         maxLength: 255
+        x-kubephos-visible-when:
+          property: action
+          values: [list-artifacts, delete-artifact]
       reference:
         type: string
         title: Tag or digest
         description: Required only when deleting one artifact.
         maxLength: 255
+        x-kubephos-visible-when:
+          property: action
+          values: [delete-artifact]
   runtime:
     executable: harbor-browser-plugin
     timeout: 5m

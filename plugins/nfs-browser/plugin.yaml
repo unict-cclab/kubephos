@@ -12,7 +12,7 @@ spec:
   configurationSchema:
     type: object
     additionalProperties: false
-    required: [machineSetRef, machineAccessRef, sharedStorageEndpointRef, action, path, content, protectOutput]
+    required: [machineSetRef, machineAccessRef, sharedStorageEndpointRef, action, path, protectOutput]
     properties:
       machineSetRef:
         type: string
@@ -52,6 +52,9 @@ spec:
         maxLength: 131072
         default: ""
         x-kubephos-multiline: true
+        x-kubephos-visible-when:
+          property: action
+          values: [write]
       protectOutput:
         type: boolean
         title: Protect result
