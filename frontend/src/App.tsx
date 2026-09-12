@@ -10,7 +10,7 @@ import type {PlatformData, PluginPackage, Session, View, Workspace} from './type
 
 const TerminalDialog = lazy(() => import('./components/TerminalDialog').then(module => ({default: module.TerminalDialog})))
 
-const emptyData: PlatformData = {system: null, pluginRuntime: null, workspaces: [], pipelines: [], pipelineRuns: [], experiments: [], operations: [], artifacts: [], plugins: [], pluginPackages: [], pluginImports: [], applications: [], credentials: [], connections: [], machineTemplates: [], infrastructureServices: [], kubernetesClusters: [], resources: [], audit: []}
+const emptyData: PlatformData = {system: null, pluginRuntime: null, workspaces: [], pipelines: [], pipelineRuns: [], experiments: [], experimentConfigurations: [], operations: [], artifacts: [], plugins: [], pluginPackages: [], pluginImports: [], applications: [], credentials: [], connections: [], machineTemplates: [], infrastructureServices: [], kubernetesClusters: [], resources: [], audit: []}
 const viewMetadata: Record<View, [string, string]> = {
   overview: ['CONTROL PLANE', 'Overview'],
   workspaces: ['ENVIRONMENTS', 'Workspaces'],
@@ -60,13 +60,14 @@ export default function App() {
     if (!session?.authenticated) return
     setRefreshing(true)
     try {
-		const [system, pluginRuntime, workspaces, pipelines, pipelineRuns, experiments, operations, artifacts, plugins, pluginPackages, pluginImports, applications, credentials, connections, machineTemplates, infrastructureServices, kubernetesClusters, resources, audit] = await Promise.all([
+		const [system, pluginRuntime, workspaces, pipelines, pipelineRuns, experiments, experimentConfigurations, operations, artifacts, plugins, pluginPackages, pluginImports, applications, credentials, connections, machineTemplates, infrastructureServices, kubernetesClusters, resources, audit] = await Promise.all([
         request<PlatformData['system']>('/system'),
         request<PlatformData['pluginRuntime']>('/plugin-runtime'),
         request<{items: PlatformData['workspaces']}>('/workspaces'),
         request<{items: PlatformData['pipelines']}>('/pipelines'),
         request<{items: PlatformData['pipelineRuns']}>('/pipeline-runs'),
         request<{items: PlatformData['experiments']}>('/experiments'),
+        request<{items: PlatformData['experimentConfigurations']}>('/experiment-configurations'),
         request<{items: PlatformData['operations']}>('/operations'),
         request<{items: PlatformData['artifacts']}>('/artifacts?limit=500'),
         request<{items: PlatformData['plugins']}>('/plugins'),
@@ -81,7 +82,7 @@ export default function App() {
 		request<{items: PlatformData['resources']}>('/infrastructure/resources'),
         request<{items: PlatformData['audit']}>('/audit?limit=20')
       ])
-		setData({system, pluginRuntime, workspaces: workspaces.items, pipelines: pipelines.items, pipelineRuns: pipelineRuns.items, experiments: experiments.items, operations: operations.items, artifacts: artifacts.items, plugins: plugins.items, pluginPackages: pluginPackages.items, pluginImports: pluginImports.items, applications: applications.items, credentials: credentials.items, connections: connections.items, machineTemplates: machineTemplates.items, infrastructureServices: infrastructureServices.items, kubernetesClusters: kubernetesClusters.items, resources: resources.items, audit: audit.items})
+		setData({system, pluginRuntime, workspaces: workspaces.items, pipelines: pipelines.items, pipelineRuns: pipelineRuns.items, experiments: experiments.items, experimentConfigurations: experimentConfigurations.items, operations: operations.items, artifacts: artifacts.items, plugins: plugins.items, pluginPackages: pluginPackages.items, pluginImports: pluginImports.items, applications: applications.items, credentials: credentials.items, connections: connections.items, machineTemplates: machineTemplates.items, infrastructureServices: infrastructureServices.items, kubernetesClusters: kubernetesClusters.items, resources: resources.items, audit: audit.items})
       setConnected(true)
       if (!silent) notify('Everything is up to date.')
     } catch (cause) {

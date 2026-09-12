@@ -1,5 +1,6 @@
 import {formatDate, shortID} from '../lib'
-import type {Application, Artifact, AuditEvent, Connection, Credential, Experiment, InfrastructureResource, ManagedResource, Operation, Pipeline, PipelineRun, Plugin, PluginImportJob, PluginPackage, PluginRuntimeStatus, Session, SystemStatus, View, Workspace} from '../types'
+import type {Application, Artifact, AuditEvent, Connection, Credential, Experiment, ExperimentConfiguration, InfrastructureResource, ManagedResource, Operation, Pipeline, PipelineRun, Plugin, PluginImportJob, PluginPackage, PluginRuntimeStatus, Session, SystemStatus, View, Workspace} from '../types'
+import {ExperimentConfigurationsView} from './ExperimentConfigurationsView'
 import {PipelinesView} from './PipelinesView'
 import {ResultsView} from './ResultsView'
 
@@ -13,6 +14,7 @@ interface ViewProps {
   operations: Operation[]
   artifacts: Artifact[]
   experiments: Experiment[]
+  experimentConfigurations: ExperimentConfiguration[]
   plugins: Plugin[]
   pluginPackages: PluginPackage[]
   pluginImports: PluginImportJob[]
@@ -90,7 +92,7 @@ export function Views(props: ViewProps) {
       <Kubernetes {...props} />
     </section>
     <section className={`view ${props.view === 'experiments' ? 'active' : ''}`}>
-      <ProductNext eyebrow="CONFIGURE ONCE" title="Experiment configurations" copy="Choose an application, load, chaos and scheduling strategies, then create isolated repeatable runs." />
+      <ExperimentConfigurationsView items={props.experimentConfigurations} clusters={props.kubernetesClusters} workspaces={props.workspaces} applications={props.applications} plugins={props.plugins} session={props.session} isAdmin={props.isAdmin} changed={props.changed} />
     </section>
     <section className={`view ${props.view === 'suites' ? 'active' : ''}`}>
       <ProductNext eyebrow="COMPARE" title="Experiment suites" copy="Run multiple configurations with controlled ordering and compare aggregate scientific results." />

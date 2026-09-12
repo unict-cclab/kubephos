@@ -166,6 +166,20 @@ type ExperimentTrial struct {
 	CompletedAt      *time.Time `json:"completedAt,omitempty"`
 }
 
+type ExperimentConfiguration struct {
+	ID                string           `json:"id"`
+	WorkspaceID       string           `json:"workspaceId"`
+	ClusterResourceID string           `json:"clusterResourceId"`
+	Name              string           `json:"name"`
+	Description       string           `json:"description"`
+	ApplicationRef    string           `json:"applicationRef"`
+	ApplicationDigest string           `json:"applicationDigest"`
+	Definition        json.RawMessage  `json:"definition"`
+	Validation        ValidationReport `json:"validation"`
+	CreatedAt         time.Time        `json:"createdAt"`
+	UpdatedAt         time.Time        `json:"updatedAt"`
+}
+
 type Credential struct {
 	ID          string    `json:"id"`
 	Name        string    `json:"name"`

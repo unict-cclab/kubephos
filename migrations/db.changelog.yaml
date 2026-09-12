@@ -146,3 +146,10 @@ databaseChangeLog:
         - sqlFile:
             path: changes/021-managed-pipeline-cleanup.sql
             relativeToChangelogFile: true
+  - changeSet:
+      id: 022-experiment-configurations
+      author: kubephos
+      changes:
+        - sqlFile:
+            path: changes/022-experiment-configurations.sql
+            relativeToChangelogFile: true

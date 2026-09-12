@@ -591,6 +591,103 @@ func (s *Store) GetCatalogApplicationDescriptor(ctx context.Context, application
 	return descriptor, err
 }
 
+func (s *Store) GetCatalogApplication(ctx context.Context, applicationID, version string) (domain.CatalogApplication, error) {
+	var application domain.CatalogApplication
+	err := s.pool.QueryRow(ctx, `
+		SELECT id, name, version, description, origin, descriptor, digest, enabled, created_at, updated_at
+		FROM catalog_applications
+		WHERE id = $1 AND version = $2 AND enabled = true
+	`, applicationID, version).Scan(&application.ID, &application.Name, &application.Version, &application.Description, &application.Origin, &application.Descriptor, &application.Digest, &application.Enabled, &application.CreatedAt, &application.UpdatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.CatalogApplication{}, ErrNotFound
+	}
+	application.Reference = catalogReference(application.ID, application.Version)
+	return application, err
+}
+
+func catalogReference(applicationID, version string) string {
+	return "app:" + applicationID + "@" + version
+}
+
+func (s *Store) CreateExperimentConfiguration(ctx context.Context, configuration domain.ExperimentConfiguration) (domain.ExperimentConfiguration, error) {
+	validation, err := json.Marshal(configuration.Validation)
+	if err != nil {
+		return domain.ExperimentConfiguration{}, err
+	}
+	err = s.pool.QueryRow(ctx, `
+		INSERT INTO experiment_configurations (id, workspace_id, cluster_resource_id, name, description, application_ref, application_digest, definition, validation)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		RETURNING created_at, updated_at
+	`, configuration.ID, configuration.WorkspaceID, configuration.ClusterResourceID, configuration.Name, configuration.Description, configuration.ApplicationRef, configuration.ApplicationDigest, configuration.Definition, validation).Scan(&configuration.CreatedAt, &configuration.UpdatedAt)
+	if duplicate(err) {
+		return domain.ExperimentConfiguration{}, ErrConflict
+	}
+	return configuration, err
+}
+
+func (s *Store) ListExperimentConfigurations(ctx context.Context) ([]domain.ExperimentConfiguration, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, workspace_id, cluster_resource_id, name, description, application_ref, application_digest, definition, validation, created_at, updated_at
+		FROM experiment_configurations
+		ORDER BY updated_at DESC
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := []domain.ExperimentConfiguration{}
+	for rows.Next() {
+		configuration, err := scanExperimentConfiguration(rows)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, configuration)
+	}
+	return result, rows.Err()
+}
+
+func (s *Store) GetExperimentConfiguration(ctx context.Context, configurationID string) (domain.ExperimentConfiguration, error) {
+	configuration, err := scanExperimentConfiguration(s.pool.QueryRow(ctx, `
+		SELECT id, workspace_id, cluster_resource_id, name, description, application_ref, application_digest, definition, validation, created_at, updated_at
+		FROM experiment_configurations
+		WHERE id = $1
+	`, configurationID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.ExperimentConfiguration{}, ErrNotFound
+	}
+	return configuration, err
+}
+
+func (s *Store) DeleteExperimentConfiguration(ctx context.Context, configurationID string) error {
+	command, err := s.pool.Exec(ctx, `DELETE FROM experiment_configurations WHERE id = $1`, configurationID)
+	if err != nil {
+		return err
+	}
+	if command.RowsAffected() != 1 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func (s *Store) ClusterHasExperimentConfigurations(ctx context.Context, clusterResourceID string) (bool, error) {
+	var exists bool
+	err := s.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM experiment_configurations WHERE cluster_resource_id = $1)`, clusterResourceID).Scan(&exists)
+	return exists, err
+}
+
+func scanExperimentConfiguration(row scanner) (domain.ExperimentConfiguration, error) {
+	var configuration domain.ExperimentConfiguration
+	var validation []byte
+	err := row.Scan(&configuration.ID, &configuration.WorkspaceID, &configuration.ClusterResourceID, &configuration.Name, &configuration.Description, &configuration.ApplicationRef, &configuration.ApplicationDigest, &configuration.Definition, &validation, &configuration.CreatedAt, &configuration.UpdatedAt)
+	if err != nil {
+		return domain.ExperimentConfiguration{}, err
+	}
+	if err := json.Unmarshal(validation, &configuration.Validation); err != nil {
+		return domain.ExperimentConfiguration{}, err
+	}
+	return configuration, nil
+}
+
 func (s *Store) ListCatalogApplications(ctx context.Context) ([]domain.CatalogApplication, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT id, name, version, description, origin, descriptor, digest, enabled, created_at, updated_at
@@ -608,7 +705,7 @@ func (s *Store) ListCatalogApplications(ctx context.Context) ([]domain.CatalogAp
 		if err := rows.Scan(&application.ID, &application.Name, &application.Version, &application.Description, &application.Origin, &application.Descriptor, &application.Digest, &application.Enabled, &application.CreatedAt, &application.UpdatedAt); err != nil {
 			return nil, err
 		}
-		application.Reference = "app:" + application.ID + "@" + application.Version
+		application.Reference = catalogReference(application.ID, application.Version)
 		result = append(result, application)
 	}
 	return result, rows.Err()
@@ -1050,7 +1147,7 @@ func (s *Store) ListManagedResources(ctx context.Context, kind string) ([]domain
 		SELECT resource.id, resource.workspace_id, resource.name, resource.kind, resource.provider, COALESCE(resource.connection_id, ''),
 		       resource.plugin_id, resource.plugin_version, resource.plugin_digest, resource.spec, COALESCE(resource.operation_id, ''),
 		       COALESCE(resource.pipeline_id, ''), COALESCE(resource.pipeline_run_id, ''),
-		       COALESCE((SELECT artifact.id FROM artifacts artifact WHERE artifact.operation_id = resource.operation_id AND artifact.type <> 'RunResult' ORDER BY artifact.created_at LIMIT 1), creation_run.result_artifact_id, ''),
+		       COALESCE((SELECT artifact.id FROM artifacts artifact WHERE artifact.operation_id = resource.operation_id AND artifact.artifact_type <> 'RunResult' ORDER BY artifact.created_at LIMIT 1), creation_run.result_artifact_id, ''),
 		       COALESCE(resource.deletion_operation_id, ''), COALESCE(resource.deletion_pipeline_id, ''), COALESCE(resource.deletion_pipeline_run_id, ''),
 		       COALESCE(creation.status, creation_run.status), COALESCE(creation.error, creation_run.error, ''), COALESCE(creation.validation, creation_pipeline.validation),
 		       COALESCE(deletion.status, deletion_run.status, ''), COALESCE(deletion.error, deletion_run.error, ''), resource.created_at, resource.updated_at
@@ -1084,7 +1181,7 @@ func (s *Store) GetManagedResource(ctx context.Context, resourceID string) (doma
 		SELECT resource.id, resource.workspace_id, resource.name, resource.kind, resource.provider, COALESCE(resource.connection_id, ''),
 		       resource.plugin_id, resource.plugin_version, resource.plugin_digest, resource.spec, COALESCE(resource.operation_id, ''),
 		       COALESCE(resource.pipeline_id, ''), COALESCE(resource.pipeline_run_id, ''),
-		       COALESCE((SELECT artifact.id FROM artifacts artifact WHERE artifact.operation_id = resource.operation_id AND artifact.type <> 'RunResult' ORDER BY artifact.created_at LIMIT 1), creation_run.result_artifact_id, ''),
+		       COALESCE((SELECT artifact.id FROM artifacts artifact WHERE artifact.operation_id = resource.operation_id AND artifact.artifact_type <> 'RunResult' ORDER BY artifact.created_at LIMIT 1), creation_run.result_artifact_id, ''),
 		       COALESCE(resource.deletion_operation_id, ''), COALESCE(resource.deletion_pipeline_id, ''), COALESCE(resource.deletion_pipeline_run_id, ''),
 		       COALESCE(creation.status, creation_run.status), COALESCE(creation.error, creation_run.error, ''), COALESCE(creation.validation, creation_pipeline.validation),
 		       COALESCE(deletion.status, deletion_run.status, ''), COALESCE(deletion.error, deletion_run.error, ''), resource.created_at, resource.updated_at

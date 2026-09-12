@@ -6,12 +6,14 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
 
 	"kubephos.dev/kubephos/internal/domain"
 	"kubephos.dev/kubephos/internal/plugins"
+	"kubephos.dev/kubephos/internal/schema"
 )
 
 type unavailableRunner struct{}
@@ -293,6 +295,34 @@ func TestNormalizePipelineExperimentInputRejectsUnsafeFanout(t *testing.T) {
 		if err := normalizePipelineExperimentInput(&input); err == nil {
 			t.Fatalf("expected rejection for %#v", input)
 		}
+	}
+}
+
+func TestExperimentComponentSchemaRemovesRuntimeInputs(t *testing.T) {
+	raw := json.RawMessage(`{"type":"object","required":["cluster","mode"],"additionalProperties":false,"properties":{"cluster":{"type":"string","format":"kubephos-artifact-ref"},"mode":{"type":"string","enum":["safe","fast"]},"optional":{"type":"integer","default":2}}}`)
+	filtered, err := experimentComponentSchema(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if issues, err := schema.Validate(filtered, json.RawMessage(`{"mode":"safe","optional":3}`)); err != nil || len(issues) != 0 {
+		t.Fatalf("expected configurable fields to validate: %#v %v", issues, err)
+	}
+	if issues, err := schema.Validate(filtered, json.RawMessage(`{"cluster":"artifact","mode":"safe"}`)); err != nil || len(issues) == 0 {
+		t.Fatalf("expected runtime field to be rejected: %#v %v", issues, err)
+	}
+}
+
+func TestValidExperimentTargetsRejectsOverlap(t *testing.T) {
+	pattern := regexp.MustCompile(`^[a-z][a-z0-9-]{0,62}$`)
+	allowed := map[string]bool{"frontend": true, "checkout": true, "email": true}
+	if !validExperimentTargets([]string{"frontend", "checkout"}, []string{"email"}, pattern, allowed) {
+		t.Fatal("expected distinct target selection to be valid")
+	}
+	if validExperimentTargets([]string{"frontend"}, []string{"frontend"}, pattern, allowed) {
+		t.Fatal("expected overlapping target selection to be rejected")
+	}
+	if validExperimentTargets([]string{"unknown"}, nil, pattern, allowed) {
+		t.Fatal("expected an unknown application component to be rejected")
 	}
 }
 

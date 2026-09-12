@@ -105,6 +105,11 @@ func NewServer(store *storage.Store, registry *plugins.Registry, artifactStore *
 	router.HandleFunc("GET /api/v1/kubernetes-clusters/{id}", server.getKubernetesCluster)
 	router.HandleFunc("DELETE /api/v1/kubernetes-clusters/{id}", server.deleteKubernetesCluster)
 	router.HandleFunc("GET /api/v1/kubernetes-clusters/{id}/kubeconfig", server.downloadKubeconfig)
+	router.HandleFunc("GET /api/v1/experiment-configurations", server.listExperimentConfigurations)
+	router.HandleFunc("POST /api/v1/experiment-configurations", server.createExperimentConfiguration)
+	router.HandleFunc("GET /api/v1/experiment-configurations/{id}", server.getExperimentConfiguration)
+	router.HandleFunc("POST /api/v1/experiment-configurations/{id}/clone", server.cloneExperimentConfiguration)
+	router.HandleFunc("DELETE /api/v1/experiment-configurations/{id}", server.deleteExperimentConfiguration)
 	router.HandleFunc("GET /api/v1/infrastructure/resources", server.listInfrastructureResources)
 	router.HandleFunc("GET /api/v1/terminal-targets", server.listTerminalTargets)
 	router.HandleFunc("POST /api/v1/terminals", server.createTerminal)
@@ -1307,10 +1312,276 @@ func (s *Server) getKubernetesCluster(response http.ResponseWriter, request *htt
 		return
 	}
 	if err != nil {
+		slog.Error("read managed cluster", "error", err)
 		writeError(response, http.StatusInternalServerError, "database_error", "Could not read the Kubernetes cluster.")
 		return
 	}
 	writeJSON(response, http.StatusOK, resource)
+}
+
+type experimentConfigurationInput struct {
+	WorkspaceID       string                                 `json:"workspaceId"`
+	ClusterResourceID string                                 `json:"clusterResourceId"`
+	Name              string                                 `json:"name"`
+	Description       string                                 `json:"description"`
+	ApplicationRef    string                                 `json:"applicationRef"`
+	Definition        experimentConfigurationDefinitionInput `json:"definition"`
+}
+
+type experimentConfigurationDefinitionInput struct {
+	ApplicationValues json.RawMessage                         `json:"applicationValues"`
+	Components        []experimentConfigurationComponentInput `json:"components"`
+}
+
+type experimentConfigurationComponentInput struct {
+	ID            string          `json:"id"`
+	PluginID      string          `json:"pluginId"`
+	PluginVersion string          `json:"pluginVersion,omitempty"`
+	PluginDigest  string          `json:"pluginDigest,omitempty"`
+	Capability    string          `json:"capability"`
+	Configuration json.RawMessage `json:"configuration"`
+	Targets       struct {
+		Include []string `json:"include"`
+		Exclude []string `json:"exclude"`
+	} `json:"targets"`
+}
+
+func (s *Server) listExperimentConfigurations(response http.ResponseWriter, request *http.Request) {
+	items, err := s.store.ListExperimentConfigurations(request.Context())
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, "database_error", "Could not list experiment configurations.")
+		return
+	}
+	writeJSON(response, http.StatusOK, map[string]any{"items": items})
+}
+
+func (s *Server) getExperimentConfiguration(response http.ResponseWriter, request *http.Request) {
+	configuration, err := s.store.GetExperimentConfiguration(request.Context(), request.PathValue("id"))
+	if errors.Is(err, storage.ErrNotFound) {
+		writeError(response, http.StatusNotFound, "not_found", "Experiment configuration not found.")
+		return
+	}
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, "database_error", "Could not read the experiment configuration.")
+		return
+	}
+	writeJSON(response, http.StatusOK, configuration)
+}
+
+func (s *Server) createExperimentConfiguration(response http.ResponseWriter, request *http.Request) {
+	var input experimentConfigurationInput
+	if err := decodeJSON(request, &input); err != nil {
+		writeError(response, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	configuration, failure := s.validatedExperimentConfiguration(request.Context(), input)
+	if failure != nil {
+		failure.write(response)
+		return
+	}
+	created, err := s.store.CreateExperimentConfiguration(request.Context(), configuration)
+	if errors.Is(err, storage.ErrConflict) {
+		writeError(response, http.StatusConflict, "configuration_conflict", "An experiment configuration with this name already exists in the environment.")
+		return
+	}
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, "database_error", "Could not save the experiment configuration.")
+		return
+	}
+	writeJSON(response, http.StatusCreated, created)
+}
+
+func (s *Server) cloneExperimentConfiguration(response http.ResponseWriter, request *http.Request) {
+	var input struct {
+		Name string `json:"name"`
+	}
+	if err := decodeJSON(request, &input); err != nil {
+		writeError(response, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	source, err := s.store.GetExperimentConfiguration(request.Context(), request.PathValue("id"))
+	if errors.Is(err, storage.ErrNotFound) {
+		writeError(response, http.StatusNotFound, "not_found", "Experiment configuration not found.")
+		return
+	}
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, "database_error", "Could not read the experiment configuration.")
+		return
+	}
+	var definition experimentConfigurationDefinitionInput
+	if err := json.Unmarshal(source.Definition, &definition); err != nil {
+		writeError(response, http.StatusConflict, "invalid_snapshot", "The stored experiment configuration is invalid.")
+		return
+	}
+	configuration, failure := s.validatedExperimentConfiguration(request.Context(), experimentConfigurationInput{WorkspaceID: source.WorkspaceID, ClusterResourceID: source.ClusterResourceID, Name: input.Name, Description: source.Description, ApplicationRef: source.ApplicationRef, Definition: definition})
+	if failure != nil {
+		failure.write(response)
+		return
+	}
+	created, err := s.store.CreateExperimentConfiguration(request.Context(), configuration)
+	if errors.Is(err, storage.ErrConflict) {
+		writeError(response, http.StatusConflict, "configuration_conflict", "An experiment configuration with this name already exists in the environment.")
+		return
+	}
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, "database_error", "Could not clone the experiment configuration.")
+		return
+	}
+	writeJSON(response, http.StatusCreated, created)
+}
+
+func (s *Server) deleteExperimentConfiguration(response http.ResponseWriter, request *http.Request) {
+	err := s.store.DeleteExperimentConfiguration(request.Context(), request.PathValue("id"))
+	if errors.Is(err, storage.ErrNotFound) {
+		writeError(response, http.StatusNotFound, "not_found", "Experiment configuration not found.")
+		return
+	}
+	if err != nil {
+		writeError(response, http.StatusConflict, "configuration_in_use", "The configuration is already used by an experiment instance.")
+		return
+	}
+	response.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) validatedExperimentConfiguration(ctx context.Context, input experimentConfigurationInput) (domain.ExperimentConfiguration, *managedOperationFailure) {
+	input.WorkspaceID = strings.TrimSpace(input.WorkspaceID)
+	input.ClusterResourceID = strings.TrimSpace(input.ClusterResourceID)
+	input.Name = strings.TrimSpace(input.Name)
+	input.Description = strings.TrimSpace(input.Description)
+	input.ApplicationRef = strings.TrimSpace(input.ApplicationRef)
+	if input.Name == "" || len([]rune(input.Name)) > 120 || len([]rune(input.Description)) > 1000 {
+		return domain.ExperimentConfiguration{}, &managedOperationFailure{status: http.StatusUnprocessableEntity, code: "invalid_name", message: "Name is required, with at most 120 characters; description can contain at most 1000 characters."}
+	}
+	cluster, err := s.store.GetManagedResource(ctx, input.ClusterResourceID)
+	if errors.Is(err, storage.ErrNotFound) || err == nil && cluster.Kind != "kubernetes-cluster" {
+		return domain.ExperimentConfiguration{}, &managedOperationFailure{status: http.StatusUnprocessableEntity, code: "invalid_cluster", message: "Select a managed Kubernetes cluster."}
+	}
+	if err != nil {
+		return domain.ExperimentConfiguration{}, &managedOperationFailure{status: http.StatusInternalServerError, code: "database_error", message: "Could not validate the Kubernetes cluster."}
+	}
+	if cluster.Status != "ready" || cluster.WorkspaceID != input.WorkspaceID {
+		return domain.ExperimentConfiguration{}, &managedOperationFailure{status: http.StatusConflict, code: "cluster_not_ready", message: "The selected cluster must be ready and belong to the same environment."}
+	}
+	applicationID, applicationVersion, err := catalog.ParseReference(input.ApplicationRef)
+	if err != nil {
+		return domain.ExperimentConfiguration{}, &managedOperationFailure{status: http.StatusUnprocessableEntity, code: "invalid_application", message: err.Error()}
+	}
+	application, err := s.store.GetCatalogApplication(ctx, applicationID, applicationVersion)
+	if errors.Is(err, storage.ErrNotFound) {
+		return domain.ExperimentConfiguration{}, &managedOperationFailure{status: http.StatusUnprocessableEntity, code: "invalid_application", message: "Select an enabled application version from the catalog."}
+	}
+	if err != nil {
+		return domain.ExperimentConfiguration{}, &managedOperationFailure{status: http.StatusInternalServerError, code: "database_error", message: "Could not validate the application."}
+	}
+	if len(input.Definition.ApplicationValues) == 0 {
+		input.Definition.ApplicationValues = json.RawMessage(`{}`)
+	}
+	var descriptor catalog.Descriptor
+	if err := json.Unmarshal(application.Descriptor, &descriptor); err != nil {
+		return domain.ExperimentConfiguration{}, &managedOperationFailure{status: http.StatusConflict, code: "invalid_application", message: "The selected application contract is invalid."}
+	}
+	valuesSchema, _ := json.Marshal(descriptor.Spec.ValuesSchema)
+	if issues, err := schema.Validate(valuesSchema, input.Definition.ApplicationValues); err != nil {
+		return domain.ExperimentConfiguration{}, &managedOperationFailure{status: http.StatusInternalServerError, code: "invalid_schema", message: err.Error()}
+	} else if len(issues) > 0 {
+		return domain.ExperimentConfiguration{}, experimentConfigurationIssues("applicationValues", issues)
+	}
+	if len(input.Definition.Components) > 24 {
+		return domain.ExperimentConfiguration{}, &managedOperationFailure{status: http.StatusUnprocessableEntity, code: "invalid_components", message: "An experiment configuration can contain at most 24 component instances."}
+	}
+	componentPattern := regexp.MustCompile(`^[a-z][a-z0-9-]{0,62}$`)
+	applicationComponents := map[string]bool{}
+	for _, component := range descriptor.Spec.Interface.Components {
+		applicationComponents[component.ID] = true
+	}
+	seenIDs := map[string]bool{}
+	validation := domain.ValidationReport{Valid: true, CheckedAt: time.Now().UTC()}
+	for index := range input.Definition.Components {
+		component := &input.Definition.Components[index]
+		component.ID = strings.TrimSpace(component.ID)
+		component.PluginID = strings.TrimSpace(component.PluginID)
+		component.Capability = strings.TrimSpace(component.Capability)
+		if !componentPattern.MatchString(component.ID) || seenIDs[component.ID] {
+			return domain.ExperimentConfiguration{}, &managedOperationFailure{status: http.StatusUnprocessableEntity, code: "invalid_component", message: "Component instance IDs must be unique lowercase labels."}
+		}
+		seenIDs[component.ID] = true
+		plugin, err := s.registry.Get(component.PluginID)
+		if err != nil {
+			return domain.ExperimentConfiguration{}, &managedOperationFailure{status: http.StatusUnprocessableEntity, code: "invalid_plugin", message: err.Error()}
+		}
+		manifest := plugin.Manifest()
+		component.PluginVersion = manifest.Version
+		component.PluginDigest = manifest.Runtime.Digest
+		if component.Capability == "" || !manifest.HasCapability(component.Capability) || strings.HasSuffix(component.Capability, ".preflight") || strings.HasSuffix(component.Capability, ".cleanup") || component.Capability == "lifecycle.cleanup" {
+			return domain.ExperimentConfiguration{}, &managedOperationFailure{status: http.StatusUnprocessableEntity, code: "invalid_capability", message: "Each component must select a primary capability declared by its plugin."}
+		}
+		if len(component.Configuration) == 0 {
+			component.Configuration = json.RawMessage(`{}`)
+		}
+		configSchema, err := experimentComponentSchema(manifest.Schema)
+		if err != nil {
+			return domain.ExperimentConfiguration{}, &managedOperationFailure{status: http.StatusInternalServerError, code: "invalid_schema", message: err.Error()}
+		}
+		if issues, err := schema.Validate(configSchema, component.Configuration); err != nil {
+			return domain.ExperimentConfiguration{}, &managedOperationFailure{status: http.StatusInternalServerError, code: "invalid_schema", message: err.Error()}
+		} else if len(issues) > 0 {
+			return domain.ExperimentConfiguration{}, experimentConfigurationIssues("components."+component.ID+".configuration", issues)
+		}
+		if !validExperimentTargets(component.Targets.Include, component.Targets.Exclude, componentPattern, applicationComponents) {
+			return domain.ExperimentConfiguration{}, &managedOperationFailure{status: http.StatusUnprocessableEntity, code: "invalid_targets", message: "Component targets must contain unique catalog component IDs without overlap."}
+		}
+		validation.Issues = append(validation.Issues, domain.ValidationIssue{Level: "info", Path: "components." + component.ID, Message: manifest.Name + " " + manifest.Version + " is installed and its configurable inputs are valid."})
+	}
+	validation.Issues = append(validation.Issues, domain.ValidationIssue{Level: "info", Path: "clusterResourceId", Message: "Cluster health and every runtime dependency will be checked again before each run step."})
+	definition, _ := json.Marshal(input.Definition)
+	return domain.ExperimentConfiguration{ID: id.New("expcfg"), WorkspaceID: input.WorkspaceID, ClusterResourceID: input.ClusterResourceID, Name: input.Name, Description: input.Description, ApplicationRef: application.Reference, ApplicationDigest: application.Digest, Definition: definition, Validation: validation}, nil
+}
+
+func experimentConfigurationIssues(prefix string, issues []schema.Issue) *managedOperationFailure {
+	converted := make([]domain.ValidationIssue, 0, len(issues))
+	for _, issue := range issues {
+		converted = append(converted, domain.ValidationIssue{Level: "error", Path: prefix + "." + strings.TrimPrefix(issue.Path, "$."), Message: issue.Message})
+	}
+	return &managedOperationFailure{status: http.StatusUnprocessableEntity, payload: map[string]any{"code": "validation_failed", "validation": domain.ValidationReport{Valid: false, Issues: converted, CheckedAt: time.Now().UTC()}}}
+}
+
+func experimentComponentSchema(raw json.RawMessage) (json.RawMessage, error) {
+	var definition map[string]any
+	if err := json.Unmarshal(raw, &definition); err != nil {
+		return nil, err
+	}
+	properties, _ := definition["properties"].(map[string]any)
+	filtered := map[string]any{}
+	for name, rawProperty := range properties {
+		property, _ := rawProperty.(map[string]any)
+		if property["format"] == "kubephos-artifact-ref" || property["format"] == "kubephos-application-ref" {
+			continue
+		}
+		filtered[name] = property
+	}
+	required := []string{}
+	rawRequired, _ := definition["required"].([]any)
+	for _, rawName := range rawRequired {
+		name, _ := rawName.(string)
+		if _, exists := filtered[name]; exists {
+			required = append(required, name)
+		}
+	}
+	result := map[string]any{"type": "object", "additionalProperties": false, "properties": filtered, "required": required}
+	return json.Marshal(result)
+}
+
+func validExperimentTargets(include, exclude []string, pattern *regexp.Regexp, allowed map[string]bool) bool {
+	seen := map[string]bool{}
+	for _, values := range [][]string{include, exclude} {
+		for _, value := range values {
+			if !pattern.MatchString(value) || seen[value] || !allowed[value] {
+				return false
+			}
+			seen[value] = true
+		}
+	}
+	return true
 }
 
 func (s *Server) createKubernetesCluster(response http.ResponseWriter, request *http.Request) {
@@ -1547,6 +1818,15 @@ func (s *Server) deleteKubernetesCluster(response http.ResponseWriter, request *
 	}
 	if err != nil {
 		writeError(response, http.StatusInternalServerError, "database_error", "Could not read the Kubernetes cluster.")
+		return
+	}
+	used, err := s.store.ClusterHasExperimentConfigurations(request.Context(), resource.ID)
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, "database_error", "Could not validate cluster dependencies.")
+		return
+	}
+	if used {
+		writeError(response, http.StatusConflict, "cluster_in_use", "Delete the experiment configurations associated with this cluster first.")
 		return
 	}
 	s.deleteManagedPipelineResource(response, request, resource, "cluster")

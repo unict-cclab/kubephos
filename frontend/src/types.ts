@@ -253,6 +253,30 @@ export interface Experiment {
   updatedAt: string
 }
 
+export interface ExperimentConfigurationComponent {
+  id: string
+  pluginId: string
+  pluginVersion?: string
+  pluginDigest?: string
+  capability: string
+  configuration: Record<string, unknown>
+  targets: {include: string[]; exclude: string[]}
+}
+
+export interface ExperimentConfiguration {
+  id: string
+  workspaceId: string
+  clusterResourceId: string
+  name: string
+  description: string
+  applicationRef: string
+  applicationDigest: string
+  definition: {applicationValues: Record<string, unknown>; components: ExperimentConfigurationComponent[]}
+  validation: ValidationReport
+  createdAt: string
+  updatedAt: string
+}
+
 export interface PipelineBinding {
   path: string
   fromStage: string
@@ -438,6 +462,7 @@ export interface PlatformData {
 	pluginRuntime: PluginRuntimeStatus | null
   workspaces: Workspace[]
   experiments: Experiment[]
+  experimentConfigurations: ExperimentConfiguration[]
   pipelines: Pipeline[]
   pipelineRuns: PipelineRun[]
   operations: Operation[]
