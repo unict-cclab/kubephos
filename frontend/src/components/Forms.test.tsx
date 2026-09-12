@@ -1,7 +1,7 @@
 import {fireEvent, render, screen, waitFor} from '@testing-library/react'
 import {afterEach, beforeAll, describe, expect, it, vi} from 'vitest'
 import type {Artifact, Connection, ManagedResource, Plugin, Workspace} from '../types'
-import {ConnectionDialog, InfrastructureServiceDialog, RuntimeDialog} from './Forms'
+import {ConnectionDialog, InfrastructureServiceDialog, KubernetesClusterDialog, RuntimeDialog} from './Forms'
 
 const artifacts: Artifact[] = [
   artifact('art_executor_endpoint', 'op_executor', 'executor-endpoint', 'OCIExecutorEndpoint', false),
@@ -116,6 +116,29 @@ describe('InfrastructureServiceDialog', () => {
   })
 })
 
+describe('KubernetesClusterDialog', () => {
+  it('submits an independent capacity for every pool', async () => {
+    const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({id: 'cluster_created'}), {status: 202, headers: {'Content-Type': 'application/json'}}))
+    vi.stubGlobal('fetch', fetch)
+    render(<KubernetesClusterDialog open close={() => {}} workspaces={[workspace]} templates={[machineTemplate]} services={[harborService, nfsService]} session={{authenticated: true, csrfToken: 'csrf'}} applications={[]} artifacts={[]} connections={[connection]} credentials={[]} onDone={async () => {}} />)
+
+    fireEvent.change(screen.getByRole('textbox', {name: 'Cluster name'}), {target: {value: 'development'}})
+    fireEvent.change(screen.getByRole('spinbutton', {name: 'First VM ID'}), {target: {value: '200'}})
+    fireEvent.change(screen.getByRole('textbox', {name: 'First node IP'}), {target: {value: '10.10.0.20'}})
+    fireEvent.change(screen.getByRole('textbox', {name: 'Gateway'}), {target: {value: '10.10.0.1'}})
+    const cores = screen.getAllByRole('spinbutton', {name: 'CPU cores'})
+    fireEvent.change(cores[2], {target: {value: '6'}})
+    fireEvent.click(screen.getByRole('button', {name: 'Validate and create'}))
+
+    await waitFor(() => expect(fetch).toHaveBeenCalledOnce())
+    const body = JSON.parse(fetch.mock.calls[0][1].body)
+    expect(body.controlPlaneCapacity).toEqual({cores: 2, memoryMiB: 4096, diskGiB: 80})
+    expect(body.managementPool.capacity).toEqual({cores: 4, memoryMiB: 8192, diskGiB: 80})
+    expect(body.applicationPools).toEqual([{name: 'applications', count: 2, zones: ['zone-a'], capacity: {cores: 6, memoryMiB: 8192, diskGiB: 80}}])
+    expect(body).not.toHaveProperty('cores')
+  })
+})
+
 function artifact(id: string, operationId: string, name: string, type: string, sensitive: boolean): Artifact {
   return {id, operationId, name, type, version: 'v1alpha1', mediaType: 'application/json', digest: 'sha256:test', sizeBytes: 1, sensitive, verifiedAt: '2026-09-10T00:00:00Z'}
 }
@@ -158,3 +181,5 @@ const machineTemplate: ManagedResource = {
   id: 'tmpl_ready', workspaceId: workspace.id, name: 'ubuntu', kind: 'machine-template', provider: 'proxmox', connectionId: connection.id,
   status: 'ready', validation: {valid: true, issues: []}, spec: {}, createdAt: '2026-09-12T00:00:00Z', updatedAt: '2026-09-12T00:00:00Z'
 }
+const harborService: ManagedResource = {...machineTemplate, id: 'svc_harbor', name: 'harbor', kind: 'harbor', pipelineRunId: 'run_harbor', artifactId: 'art_harbor'}
+const nfsService: ManagedResource = {...machineTemplate, id: 'svc_nfs', name: 'nfs', kind: 'nfs', pipelineRunId: 'run_nfs', artifactId: 'art_nfs'}

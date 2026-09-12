@@ -92,22 +92,46 @@ spec:
         default: 3
       cores:
         type: integer
-        title: CPU cores per machine
+        title: Default CPU cores per machine
         minimum: 1
         maximum: 32
         default: 2
       memoryMiB:
         type: integer
-        title: Memory MiB per machine
+        title: Default memory MiB per machine
         minimum: 512
         maximum: 131072
         default: 4096
       diskGiB:
         type: integer
-        title: Disk GiB per machine
+        title: Default disk GiB per machine
         minimum: 8
         maximum: 2048
         default: 32
+      machineProfiles:
+        type: array
+        title: Capacity for each machine
+        maxItems: 12
+        items:
+          type: object
+          additionalProperties: false
+          required:
+            - cores
+            - memoryMiB
+            - diskGiB
+          properties:
+            cores:
+              type: integer
+              minimum: 1
+              maximum: 32
+            memoryMiB:
+              type: integer
+              minimum: 512
+              maximum: 131072
+            diskGiB:
+              type: integer
+              minimum: 8
+              maximum: 2048
       sshUser:
         type: string
         title: SSH user

@@ -18,6 +18,21 @@ import (
 
 type unavailableRunner struct{}
 
+func TestManagedMachineCapacityProfiles(t *testing.T) {
+	defaults := managedMachineCapacity{Cores: 4, MemoryMiB: 8192, DiskGiB: 80}
+	capacity := managedCapacityDefaults(managedMachineCapacity{Cores: 6}, defaults)
+	if capacity.Cores != 6 || capacity.MemoryMiB != 8192 || capacity.DiskGiB != 80 || !validManagedCapacity(capacity, 60) {
+		t.Fatalf("unexpected capacity defaults %#v", capacity)
+	}
+	profiles := appendManagedMachineProfiles(nil, 3, capacity)
+	if len(profiles) != 3 || profiles[2] != capacity {
+		t.Fatalf("unexpected machine profiles %#v", profiles)
+	}
+	if validManagedCapacity(capacity, 100) {
+		t.Fatal("capacity smaller than the template disk was accepted")
+	}
+}
+
 func (unavailableRunner) Ready(context.Context) error {
 	return errors.New("executor offline")
 }

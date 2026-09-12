@@ -39,22 +39,23 @@ type sshAccess interface {
 type networkSSHAccess struct{}
 
 type TopologySpec struct {
-	ConnectionRef      string `json:"connectionRef"`
-	MachineTemplateRef string `json:"machineTemplateRef"`
-	Node               string `json:"node"`
-	TemplateVMID       int    `json:"templateVMID"`
-	BaseVMID           int    `json:"baseVMID"`
-	AddressStart       string `json:"addressStart"`
-	PrefixLength       int    `json:"prefixLength"`
-	Gateway            string `json:"gateway"`
-	DNSServer          string `json:"dnsServer"`
-	NamePrefix         string `json:"namePrefix"`
-	MachineCount       int    `json:"machineCount"`
-	Cores              int    `json:"cores"`
-	MemoryMiB          int    `json:"memoryMiB"`
-	DiskGiB            int    `json:"diskGiB"`
-	SSHUser            string `json:"sshUser"`
-	CleanupAfterTest   bool   `json:"cleanupAfterTest"`
+	ConnectionRef      string            `json:"connectionRef"`
+	MachineTemplateRef string            `json:"machineTemplateRef"`
+	Node               string            `json:"node"`
+	TemplateVMID       int               `json:"templateVMID"`
+	BaseVMID           int               `json:"baseVMID"`
+	AddressStart       string            `json:"addressStart"`
+	PrefixLength       int               `json:"prefixLength"`
+	Gateway            string            `json:"gateway"`
+	DNSServer          string            `json:"dnsServer"`
+	NamePrefix         string            `json:"namePrefix"`
+	MachineCount       int               `json:"machineCount"`
+	Cores              int               `json:"cores"`
+	MemoryMiB          int               `json:"memoryMiB"`
+	DiskGiB            int               `json:"diskGiB"`
+	MachineProfiles    []machineCapacity `json:"machineProfiles,omitempty"`
+	SSHUser            string            `json:"sshUser"`
+	CleanupAfterTest   bool              `json:"cleanupAfterTest"`
 }
 
 type topologyStepInput struct {
@@ -75,9 +76,18 @@ type topologyStepInput struct {
 }
 
 type plannedMachine struct {
-	VMID    int    `json:"vmid"`
-	Name    string `json:"name"`
-	Address string `json:"address"`
+	VMID      int    `json:"vmid"`
+	Name      string `json:"name"`
+	Address   string `json:"address"`
+	Cores     int    `json:"cores,omitempty"`
+	MemoryMiB int    `json:"memoryMiB,omitempty"`
+	DiskGiB   int    `json:"diskGiB,omitempty"`
+}
+
+type machineCapacity struct {
+	Cores     int `json:"cores"`
+	MemoryMiB int `json:"memoryMiB"`
+	DiskGiB   int `json:"diskGiB"`
 }
 
 type guestExecStart struct {
@@ -162,7 +172,7 @@ func (TopologyPlugin) Manifest() plugins.Manifest {
 	return plugins.Manifest{
 		ID: topologyPluginID, Provider: "proxmox", Name: "Proxmox machine topology", Version: "0.3.1",
 		Description:     "Creates a validated group of isolated machines from one Proxmox template.",
-		Schema:          json.RawMessage(`{"type":"object","additionalProperties":false,"required":["connectionRef","node","templateVMID","baseVMID","addressStart","prefixLength","gateway","dnsServer","namePrefix","machineCount","cores","memoryMiB","diskGiB","sshUser","cleanupAfterTest"],"properties":{"connectionRef":{"type":"string","title":"Proxmox connection","format":"kubephos-connection-ref","x-kubephos-provider":"proxmox"},"machineTemplateRef":{"type":"string","title":"Managed machine template","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"MachineTemplate","x-kubephos-artifact-version":"v1alpha1"},"node":{"type":"string","title":"Proxmox node","minLength":1,"maxLength":64},"templateVMID":{"type":"integer","title":"Template VMID","minimum":100,"maximum":999999999},"baseVMID":{"type":"integer","title":"First new VMID","minimum":100,"maximum":999999988},"addressStart":{"type":"string","title":"First machine address"},"prefixLength":{"type":"integer","title":"Network prefix length","minimum":8,"maximum":30,"default":24},"gateway":{"type":"string","title":"Network gateway"},"dnsServer":{"type":"string","title":"DNS server"},"namePrefix":{"type":"string","title":"Machine group name","pattern":"^[a-z0-9][a-z0-9-]{0,19}$","default":"cluster"},"machineCount":{"type":"integer","title":"Number of machines","minimum":1,"maximum":12,"default":3},"cores":{"type":"integer","title":"CPU cores per machine","minimum":1,"maximum":32,"default":2},"memoryMiB":{"type":"integer","title":"Memory MiB per machine","minimum":512,"maximum":131072,"default":4096},"diskGiB":{"type":"integer","title":"Disk GiB per machine","minimum":8,"maximum":2048,"default":32},"sshUser":{"type":"string","title":"SSH user","pattern":"^[a-z_][a-z0-9_-]{0,31}$","default":"ubuntu"},"cleanupAfterTest":{"type":"boolean","title":"Remove machines after validation","default":false}}}`),
+		Schema:          json.RawMessage(`{"type":"object","additionalProperties":false,"required":["connectionRef","node","templateVMID","baseVMID","addressStart","prefixLength","gateway","dnsServer","namePrefix","machineCount","cores","memoryMiB","diskGiB","sshUser","cleanupAfterTest"],"properties":{"connectionRef":{"type":"string","title":"Proxmox connection","format":"kubephos-connection-ref","x-kubephos-provider":"proxmox"},"machineTemplateRef":{"type":"string","title":"Managed machine template","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"MachineTemplate","x-kubephos-artifact-version":"v1alpha1"},"node":{"type":"string","title":"Proxmox node","minLength":1,"maxLength":64},"templateVMID":{"type":"integer","title":"Template VMID","minimum":100,"maximum":999999999},"baseVMID":{"type":"integer","title":"First new VMID","minimum":100,"maximum":999999988},"addressStart":{"type":"string","title":"First machine address"},"prefixLength":{"type":"integer","title":"Network prefix length","minimum":8,"maximum":30,"default":24},"gateway":{"type":"string","title":"Network gateway"},"dnsServer":{"type":"string","title":"DNS server"},"namePrefix":{"type":"string","title":"Machine group name","pattern":"^[a-z0-9][a-z0-9-]{0,19}$","default":"cluster"},"machineCount":{"type":"integer","title":"Number of machines","minimum":1,"maximum":12,"default":3},"cores":{"type":"integer","title":"Default CPU cores per machine","minimum":1,"maximum":32,"default":2},"memoryMiB":{"type":"integer","title":"Default memory MiB per machine","minimum":512,"maximum":131072,"default":4096},"diskGiB":{"type":"integer","title":"Default disk GiB per machine","minimum":8,"maximum":2048,"default":32},"machineProfiles":{"type":"array","title":"Capacity for each machine","maxItems":12,"items":{"type":"object","additionalProperties":false,"required":["cores","memoryMiB","diskGiB"],"properties":{"cores":{"type":"integer","minimum":1,"maximum":32},"memoryMiB":{"type":"integer","minimum":512,"maximum":131072},"diskGiB":{"type":"integer","minimum":8,"maximum":2048}}}},"sshUser":{"type":"string","title":"SSH user","pattern":"^[a-z_][a-z0-9_-]{0,31}$","default":"ubuntu"},"cleanupAfterTest":{"type":"boolean","title":"Remove machines after validation","default":false}}}`),
 		ArtifactInputs:  []domain.ArtifactContract{{Type: "MachineTemplate", Version: "v1alpha1"}},
 		ArtifactOutputs: []domain.ArtifactContract{{Type: "MachineSet", Version: "v1alpha1"}, {Type: "MachineAccess", Version: "v1alpha1"}},
 		Capabilities:    []string{"infrastructure.machine-topology.provision", "infrastructure.provision", "infrastructure.deprovision", "infrastructure.preflight", "lifecycle.cleanup"},
@@ -236,10 +246,14 @@ func (TopologyPlugin) Plan(ctx context.Context, invocation Invocation) (domain.P
 		return domain.Plan{}, err
 	}
 	marker := hex.EncodeToString(markerBytes)
+	profiles, err := topologyMachineProfiles(spec)
+	if err != nil {
+		return domain.Plan{}, err
+	}
 	machines := make([]plannedMachine, spec.MachineCount)
 	createEffects := make([]domain.ResourceEffect, spec.MachineCount)
 	for index := range machines {
-		machines[index] = plannedMachine{VMID: spec.BaseVMID + index, Name: fmt.Sprintf("kubephos-%s-%02d-%s", spec.NamePrefix, index+1, marker[:6]), Address: addresses[index]}
+		machines[index] = plannedMachine{VMID: spec.BaseVMID + index, Name: fmt.Sprintf("kubephos-%s-%02d-%s", spec.NamePrefix, index+1, marker[:6]), Address: addresses[index], Cores: profiles[index].Cores, MemoryMiB: profiles[index].MemoryMiB, DiskGiB: profiles[index].DiskGiB}
 		createEffects[index] = domain.ResourceEffect{Action: "create", ExternalID: externalID(machines[index].VMID), Kind: "virtual-machine", Name: machines[index].Name}
 	}
 	base := topologyStepInput{ConnectionRef: spec.ConnectionRef, MachineTemplateRef: spec.MachineTemplateRef, Node: spec.Node, TemplateVMID: spec.TemplateVMID, Cores: spec.Cores, MemoryMiB: spec.MemoryMiB, DiskGiB: spec.DiskGiB, SSHUser: spec.SSHUser, PrefixLength: spec.PrefixLength, Gateway: spec.Gateway, DNSServer: spec.DNSServer, Marker: marker, Machines: machines}
@@ -509,10 +523,35 @@ func validateTopologyValues(spec TopologySpec) *domain.ValidationIssue {
 		return &domain.ValidationIssue{Path: "memoryMiB", Message: "Memory must be between 512 and 131072 MiB."}
 	case spec.DiskGiB < 8 || spec.DiskGiB > 2048:
 		return &domain.ValidationIssue{Path: "diskGiB", Message: "Disk must be between 8 and 2048 GiB."}
+	case len(spec.MachineProfiles) > 0 && len(spec.MachineProfiles) != spec.MachineCount:
+		return &domain.ValidationIssue{Path: "machineProfiles", Message: "Machine profiles must match the requested machine count."}
 	case !regexpSSHUser.MatchString(spec.SSHUser):
 		return &domain.ValidationIssue{Path: "sshUser", Message: "SSH user is invalid."}
 	}
+	for index, capacity := range spec.MachineProfiles {
+		if !validMachineCapacity(capacity) {
+			return &domain.ValidationIssue{Path: fmt.Sprintf("machineProfiles.%d", index), Message: "Machine capacity is outside the supported range."}
+		}
+	}
 	return nil
+}
+
+func topologyMachineProfiles(spec TopologySpec) ([]machineCapacity, error) {
+	if issue := validateTopologyValues(spec); issue != nil {
+		return nil, errors.New(issue.Message)
+	}
+	if len(spec.MachineProfiles) > 0 {
+		return spec.MachineProfiles, nil
+	}
+	profiles := make([]machineCapacity, spec.MachineCount)
+	for index := range profiles {
+		profiles[index] = machineCapacity{Cores: spec.Cores, MemoryMiB: spec.MemoryMiB, DiskGiB: spec.DiskGiB}
+	}
+	return profiles, nil
+}
+
+func validMachineCapacity(capacity machineCapacity) bool {
+	return capacity.Cores >= 1 && capacity.Cores <= 32 && capacity.MemoryMiB >= 512 && capacity.MemoryMiB <= 131072 && capacity.DiskGiB >= 8 && capacity.DiskGiB <= 2048
 }
 
 var (
@@ -553,6 +592,7 @@ func validatePlannedInventory(resources []vmResource, input topologyStepInput) e
 }
 
 func createTopologyMachine(ctx context.Context, connection *client, input topologyStepInput, planned plannedMachine, publicKey string, log plugins.Logger) error {
+	capacity := plannedMachineCapacity(input, planned)
 	if err := log("info", fmt.Sprintf("Cloning template %d to VM %d", input.TemplateVMID, planned.VMID)); err != nil {
 		return err
 	}
@@ -564,7 +604,7 @@ func createTopologyMachine(ctx context.Context, connection *client, input topolo
 		return err
 	}
 	values := url.Values{
-		"cores": {strconv.Itoa(input.Cores)}, "memory": {strconv.Itoa(input.MemoryMiB)}, "tags": {managedTag},
+		"cores": {strconv.Itoa(capacity.Cores)}, "memory": {strconv.Itoa(capacity.MemoryMiB)}, "tags": {managedTag},
 		"description": {topologyDescription(input.Marker)}, "onboot": {"1"}, "ciuser": {input.SSHUser},
 		"sshkeys": {encodeProxmoxSSHKey(publicKey)}, "ipconfig0": {staticIPConfig(planned.Address, input.PrefixLength, input.Gateway)},
 		"nameserver": {input.DNSServer}, "agent": {"enabled=1"}, "ciupgrade": {"0"},
@@ -584,10 +624,10 @@ func createTopologyMachine(ctx context.Context, connection *client, input topolo
 	if err != nil {
 		return err
 	}
-	if err := log("info", fmt.Sprintf("Resizing VM %d disk to %d GiB", planned.VMID, input.DiskGiB)); err != nil {
+	if err := log("info", fmt.Sprintf("Resizing VM %d disk to %d GiB", planned.VMID, capacity.DiskGiB)); err != nil {
 		return err
 	}
-	upid, err = connection.task(ctx, http.MethodPut, fmt.Sprintf("/api2/json/nodes/%s/qemu/%d/resize", url.PathEscape(input.Node), planned.VMID), url.Values{"disk": {disk}, "size": {strconv.Itoa(input.DiskGiB) + "G"}})
+	upid, err = connection.task(ctx, http.MethodPut, fmt.Sprintf("/api2/json/nodes/%s/qemu/%d/resize", url.PathEscape(input.Node), planned.VMID), url.Values{"disk": {disk}, "size": {strconv.Itoa(capacity.DiskGiB) + "G"}})
 	if err != nil {
 		return err
 	}
@@ -614,13 +654,14 @@ func topologyExecutionResult(ctx context.Context, connection *client, input topo
 	resources := make([]domain.DiscoveredResource, 0, len(input.Machines))
 	machines := make([]machine, 0, len(input.Machines))
 	for _, planned := range input.Machines {
+		capacity := plannedMachineCapacity(input, planned)
 		resource, err := connection.vm(ctx, planned.VMID)
 		if err != nil {
 			return topologyResult{}, err
 		}
-		metadata, _ := json.Marshal(map[string]any{"vmid": planned.VMID, "node": input.Node, "type": "qemu", "templateVMID": input.TemplateVMID, "address": planned.Address, "cores": input.Cores, "memoryMiB": input.MemoryMiB, "diskGiB": input.DiskGiB, "ownershipMarker": input.Marker})
+		metadata, _ := json.Marshal(map[string]any{"vmid": planned.VMID, "node": input.Node, "type": "qemu", "templateVMID": input.TemplateVMID, "address": planned.Address, "cores": capacity.Cores, "memoryMiB": capacity.MemoryMiB, "diskGiB": capacity.DiskGiB, "ownershipMarker": input.Marker})
 		resources = append(resources, domain.DiscoveredResource{ExternalID: externalID(planned.VMID), Kind: "virtual-machine", Name: planned.Name, State: resource.Status, Metadata: metadata})
-		machines = append(machines, machine{ID: externalID(planned.VMID), Name: planned.Name, Node: input.Node, Address: planned.Address, SSHPort: 22, SSHUser: input.SSHUser, State: resource.Status, Cores: input.Cores, MemoryMiB: input.MemoryMiB, DiskGiB: input.DiskGiB})
+		machines = append(machines, machine{ID: externalID(planned.VMID), Name: planned.Name, Node: input.Node, Address: planned.Address, SSHPort: 22, SSHUser: input.SSHUser, State: resource.Status, Cores: capacity.Cores, MemoryMiB: capacity.MemoryMiB, DiskGiB: capacity.DiskGiB})
 	}
 	name := strings.TrimPrefix(input.Machines[0].Name, "kubephos-")
 	return topologyResult{
@@ -784,8 +825,9 @@ func validateTopologyResult(input topologyStepInput, result topologyResult) erro
 	seen := make(map[string]bool, len(result.MachineSet.Spec.Machines))
 	for _, value := range result.MachineSet.Spec.Machines {
 		planned, ok := plannedByID[value.ID]
+		capacity := plannedMachineCapacity(input, planned)
 		address := net.ParseIP(value.Address)
-		if !ok || seen[value.ID] || value.Name != planned.Name || value.Node != input.Node || value.Address != planned.Address || value.SSHUser != input.SSHUser || value.SSHPort != 22 || value.State != "running" || value.Cores != input.Cores || value.MemoryMiB != input.MemoryMiB || value.DiskGiB != input.DiskGiB || address == nil || address.To4() == nil || address.IsLoopback() || address.IsLinkLocalUnicast() {
+		if !ok || seen[value.ID] || value.Name != planned.Name || value.Node != input.Node || value.Address != planned.Address || value.SSHUser != input.SSHUser || value.SSHPort != 22 || value.State != "running" || value.Cores != capacity.Cores || value.MemoryMiB != capacity.MemoryMiB || value.DiskGiB != capacity.DiskGiB || address == nil || address.To4() == nil || address.IsLoopback() || address.IsLinkLocalUnicast() {
 			return fmt.Errorf("machine %q does not match the validated topology", value.ID)
 		}
 		seen[value.ID] = true
@@ -870,6 +912,7 @@ func cleanupOwnedTopology(configuration vmConfig, input topologyStepInput, plann
 }
 
 func configuredTopologyAccess(configuration vmConfig, input topologyStepInput, planned plannedMachine, publicKey string) bool {
+	capacity := plannedMachineCapacity(input, planned)
 	storedKey := strings.TrimSpace(configuration.SSHKeys)
 	if decoded, err := url.QueryUnescape(storedKey); err == nil {
 		storedKey = strings.TrimSpace(decoded)
@@ -879,7 +922,15 @@ func configuredTopologyAccess(configuration vmConfig, input topologyStepInput, p
 		return false
 	}
 	diskSize, err := topologyDiskSizeGiB(diskConfiguration(configuration, disk))
-	return err == nil && diskSize >= float64(input.DiskGiB) && configuration.CIUser == input.SSHUser && storedKey == strings.TrimSpace(publicKey) && configuration.IPConfig0 == staticIPConfig(planned.Address, input.PrefixLength, input.Gateway) && configuration.NameServer == input.DNSServer
+	return err == nil && diskSize >= float64(capacity.DiskGiB) && configuration.CIUser == input.SSHUser && storedKey == strings.TrimSpace(publicKey) && configuration.IPConfig0 == staticIPConfig(planned.Address, input.PrefixLength, input.Gateway) && configuration.NameServer == input.DNSServer
+}
+
+func plannedMachineCapacity(input topologyStepInput, planned plannedMachine) machineCapacity {
+	capacity := machineCapacity{Cores: planned.Cores, MemoryMiB: planned.MemoryMiB, DiskGiB: planned.DiskGiB}
+	if validMachineCapacity(capacity) {
+		return capacity
+	}
+	return machineCapacity{Cores: input.Cores, MemoryMiB: input.MemoryMiB, DiskGiB: input.DiskGiB}
 }
 
 func topologyRootDisk(configuration vmConfig) (string, error) {

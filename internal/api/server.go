@@ -1312,9 +1312,16 @@ func (s *Server) createInfrastructureService(response http.ResponseWriter, reque
 }
 
 type managedNodePoolInput struct {
-	Name  string   `json:"name"`
-	Count int      `json:"count"`
-	Zones []string `json:"zones"`
+	Name     string                 `json:"name"`
+	Count    int                    `json:"count"`
+	Zones    []string               `json:"zones"`
+	Capacity managedMachineCapacity `json:"capacity"`
+}
+
+type managedMachineCapacity struct {
+	Cores     int `json:"cores"`
+	MemoryMiB int `json:"memoryMiB"`
+	DiskGiB   int `json:"diskGiB"`
 }
 
 func (s *Server) listKubernetesClusters(response http.ResponseWriter, request *http.Request) {
@@ -2010,24 +2017,22 @@ func marshalRaw(value any) json.RawMessage {
 
 func (s *Server) createKubernetesCluster(response http.ResponseWriter, request *http.Request) {
 	var input struct {
-		WorkspaceID       string                 `json:"workspaceId"`
-		ConnectionID      string                 `json:"connectionId"`
-		TemplateID        string                 `json:"templateId"`
-		HarborID          string                 `json:"harborId"`
-		NFSID             string                 `json:"nfsId"`
-		Name              string                 `json:"name"`
-		BaseVMID          int                    `json:"baseVMID"`
-		AddressStart      string                 `json:"addressStart"`
-		PrefixLength      int                    `json:"prefixLength"`
-		Gateway           string                 `json:"gateway"`
-		DNSServer         string                 `json:"dnsServer"`
-		ControlPlanes     int                    `json:"controlPlanes"`
-		ControlPlaneZones []string               `json:"controlPlaneZones"`
-		ManagementPool    managedNodePoolInput   `json:"managementPool"`
-		ApplicationPools  []managedNodePoolInput `json:"applicationPools"`
-		Cores             int                    `json:"cores"`
-		MemoryMiB         int                    `json:"memoryMiB"`
-		DiskGiB           int                    `json:"diskGiB"`
+		WorkspaceID          string                 `json:"workspaceId"`
+		ConnectionID         string                 `json:"connectionId"`
+		TemplateID           string                 `json:"templateId"`
+		HarborID             string                 `json:"harborId"`
+		NFSID                string                 `json:"nfsId"`
+		Name                 string                 `json:"name"`
+		BaseVMID             int                    `json:"baseVMID"`
+		AddressStart         string                 `json:"addressStart"`
+		PrefixLength         int                    `json:"prefixLength"`
+		Gateway              string                 `json:"gateway"`
+		DNSServer            string                 `json:"dnsServer"`
+		ControlPlanes        int                    `json:"controlPlanes"`
+		ControlPlaneZones    []string               `json:"controlPlaneZones"`
+		ControlPlaneCapacity managedMachineCapacity `json:"controlPlaneCapacity"`
+		ManagementPool       managedNodePoolInput   `json:"managementPool"`
+		ApplicationPools     []managedNodePoolInput `json:"applicationPools"`
 	}
 	if err := decodeJSON(request, &input); err != nil {
 		writeError(response, http.StatusBadRequest, "invalid_request", err.Error())
@@ -2054,11 +2059,19 @@ func (s *Server) createKubernetesCluster(response http.ResponseWriter, request *
 	if len(input.ControlPlaneZones) == 0 {
 		input.ControlPlaneZones = []string{"zone-a"}
 	}
+	input.ControlPlaneCapacity = managedCapacityDefaults(input.ControlPlaneCapacity, managedMachineCapacity{Cores: 2, MemoryMiB: 4096, DiskGiB: 80})
 	if input.ManagementPool.Name == "" {
-		input.ManagementPool = managedNodePoolInput{Name: "management", Count: 1, Zones: []string{"zone-a"}}
+		input.ManagementPool.Name = "management"
 	}
+	if input.ManagementPool.Count == 0 {
+		input.ManagementPool.Count = 1
+	}
+	if len(input.ManagementPool.Zones) == 0 {
+		input.ManagementPool.Zones = []string{"zone-a"}
+	}
+	input.ManagementPool.Capacity = managedCapacityDefaults(input.ManagementPool.Capacity, managedMachineCapacity{Cores: 4, MemoryMiB: 8192, DiskGiB: 80})
 	if len(input.ApplicationPools) == 0 {
-		input.ApplicationPools = []managedNodePoolInput{{Name: "applications", Count: 2, Zones: []string{"zone-a"}}}
+		input.ApplicationPools = []managedNodePoolInput{{Name: "applications", Count: 2, Zones: []string{"zone-a"}, Capacity: managedMachineCapacity{Cores: 4, MemoryMiB: 8192, DiskGiB: 80}}}
 	}
 	seenPools := map[string]bool{input.ManagementPool.Name: true}
 	if !validManagedPool(input.ManagementPool, labelPattern) {
@@ -2066,8 +2079,10 @@ func (s *Server) createKubernetesCluster(response http.ResponseWriter, request *
 		return
 	}
 	totalMachines := input.ControlPlanes + input.ManagementPool.Count
-	for _, pool := range input.ApplicationPools {
-		if !validManagedPool(pool, labelPattern) || seenPools[pool.Name] {
+	for index := range input.ApplicationPools {
+		pool := &input.ApplicationPools[index]
+		pool.Capacity = managedCapacityDefaults(pool.Capacity, managedMachineCapacity{Cores: 4, MemoryMiB: 8192, DiskGiB: 80})
+		if !validManagedPool(*pool, labelPattern) || seenPools[pool.Name] {
 			writeError(response, http.StatusUnprocessableEntity, "invalid_pool", "Application pools require unique names, a node count and at least one valid zone.")
 			return
 		}
@@ -2121,17 +2136,19 @@ func (s *Server) createKubernetesCluster(response http.ResponseWriter, request *
 		writeError(response, http.StatusUnprocessableEntity, "invalid_vmid", "The consecutive cluster VM ID range is invalid.")
 		return
 	}
-	if input.Cores == 0 {
-		input.Cores = 4
+	if !validManagedCapacity(input.ControlPlaneCapacity, templateSpec.DiskGiB) {
+		writeError(response, http.StatusUnprocessableEntity, "invalid_capacity", "Control plane capacity is outside the supported range or smaller than the template disk.")
+		return
 	}
-	if input.MemoryMiB == 0 {
-		input.MemoryMiB = 8192
+	if !validManagedCapacity(input.ManagementPool.Capacity, templateSpec.DiskGiB) {
+		writeError(response, http.StatusUnprocessableEntity, "invalid_capacity", "Management pool capacity is outside the supported range or smaller than the template disk.")
+		return
 	}
-	if input.DiskGiB == 0 {
-		input.DiskGiB = 80
-	}
-	if input.Cores < 1 || input.Cores > 32 || input.MemoryMiB < 1024 || input.MemoryMiB > 131072 || input.DiskGiB < templateSpec.DiskGiB || input.DiskGiB > 2048 {
-		writeError(response, http.StatusUnprocessableEntity, "invalid_capacity", "Machine capacity is outside the supported range or smaller than the template disk.")
+	for _, pool := range input.ApplicationPools {
+		if validManagedCapacity(pool.Capacity, templateSpec.DiskGiB) {
+			continue
+		}
+		writeError(response, http.StatusUnprocessableEntity, "invalid_capacity", "Application pool "+pool.Name+" has capacity outside the supported range or smaller than the template disk.")
 		return
 	}
 	topologyPlugin, err := s.pluginForCapability(connection.Provider, "infrastructure.machine-topology.provision")
@@ -2154,7 +2171,13 @@ func (s *Server) createKubernetesCluster(response http.ResponseWriter, request *
 		writeError(response, http.StatusUnprocessableEntity, "capability_unavailable", err.Error())
 		return
 	}
-	topologySpec, _ := json.Marshal(map[string]any{"connectionRef": connection.ID, "machineTemplateRef": template.ArtifactID, "node": templateSpec.Node, "templateVMID": templateSpec.VMID, "baseVMID": input.BaseVMID, "addressStart": input.AddressStart, "prefixLength": input.PrefixLength, "gateway": input.Gateway, "dnsServer": input.DNSServer, "namePrefix": input.Name, "machineCount": totalMachines, "cores": input.Cores, "memoryMiB": input.MemoryMiB, "diskGiB": input.DiskGiB, "sshUser": templateSpec.SSHUser, "cleanupAfterTest": false})
+	machineProfiles := make([]managedMachineCapacity, 0, totalMachines)
+	machineProfiles = appendManagedMachineProfiles(machineProfiles, input.ControlPlanes, input.ControlPlaneCapacity)
+	machineProfiles = appendManagedMachineProfiles(machineProfiles, input.ManagementPool.Count, input.ManagementPool.Capacity)
+	for _, pool := range input.ApplicationPools {
+		machineProfiles = appendManagedMachineProfiles(machineProfiles, pool.Count, pool.Capacity)
+	}
+	topologySpec, _ := json.Marshal(map[string]any{"connectionRef": connection.ID, "machineTemplateRef": template.ArtifactID, "node": templateSpec.Node, "templateVMID": templateSpec.VMID, "baseVMID": input.BaseVMID, "addressStart": input.AddressStart, "prefixLength": input.PrefixLength, "gateway": input.Gateway, "dnsServer": input.DNSServer, "namePrefix": input.Name, "machineCount": totalMachines, "cores": input.ControlPlaneCapacity.Cores, "memoryMiB": input.ControlPlaneCapacity.MemoryMiB, "diskGiB": input.ControlPlaneCapacity.DiskGiB, "machineProfiles": machineProfiles, "sshUser": templateSpec.SSHUser, "cleanupAfterTest": false})
 	nodePools := []map[string]any{{"name": input.ManagementPool.Name, "role": "management", "count": input.ManagementPool.Count, "zones": input.ManagementPool.Zones}}
 	for _, pool := range input.ApplicationPools {
 		nodePools = append(nodePools, map[string]any{"name": pool.Name, "role": "application", "count": pool.Count, "zones": pool.Zones})
@@ -2204,6 +2227,30 @@ func validManagedPool(pool managedNodePoolInput, pattern *regexp.Regexp) bool {
 		seen[zone] = true
 	}
 	return true
+}
+
+func managedCapacityDefaults(capacity, defaults managedMachineCapacity) managedMachineCapacity {
+	if capacity.Cores == 0 {
+		capacity.Cores = defaults.Cores
+	}
+	if capacity.MemoryMiB == 0 {
+		capacity.MemoryMiB = defaults.MemoryMiB
+	}
+	if capacity.DiskGiB == 0 {
+		capacity.DiskGiB = defaults.DiskGiB
+	}
+	return capacity
+}
+
+func validManagedCapacity(capacity managedMachineCapacity, templateDiskGiB int) bool {
+	return capacity.Cores >= 1 && capacity.Cores <= 32 && capacity.MemoryMiB >= 1024 && capacity.MemoryMiB <= 131072 && capacity.DiskGiB >= templateDiskGiB && capacity.DiskGiB <= 2048
+}
+
+func appendManagedMachineProfiles(profiles []managedMachineCapacity, count int, capacity managedMachineCapacity) []managedMachineCapacity {
+	for range count {
+		profiles = append(profiles, capacity)
+	}
+	return profiles
 }
 
 func (s *Server) managedDependency(ctx context.Context, resourceID, kind, workspaceID, connectionID string) (domain.ManagedResource, *managedOperationFailure) {

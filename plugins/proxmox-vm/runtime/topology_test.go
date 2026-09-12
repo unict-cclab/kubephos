@@ -17,7 +17,7 @@ import (
 )
 
 func TestTopologyPlanDeclaresAtomicMachineSet(t *testing.T) {
-	spec := json.RawMessage(`{"connectionRef":"conn_test","node":"pve","templateVMID":8000,"baseVMID":9000,"addressStart":"10.10.0.10","prefixLength":24,"gateway":"10.10.0.1","dnsServer":"1.1.1.1","namePrefix":"dev","machineCount":3,"cores":2,"memoryMiB":4096,"diskGiB":32,"sshUser":"ubuntu","cleanupAfterTest":false}`)
+	spec := json.RawMessage(`{"connectionRef":"conn_test","node":"pve","templateVMID":8000,"baseVMID":9000,"addressStart":"10.10.0.10","prefixLength":24,"gateway":"10.10.0.1","dnsServer":"1.1.1.1","namePrefix":"dev","machineCount":3,"cores":2,"memoryMiB":4096,"diskGiB":32,"machineProfiles":[{"cores":2,"memoryMiB":4096,"diskGiB":40},{"cores":4,"memoryMiB":8192,"diskGiB":80},{"cores":8,"memoryMiB":16384,"diskGiB":120}],"sshUser":"ubuntu","cleanupAfterTest":false}`)
 	invocation := Invocation{Input: spec, Connections: map[string]json.RawMessage{"conn_test": json.RawMessage(`{"endpoint":"https://proxmox.test","credentialRef":"cred_test","verifyTLS":false}`)}}
 	plan, err := (TopologyPlugin{}).Plan(context.Background(), invocation)
 	if err != nil {
@@ -35,6 +35,17 @@ func TestTopologyPlanDeclaresAtomicMachineSet(t *testing.T) {
 	var input topologyStepInput
 	if err := json.Unmarshal(plan.Steps[0].Input, &input); err != nil || input.DiskGiB != 32 {
 		t.Fatalf("disk capacity is missing from the plan: %#v %v", input, err)
+	}
+	if input.Machines[0].Cores != 2 || input.Machines[1].MemoryMiB != 8192 || input.Machines[2].DiskGiB != 120 {
+		t.Fatalf("per-machine capacity is missing from the plan: %#v", input.Machines)
+	}
+}
+
+func TestTopologyRejectsIncompleteMachineProfiles(t *testing.T) {
+	spec := TopologySpec{ConnectionRef: "conn_test", Node: "pve", TemplateVMID: 8000, BaseVMID: 9000, AddressStart: "10.10.0.10", PrefixLength: 24, Gateway: "10.10.0.1", DNSServer: "1.1.1.1", NamePrefix: "dev", MachineCount: 3, Cores: 2, MemoryMiB: 4096, DiskGiB: 32, MachineProfiles: []machineCapacity{{Cores: 2, MemoryMiB: 4096, DiskGiB: 40}}, SSHUser: "ubuntu"}
+	issue := validateTopologyValues(spec)
+	if issue == nil || issue.Path != "machineProfiles" {
+		t.Fatalf("expected machine profile cardinality failure, got %#v", issue)
 	}
 }
 

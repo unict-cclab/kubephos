@@ -1,4 +1,4 @@
-import {useEffect, useMemo, useState, type FormEvent} from 'react'
+import {useEffect, useMemo, useState, type Dispatch, type FormEvent, type SetStateAction} from 'react'
 import {ApiError, request} from '../api'
 import {readSchemaValues} from '../lib'
 import type {Application, Artifact, Connection, Credential, CredentialDefinition, JsonSchema, ManagedResource, Plugin, PluginRuntimeProfile, PluginRuntimeStatus, Session, Workspace} from '../types'
@@ -345,21 +345,24 @@ export function InfrastructureServiceDialog({open, close, workspaces, templates,
   </Dialog>
 }
 
-type ClusterPoolDraft = {name: string; count: number; zones: string}
+type MachineCapacityDraft = {cores: number; memoryMiB: number; diskGiB: number}
+type ClusterPoolDraft = {name: string; count: number; zones: string; capacity: MachineCapacityDraft}
+
+const applicationPoolDefaults = (): ClusterPoolDraft => ({name: 'applications', count: 2, zones: 'zone-a', capacity: {cores: 4, memoryMiB: 8192, diskGiB: 80}})
 
 export function KubernetesClusterDialog({open, close, workspaces, templates, services, ...common}: CommonProps & {open: boolean; close: () => void; workspaces: Workspace[]; templates: ManagedResource[]; services: ManagedResource[]}) {
   const defaultWorkspaceID = workspaces[0]?.id ?? ''
   const defaultConnectionID = common.connections[0]?.id ?? ''
   const [workspaceID, setWorkspaceID] = useState(defaultWorkspaceID)
   const [connectionID, setConnectionID] = useState(defaultConnectionID)
-  const [applicationPools, setApplicationPools] = useState<ClusterPoolDraft[]>([{name: 'applications', count: 2, zones: 'zone-a'}])
+  const [applicationPools, setApplicationPools] = useState<ClusterPoolDraft[]>([applicationPoolDefaults()])
   const [error, setError] = useState('')
   const [pending, setPending] = useState(false)
   useEffect(() => {
     if (!open) return
     setWorkspaceID(defaultWorkspaceID)
     setConnectionID(defaultConnectionID)
-    setApplicationPools([{name: 'applications', count: 2, zones: 'zone-a'}])
+    setApplicationPools([applicationPoolDefaults()])
     setError('')
   }, [open, defaultWorkspaceID, defaultConnectionID])
   const compatible = (item: ManagedResource) => item.status === 'ready' && item.workspaceId === workspaceID && item.connectionId === connectionID
@@ -386,11 +389,9 @@ export function KubernetesClusterDialog({open, close, workspaces, templates, ser
         dnsServer: values.get('dnsServer'),
         controlPlanes: Number(values.get('controlPlanes')),
         controlPlaneZones: parseZones(String(values.get('controlPlaneZones') ?? '')),
-        managementPool: {name: 'management', count: Number(values.get('managementCount')), zones: parseZones(String(values.get('managementZones') ?? ''))},
-        applicationPools: applicationPools.map(pool => ({name: pool.name, count: pool.count, zones: parseZones(pool.zones)})),
-        cores: Number(values.get('cores')),
-        memoryMiB: Number(values.get('memoryMiB')),
-        diskGiB: Number(values.get('diskGiB'))
+        controlPlaneCapacity: readCapacity(values, 'controlPlane'),
+        managementPool: {name: 'management', count: Number(values.get('managementCount')), zones: parseZones(String(values.get('managementZones') ?? '')), capacity: readCapacity(values, 'management')},
+        applicationPools: applicationPools.map(pool => ({name: pool.name, count: pool.count, zones: parseZones(pool.zones), capacity: pool.capacity}))
       })}, common.session.csrfToken)
       close()
       await common.onDone('Cluster validation passed and provisioning started.')
@@ -415,17 +416,34 @@ export function KubernetesClusterDialog({open, close, workspaces, templates, ser
       <div className="field-row"><label>Gateway<input name="gateway" placeholder="192.168.1.1" required /></label><label>DNS server<input name="dnsServer" defaultValue="1.1.1.1" required /></label></div>
       <div className="form-section"><strong>Control plane</strong><p>Zones are comma-separated logical failure domains.</p></div>
       <div className="field-row"><label>Nodes<select name="controlPlanes" defaultValue="1"><option value="1">1 · development</option><option value="3">3 · high availability</option></select></label><label>Zones<input name="controlPlaneZones" defaultValue="zone-a" pattern="[a-z0-9,-]+" required /></label></div>
+      <MachineCapacityFields prefix="controlPlane" defaults={{cores: 2, memoryMiB: 4096, diskGiB: 80}} />
       <div className="form-section"><strong>Management pool</strong><p>Observability and support components use this dedicated capacity.</p></div>
       <div className="field-row"><label>Nodes<input name="managementCount" type="number" min={1} max={12} defaultValue={1} required /></label><label>Zones<input name="managementZones" defaultValue="zone-a" pattern="[a-z0-9,-]+" required /></label></div>
-      <div className="form-section pool-section"><div><strong>Application pools</strong><p>Workloads are placed on nodes labelled with their pool and zone.</p></div><button className="button secondary compact" type="button" disabled={applicationPools.length >= 8} onClick={() => setApplicationPools(items => [...items, {name: `applications-${items.length + 1}`, count: 1, zones: 'zone-a'}])}>Add pool</button></div>
-      <div className="pool-editor">{applicationPools.map((pool, index) => <div className="pool-row" key={index}><label>Pool name<input value={pool.name} pattern="[a-z0-9][a-z0-9-]{0,31}" onChange={event => setApplicationPools(items => items.map((item, position) => position === index ? {...item, name: event.target.value} : item))} required /></label><label>Nodes<input type="number" value={pool.count} min={1} max={12} onChange={event => setApplicationPools(items => items.map((item, position) => position === index ? {...item, count: Number(event.target.value)} : item))} required /></label><label>Zones<input value={pool.zones} pattern="[a-z0-9,-]+" onChange={event => setApplicationPools(items => items.map((item, position) => position === index ? {...item, zones: event.target.value} : item))} required /></label>{applicationPools.length > 1 && <button type="button" className="icon-button pool-remove" aria-label={`Remove ${pool.name}`} onClick={() => setApplicationPools(items => items.filter((_, position) => position !== index))}>×</button>}</div>)}</div>
-      <details className="advanced-fields"><summary>Machine capacity</summary><p>The same reliable capacity is used for every node in this first provider profile.</p><div className="field-row"><label>CPU cores<input name="cores" type="number" min={1} max={32} defaultValue={4} /></label><label>Memory MiB<input name="memoryMiB" type="number" min={1024} max={131072} defaultValue={8192} /></label></div><label>Disk GiB<input name="diskGiB" type="number" min={8} max={2048} defaultValue={80} /></label></details>
+      <MachineCapacityFields prefix="management" defaults={{cores: 4, memoryMiB: 8192, diskGiB: 80}} />
+      <div className="form-section pool-section"><div><strong>Application pools</strong><p>Each workload pool has independent placement and machine capacity.</p></div><button className="button secondary compact" type="button" disabled={applicationPools.length >= 8} onClick={() => setApplicationPools(items => [...items, {...applicationPoolDefaults(), name: `applications-${items.length + 1}`, count: 1}])}>Add pool</button></div>
+      <div className="pool-editor">{applicationPools.map((pool, index) => <div className="pool-card" key={index}><div className="pool-row"><label>Pool name<input value={pool.name} pattern="[a-z0-9][a-z0-9-]{0,31}" onChange={event => updateApplicationPool(setApplicationPools, index, {name: event.target.value})} required /></label><label>Nodes<input type="number" value={pool.count} min={1} max={12} onChange={event => updateApplicationPool(setApplicationPools, index, {count: Number(event.target.value)})} required /></label><label>Zones<input value={pool.zones} pattern="[a-z0-9,-]+" onChange={event => updateApplicationPool(setApplicationPools, index, {zones: event.target.value})} required /></label>{applicationPools.length > 1 && <button type="button" className="icon-button pool-remove" aria-label={`Remove ${pool.name}`} onClick={() => setApplicationPools(items => items.filter((_, position) => position !== index))}>×</button>}</div><div className="capacity-grid"><label>CPU cores<input type="number" value={pool.capacity.cores} min={1} max={32} onChange={event => updateApplicationPoolCapacity(setApplicationPools, index, {cores: Number(event.target.value)})} required /></label><label>Memory MiB<input type="number" value={pool.capacity.memoryMiB} min={1024} max={131072} onChange={event => updateApplicationPoolCapacity(setApplicationPools, index, {memoryMiB: Number(event.target.value)})} required /></label><label>Disk GiB<input type="number" value={pool.capacity.diskGiB} min={8} max={2048} onChange={event => updateApplicationPoolCapacity(setApplicationPools, index, {diskGiB: Number(event.target.value)})} required /></label></div></div>)}</div>
       <ValidationCallout text="VM IDs, addresses, template, registry trust, NFS, SSH, Kubernetes API, nodes, zones, storage class and observability are gated in order." />
       {!ready && <p className="form-hint">A ready VM template, Harbor service and NFS service are required on the same connection.</p>}
       <p className="form-error">{error}</p>
       <Actions close={close} pending={pending} disabled={!ready || !workspaceID || !connectionID} label="Validate and create" />
     </form>
   </Dialog>
+}
+
+function MachineCapacityFields({prefix, defaults}: {prefix: string; defaults: MachineCapacityDraft}) {
+  return <div className="capacity-grid"><label>CPU cores<input name={`${prefix}Cores`} type="number" min={1} max={32} defaultValue={defaults.cores} required /></label><label>Memory MiB<input name={`${prefix}MemoryMiB`} type="number" min={1024} max={131072} defaultValue={defaults.memoryMiB} required /></label><label>Disk GiB<input name={`${prefix}DiskGiB`} type="number" min={8} max={2048} defaultValue={defaults.diskGiB} required /></label></div>
+}
+
+function readCapacity(values: FormData, prefix: string): MachineCapacityDraft {
+  return {cores: Number(values.get(`${prefix}Cores`)), memoryMiB: Number(values.get(`${prefix}MemoryMiB`)), diskGiB: Number(values.get(`${prefix}DiskGiB`))}
+}
+
+function updateApplicationPool(setPools: Dispatch<SetStateAction<ClusterPoolDraft[]>>, index: number, change: Partial<Omit<ClusterPoolDraft, 'capacity'>>) {
+  setPools(items => items.map((item, position) => position === index ? {...item, ...change} : item))
+}
+
+function updateApplicationPoolCapacity(setPools: Dispatch<SetStateAction<ClusterPoolDraft[]>>, index: number, change: Partial<MachineCapacityDraft>) {
+  setPools(items => items.map((item, position) => position === index ? {...item, capacity: {...item.capacity, ...change}} : item))
 }
 
 function parseZones(value: string): string[] {
