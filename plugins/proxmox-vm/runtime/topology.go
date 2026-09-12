@@ -39,33 +39,35 @@ type sshAccess interface {
 type networkSSHAccess struct{}
 
 type TopologySpec struct {
-	ConnectionRef    string `json:"connectionRef"`
-	Node             string `json:"node"`
-	TemplateVMID     int    `json:"templateVMID"`
-	BaseVMID         int    `json:"baseVMID"`
-	NamePrefix       string `json:"namePrefix"`
-	MachineCount     int    `json:"machineCount"`
-	Cores            int    `json:"cores"`
-	MemoryMiB        int    `json:"memoryMiB"`
-	DiskGiB          int    `json:"diskGiB"`
-	SSHUser          string `json:"sshUser"`
-	CleanupAfterTest bool   `json:"cleanupAfterTest"`
+	ConnectionRef      string `json:"connectionRef"`
+	MachineTemplateRef string `json:"machineTemplateRef"`
+	Node               string `json:"node"`
+	TemplateVMID       int    `json:"templateVMID"`
+	BaseVMID           int    `json:"baseVMID"`
+	NamePrefix         string `json:"namePrefix"`
+	MachineCount       int    `json:"machineCount"`
+	Cores              int    `json:"cores"`
+	MemoryMiB          int    `json:"memoryMiB"`
+	DiskGiB            int    `json:"diskGiB"`
+	SSHUser            string `json:"sshUser"`
+	CleanupAfterTest   bool   `json:"cleanupAfterTest"`
 }
 
 type topologyStepInput struct {
-	Action        string           `json:"action"`
-	ConnectionRef string           `json:"connectionRef"`
-	Node          string           `json:"node"`
-	TemplateVMID  int              `json:"templateVMID"`
-	Cores         int              `json:"cores"`
-	MemoryMiB     int              `json:"memoryMiB"`
-	DiskGiB       int              `json:"diskGiB"`
-	SSHUser       string           `json:"sshUser"`
-	PrefixLength  int              `json:"prefixLength"`
-	Gateway       string           `json:"gateway"`
-	DNSServer     string           `json:"dnsServer"`
-	Marker        string           `json:"marker"`
-	Machines      []plannedMachine `json:"machines"`
+	Action             string           `json:"action"`
+	ConnectionRef      string           `json:"connectionRef"`
+	MachineTemplateRef string           `json:"machineTemplateRef"`
+	Node               string           `json:"node"`
+	TemplateVMID       int              `json:"templateVMID"`
+	Cores              int              `json:"cores"`
+	MemoryMiB          int              `json:"memoryMiB"`
+	DiskGiB            int              `json:"diskGiB"`
+	SSHUser            string           `json:"sshUser"`
+	PrefixLength       int              `json:"prefixLength"`
+	Gateway            string           `json:"gateway"`
+	DNSServer          string           `json:"dnsServer"`
+	Marker             string           `json:"marker"`
+	Machines           []plannedMachine `json:"machines"`
 }
 
 type plannedMachine struct {
@@ -154,11 +156,12 @@ type guestIPAddress struct {
 
 func (TopologyPlugin) Manifest() plugins.Manifest {
 	return plugins.Manifest{
-		ID: topologyPluginID, Provider: "proxmox", Name: "Proxmox machine topology", Version: "0.2.0",
+		ID: topologyPluginID, Provider: "proxmox", Name: "Proxmox machine topology", Version: "0.3.0",
 		Description:     "Creates a validated group of isolated machines from one Proxmox template.",
-		Schema:          json.RawMessage(`{"type":"object","additionalProperties":false,"required":["connectionRef","node","templateVMID","baseVMID","namePrefix","machineCount","cores","memoryMiB","diskGiB","sshUser","cleanupAfterTest"],"properties":{"connectionRef":{"type":"string","title":"Proxmox connection","format":"kubephos-connection-ref","x-kubephos-provider":"proxmox"},"node":{"type":"string","title":"Proxmox node","minLength":1,"maxLength":64},"templateVMID":{"type":"integer","title":"Template VMID","minimum":100,"maximum":999999999},"baseVMID":{"type":"integer","title":"First new VMID","minimum":100,"maximum":999999988},"namePrefix":{"type":"string","title":"Machine group name","pattern":"^[a-z0-9][a-z0-9-]{0,19}$","default":"cluster"},"machineCount":{"type":"integer","title":"Number of machines","minimum":1,"maximum":12,"default":3},"cores":{"type":"integer","title":"CPU cores per machine","minimum":1,"maximum":32,"default":2},"memoryMiB":{"type":"integer","title":"Memory MiB per machine","minimum":512,"maximum":131072,"default":4096},"diskGiB":{"type":"integer","title":"Disk GiB per machine","minimum":8,"maximum":2048,"default":32},"sshUser":{"type":"string","title":"SSH user","pattern":"^[a-z_][a-z0-9_-]{0,31}$","default":"ubuntu"},"cleanupAfterTest":{"type":"boolean","title":"Remove machines after validation","default":false}}}`),
+		Schema:          json.RawMessage(`{"type":"object","additionalProperties":false,"required":["connectionRef","node","templateVMID","baseVMID","namePrefix","machineCount","cores","memoryMiB","diskGiB","sshUser","cleanupAfterTest"],"properties":{"connectionRef":{"type":"string","title":"Proxmox connection","format":"kubephos-connection-ref","x-kubephos-provider":"proxmox"},"machineTemplateRef":{"type":"string","title":"Managed machine template","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"MachineTemplate","x-kubephos-artifact-version":"v1alpha1"},"node":{"type":"string","title":"Proxmox node","minLength":1,"maxLength":64},"templateVMID":{"type":"integer","title":"Template VMID","minimum":100,"maximum":999999999},"baseVMID":{"type":"integer","title":"First new VMID","minimum":100,"maximum":999999988},"namePrefix":{"type":"string","title":"Machine group name","pattern":"^[a-z0-9][a-z0-9-]{0,19}$","default":"cluster"},"machineCount":{"type":"integer","title":"Number of machines","minimum":1,"maximum":12,"default":3},"cores":{"type":"integer","title":"CPU cores per machine","minimum":1,"maximum":32,"default":2},"memoryMiB":{"type":"integer","title":"Memory MiB per machine","minimum":512,"maximum":131072,"default":4096},"diskGiB":{"type":"integer","title":"Disk GiB per machine","minimum":8,"maximum":2048,"default":32},"sshUser":{"type":"string","title":"SSH user","pattern":"^[a-z_][a-z0-9_-]{0,31}$","default":"ubuntu"},"cleanupAfterTest":{"type":"boolean","title":"Remove machines after validation","default":false}}}`),
+		ArtifactInputs:  []domain.ArtifactContract{{Type: "MachineTemplate", Version: "v1alpha1"}},
 		ArtifactOutputs: []domain.ArtifactContract{{Type: "MachineSet", Version: "v1alpha1"}, {Type: "MachineAccess", Version: "v1alpha1"}},
-		Capabilities:    []string{"infrastructure.provision", "infrastructure.deprovision", "infrastructure.preflight", "lifecycle.cleanup"},
+		Capabilities:    []string{"infrastructure.machine-topology.provision", "infrastructure.provision", "infrastructure.deprovision", "infrastructure.preflight", "lifecycle.cleanup"},
 		Permissions:     []string{"network.proxmox.read", "network.proxmox.write", "secrets.read:proxmox-api-token"},
 	}
 }
@@ -236,15 +239,20 @@ func (TopologyPlugin) Plan(ctx context.Context, invocation Invocation) (domain.P
 		machines[index] = plannedMachine{VMID: spec.BaseVMID + index, Name: fmt.Sprintf("kubephos-%s-%02d-%s", spec.NamePrefix, index+1, marker[:6]), Address: addresses[index]}
 		createEffects[index] = domain.ResourceEffect{Action: "create", ExternalID: externalID(machines[index].VMID), Kind: "virtual-machine", Name: machines[index].Name}
 	}
-	base := topologyStepInput{ConnectionRef: spec.ConnectionRef, Node: spec.Node, TemplateVMID: spec.TemplateVMID, Cores: spec.Cores, MemoryMiB: spec.MemoryMiB, DiskGiB: spec.DiskGiB, SSHUser: spec.SSHUser, PrefixLength: configuration.PrefixLength, Gateway: configuration.Gateway, DNSServer: configuration.DNSServer, Marker: marker, Machines: machines}
+	base := topologyStepInput{ConnectionRef: spec.ConnectionRef, MachineTemplateRef: spec.MachineTemplateRef, Node: spec.Node, TemplateVMID: spec.TemplateVMID, Cores: spec.Cores, MemoryMiB: spec.MemoryMiB, DiskGiB: spec.DiskGiB, SSHUser: spec.SSHUser, PrefixLength: configuration.PrefixLength, Gateway: configuration.Gateway, DNSServer: configuration.DNSServer, Marker: marker, Machines: machines}
 	create := base
 	create.Action = "provision"
 	createInput, err := json.Marshal(create)
 	if err != nil {
 		return domain.Plan{}, err
 	}
+	artifactInputs := []domain.ArtifactInput{}
+	if spec.MachineTemplateRef != "" {
+		artifactInputs = append(artifactInputs, domain.ArtifactInput{Name: "machine-template", Type: "MachineTemplate", Version: "v1alpha1", ArtifactID: spec.MachineTemplateRef})
+	}
 	steps := []domain.PlanStep{{
 		ID: "provision-topology", Name: "Provision isolated machine topology", Input: createInput, Effects: createEffects,
+		ArtifactInputs: artifactInputs,
 		Outputs: []domain.ArtifactOutput{
 			{Name: "machine-set", Type: "MachineSet", Version: "v1alpha1", MediaType: "application/json", Source: "/machineSet"},
 			{Name: "machine-access", Type: "MachineAccess", Version: "v1alpha1", MediaType: "application/json", Source: "/machineAccess", Sensitive: true},
@@ -271,6 +279,9 @@ func (TopologyPlugin) Precheck(ctx context.Context, step domain.PlanStep, secret
 	input, connection, err := parseTopologyStep(step, secrets, connections)
 	if err != nil {
 		return domain.HealthReport{}, err
+	}
+	if err := validateTopologyTemplateArtifact(step, input); err != nil {
+		return unhealthy(err.Error(), "machine-template", "invalid"), nil
 	}
 	if err := log("info", fmt.Sprintf("Checking Proxmox before topology %s", input.Action)); err != nil {
 		return domain.HealthReport{}, err
@@ -335,6 +346,9 @@ func (plugin TopologyPlugin) Execute(ctx context.Context, step domain.PlanStep, 
 	if err != nil {
 		return nil, err
 	}
+	if err := validateTopologyTemplateArtifact(step, input); err != nil {
+		return nil, err
+	}
 	if input.Action == "delete" {
 		if err := cleanupTopology(ctx, connection, input, log); err != nil {
 			return nil, err
@@ -374,6 +388,9 @@ func (plugin TopologyPlugin) Verify(ctx context.Context, step domain.PlanStep, r
 	input, connection, err := parseTopologyStep(step, secrets, connections)
 	if err != nil {
 		return domain.HealthReport{}, err
+	}
+	if err := validateTopologyTemplateArtifact(step, input); err != nil {
+		return unhealthy(err.Error(), "machine-template", "invalid"), nil
 	}
 	if step.Cleanup || input.Action == "delete" {
 		for _, planned := range input.Machines {
@@ -449,6 +466,24 @@ func parseTopologyStep(step domain.PlanStep, secrets, connections map[string]jso
 	}
 	connection, err := newClient(configuration.Endpoint, configuration.VerifyTLS, configuration.CredentialRef, secrets)
 	return input, connection, err
+}
+
+func validateTopologyTemplateArtifact(step domain.PlanStep, input topologyStepInput) error {
+	if input.MachineTemplateRef == "" {
+		return nil
+	}
+	resolved, ok := step.ResolvedInputs["machine-template"]
+	if !ok || resolved.ID != input.MachineTemplateRef || resolved.Type != "MachineTemplate" || resolved.Version != "v1alpha1" {
+		return errors.New("managed machine template artifact is unavailable")
+	}
+	var artifact machineTemplateArtifact
+	if err := json.Unmarshal(resolved.Value, &artifact); err != nil {
+		return errors.New("managed machine template artifact is invalid")
+	}
+	if artifact.APIVersion != "artifacts.kubephos.dev/v1alpha1" || artifact.Kind != "MachineTemplate" || artifact.Spec.Provider != "proxmox" || artifact.Spec.ConnectionRef != input.ConnectionRef || artifact.Spec.Node != input.Node || artifact.Spec.VMID != input.TemplateVMID || artifact.Spec.SSHUser != input.SSHUser {
+		return errors.New("managed machine template does not match the requested topology")
+	}
+	return nil
 }
 
 func validateTopologyValues(spec TopologySpec) *domain.ValidationIssue {

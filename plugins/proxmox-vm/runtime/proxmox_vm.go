@@ -116,6 +116,8 @@ type vmConfig struct {
 	SCSI0       string `json:"scsi0"`
 	VirtIO0     string `json:"virtio0"`
 	SATA0       string `json:"sata0"`
+	Agent       string `json:"agent"`
+	Net0        string `json:"net0"`
 }
 
 func (Plugin) Manifest() plugins.Manifest {

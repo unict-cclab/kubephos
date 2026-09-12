@@ -1,7 +1,7 @@
 import {useEffect, useMemo, useState, type FormEvent} from 'react'
 import {ApiError, request} from '../api'
 import {readSchemaValues} from '../lib'
-import type {Application, Artifact, Connection, Credential, CredentialDefinition, JsonSchema, Plugin, PluginRuntimeProfile, PluginRuntimeStatus, Session, Workspace} from '../types'
+import type {Application, Artifact, Connection, Credential, CredentialDefinition, JsonSchema, ManagedResource, Plugin, PluginRuntimeProfile, PluginRuntimeStatus, Session, Workspace} from '../types'
 import {Dialog} from './Dialog'
 import {SchemaFields} from './SchemaFields'
 
@@ -235,6 +235,65 @@ export function MachineTemplateDialog({open, close, plugins, workspaces, ...comm
       <p className="form-error">{error}</p>
       <Actions close={close} pending={pending} disabled={!connections.length || !workspaces.length} label="Validate and create" />
     </form>}
+  </Dialog>
+}
+
+export function InfrastructureServiceDialog({open, close, workspaces, templates, ...common}: CommonProps & {open: boolean; close: () => void; workspaces: Workspace[]; templates: ManagedResource[]}) {
+  const [workspaceID, setWorkspaceID] = useState(workspaces[0]?.id ?? '')
+  const [connectionID, setConnectionID] = useState(common.connections[0]?.id ?? '')
+  const [kind, setKind] = useState<'harbor' | 'nfs'>('harbor')
+  const [error, setError] = useState('')
+  const [pending, setPending] = useState(false)
+  useEffect(() => {
+    if (!open) return
+    setWorkspaceID(workspaces[0]?.id ?? '')
+    setConnectionID(common.connections[0]?.id ?? '')
+    setKind('harbor')
+    setError('')
+  }, [open, workspaces, common.connections])
+  const availableTemplates = templates.filter(item => item.status === 'ready' && item.workspaceId === workspaceID && item.connectionId === connectionID)
+  const submit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    setPending(true)
+    setError('')
+    const values = new FormData(event.currentTarget)
+    try {
+      await request('/infrastructure-services', {method: 'POST', body: JSON.stringify({
+        workspaceId: workspaceID,
+        connectionId: connectionID,
+        templateId: values.get('templateId'),
+        kind,
+        name: values.get('name'),
+        vmid: Number(values.get('vmid')),
+        cores: Number(values.get('cores')),
+        memoryMiB: Number(values.get('memoryMiB')),
+        diskGiB: Number(values.get('diskGiB'))
+      })}, common.session.csrfToken)
+      close()
+      await common.onDone(`${kind === 'harbor' ? 'Harbor' : 'NFS'} validation passed and provisioning started.`)
+    } catch (cause) {
+      setError(validationMessage(cause))
+    } finally {
+      setPending(false)
+    }
+  }
+  const defaults = kind === 'harbor' ? {cores: 4, memory: 8192, disk: 100} : {cores: 2, memory: 4096, disk: 200}
+  return <Dialog open={open} onClose={close} title="Create platform service" eyebrow="MANAGED INFRASTRUCTURE" className="template-modal">
+    <form onSubmit={submit} key={`${kind}-${workspaceID}-${connectionID}`}>
+      <div className="form-section"><strong>What do you need?</strong><p>KubePhos provisions a dedicated VM, installs the service and verifies it before marking it ready.</p></div>
+      <div className="service-kind-picker" role="radiogroup" aria-label="Service type">
+        <button type="button" className={kind === 'harbor' ? 'selected' : ''} onClick={() => setKind('harbor')}><span>▣</span><strong>Harbor</strong><small>Container registry</small></button>
+        <button type="button" className={kind === 'nfs' ? 'selected' : ''} onClick={() => setKind('nfs')}><span>▤</span><strong>NFS</strong><small>Shared storage</small></button>
+      </div>
+      {workspaces.length > 1 ? <label>Environment<select value={workspaceID} onChange={event => setWorkspaceID(event.target.value)} required>{workspaces.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label> : <input type="hidden" value={workspaceID} readOnly />}
+      <label>Proxmox connection<select value={connectionID} onChange={event => setConnectionID(event.target.value)} required>{common.connections.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
+      <label>VM template<select name="templateId" required>{availableTemplates.length ? availableTemplates.map(item => <option key={item.id} value={item.id}>{item.name}</option>) : <option value="">No ready template for this environment</option>}</select></label>
+      <div className="field-row"><label>Service name<input name="name" pattern="[a-z0-9][a-z0-9-]{0,31}" maxLength={32} placeholder={kind === 'harbor' ? 'main-registry' : 'shared-data'} required autoFocus /></label><label>Proxmox VM ID<input name="vmid" type="number" min={100} max={999999999} required /></label></div>
+      <details className="advanced-fields"><summary>Capacity</summary><p>Managed defaults are suitable for development and experiments.</p><div className="field-row"><label>CPU cores<input name="cores" type="number" min={1} max={32} defaultValue={defaults.cores} /></label><label>Memory MiB<input name="memoryMiB" type="number" min={512} max={131072} defaultValue={defaults.memory} /></label></div><label>Disk GiB<input name="diskGiB" type="number" min={8} max={2048} defaultValue={defaults.disk} /></label></details>
+      <ValidationCallout text="Template ownership, VM ID, capacity, network, SSH and service health are validated at creation and again before each stage." />
+      <p className="form-error">{error}</p>
+      <Actions close={close} pending={pending} disabled={!availableTemplates.length || !workspaceID || !connectionID} label={`Create ${kind === 'harbor' ? 'Harbor' : 'NFS'}`} />
+    </form>
   </Dialog>
 }
 

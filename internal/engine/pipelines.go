@@ -106,6 +106,13 @@ func (w *Worker) reconcilePipelineRun(ctx context.Context, owner string, run dom
 			return nil
 		}
 	}
+	if run.ResultType == "" && run.ResultVersion == "" {
+		if err := w.store.CompletePipelineRun(ctx, run.ID, owner, ""); err != nil {
+			return err
+		}
+		released = true
+		return nil
+	}
 	resultOutputs := produced[pipeline.Definition.Result.Stage]
 	artifactID := resultOutputs[pipeline.Definition.Result.Output]
 	if artifactID == "" {

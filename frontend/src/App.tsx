@@ -1,6 +1,6 @@
 import {lazy, Suspense, useCallback, useEffect, useMemo, useState} from 'react'
 import {ApiError, request} from './api'
-import {ApplicationDialog, AuthDialog, ConnectionDialog, CredentialDialog, MachineTemplateDialog, OperationDialog, PluginDialog, RuntimeDialog, WorkspaceDialog} from './components/Forms'
+import {ApplicationDialog, AuthDialog, ConnectionDialog, CredentialDialog, InfrastructureServiceDialog, MachineTemplateDialog, OperationDialog, PluginDialog, RuntimeDialog, WorkspaceDialog} from './components/Forms'
 import {OperationDrawer} from './components/OperationDrawer'
 import {PipelineDialog} from './components/PipelineDialog'
 import {ToastRegion, type ToastMessage} from './components/ToastRegion'
@@ -10,7 +10,7 @@ import type {PlatformData, PluginPackage, Session, View, Workspace} from './type
 
 const TerminalDialog = lazy(() => import('./components/TerminalDialog').then(module => ({default: module.TerminalDialog})))
 
-const emptyData: PlatformData = {system: null, pluginRuntime: null, workspaces: [], pipelines: [], pipelineRuns: [], experiments: [], operations: [], artifacts: [], plugins: [], pluginPackages: [], pluginImports: [], applications: [], credentials: [], connections: [], machineTemplates: [], resources: [], audit: []}
+const emptyData: PlatformData = {system: null, pluginRuntime: null, workspaces: [], pipelines: [], pipelineRuns: [], experiments: [], operations: [], artifacts: [], plugins: [], pluginPackages: [], pluginImports: [], applications: [], credentials: [], connections: [], machineTemplates: [], infrastructureServices: [], resources: [], audit: []}
 const viewMetadata: Record<View, [string, string]> = {
   overview: ['CONTROL PLANE', 'Overview'],
   workspaces: ['ENVIRONMENTS', 'Workspaces'],
@@ -35,7 +35,7 @@ const navigation: Array<[View, string, string]> = [
   ['advanced', '•••', 'Advanced']
 ]
 
-type Modal = 'workspace' | 'workspaceFlow' | 'operation' | 'pipeline' | 'credential' | 'connection' | 'machineTemplate' | 'application' | 'plugin' | 'runtime' | 'terminal' | null
+type Modal = 'workspace' | 'workspaceFlow' | 'operation' | 'pipeline' | 'credential' | 'connection' | 'machineTemplate' | 'infrastructureService' | 'application' | 'plugin' | 'runtime' | 'terminal' | null
 
 export default function App() {
   const [session, setSession] = useState<Session | null>(null)
@@ -60,7 +60,7 @@ export default function App() {
     if (!session?.authenticated) return
     setRefreshing(true)
     try {
-		const [system, pluginRuntime, workspaces, pipelines, pipelineRuns, experiments, operations, artifacts, plugins, pluginPackages, pluginImports, applications, credentials, connections, machineTemplates, resources, audit] = await Promise.all([
+		const [system, pluginRuntime, workspaces, pipelines, pipelineRuns, experiments, operations, artifacts, plugins, pluginPackages, pluginImports, applications, credentials, connections, machineTemplates, infrastructureServices, resources, audit] = await Promise.all([
         request<PlatformData['system']>('/system'),
         request<PlatformData['pluginRuntime']>('/plugin-runtime'),
         request<{items: PlatformData['workspaces']}>('/workspaces'),
@@ -76,10 +76,11 @@ export default function App() {
         request<{items: PlatformData['credentials']}>('/credentials'),
 		request<{items: PlatformData['connections']}>('/connections'),
 		request<{items: PlatformData['machineTemplates']}>('/machine-templates'),
+		request<{items: PlatformData['infrastructureServices']}>('/infrastructure-services'),
 		request<{items: PlatformData['resources']}>('/infrastructure/resources'),
         request<{items: PlatformData['audit']}>('/audit?limit=20')
       ])
-		setData({system, pluginRuntime, workspaces: workspaces.items, pipelines: pipelines.items, pipelineRuns: pipelineRuns.items, experiments: experiments.items, operations: operations.items, artifacts: artifacts.items, plugins: plugins.items, pluginPackages: pluginPackages.items, pluginImports: pluginImports.items, applications: applications.items, credentials: credentials.items, connections: connections.items, machineTemplates: machineTemplates.items, resources: resources.items, audit: audit.items})
+		setData({system, pluginRuntime, workspaces: workspaces.items, pipelines: pipelines.items, pipelineRuns: pipelineRuns.items, experiments: experiments.items, operations: operations.items, artifacts: artifacts.items, plugins: plugins.items, pluginPackages: pluginPackages.items, pluginImports: pluginImports.items, applications: applications.items, credentials: credentials.items, connections: connections.items, machineTemplates: machineTemplates.items, infrastructureServices: infrastructureServices.items, resources: resources.items, audit: audit.items})
       setConnected(true)
       if (!silent) notify('Everything is up to date.')
     } catch (cause) {
@@ -169,6 +170,16 @@ export default function App() {
     }
   }
 
+  const deleteInfrastructureService = async (serviceID: string, name: string) => {
+    if (!window.confirm(`Delete service ${name} and its dedicated VM?`)) return
+    try {
+      await request(`/infrastructure-services/${serviceID}`, {method: 'DELETE'}, session?.csrfToken)
+      await afterMutation('Service deletion validated and queued.')
+    } catch (cause) {
+      notify(cause instanceof Error ? cause.message : 'Could not delete the service.', true)
+    }
+  }
+
   const openOperationForm = (selected: Workspace) => {
     if (!data.plugins.length) {
       notify('No plugin is installed.', true)
@@ -232,8 +243,10 @@ export default function App() {
           addCredential={() => setModal('credential')}
 		  addConnection={() => setModal('connection')}
 		  addMachineTemplate={() => setModal('machineTemplate')}
+		  addInfrastructureService={() => setModal('infrastructureService')}
 		  deleteConnection={deleteConnection}
 		  deleteMachineTemplate={deleteMachineTemplate}
+		  deleteInfrastructureService={deleteInfrastructureService}
           openInfrastructureCapability={openInfrastructureCapability}
           openTerminal={selected => {setWorkspace(selected); setModal('terminal')}}
         />
@@ -246,6 +259,7 @@ export default function App() {
     <CredentialDialog {...common} open={modal === 'credential'} close={() => setModal(null)} plugins={data.plugins} />
 	<ConnectionDialog {...common} open={modal === 'connection'} close={() => setModal(null)} plugins={data.plugins} />
 	<MachineTemplateDialog {...common} open={modal === 'machineTemplate'} close={() => setModal(null)} plugins={data.plugins} workspaces={data.workspaces} />
+	<InfrastructureServiceDialog {...common} open={modal === 'infrastructureService'} close={() => setModal(null)} workspaces={data.workspaces} templates={data.machineTemplates} />
     <ApplicationDialog {...common} open={modal === 'application'} close={() => setModal(null)} />
     <PluginDialog {...common} open={modal === 'plugin'} close={() => setModal(null)} />
     <RuntimeDialog {...common} open={modal === 'runtime'} close={() => setModal(null)} runtime={data.pluginRuntime} />

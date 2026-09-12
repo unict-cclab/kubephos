@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -95,6 +96,10 @@ func NewServer(store *storage.Store, registry *plugins.Registry, artifactStore *
 	router.HandleFunc("POST /api/v1/machine-templates", server.createMachineTemplate)
 	router.HandleFunc("GET /api/v1/machine-templates/{id}", server.getMachineTemplate)
 	router.HandleFunc("DELETE /api/v1/machine-templates/{id}", server.deleteMachineTemplate)
+	router.HandleFunc("GET /api/v1/infrastructure-services", server.listInfrastructureServices)
+	router.HandleFunc("POST /api/v1/infrastructure-services", server.createInfrastructureService)
+	router.HandleFunc("GET /api/v1/infrastructure-services/{id}", server.getInfrastructureService)
+	router.HandleFunc("DELETE /api/v1/infrastructure-services/{id}", server.deleteInfrastructureService)
 	router.HandleFunc("GET /api/v1/infrastructure/resources", server.listInfrastructureResources)
 	router.HandleFunc("GET /api/v1/terminal-targets", server.listTerminalTargets)
 	router.HandleFunc("POST /api/v1/terminals", server.createTerminal)
@@ -1097,6 +1102,265 @@ func (s *Server) deleteMachineTemplate(response http.ResponseWriter, request *ht
 	writeJSON(response, http.StatusAccepted, resource)
 }
 
+func (s *Server) listInfrastructureServices(response http.ResponseWriter, request *http.Request) {
+	kind := strings.TrimSpace(request.URL.Query().Get("kind"))
+	kinds := []string{"harbor", "nfs"}
+	if kind != "" {
+		if kind != "harbor" && kind != "nfs" {
+			writeError(response, http.StatusUnprocessableEntity, "invalid_kind", "Service kind must be harbor or nfs.")
+			return
+		}
+		kinds = []string{kind}
+	}
+	items := []domain.ManagedResource{}
+	for _, current := range kinds {
+		resources, err := s.store.ListManagedResources(request.Context(), current)
+		if err != nil {
+			writeError(response, http.StatusInternalServerError, "database_error", "Could not list infrastructure services.")
+			return
+		}
+		items = append(items, resources...)
+	}
+	slices.SortFunc(items, func(left, right domain.ManagedResource) int { return right.CreatedAt.Compare(left.CreatedAt) })
+	writeJSON(response, http.StatusOK, map[string]any{"items": items})
+}
+
+func (s *Server) getInfrastructureService(response http.ResponseWriter, request *http.Request) {
+	resource, err := s.store.GetManagedResource(request.Context(), request.PathValue("id"))
+	if errors.Is(err, storage.ErrNotFound) || err == nil && resource.Kind != "harbor" && resource.Kind != "nfs" {
+		writeError(response, http.StatusNotFound, "not_found", "Infrastructure service not found.")
+		return
+	}
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, "database_error", "Could not read the infrastructure service.")
+		return
+	}
+	writeJSON(response, http.StatusOK, resource)
+}
+
+func (s *Server) createInfrastructureService(response http.ResponseWriter, request *http.Request) {
+	var input struct {
+		WorkspaceID  string `json:"workspaceId"`
+		ConnectionID string `json:"connectionId"`
+		TemplateID   string `json:"templateId"`
+		Kind         string `json:"kind"`
+		Name         string `json:"name"`
+		VMID         int    `json:"vmid"`
+		Cores        int    `json:"cores"`
+		MemoryMiB    int    `json:"memoryMiB"`
+		DiskGiB      int    `json:"diskGiB"`
+	}
+	if err := decodeJSON(request, &input); err != nil {
+		writeError(response, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	input.WorkspaceID = strings.TrimSpace(input.WorkspaceID)
+	input.ConnectionID = strings.TrimSpace(input.ConnectionID)
+	input.TemplateID = strings.TrimSpace(input.TemplateID)
+	input.Kind = strings.TrimSpace(input.Kind)
+	input.Name = strings.TrimSpace(input.Name)
+	if input.Kind != "harbor" && input.Kind != "nfs" {
+		writeError(response, http.StatusUnprocessableEntity, "invalid_kind", "Service kind must be harbor or nfs.")
+		return
+	}
+	if input.Name == "" || len(input.Name) > 32 || !regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,31}$`).MatchString(input.Name) {
+		writeError(response, http.StatusUnprocessableEntity, "invalid_name", "Service name must be a lowercase label with at most 32 characters.")
+		return
+	}
+	connection, err := s.store.GetProviderConnectionConfiguration(request.Context(), input.ConnectionID)
+	if errors.Is(err, storage.ErrNotFound) {
+		writeError(response, http.StatusUnprocessableEntity, "invalid_connection", "Select an existing infrastructure connection.")
+		return
+	}
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, "database_error", "Could not validate the infrastructure connection.")
+		return
+	}
+	template, err := s.store.GetManagedResource(request.Context(), input.TemplateID)
+	if errors.Is(err, storage.ErrNotFound) || err == nil && template.Kind != "machine-template" {
+		writeError(response, http.StatusUnprocessableEntity, "invalid_template", "Select an existing machine template.")
+		return
+	}
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, "database_error", "Could not validate the machine template.")
+		return
+	}
+	if template.Status != "ready" || template.ArtifactID == "" {
+		writeError(response, http.StatusConflict, "template_not_ready", "The selected machine template is not ready.")
+		return
+	}
+	if template.ConnectionID != connection.ID || template.Provider != connection.Provider || template.WorkspaceID != input.WorkspaceID {
+		writeError(response, http.StatusUnprocessableEntity, "template_mismatch", "The template must belong to the selected connection and workspace.")
+		return
+	}
+	var templateSpec struct {
+		Node    string `json:"node"`
+		VMID    int    `json:"vmid"`
+		DiskGiB int    `json:"diskGiB"`
+		SSHUser string `json:"sshUser"`
+	}
+	if err := json.Unmarshal(template.Spec, &templateSpec); err != nil || templateSpec.Node == "" || templateSpec.VMID < 100 || templateSpec.SSHUser == "" {
+		writeError(response, http.StatusConflict, "template_invalid", "The saved machine template configuration is incomplete.")
+		return
+	}
+	if input.VMID < 100 || input.VMID > 999999999 {
+		writeError(response, http.StatusUnprocessableEntity, "invalid_vmid", "VM ID must be between 100 and 999999999.")
+		return
+	}
+	if input.Cores == 0 {
+		input.Cores = map[string]int{"harbor": 4, "nfs": 2}[input.Kind]
+	}
+	if input.MemoryMiB == 0 {
+		input.MemoryMiB = map[string]int{"harbor": 8192, "nfs": 4096}[input.Kind]
+	}
+	if input.DiskGiB == 0 {
+		input.DiskGiB = map[string]int{"harbor": 100, "nfs": 200}[input.Kind]
+	}
+	if input.Cores < 1 || input.Cores > 32 || input.MemoryMiB < 512 || input.MemoryMiB > 131072 || input.DiskGiB < templateSpec.DiskGiB || input.DiskGiB > 2048 {
+		writeError(response, http.StatusUnprocessableEntity, "invalid_capacity", "Capacity is outside the supported range or smaller than the template disk.")
+		return
+	}
+	topologyPlugin, err := s.pluginForCapability(connection.Provider, "infrastructure.machine-topology.provision")
+	if err != nil {
+		writeError(response, http.StatusUnprocessableEntity, "capability_unavailable", err.Error())
+		return
+	}
+	serviceCapability := map[string]string{"harbor": "registry.oci.provision", "nfs": "storage.shared.provision"}[input.Kind]
+	servicePlugin, err := s.pluginForCapability("", serviceCapability)
+	if err != nil {
+		writeError(response, http.StatusUnprocessableEntity, "capability_unavailable", err.Error())
+		return
+	}
+	topologySpec, _ := json.Marshal(map[string]any{
+		"connectionRef": connection.ID, "machineTemplateRef": template.ArtifactID, "node": templateSpec.Node,
+		"templateVMID": templateSpec.VMID, "baseVMID": input.VMID, "namePrefix": input.Name, "machineCount": 1,
+		"cores": input.Cores, "memoryMiB": input.MemoryMiB, "diskGiB": input.DiskGiB, "sshUser": templateSpec.SSHUser, "cleanupAfterTest": false,
+	})
+	serviceSpec := map[string]any{"machineSetRef": "", "machineAccessRef": ""}
+	if input.Kind == "harbor" {
+		serviceSpec["registryName"] = input.Name
+	} else {
+		serviceSpec["storageName"] = input.Name
+	}
+	serviceRaw, _ := json.Marshal(serviceSpec)
+	resultOutput := map[string]string{"harbor": "registry-endpoint", "nfs": "shared-storage-endpoint"}[input.Kind]
+	definition := domain.PipelineDefinition{
+		Stages: []domain.PipelineStage{
+			{ID: "machine", PluginID: topologyPlugin.Manifest().ID, Title: "Provision dedicated machine", Spec: topologySpec},
+			{ID: "service", PluginID: servicePlugin.Manifest().ID, Title: "Install and verify " + input.Kind, Spec: serviceRaw, Bindings: []domain.PipelineBinding{
+				{Path: "/machineSetRef", FromStage: "machine", FromOutput: "machine-set"},
+				{Path: "/machineAccessRef", FromStage: "machine", FromOutput: "machine-access"},
+			}},
+		},
+		Result: domain.PipelineOutput{Stage: "service", Output: resultOutput},
+	}
+	validated, failure := s.validatedManagedPipeline(request.Context(), input.WorkspaceID, definition)
+	if failure != nil {
+		failure.write(response)
+		return
+	}
+	resourceID := id.New("svc")
+	pipeline := domain.Pipeline{ID: id.New("pipe"), WorkspaceID: input.WorkspaceID, Name: "managed-" + input.Kind + "-" + resourceID, Description: "", Definition: validated.Definition, Resolution: validated.Resolution, Validation: validated.Validation, Hash: validated.Hash}
+	run := domain.PipelineRun{ID: id.New("run"), PipelineID: pipeline.ID, WorkspaceID: input.WorkspaceID, Name: "Provision " + input.Name, PipelineHash: pipeline.Hash, ResultType: pipeline.Resolution.Result.Type, ResultVersion: pipeline.Resolution.Result.Version}
+	for position, stage := range pipeline.Definition.Stages {
+		run.Stages = append(run.Stages, domain.PipelineRunStage{ID: run.ID + "_" + stage.ID, RunID: run.ID, Position: position + 1, StageID: stage.ID, PluginID: stage.PluginID, Title: stage.Title, Status: domain.StepPending})
+	}
+	managedSpec, _ := json.Marshal(input)
+	manifest := servicePlugin.Manifest()
+	resource, err := s.store.CreateManagedPipelineResource(request.Context(), domain.ManagedResource{ID: resourceID, WorkspaceID: input.WorkspaceID, Name: input.Name, Kind: input.Kind, Provider: connection.Provider, ConnectionID: connection.ID, PluginID: manifest.ID, PluginVersion: manifest.Version, PluginDigest: manifest.Runtime.Digest, Spec: managedSpec}, pipeline, run, []domain.ManagedResourceDependency{{ResourceID: resourceID, DependsOnID: template.ID, Relation: "machine-template"}})
+	if err != nil {
+		var databaseError *pgconn.PgError
+		if errors.As(err, &databaseError) && databaseError.Code == "23505" {
+			writeError(response, http.StatusConflict, "service_conflict", "A service with this name already exists for the selected connection.")
+			return
+		}
+		writeError(response, http.StatusInternalServerError, "database_error", "Could not create the infrastructure service workflow.")
+		return
+	}
+	writeJSON(response, http.StatusAccepted, resource)
+}
+
+func (s *Server) deleteInfrastructureService(response http.ResponseWriter, request *http.Request) {
+	resource, err := s.store.GetManagedResource(request.Context(), request.PathValue("id"))
+	if errors.Is(err, storage.ErrNotFound) || err == nil && resource.Kind != "harbor" && resource.Kind != "nfs" {
+		writeError(response, http.StatusNotFound, "not_found", "Infrastructure service not found.")
+		return
+	}
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, "database_error", "Could not read the infrastructure service.")
+		return
+	}
+	if resource.Status != "ready" && resource.Status != "failed" || resource.PipelineRunID == "" {
+		writeError(response, http.StatusConflict, "service_not_ready", "Only a completed infrastructure service lifecycle can be deleted.")
+		return
+	}
+	sourceRun, err := s.store.GetPipelineRun(request.Context(), resource.PipelineRunID)
+	if err != nil || !terminal(sourceRun.Status) || len(sourceRun.Stages) == 0 {
+		writeError(response, http.StatusConflict, "cleanup_unavailable", "The completed service lifecycle is unavailable.")
+		return
+	}
+	definition := domain.PipelineDefinition{}
+	resolution := domain.PipelineResolution{}
+	validation := domain.ValidationReport{Valid: true, CheckedAt: time.Now().UTC()}
+	for sourcePosition := len(sourceRun.Stages) - 1; sourcePosition >= 0; sourcePosition-- {
+		sourceStage := sourceRun.Stages[sourcePosition]
+		if sourceStage.OperationID == "" {
+			continue
+		}
+		source, err := s.store.GetOperation(request.Context(), sourceStage.OperationID)
+		if err != nil {
+			writeError(response, http.StatusConflict, "cleanup_unavailable", "A provisioning stage lifecycle is unavailable.")
+			return
+		}
+		if _, err := cleanupPlan(source); err != nil {
+			continue
+		}
+		cleanup, failure := s.validatedManagedCleanup(request.Context(), source)
+		if failure != nil {
+			failure.write(response)
+			return
+		}
+		stageID := "cleanup-" + sourceStage.StageID
+		definition.Stages = append(definition.Stages, domain.PipelineStage{ID: stageID, PluginID: cleanup.PluginID, Title: "Remove " + strings.ToLower(sourceStage.Title), Spec: cleanup.Spec})
+		resolution.Stages = append(resolution.Stages, domain.ResolvedPipelineStage{ID: stageID, PluginID: cleanup.PluginID, PluginVersion: cleanup.PluginVersion, PluginDigest: cleanup.PluginDigest, Spec: cleanup.Spec, Plan: cleanup.Plan})
+		validation.Issues = append(validation.Issues, cleanup.Validation.Issues...)
+	}
+	if len(definition.Stages) == 0 {
+		if err := s.store.DeleteFailedManagedResource(request.Context(), resource.ID); errors.Is(err, storage.ErrConflict) {
+			writeError(response, http.StatusConflict, "cleanup_unavailable", "The failed lifecycle cannot be dismissed in its current state.")
+			return
+		} else if err != nil {
+			writeError(response, http.StatusInternalServerError, "database_error", "Could not dismiss the failed service lifecycle.")
+			return
+		}
+		response.WriteHeader(http.StatusNoContent)
+		return
+	}
+	hash, err := workflows.Fingerprint(definition, resolution)
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, "planning_failed", "Could not fingerprint the deletion workflow.")
+		return
+	}
+	pipeline := domain.Pipeline{ID: id.New("pipe"), WorkspaceID: resource.WorkspaceID, Name: "delete-managed-" + resource.ID, Definition: definition, Resolution: resolution, Validation: validation, Hash: hash}
+	run := domain.PipelineRun{ID: id.New("run"), PipelineID: pipeline.ID, WorkspaceID: resource.WorkspaceID, Name: "Delete " + resource.Name, PipelineHash: pipeline.Hash}
+	for position, stage := range definition.Stages {
+		run.Stages = append(run.Stages, domain.PipelineRunStage{ID: run.ID + "_" + stage.ID, RunID: run.ID, Position: position + 1, StageID: stage.ID, PluginID: stage.PluginID, Title: stage.Title, Status: domain.StepPending})
+	}
+	if err := s.store.CreateManagedPipelineResourceDeletion(request.Context(), resource.ID, pipeline, run); errors.Is(err, storage.ErrConflict) {
+		writeError(response, http.StatusConflict, "service_in_use", "The service is still in use or already being deleted.")
+		return
+	} else if err != nil {
+		writeError(response, http.StatusInternalServerError, "database_error", "Could not create the service deletion workflow.")
+		return
+	}
+	resource, err = s.store.GetManagedResource(request.Context(), resource.ID)
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, "database_error", "Could not read the service deletion workflow.")
+		return
+	}
+	writeJSON(response, http.StatusAccepted, resource)
+}
+
 type managedOperationFailure struct {
 	status  int
 	code    string
@@ -1115,7 +1379,7 @@ func (failure *managedOperationFailure) write(response http.ResponseWriter) {
 func (s *Server) pluginForCapability(provider, capability string) (plugins.Plugin, error) {
 	var selected plugins.Plugin
 	for _, manifest := range s.registry.Manifests() {
-		if manifest.Provider != provider || !manifest.HasCapability(capability) {
+		if provider != "" && manifest.Provider != provider || !manifest.HasCapability(capability) {
 			continue
 		}
 		if selected != nil {
@@ -1131,6 +1395,57 @@ func (s *Server) pluginForCapability(provider, capability string) (plugins.Plugi
 		return nil, fmt.Errorf("no installed plugin provides %s for provider %s", capability, provider)
 	}
 	return selected, nil
+}
+
+func (s *Server) validatedManagedPipeline(ctx context.Context, workspaceID string, definition domain.PipelineDefinition) (workflows.Result, *managedOperationFailure) {
+	if _, err := s.store.GetWorkspace(ctx, workspaceID); errors.Is(err, storage.ErrNotFound) {
+		return workflows.Result{}, &managedOperationFailure{status: http.StatusUnprocessableEntity, code: "invalid_workspace", message: "Select an existing workspace."}
+	} else if err != nil {
+		return workflows.Result{}, &managedOperationFailure{status: http.StatusInternalServerError, code: "database_error", message: "Could not validate workspace."}
+	}
+	result, err := workflows.Validate(ctx, s.registry, definition)
+	if err != nil {
+		return workflows.Result{}, &managedOperationFailure{status: http.StatusUnprocessableEntity, code: "invalid_pipeline", message: err.Error()}
+	}
+	if !result.Validation.Valid {
+		return workflows.Result{}, &managedOperationFailure{status: http.StatusUnprocessableEntity, payload: map[string]any{"code": "validation_failed", "validation": result.Validation}}
+	}
+	for index := range result.Resolution.Stages {
+		resolved := &result.Resolution.Stages[index]
+		plugin, err := s.registry.Get(resolved.PluginID)
+		if err != nil {
+			return workflows.Result{}, &managedOperationFailure{status: http.StatusUnprocessableEntity, code: "invalid_plugin", message: err.Error()}
+		}
+		manifest := plugin.Manifest()
+		if err := validatePlanEffects(manifest, resolved.Plan); err != nil {
+			return workflows.Result{}, &managedOperationFailure{status: http.StatusUnprocessableEntity, code: "invalid_plan_effects", message: "Stage " + resolved.ID + ": " + err.Error()}
+		}
+		externalPlan := withoutPipelineBindings(resolved.Plan)
+		if err := s.validateExternalArtifactInputs(ctx, workspaceID, externalPlan); err != nil {
+			return workflows.Result{}, &managedOperationFailure{status: http.StatusUnprocessableEntity, code: "invalid_artifact_reference", message: "Stage " + resolved.ID + ": " + err.Error()}
+		}
+		if err := s.validateResourceEffects(ctx, workspaceID, manifest, resolved.Plan); err != nil {
+			return workflows.Result{}, &managedOperationFailure{status: http.StatusConflict, code: "resource_conflict", message: "Stage " + resolved.ID + ": " + err.Error()}
+		}
+		if hasPipelineBindings(resolved.Plan) {
+			result.Validation.Issues = append(result.Validation.Issues, domain.ValidationIssue{Level: "info", Path: "stages." + resolved.ID, Message: "Runtime preflight will use verified outputs from earlier stages."})
+			continue
+		}
+		preflight := preflightPlan(ctx, plugin, resolved.Plan, func(ctx context.Context, step domain.PlanStep) (domain.PlanStep, error) {
+			return s.resolvePreflightArtifactInputs(ctx, workspaceID, step)
+		})
+		result.Validation.Issues = append(result.Validation.Issues, preflight...)
+		for _, issue := range preflight {
+			if issue.Level == "error" {
+				result.Validation.Valid = false
+			}
+		}
+	}
+	result.Validation.CheckedAt = time.Now().UTC()
+	if !result.Validation.Valid {
+		return workflows.Result{}, &managedOperationFailure{status: http.StatusUnprocessableEntity, payload: map[string]any{"code": "preflight_failed", "validation": result.Validation}}
+	}
+	return result, nil
 }
 
 func (s *Server) validatedManagedOperation(ctx context.Context, workspaceID string, plugin plugins.Plugin, title string, spec json.RawMessage) (domain.Operation, *managedOperationFailure) {

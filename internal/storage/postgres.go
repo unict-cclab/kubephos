@@ -513,8 +513,9 @@ func (s *Store) DeleteProviderConnection(ctx context.Context, connectionID strin
 			SELECT 1
 			FROM managed_resources resource
 			LEFT JOIN operations deletion ON deletion.id = resource.deletion_operation_id
+			LEFT JOIN pipeline_runs deletion_run ON deletion_run.id = resource.deletion_pipeline_run_id
 			WHERE resource.connection_id = $1
-			  AND (resource.deletion_operation_id IS NULL OR deletion.status <> $2)
+			  AND COALESCE(deletion.status, deletion_run.status, '') <> $2
 		)
 	`, connectionID, domain.OperationSucceeded).Scan(&exists)
 	if err != nil {
@@ -961,17 +962,106 @@ func (s *Store) CreateManagedResource(ctx context.Context, resource domain.Manag
 	return resource, nil
 }
 
+func (s *Store) CreateManagedPipelineResource(ctx context.Context, resource domain.ManagedResource, pipeline domain.Pipeline, run domain.PipelineRun, dependencies []domain.ManagedResourceDependency) (domain.ManagedResource, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return domain.ManagedResource{}, err
+	}
+	defer tx.Rollback(ctx)
+	if err := insertPipelineLifecycle(ctx, tx, &pipeline, &run); err != nil {
+		return domain.ManagedResource{}, err
+	}
+	err = tx.QueryRow(ctx, `
+		INSERT INTO managed_resources (id, workspace_id, name, kind, provider, connection_id, plugin_id, plugin_version, plugin_digest, spec, pipeline_id, pipeline_run_id)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+		RETURNING created_at, updated_at
+	`, resource.ID, resource.WorkspaceID, resource.Name, resource.Kind, resource.Provider, resource.ConnectionID, resource.PluginID, resource.PluginVersion, resource.PluginDigest, resource.Spec, pipeline.ID, run.ID).Scan(&resource.CreatedAt, &resource.UpdatedAt)
+	if err != nil {
+		return domain.ManagedResource{}, err
+	}
+	for _, dependency := range dependencies {
+		if dependency.ResourceID != resource.ID || dependency.DependsOnID == "" || dependency.Relation == "" {
+			return domain.ManagedResource{}, ErrConflict
+		}
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO managed_resource_dependencies (resource_id, depends_on_id, relation)
+			VALUES ($1, $2, $3)
+		`, dependency.ResourceID, dependency.DependsOnID, dependency.Relation); err != nil {
+			return domain.ManagedResource{}, err
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return domain.ManagedResource{}, err
+	}
+	resource.PipelineID = pipeline.ID
+	resource.PipelineRunID = run.ID
+	resource.Status = "provisioning"
+	resource.Validation = pipeline.Validation
+	return resource, nil
+}
+
+func insertPipelineLifecycle(ctx context.Context, tx pgx.Tx, pipeline *domain.Pipeline, run *domain.PipelineRun) error {
+	definition, err := json.Marshal(pipeline.Definition)
+	if err != nil {
+		return err
+	}
+	resolution, err := json.Marshal(pipeline.Resolution)
+	if err != nil {
+		return err
+	}
+	validation, err := json.Marshal(pipeline.Validation)
+	if err != nil {
+		return err
+	}
+	err = tx.QueryRow(ctx, `
+		INSERT INTO pipelines (id, workspace_id, name, description, definition, resolution, validation, pipeline_hash)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		RETURNING created_at, updated_at
+	`, pipeline.ID, pipeline.WorkspaceID, pipeline.Name, pipeline.Description, definition, resolution, validation, pipeline.Hash).Scan(&pipeline.CreatedAt, &pipeline.UpdatedAt)
+	if err != nil {
+		return err
+	}
+	if run.PipelineID != pipeline.ID || run.WorkspaceID != pipeline.WorkspaceID || run.PipelineHash != pipeline.Hash || run.ResultType != pipeline.Resolution.Result.Type || run.ResultVersion != pipeline.Resolution.Result.Version {
+		return ErrConflict
+	}
+	err = tx.QueryRow(ctx, `
+		INSERT INTO pipeline_runs (id, pipeline_id, workspace_id, name, status, pipeline_hash, result_type, result_version, scheduled_for)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, COALESCE($9, now()))
+		RETURNING created_at, queued_at, scheduled_for
+	`, run.ID, run.PipelineID, run.WorkspaceID, run.Name, domain.OperationQueued, run.PipelineHash, run.ResultType, run.ResultVersion, run.ScheduledFor).Scan(&run.CreatedAt, &run.QueuedAt, &run.ScheduledFor)
+	if err != nil {
+		return err
+	}
+	for index := range run.Stages {
+		stage := &run.Stages[index]
+		stage.Status = domain.StepPending
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO pipeline_run_stages (id, run_id, position, stage_id, plugin_id, title, status)
+			VALUES ($1, $2, $3, $4, $5, $6, $7)
+		`, stage.ID, run.ID, stage.Position, stage.StageID, stage.PluginID, stage.Title, stage.Status); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (s *Store) ListManagedResources(ctx context.Context, kind string) ([]domain.ManagedResource, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT resource.id, resource.workspace_id, resource.name, resource.kind, resource.provider, COALESCE(resource.connection_id, ''),
-		       resource.plugin_id, resource.plugin_version, resource.plugin_digest, resource.spec, resource.operation_id,
-		       COALESCE(resource.deletion_operation_id, ''), creation.status, creation.error, creation.validation,
-		       COALESCE(deletion.status, ''), COALESCE(deletion.error, ''), resource.created_at, resource.updated_at
+		       resource.plugin_id, resource.plugin_version, resource.plugin_digest, resource.spec, COALESCE(resource.operation_id, ''),
+		       COALESCE(resource.pipeline_id, ''), COALESCE(resource.pipeline_run_id, ''),
+		       COALESCE((SELECT artifact.id FROM artifacts artifact WHERE artifact.operation_id = resource.operation_id AND artifact.type <> 'RunResult' ORDER BY artifact.created_at LIMIT 1), creation_run.result_artifact_id, ''),
+		       COALESCE(resource.deletion_operation_id, ''), COALESCE(resource.deletion_pipeline_id, ''), COALESCE(resource.deletion_pipeline_run_id, ''),
+		       COALESCE(creation.status, creation_run.status), COALESCE(creation.error, creation_run.error, ''), COALESCE(creation.validation, creation_pipeline.validation),
+		       COALESCE(deletion.status, deletion_run.status, ''), COALESCE(deletion.error, deletion_run.error, ''), resource.created_at, resource.updated_at
 		FROM managed_resources resource
-		JOIN operations creation ON creation.id = resource.operation_id
+		LEFT JOIN operations creation ON creation.id = resource.operation_id
+		LEFT JOIN pipelines creation_pipeline ON creation_pipeline.id = resource.pipeline_id
+		LEFT JOIN pipeline_runs creation_run ON creation_run.id = resource.pipeline_run_id
 		LEFT JOIN operations deletion ON deletion.id = resource.deletion_operation_id
+		LEFT JOIN pipeline_runs deletion_run ON deletion_run.id = resource.deletion_pipeline_run_id
 		WHERE resource.kind = $1
-		  AND (resource.deletion_operation_id IS NULL OR deletion.status <> $2)
+		  AND COALESCE(deletion.status, deletion_run.status, '') <> $2
 		ORDER BY resource.created_at DESC
 	`, kind, domain.OperationSucceeded)
 	if err != nil {
@@ -992,12 +1082,18 @@ func (s *Store) ListManagedResources(ctx context.Context, kind string) ([]domain
 func (s *Store) GetManagedResource(ctx context.Context, resourceID string) (domain.ManagedResource, error) {
 	row := s.pool.QueryRow(ctx, `
 		SELECT resource.id, resource.workspace_id, resource.name, resource.kind, resource.provider, COALESCE(resource.connection_id, ''),
-		       resource.plugin_id, resource.plugin_version, resource.plugin_digest, resource.spec, resource.operation_id,
-		       COALESCE(resource.deletion_operation_id, ''), creation.status, creation.error, creation.validation,
-		       COALESCE(deletion.status, ''), COALESCE(deletion.error, ''), resource.created_at, resource.updated_at
+		       resource.plugin_id, resource.plugin_version, resource.plugin_digest, resource.spec, COALESCE(resource.operation_id, ''),
+		       COALESCE(resource.pipeline_id, ''), COALESCE(resource.pipeline_run_id, ''),
+		       COALESCE((SELECT artifact.id FROM artifacts artifact WHERE artifact.operation_id = resource.operation_id AND artifact.type <> 'RunResult' ORDER BY artifact.created_at LIMIT 1), creation_run.result_artifact_id, ''),
+		       COALESCE(resource.deletion_operation_id, ''), COALESCE(resource.deletion_pipeline_id, ''), COALESCE(resource.deletion_pipeline_run_id, ''),
+		       COALESCE(creation.status, creation_run.status), COALESCE(creation.error, creation_run.error, ''), COALESCE(creation.validation, creation_pipeline.validation),
+		       COALESCE(deletion.status, deletion_run.status, ''), COALESCE(deletion.error, deletion_run.error, ''), resource.created_at, resource.updated_at
 		FROM managed_resources resource
-		JOIN operations creation ON creation.id = resource.operation_id
+		LEFT JOIN operations creation ON creation.id = resource.operation_id
+		LEFT JOIN pipelines creation_pipeline ON creation_pipeline.id = resource.pipeline_id
+		LEFT JOIN pipeline_runs creation_run ON creation_run.id = resource.pipeline_run_id
 		LEFT JOIN operations deletion ON deletion.id = resource.deletion_operation_id
+		LEFT JOIN pipeline_runs deletion_run ON deletion_run.id = resource.deletion_pipeline_run_id
 		WHERE resource.id = $1
 	`, resourceID)
 	resource, err := scanManagedResource(row)
@@ -1012,8 +1108,8 @@ func scanManagedResource(row pgx.Row) (domain.ManagedResource, error) {
 	var creationStatus, creationError, deletionStatus, deletionError string
 	var validation []byte
 	err := row.Scan(&resource.ID, &resource.WorkspaceID, &resource.Name, &resource.Kind, &resource.Provider, &resource.ConnectionID,
-		&resource.PluginID, &resource.PluginVersion, &resource.PluginDigest, &resource.Spec, &resource.OperationID,
-		&resource.DeletionOperationID, &creationStatus, &creationError, &validation, &deletionStatus, &deletionError, &resource.CreatedAt, &resource.UpdatedAt)
+		&resource.PluginID, &resource.PluginVersion, &resource.PluginDigest, &resource.Spec, &resource.OperationID, &resource.PipelineID, &resource.PipelineRunID, &resource.ArtifactID,
+		&resource.DeletionOperationID, &resource.DeletionPipelineID, &resource.DeletionPipelineRunID, &creationStatus, &creationError, &validation, &deletionStatus, &deletionError, &resource.CreatedAt, &resource.UpdatedAt)
 	if err != nil {
 		return domain.ManagedResource{}, err
 	}
@@ -1075,8 +1171,9 @@ func (s *Store) CreateManagedResourceDeletion(ctx context.Context, resourceID st
 			FROM managed_resource_dependencies dependency
 			JOIN managed_resources consumer ON consumer.id = dependency.resource_id
 			LEFT JOIN operations deletion ON deletion.id = consumer.deletion_operation_id
+			LEFT JOIN pipeline_runs deletion_run ON deletion_run.id = consumer.deletion_pipeline_run_id
 			WHERE dependency.depends_on_id = $1
-			  AND (consumer.deletion_operation_id IS NULL OR deletion.status <> $2)
+			  AND COALESCE(deletion.status, deletion_run.status, '') <> $2
 		)
 	`, resourceID, domain.OperationSucceeded).Scan(&used)
 	if err != nil {
@@ -1094,6 +1191,101 @@ func (s *Store) CreateManagedResourceDeletion(ctx context.Context, resourceID st
 	}
 	if command.RowsAffected() != 1 {
 		return ErrNotFound
+	}
+	return tx.Commit(ctx)
+}
+
+func (s *Store) CreateManagedPipelineResourceDeletion(ctx context.Context, resourceID string, pipeline domain.Pipeline, run domain.PipelineRun) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	var creationStatus, deletionOperationID, deletionRunID string
+	err = tx.QueryRow(ctx, `
+		SELECT COALESCE(creation.status, creation_run.status), COALESCE(resource.deletion_operation_id, ''), COALESCE(resource.deletion_pipeline_run_id, '')
+		FROM managed_resources resource
+		LEFT JOIN operations creation ON creation.id = resource.operation_id
+		LEFT JOIN pipeline_runs creation_run ON creation_run.id = resource.pipeline_run_id
+		WHERE resource.id = $1
+		FOR UPDATE OF resource
+	`, resourceID).Scan(&creationStatus, &deletionOperationID, &deletionRunID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrNotFound
+	}
+	if err != nil {
+		return err
+	}
+	if creationStatus != domain.OperationSucceeded && creationStatus != domain.OperationFailed && creationStatus != domain.OperationCanceled || deletionOperationID != "" || deletionRunID != "" {
+		return ErrConflict
+	}
+	var used bool
+	err = tx.QueryRow(ctx, `
+		SELECT EXISTS(
+			SELECT 1
+			FROM managed_resource_dependencies dependency
+			JOIN managed_resources consumer ON consumer.id = dependency.resource_id
+			LEFT JOIN operations deletion ON deletion.id = consumer.deletion_operation_id
+			LEFT JOIN pipeline_runs deletion_run ON deletion_run.id = consumer.deletion_pipeline_run_id
+			WHERE dependency.depends_on_id = $1
+			  AND COALESCE(deletion.status, deletion_run.status, '') <> $2
+		)
+	`, resourceID, domain.OperationSucceeded).Scan(&used)
+	if err != nil {
+		return err
+	}
+	if used {
+		return ErrConflict
+	}
+	if err := insertPipelineLifecycle(ctx, tx, &pipeline, &run); err != nil {
+		return err
+	}
+	command, err := tx.Exec(ctx, `
+		UPDATE managed_resources
+		SET deletion_pipeline_id = $2, deletion_pipeline_run_id = $3, updated_at = now()
+		WHERE id = $1
+	`, resourceID, pipeline.ID, run.ID)
+	if err != nil {
+		return err
+	}
+	if command.RowsAffected() != 1 {
+		return ErrNotFound
+	}
+	return tx.Commit(ctx)
+}
+
+func (s *Store) DeleteFailedManagedResource(ctx context.Context, resourceID string) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	var status string
+	err = tx.QueryRow(ctx, `
+		SELECT COALESCE(creation.status, creation_run.status)
+		FROM managed_resources resource
+		LEFT JOIN operations creation ON creation.id = resource.operation_id
+		LEFT JOIN pipeline_runs creation_run ON creation_run.id = resource.pipeline_run_id
+		WHERE resource.id = $1
+		  AND resource.deletion_operation_id IS NULL
+		  AND resource.deletion_pipeline_run_id IS NULL
+		  AND NOT EXISTS (
+		      SELECT 1 FROM pipeline_run_stages stage
+		      WHERE stage.run_id = resource.pipeline_run_id AND stage.operation_id IS NOT NULL
+		  )
+		FOR UPDATE OF resource
+	`, resourceID).Scan(&status)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrConflict
+	}
+	if err != nil {
+		return err
+	}
+	if status != domain.OperationFailed && status != domain.OperationCanceled {
+		return ErrConflict
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM managed_resources WHERE id = $1`, resourceID); err != nil {
+		return err
 	}
 	return tx.Commit(ctx)
 }

@@ -381,8 +381,13 @@ export interface ManagedResource {
   kind: string
   provider: string
   connectionId?: string
-  operationId: string
+  operationId?: string
+  pipelineId?: string
+  pipelineRunId?: string
+  artifactId?: string
   deletionOperationId?: string
+  deletionPipelineId?: string
+  deletionPipelineRunId?: string
   status: string
   error?: string
   validation: ValidationReport
@@ -444,6 +449,7 @@ export interface PlatformData {
   credentials: Credential[]
   connections: Connection[]
   machineTemplates: ManagedResource[]
+  infrastructureServices: ManagedResource[]
   resources: InfrastructureResource[]
   audit: AuditEvent[]
 }

@@ -64,7 +64,7 @@ func TestTemplateLifecycleValidatesCreatesVerifiesAndDeletes(t *testing.T) {
 		case request.Method == http.MethodGet && request.URL.Path == "/api2/json/nodes/pve/storage":
 			write([]map[string]any{{"storage": "local", "active": 1, "enabled": 1, "content": "iso,vztmpl,import"}, {"storage": "local-lvm", "active": 1, "enabled": 1, "content": "images,rootdir"}})
 		case request.Method == http.MethodGet && request.URL.Path == "/api2/json/access/permissions":
-			write(map[string]map[string]int{"/": {"Datastore.AllocateSpace": 1, "Datastore.Audit": 1, "VM.Allocate": 1, "VM.Config.Cloudinit": 1, "VM.Config.CPU": 1, "VM.Config.Disk": 1, "VM.Config.Memory": 1, "VM.Config.Network": 1, "VM.Config.Options": 1, "VM.PowerMgmt": 1}})
+			write(map[string]map[string]int{"/": {"Datastore.AllocateSpace": 1, "Datastore.AllocateTemplate": 1, "Datastore.Audit": 1, "VM.Allocate": 1, "VM.Config.Cloudinit": 1, "VM.Config.CPU": 1, "VM.Config.Disk": 1, "VM.Config.Memory": 1, "VM.Config.Network": 1, "VM.Config.Options": 1, "VM.PowerMgmt": 1}})
 		case request.Method == http.MethodGet && request.URL.Path == "/api2/json/nodes/pve/storage/local/content":
 			write([]map[string]string{{"volid": "local:import/noble-server-cloudimg-amd64.qcow2"}})
 		case request.Method == http.MethodPost && request.URL.Path == "/api2/json/nodes/pve/qemu":
@@ -75,7 +75,7 @@ func TestTemplateLifecycleValidatesCreatesVerifiesAndDeletes(t *testing.T) {
 			state.description = request.Form.Get("description")
 			write("UPID:pve:create")
 		case request.Method == http.MethodGet && request.URL.Path == "/api2/json/nodes/pve/qemu/8100/config":
-			write(map[string]string{"name": state.name, "tags": state.tags, "description": state.description, "boot": "order=scsi0;ide2", "scsi0": "local-lvm:vm-8100-disk-0,size=32G"})
+			write(map[string]string{"name": state.name, "tags": state.tags, "description": state.description, "boot": "order=scsi0;ide2", "scsi0": "local-lvm:vm-8100-disk-0,size=32G", "agent": "enabled=1", "net0": "virtio=AA:BB:CC:DD:EE:FF,bridge=vmbr0", "ciuser": "ubuntu", "nameserver": "1.1.1.1", "ipconfig0": "ip=dhcp"})
 		case request.Method == http.MethodPut && request.URL.Path == "/api2/json/nodes/pve/qemu/8100/resize":
 			write("UPID:pve:resize")
 		case request.Method == http.MethodPost && request.URL.Path == "/api2/json/nodes/pve/qemu/8100/status/start":

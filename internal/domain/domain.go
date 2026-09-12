@@ -186,23 +186,34 @@ type ProviderConnection struct {
 }
 
 type ManagedResource struct {
-	ID                  string           `json:"id"`
-	WorkspaceID         string           `json:"workspaceId"`
-	Name                string           `json:"name"`
-	Kind                string           `json:"kind"`
-	Provider            string           `json:"provider"`
-	ConnectionID        string           `json:"connectionId,omitempty"`
-	PluginID            string           `json:"pluginId"`
-	PluginVersion       string           `json:"pluginVersion"`
-	PluginDigest        string           `json:"pluginDigest,omitempty"`
-	Spec                json.RawMessage  `json:"spec"`
-	OperationID         string           `json:"operationId"`
-	DeletionOperationID string           `json:"deletionOperationId,omitempty"`
-	Status              string           `json:"status"`
-	Error               string           `json:"error,omitempty"`
-	Validation          ValidationReport `json:"validation"`
-	CreatedAt           time.Time        `json:"createdAt"`
-	UpdatedAt           time.Time        `json:"updatedAt"`
+	ID                    string           `json:"id"`
+	WorkspaceID           string           `json:"workspaceId"`
+	Name                  string           `json:"name"`
+	Kind                  string           `json:"kind"`
+	Provider              string           `json:"provider"`
+	ConnectionID          string           `json:"connectionId,omitempty"`
+	PluginID              string           `json:"pluginId"`
+	PluginVersion         string           `json:"pluginVersion"`
+	PluginDigest          string           `json:"pluginDigest,omitempty"`
+	Spec                  json.RawMessage  `json:"spec"`
+	OperationID           string           `json:"operationId,omitempty"`
+	PipelineID            string           `json:"pipelineId,omitempty"`
+	PipelineRunID         string           `json:"pipelineRunId,omitempty"`
+	ArtifactID            string           `json:"artifactId,omitempty"`
+	DeletionOperationID   string           `json:"deletionOperationId,omitempty"`
+	DeletionPipelineID    string           `json:"deletionPipelineId,omitempty"`
+	DeletionPipelineRunID string           `json:"deletionPipelineRunId,omitempty"`
+	Status                string           `json:"status"`
+	Error                 string           `json:"error,omitempty"`
+	Validation            ValidationReport `json:"validation"`
+	CreatedAt             time.Time        `json:"createdAt"`
+	UpdatedAt             time.Time        `json:"updatedAt"`
+}
+
+type ManagedResourceDependency struct {
+	ResourceID  string `json:"resourceId"`
+	DependsOnID string `json:"dependsOnId"`
+	Relation    string `json:"relation"`
 }
 
 type CatalogApplication struct {

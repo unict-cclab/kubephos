@@ -132,3 +132,17 @@ databaseChangeLog:
         - sqlFile:
             path: changes/019-managed-resources.sql
             relativeToChangelogFile: true
+  - changeSet:
+      id: 020-managed-pipeline-resources
+      author: kubephos
+      changes:
+        - sqlFile:
+            path: changes/020-managed-pipeline-resources.sql
+            relativeToChangelogFile: true
+  - changeSet:
+      id: 021-managed-pipeline-cleanup
+      author: kubephos
+      changes:
+        - sqlFile:
+            path: changes/021-managed-pipeline-cleanup.sql
+            relativeToChangelogFile: true

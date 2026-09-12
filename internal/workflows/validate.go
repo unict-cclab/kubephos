@@ -415,3 +415,7 @@ func fingerprint(definition domain.PipelineDefinition, resolution domain.Pipelin
 	digest := sha256.Sum256(payload)
 	return hex.EncodeToString(digest[:]), nil
 }
+
+func Fingerprint(definition domain.PipelineDefinition, resolution domain.PipelineResolution) (string, error) {
+	return fingerprint(definition, resolution)
+}

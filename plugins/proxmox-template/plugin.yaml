@@ -128,4 +128,5 @@ spec:
   permissions:
     - network.proxmox.read
     - network.proxmox.write
+    - network.egress
     - secrets.read:proxmox-api-token

@@ -120,7 +120,7 @@ func (TemplatePlugin) Manifest() plugins.Manifest {
 		Schema:          json.RawMessage(`{"type":"object","additionalProperties":false,"required":["connectionRef","name","node","vmid","os","storage","imageStorage","bridge","diskGiB","prefixLength","dnsServer","sshUser"],"properties":{"connectionRef":{"type":"string","title":"Proxmox connection","format":"kubephos-connection-ref","x-kubephos-provider":"proxmox"},"name":{"type":"string","title":"Template name","pattern":"^[a-z0-9][a-z0-9-]{0,31}$"},"node":{"type":"string","title":"Proxmox node","minLength":1,"maxLength":64},"vmid":{"type":"integer","title":"Template VMID","minimum":100,"maximum":999999999},"os":{"type":"string","title":"Operating system","enum":["ubuntu-24.04","ubuntu-22.04","debian-12"],"default":"ubuntu-24.04"},"cloudImageURL":{"type":"string","title":"Custom cloud image URL","default":""},"storage":{"type":"string","title":"VM disk storage","minLength":1,"maxLength":64},"imageStorage":{"type":"string","title":"Image staging storage","minLength":1,"maxLength":64},"bridge":{"type":"string","title":"Network bridge","pattern":"^[A-Za-z0-9._-]{1,32}$","default":"vmbr0"},"diskGiB":{"type":"integer","title":"Disk GiB","minimum":8,"maximum":2048,"default":32},"address":{"type":"string","title":"Temporary address","description":"Leave empty to use DHCP.","default":""},"prefixLength":{"type":"integer","title":"Prefix length","minimum":1,"maximum":32,"default":24},"gateway":{"type":"string","title":"Gateway","default":""},"dnsServer":{"type":"string","title":"DNS server","default":"1.1.1.1"},"sshUser":{"type":"string","title":"SSH user","pattern":"^[a-z_][a-z0-9_-]{0,31}$","default":"ubuntu"}}}`),
 		ArtifactOutputs: []domain.ArtifactContract{{Type: "MachineTemplate", Version: "v1alpha1"}},
 		Capabilities:    []string{"infrastructure.provision", "infrastructure.deprovision", "infrastructure.machine-template.provision", "infrastructure.machine-template.deprovision", "infrastructure.preflight", "lifecycle.cleanup"},
-		Permissions:     []string{"network.proxmox.read", "network.proxmox.write", "secrets.read:proxmox-api-token"},
+		Permissions:     []string{"network.proxmox.read", "network.proxmox.write", "network.egress", "secrets.read:proxmox-api-token"},
 	}
 }
 
@@ -155,7 +155,7 @@ func (plugin TemplatePlugin) Validate(ctx context.Context, invocation Invocation
 	if err != nil {
 		return invalidReport(report, "connectionRef", fmt.Sprintf("Token permissions cannot be verified: %v", err))
 	}
-	for _, privilege := range []string{"Datastore.AllocateSpace", "Datastore.Audit", "VM.Allocate", "VM.Config.Cloudinit", "VM.Config.CPU", "VM.Config.Disk", "VM.Config.Memory", "VM.Config.Network", "VM.Config.Options", "VM.PowerMgmt"} {
+	for _, privilege := range []string{"Datastore.AllocateSpace", "Datastore.AllocateTemplate", "Datastore.Audit", "VM.Allocate", "VM.Config.Cloudinit", "VM.Config.CPU", "VM.Config.Disk", "VM.Config.Memory", "VM.Config.Network", "VM.Config.Options", "VM.PowerMgmt"} {
 		if !hasPrivilege(permissions, privilege) {
 			return invalidReport(report, "connectionRef", fmt.Sprintf("Token is missing required privilege %s.", privilege))
 		}
@@ -232,7 +232,7 @@ func (plugin TemplatePlugin) Precheck(ctx context.Context, step domain.PlanStep,
 	if err != nil {
 		return unhealthy("Proxmox permissions are unavailable", "permissions", "unknown"), nil
 	}
-	for _, privilege := range []string{"Datastore.AllocateSpace", "Datastore.Audit", "VM.Allocate", "VM.Config.Cloudinit", "VM.Config.CPU", "VM.Config.Disk", "VM.Config.Memory", "VM.Config.Network", "VM.Config.Options", "VM.PowerMgmt"} {
+	for _, privilege := range []string{"Datastore.AllocateSpace", "Datastore.AllocateTemplate", "Datastore.Audit", "VM.Allocate", "VM.Config.Cloudinit", "VM.Config.CPU", "VM.Config.Disk", "VM.Config.Memory", "VM.Config.Network", "VM.Config.Options", "VM.PowerMgmt"} {
 		if !hasPrivilege(permissions, privilege) {
 			return unhealthy("Required Proxmox permissions changed after validation", "permissions", "insufficient"), nil
 		}
@@ -330,6 +330,9 @@ func (plugin TemplatePlugin) Verify(ctx context.Context, step domain.PlanStep, r
 	configuration, err := connection.config(ctx, input.Node, input.VMID)
 	if err != nil || !ownedTemplate(configuration, input) {
 		return unhealthy("Created template ownership could not be verified", "ownership", "rejected"), nil
+	}
+	if !configuredTemplate(configuration, input) {
+		return unhealthy("Created template disk, network or guest agent configuration is incomplete", "configuration", "invalid"), nil
 	}
 	if result.MachineTemplate != templateArtifact(input) || len(result.Resources) != 1 || result.Resources[0].ExternalID != externalID(input.VMID) || result.Resources[0].Kind != "virtual-machine-template" {
 		return unhealthy("MachineTemplate artifact does not match the validated plan", "artifact", "invalid"), nil
@@ -689,6 +692,15 @@ func templateArtifact(input templateStepInput) machineTemplateArtifact {
 func ownedTemplate(configuration vmConfig, input templateStepInput) bool {
 	tags := strings.FieldsFunc(configuration.Tags, func(value rune) bool { return value == ';' || value == ',' || value == ' ' })
 	return configuration.Name == input.Name && slices.Contains(tags, managedTag) && configuration.Description == templateDescription(input.Marker) && input.Marker != ""
+}
+
+func configuredTemplate(configuration vmConfig, input templateStepInput) bool {
+	diskSize, err := topologyDiskSizeGiB(configuration.SCSI0)
+	if err != nil || diskSize < float64(input.DiskGiB) {
+		return false
+	}
+	agent := strings.Split(configuration.Agent, ",")[0]
+	return strings.HasPrefix(configuration.SCSI0, input.Storage+":") && strings.Contains(configuration.Net0, "bridge="+input.Bridge) && (agent == "1" || agent == "enabled=1") && configuration.CIUser == input.SSHUser && configuration.NameServer == input.DNSServer && configuration.IPConfig0 == templateIPConfig(input)
 }
 
 func templateDescription(marker string) string {

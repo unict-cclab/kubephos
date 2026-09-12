@@ -360,7 +360,7 @@ func (s *Store) FailPipelineRunStage(ctx context.Context, runStageID, status, me
 func (s *Store) CompletePipelineRun(ctx context.Context, runID, owner, artifactID string) error {
 	command, err := s.pool.Exec(ctx, `
 		UPDATE pipeline_runs
-		SET status = $3, result_artifact_id = $4, completed_at = now(), lease_owner = NULL, lease_until = NULL
+		SET status = $3, result_artifact_id = NULLIF($4, ''), completed_at = now(), lease_owner = NULL, lease_until = NULL
 		WHERE id = $1 AND lease_owner = $2 AND status = $5
 		  AND NOT EXISTS (SELECT 1 FROM pipeline_run_stages WHERE run_id = $1 AND status <> $6)
 	`, runID, owner, domain.OperationSucceeded, artifactID, domain.OperationRunning, domain.StepSucceeded)

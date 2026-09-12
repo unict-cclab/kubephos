@@ -3,7 +3,7 @@ kind: Plugin
 metadata:
   id: io.kubephos.infrastructure.proxmox.topology
   name: Proxmox machine topology
-  version: 0.2.0
+  version: 0.3.0
   description: Creates a validated group of isolated machines from one Proxmox template.
 spec:
   protocol: v1alpha1
@@ -39,6 +39,12 @@ spec:
         title: Proxmox connection
         format: kubephos-connection-ref
         x-kubephos-provider: proxmox
+      machineTemplateRef:
+        type: string
+        title: Managed machine template
+        format: kubephos-artifact-ref
+        x-kubephos-artifact-type: MachineTemplate
+        x-kubephos-artifact-version: v1alpha1
       node:
         type: string
         title: Proxmox node
@@ -96,12 +102,16 @@ spec:
     executable: proxmox-topology-plugin
     timeout: 30m
   artifacts:
+    inputs:
+      - type: MachineTemplate
+        version: v1alpha1
     outputs:
       - type: MachineSet
         version: v1alpha1
       - type: MachineAccess
         version: v1alpha1
   capabilities:
+    - infrastructure.machine-topology.provision
     - infrastructure.provision
     - infrastructure.deprovision
     - infrastructure.preflight
