@@ -1258,7 +1258,7 @@ func (s *Store) CreateManagedResourceDeletion(ctx context.Context, resourceID st
 	if err != nil {
 		return err
 	}
-	if creationStatus != domain.OperationSucceeded || deletionID != "" {
+	if creationStatus != domain.OperationSucceeded && creationStatus != domain.OperationFailed && creationStatus != domain.OperationCanceled || deletionID != "" {
 		return ErrConflict
 	}
 	var used bool
@@ -1349,6 +1349,33 @@ func (s *Store) CreateManagedPipelineResourceDeletion(ctx context.Context, resou
 		return ErrNotFound
 	}
 	return tx.Commit(ctx)
+}
+
+func (s *Store) ResetFailedManagedResourceDeletion(ctx context.Context, resourceID string) error {
+	command, err := s.pool.Exec(ctx, `
+		UPDATE managed_resources resource
+		SET deletion_operation_id = NULL, deletion_pipeline_id = NULL, deletion_pipeline_run_id = NULL, updated_at = now()
+		WHERE resource.id = $1
+		  AND (
+		      resource.deletion_operation_id IS NOT NULL
+		      AND EXISTS (
+		          SELECT 1 FROM operations deletion
+		          WHERE deletion.id = resource.deletion_operation_id AND deletion.status IN ($2, $3)
+		      )
+		      OR resource.deletion_pipeline_run_id IS NOT NULL
+		      AND EXISTS (
+		          SELECT 1 FROM pipeline_runs deletion_run
+		          WHERE deletion_run.id = resource.deletion_pipeline_run_id AND deletion_run.status IN ($2, $3)
+		      )
+		  )
+	`, resourceID, domain.OperationFailed, domain.OperationCanceled)
+	if err != nil {
+		return err
+	}
+	if command.RowsAffected() != 1 {
+		return ErrConflict
+	}
+	return nil
 }
 
 func (s *Store) DeleteFailedManagedResource(ctx context.Context, resourceID string) error {

@@ -47,6 +47,9 @@ type descriptor struct {
 			Inputs  []domain.ArtifactContract `yaml:"inputs"`
 			Outputs []domain.ArtifactContract `yaml:"outputs"`
 		} `yaml:"artifacts"`
+		Targeting *struct {
+			RequiredTrait string `yaml:"requiredTrait"`
+		} `yaml:"targeting"`
 		Permissions  []string `yaml:"permissions"`
 		Capabilities []string `yaml:"capabilities"`
 		Runtime      struct {
@@ -82,6 +85,7 @@ var versionExpression = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._+-]{0,127}$`
 var capabilityExpression = regexp.MustCompile(`^[a-z][a-z0-9.-]*(?::[a-z0-9][a-z0-9._-]{0,79})?$`)
 var artifactTypeExpression = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9.-]{0,127}$`)
 var artifactVersionExpression = regexp.MustCompile(`^v[0-9]+(?:alpha[0-9]+|beta[0-9]+)?$`)
+var targetTraitExpression = regexp.MustCompile(`^[a-z][a-z0-9-]{0,62}$`)
 var ociNameExpression = regexp.MustCompile(`^[a-z0-9]+(?:(?:[._-][a-z0-9]+)|(?::[0-9]+))*(?:/[a-z0-9]+(?:[._-][a-z0-9]+)*)*(?::[A-Za-z0-9_][A-Za-z0-9._-]{0,127})?$`)
 
 func LoadDirectory(directory string, resolver SecretResolver, connections ConnectionResolver, catalogResolver CatalogResolver, runners ...ContainerRunner) (*Registry, error) {
@@ -248,6 +252,18 @@ func loadDefinition(value []byte, baseDirectory string, resolver SecretResolver,
 	if err := validateArtifactContracts(definition.Spec.Artifacts.Outputs, "output"); err != nil {
 		return nil, err
 	}
+	hasTargetBinding := false
+	for _, input := range definition.Spec.Artifacts.Inputs {
+		if input.Type == "TargetBinding" {
+			hasTargetBinding = true
+		}
+	}
+	if hasTargetBinding && (definition.Spec.Targeting == nil || !targetTraitExpression.MatchString(definition.Spec.Targeting.RequiredTrait)) {
+		return nil, errors.New("plugins consuming TargetBinding must declare a valid targeting.requiredTrait")
+	}
+	if !hasTargetBinding && definition.Spec.Targeting != nil {
+		return nil, errors.New("targeting requires a TargetBinding artifact input")
+	}
 	if (definition.Spec.Runtime.Executable == "") == (definition.Spec.Runtime.Image == "") {
 		return nil, errors.New("plugin runtime must declare exactly one executable or image")
 	}
@@ -330,6 +346,10 @@ func loadDefinition(value []byte, baseDirectory string, resolver SecretResolver,
 			secretKinds[strings.TrimPrefix(permission, "secrets.read:")] = true
 		}
 	}
+	var targeting *Targeting
+	if definition.Spec.Targeting != nil {
+		targeting = &Targeting{RequiredTrait: definition.Spec.Targeting.RequiredTrait}
+	}
 	plugin := &Process{
 		manifest: Manifest{
 			ID:                definition.Metadata.ID,
@@ -341,6 +361,7 @@ func loadDefinition(value []byte, baseDirectory string, resolver SecretResolver,
 			CredentialSchemas: credentialSchemas,
 			ArtifactInputs:    definition.Spec.Artifacts.Inputs,
 			ArtifactOutputs:   definition.Spec.Artifacts.Outputs,
+			Targeting:         targeting,
 			Capabilities:      definition.Spec.Capabilities,
 			Permissions:       definition.Spec.Permissions,
 			Runtime:           runtimeManifest,
@@ -366,6 +387,7 @@ func loadDefinition(value []byte, baseDirectory string, resolver SecretResolver,
 		return nil, fmt.Errorf("describe plugin: %w", err)
 	}
 	if described.ID != plugin.manifest.ID || described.Version != plugin.manifest.Version || described.Provider != plugin.manifest.Provider ||
+		!reflect.DeepEqual(described.Targeting, plugin.manifest.Targeting) ||
 		!reflect.DeepEqual(described.ArtifactInputs, plugin.manifest.ArtifactInputs) || !reflect.DeepEqual(described.ArtifactOutputs, plugin.manifest.ArtifactOutputs) {
 		return nil, errors.New("plugin executable identity does not match its descriptor")
 	}

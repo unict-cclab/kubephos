@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -29,6 +30,7 @@ const (
 	ownershipKey            = "kubephos.dev/ownership-marker"
 	applicationOwnershipKey = "kubephos.dev/application-marker"
 	loadProfileKey          = "kubephos.dev/load-profile"
+	previousReplicasKey     = "kubephos.dev/load-previous-replicas"
 )
 
 type Plugin struct {
@@ -185,7 +187,7 @@ func (Plugin) Manifest() plugins.Manifest {
 		Schema:          json.RawMessage(`{"type":"object","additionalProperties":false,"required":["clusterConnectionRef","applicationDeploymentRef","loadProfileSetRef","profileId","action","replicas"],"properties":{"clusterConnectionRef":{"type":"string","title":"Kubernetes cluster","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ClusterConnection","x-kubephos-artifact-version":"v1alpha1"},"applicationDeploymentRef":{"type":"string","title":"Application deployment","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ApplicationDeployment","x-kubephos-artifact-version":"v1alpha1"},"loadProfileSetRef":{"type":"string","title":"Load profiles","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"LoadProfileSet","x-kubephos-artifact-version":"v1alpha1"},"profileId":{"type":"string","title":"Load profile","description":"Stable profile ID declared by the application package.","minLength":1,"maxLength":63,"default":"default-load"},"action":{"type":"string","title":"Action","x-kubephos-primary-action":true,"enum":["start","stop","resume"],"default":"start"},"replicas":{"type":"integer","title":"Load intensity","description":"Number of load driver replicas used by start or resume.","minimum":1,"maximum":1000,"default":1}}}`),
 		ArtifactInputs:  []domain.ArtifactContract{{Type: "ClusterConnection", Version: "v1alpha1"}, {Type: "ApplicationDeployment", Version: "v1alpha1"}, {Type: "LoadProfileSet", Version: "v1alpha1"}},
 		ArtifactOutputs: []domain.ArtifactContract{{Type: "LoadSession", Version: "v1alpha1"}},
-		Capabilities:    []string{"load.session.control", "load.session.preflight"},
+		Capabilities:    []string{"load.session.control", "load.session.preflight", "load.session.cleanup", "lifecycle.cleanup"},
 		Permissions:     []string{"cluster.admin"},
 	}
 }
@@ -276,6 +278,20 @@ func (plugin Plugin) Precheck(ctx context.Context, step domain.PlanStep, log plu
 		return unhealthy(err.Error(), "loadSession", "unknown"), nil
 	}
 	owned := exists && state.Metadata.Annotations[applicationOwnershipKey] == deployment.Metadata.OwnershipMarker && state.Metadata.Annotations[loadProfileKey] == profile.ID
+	if step.Cleanup {
+		if !exists && spec.Action == "start" {
+			return domain.HealthReport{Status: domain.HealthHealthy, Summary: "The load workload is already absent", Checks: map[string]string{"loadSession": "absent", "ownership": "verified"}}, nil
+		}
+		if !owned {
+			return unhealthy("Only the load workload owned by this application can be reset", "loadSession", "invalid"), nil
+		}
+		if spec.Action != "start" {
+			if _, err := storedPreviousReplicas(state); err != nil {
+				return unhealthy(err.Error(), "loadSession", "invalid"), nil
+			}
+		}
+		return domain.HealthReport{Status: domain.HealthHealthy, Summary: "The load session is safe to reset", Checks: map[string]string{"loadSession": "owned", "ownership": "verified"}}, nil
+	}
 	switch spec.Action {
 	case "start":
 		if exists {
@@ -343,6 +359,9 @@ func (plugin Plugin) Execute(ctx context.Context, step domain.PlanStep, log plug
 		if !ownedBy(state, deployment, profile) {
 			return nil, errors.New("load workload ownership changed after precheck")
 		}
+		if _, err := runner.Run(ctx, cluster.Spec.Kubeconfig, nil, "annotate", resource, "-n", deployment.Spec.Namespace, previousReplicasKey+"="+fmt.Sprint(previous), "--overwrite"); err != nil {
+			return nil, err
+		}
 		replicas := 0
 		if spec.Action == "resume" {
 			replicas = spec.Replicas
@@ -369,6 +388,35 @@ func (plugin Plugin) Verify(ctx context.Context, step domain.PlanStep, raw json.
 	if err != nil {
 		return domain.HealthReport{}, err
 	}
+	runner := plugin.runner()
+	if step.Cleanup {
+		state, exists, err := readWorkload(ctx, runner, cluster.Spec.Kubeconfig, deployment.Spec.Namespace, profile.Workload)
+		if err != nil {
+			return unhealthy(err.Error(), "loadSession", "unknown"), nil
+		}
+		if spec.Action == "start" {
+			if exists {
+				return unhealthy("The load workload still exists after reset", "loadSession", "present"), nil
+			}
+			return domain.HealthReport{Status: domain.HealthHealthy, Summary: "The started load workload was removed", Checks: map[string]string{"loadSession": "absent"}}, nil
+		}
+		if !exists || !ownedBy(state, deployment, profile) {
+			return unhealthy("The load workload is unavailable after reset", "loadSession", "invalid"), nil
+		}
+		previous, err := storedPreviousReplicas(state)
+		if err != nil || state.Spec.Replicas != previous {
+			return unhealthy("The previous load intensity was not restored", "loadSession", "invalid"), nil
+		}
+		if previous == 0 {
+			err = waitForStopped(ctx, runner, cluster.Spec.Kubeconfig, deployment.Spec.Namespace, profile, log)
+		} else {
+			err = waitForReady(ctx, runner, cluster.Spec.Kubeconfig, deployment.Spec.Namespace, profile, previous, log)
+		}
+		if err != nil {
+			return unhealthy(err.Error(), "loadSession", "unhealthy"), nil
+		}
+		return domain.HealthReport{Status: domain.HealthHealthy, Summary: "The previous load intensity was restored", Checks: map[string]string{"loadSession": "restored", "replicas": fmt.Sprint(previous)}}, nil
+	}
 	var value result
 	if err := json.Unmarshal(raw, &value); err != nil {
 		return domain.HealthReport{}, err
@@ -382,7 +430,6 @@ func (plugin Plugin) Verify(ctx context.Context, step domain.PlanStep, raw json.
 	if err := validateResult(value.LoadSession, spec, cluster, deployment, profile, expectedState, expectedReplicas); err != nil {
 		return unhealthy(err.Error(), "artifact", "invalid"), nil
 	}
-	runner := plugin.runner()
 	state, exists, err := readWorkload(ctx, runner, cluster.Spec.Kubeconfig, deployment.Spec.Namespace, profile.Workload)
 	if err != nil || !exists || !ownedBy(state, deployment, profile) || state.Spec.Replicas != expectedReplicas {
 		return unhealthy("Load workload state or ownership does not match the validated transition", "loadSession", "invalid"), nil
@@ -414,10 +461,6 @@ func (plugin Plugin) Cleanup(ctx context.Context, step domain.PlanStep, raw json
 	if !ownedBy(state, deployment, profile) {
 		return errors.New("refusing to compensate a load workload without verified ownership")
 	}
-	var value result
-	if len(raw) > 0 {
-		_ = json.Unmarshal(raw, &value)
-	}
 	resource := resourceName(profile.Workload)
 	if spec.Action == "start" {
 		if err := log("warning", "Removing the load workload created by the failed start operation"); err != nil {
@@ -426,15 +469,27 @@ func (plugin Plugin) Cleanup(ctx context.Context, step domain.PlanStep, raw json
 		_, err = runner.Run(ctx, cluster.Spec.Kubeconfig, nil, "delete", resource, "-n", deployment.Spec.Namespace, "--wait=true", "--timeout=5m")
 		return err
 	}
-	previous := value.LoadSession.Spec.PreviousReplicas
-	if previous < 0 || previous > 1000 {
-		return errors.New("previous load intensity is unavailable for compensation")
+	previous, err := storedPreviousReplicas(state)
+	if err != nil {
+		return err
 	}
 	if err := log("warning", fmt.Sprintf("Restoring the previous load intensity %d", previous)); err != nil {
 		return err
 	}
 	_, err = runner.Run(ctx, cluster.Spec.Kubeconfig, nil, "scale", resource, "-n", deployment.Spec.Namespace, "--replicas", fmt.Sprint(previous))
 	return err
+}
+
+func storedPreviousReplicas(state workloadState) (int, error) {
+	value, ok := state.Metadata.Annotations[previousReplicasKey]
+	if !ok {
+		return 0, errors.New("previous load intensity is unavailable for compensation")
+	}
+	previous, err := strconv.Atoi(value)
+	if err != nil || previous < 0 || previous > 1000 {
+		return 0, errors.New("previous load intensity is invalid")
+	}
+	return previous, nil
 }
 
 func resolve(step domain.PlanStep) (Spec, clusterConnection, applicationDeployment, loadProfileSet, loadProfile, serviceEndpoint, error) {

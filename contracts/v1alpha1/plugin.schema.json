@@ -107,6 +107,17 @@
           },
           "additionalProperties": false
         },
+        "targeting": {
+          "type": "object",
+          "required": ["requiredTrait"],
+          "properties": {
+            "requiredTrait": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9-]{0,62}$"
+            }
+          },
+          "additionalProperties": false
+        },
         "capabilities": {
           "type": "array",
           "items": { "$ref": "#/$defs/manifestValue" },

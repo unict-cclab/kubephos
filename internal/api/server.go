@@ -1084,8 +1084,19 @@ func (s *Server) deleteMachineTemplate(response http.ResponseWriter, request *ht
 		writeError(response, http.StatusInternalServerError, "database_error", "Could not read machine template.")
 		return
 	}
-	if resource.Status != "ready" {
-		writeError(response, http.StatusConflict, "template_not_ready", "Only a ready machine template can be deleted.")
+	if resource.Status == "deletion-failed" {
+		if err := s.store.ResetFailedManagedResourceDeletion(request.Context(), resource.ID); err != nil {
+			writeError(response, http.StatusConflict, "cleanup_unavailable", "The failed template deletion cannot be retried in its current state.")
+			return
+		}
+		resource, err = s.store.GetManagedResource(request.Context(), resource.ID)
+		if err != nil {
+			writeError(response, http.StatusInternalServerError, "database_error", "Could not reload the machine template lifecycle.")
+			return
+		}
+	}
+	if resource.Status != "ready" && resource.Status != "failed" && resource.Status != "canceled" {
+		writeError(response, http.StatusConflict, "template_not_ready", "Only a completed machine template lifecycle can be deleted.")
 		return
 	}
 	source, err := s.store.GetOperation(request.Context(), resource.OperationID)
@@ -1439,7 +1450,7 @@ func (s *Server) deleteExperimentConfiguration(response http.ResponseWriter, req
 		return
 	}
 	if err != nil {
-		writeError(response, http.StatusConflict, "configuration_in_use", "The configuration is already used by an experiment instance.")
+		writeError(response, http.StatusInternalServerError, "database_error", "Could not delete the experiment configuration.")
 		return
 	}
 	response.WriteHeader(http.StatusNoContent)
@@ -1897,8 +1908,11 @@ func (s *Server) experimentInstancePipeline(ctx context.Context, configuration d
 		}
 		manifest := plugin.Manifest()
 		if manifestNeedsArtifact(manifest, "TargetBinding", "v1alpha1") {
+			if manifest.Targeting == nil || manifest.Targeting.RequiredTrait == "" {
+				return domain.PipelineDefinition{}, &managedOperationFailure{status: http.StatusConflict, code: "invalid_plugin", message: "Plugin " + manifest.ID + " does not declare the required workload trait."}
+			}
 			bindingID := fmt.Sprintf("targets-%d", index+1)
-			bindingSpec := map[string]any{"requiredTrait": "*", "includeComponentIds": component.Targets.Include, "excludeComponentIds": component.Targets.Exclude}
+			bindingSpec := map[string]any{"requiredTrait": manifest.Targeting.RequiredTrait, "includeComponentIds": component.Targets.Include, "excludeComponentIds": component.Targets.Exclude}
 			bindings, failure := experimentArtifactBindings(bindingSpec, bindingPlugin.Manifest(), sources, configuration.ApplicationRef)
 			if failure != nil {
 				return domain.PipelineDefinition{}, failure
@@ -2235,6 +2249,18 @@ func (s *Server) deleteKubernetesCluster(response http.ResponseWriter, request *
 }
 
 func (s *Server) deleteManagedPipelineResource(response http.ResponseWriter, request *http.Request, resource domain.ManagedResource, label string) {
+	if resource.Status == "deletion-failed" {
+		if err := s.store.ResetFailedManagedResourceDeletion(request.Context(), resource.ID); err != nil {
+			writeError(response, http.StatusConflict, "cleanup_unavailable", "The failed deletion workflow cannot be retried in its current state.")
+			return
+		}
+		var err error
+		resource, err = s.store.GetManagedResource(request.Context(), resource.ID)
+		if err != nil {
+			writeError(response, http.StatusInternalServerError, "database_error", "Could not reload the managed lifecycle.")
+			return
+		}
+	}
 	if resource.Status != "ready" && resource.Status != "failed" || resource.PipelineRunID == "" {
 		writeError(response, http.StatusConflict, label+"_not_ready", "Only a completed managed lifecycle can be deleted.")
 		return
@@ -2286,7 +2312,8 @@ func (s *Server) deleteManagedPipelineResource(response http.ResponseWriter, req
 		writeError(response, http.StatusInternalServerError, "planning_failed", "Could not fingerprint the deletion workflow.")
 		return
 	}
-	pipeline := domain.Pipeline{ID: id.New("pipe"), WorkspaceID: resource.WorkspaceID, Name: "delete-managed-" + resource.ID, Definition: definition, Resolution: resolution, Validation: validation, Hash: hash}
+	pipelineID := id.New("pipe")
+	pipeline := domain.Pipeline{ID: pipelineID, WorkspaceID: resource.WorkspaceID, Name: "delete-managed-" + resource.ID + "-" + strings.TrimPrefix(pipelineID, "pipe_")[:8], Definition: definition, Resolution: resolution, Validation: validation, Hash: hash}
 	run := pipelineRunForManagedPipeline(pipeline, "Delete "+resource.Name)
 	if err := s.store.CreateManagedPipelineResourceDeletion(request.Context(), resource.ID, pipeline, run); errors.Is(err, storage.ErrConflict) {
 		writeError(response, http.StatusConflict, label+"_in_use", "The resource is still in use or already being deleted.")

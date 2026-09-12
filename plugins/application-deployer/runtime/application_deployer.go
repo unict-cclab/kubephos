@@ -32,7 +32,9 @@ const (
 )
 
 type Plugin struct {
-	Runner commandRunner
+	Runner            commandRunner
+	StabilityChecks   int
+	StabilityInterval time.Duration
 }
 
 type Invocation struct {
@@ -136,7 +138,7 @@ type commandRunner interface {
 
 func (Plugin) Manifest() plugins.Manifest {
 	return plugins.Manifest{
-		ID: pluginID, Name: "Kubernetes application deployer", Version: "0.2.0",
+		ID: pluginID, Name: "Kubernetes application deployer", Version: "0.2.1",
 		Description:     "Deploys any validated application package into an isolated Kubernetes namespace.",
 		Schema:          json.RawMessage(`{"type":"object","additionalProperties":false,"required":["clusterConnectionRef","manifestSetRef","workloadTargetsRef","serviceEndpointsRef"],"properties":{"clusterConnectionRef":{"type":"string","title":"Kubernetes cluster","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ClusterConnection","x-kubephos-artifact-version":"v1alpha1"},"manifestSetRef":{"type":"string","title":"Application manifests","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ManifestSet","x-kubephos-artifact-version":"v1alpha1"},"workloadTargetsRef":{"type":"string","title":"Application workloads","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"WorkloadTargets","x-kubephos-artifact-version":"v1alpha1"},"serviceEndpointsRef":{"type":"string","title":"Application endpoints","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ServiceEndpoints","x-kubephos-artifact-version":"v1alpha1"}}}`),
 		ArtifactInputs:  []domain.ArtifactContract{{Type: "ClusterConnection", Version: "v1alpha1"}, {Type: "ManifestSet", Version: "v1alpha1"}, {Type: "WorkloadTargets", Version: "v1alpha1"}, {Type: "ServiceEndpoints", Version: "v1alpha1"}},
@@ -301,13 +303,43 @@ func (plugin Plugin) Verify(ctx context.Context, step domain.PlanStep, raw json.
 	if err := log("info", fmt.Sprintf("Waiting for %d declared workloads in parallel", len(workloads))); err != nil {
 		return domain.HealthReport{}, err
 	}
-	if err := verifyWorkloads(ctx, runner, cluster.Spec.Kubeconfig, input.Namespace, workloads, log); err != nil {
+	if err := plugin.verifyStableWorkloads(ctx, runner, cluster.Spec.Kubeconfig, input.Namespace, workloads, log); err != nil {
 		return unhealthy(err.Error(), "workloads", "unhealthy"), nil
 	}
 	if err := verifyEndpoints(ctx, runner, cluster.Spec.Kubeconfig, input.Namespace, endpoints); err != nil {
 		return unhealthy(err.Error(), "endpoints", "unhealthy"), nil
 	}
 	return domain.HealthReport{Status: domain.HealthHealthy, Summary: "The isolated application deployment is ready", Checks: map[string]string{"namespace": input.Namespace, "ownership": "verified", "workloads": fmt.Sprintf("%d ready", len(workloads)), "endpoints": fmt.Sprintf("%d ready", len(endpoints)), "manifest": "verified"}}, nil
+}
+
+func (plugin Plugin) verifyStableWorkloads(ctx context.Context, runner commandRunner, kubeconfig, namespace string, workloads []workloadTarget, log plugins.Logger) error {
+	checks := plugin.StabilityChecks
+	if checks <= 0 {
+		checks = 3
+	}
+	interval := plugin.StabilityInterval
+	if interval <= 0 {
+		interval = 15 * time.Second
+	}
+	for check := 1; check <= checks; check++ {
+		if err := verifyWorkloads(ctx, runner, kubeconfig, namespace, workloads, log); err != nil {
+			return err
+		}
+		if check == checks {
+			break
+		}
+		if err := log("info", fmt.Sprintf("Workload stability sample %d/%d passed", check, checks)); err != nil {
+			return err
+		}
+		timer := time.NewTimer(interval)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
+	return log("info", fmt.Sprintf("Workload stability window passed with %d samples", checks))
 }
 
 func (plugin Plugin) Cleanup(ctx context.Context, step domain.PlanStep, _ json.RawMessage, log plugins.Logger) error {

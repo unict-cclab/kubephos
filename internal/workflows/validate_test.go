@@ -123,6 +123,22 @@ func TestValidateRejectsForwardReference(t *testing.T) {
 	}
 }
 
+func TestValidateRequiresCleanupCapabilityForMutableExperimentStage(t *testing.T) {
+	plugin := workflowPlugin{
+		manifest: plugins.Manifest{ID: "mutable", Name: "Mutable", Version: "1", Schema: json.RawMessage(`{"type":"object"}`), ArtifactOutputs: []domain.ArtifactContract{{Type: "Dataset", Version: "v1"}}},
+		plan:     domain.Plan{PluginID: "mutable", Steps: []domain.PlanStep{{ID: "run", Name: "Run", Input: json.RawMessage(`{}`), Mutating: true, Outputs: []domain.ArtifactOutput{{Name: "dataset", Type: "Dataset", Version: "v1", MediaType: "application/json", Source: "/result"}}}}},
+	}
+	definition := domain.PipelineDefinition{CleanupAfterRun: true, Stages: []domain.PipelineStage{{ID: "mutate", PluginID: "mutable", Title: "Mutate", Spec: json.RawMessage(`{}`)}}, Result: domain.PipelineOutput{Stage: "mutate", Output: "dataset"}}
+	if _, err := Validate(context.Background(), plugins.NewRegistry(plugin), definition); err == nil || !strings.Contains(err.Error(), "lifecycle.cleanup") {
+		t.Fatalf("expected cleanup capability rejection, got %v", err)
+	}
+	plugin.manifest.Capabilities = []string{"lifecycle.cleanup"}
+	result, err := Validate(context.Background(), plugins.NewRegistry(plugin), definition)
+	if err != nil || !result.Validation.Valid {
+		t.Fatalf("expected cleanup-capable stage to validate, got %#v %v", result.Validation, err)
+	}
+}
+
 func TestValidateRejectsContractMismatch(t *testing.T) {
 	producer := workflowPlugin{
 		manifest: plugins.Manifest{ID: "producer", Name: "Producer", Version: "1", Schema: json.RawMessage(`{"type":"object"}`), ArtifactOutputs: []domain.ArtifactContract{{Type: "Cluster", Version: "v1"}}},

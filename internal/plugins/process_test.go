@@ -135,6 +135,35 @@ spec:
 	}
 }
 
+func TestTargetBindingConsumerRequiresTargetTrait(t *testing.T) {
+	descriptor := `apiVersion: plugins.kubephos.io/v1alpha1
+kind: Plugin
+metadata:
+  id: dev.example.targeting
+  name: Targeting example
+  version: 1.0.0
+spec:
+  protocol: v1alpha1
+  commands: [describe, validate, plan, precheck, execute, verify, status, cancel, cleanup]
+  configurationSchema: {type: object}
+  runtime:
+    image: example.test/targeting@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  artifacts:
+    inputs: [{type: TargetBinding, version: v1alpha1}]
+`
+	if _, err := InspectDefinition([]byte(descriptor)); err == nil || !strings.Contains(err.Error(), "targeting.requiredTrait") {
+		t.Fatalf("expected missing target trait error, got %v", err)
+	}
+	withTargeting := descriptor + "  targeting:\n    requiredTrait: scalable\n"
+	manifest, err := InspectDefinition([]byte(withTargeting))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if manifest.Targeting == nil || manifest.Targeting.RequiredTrait != "scalable" {
+		t.Fatalf("unexpected targeting contract: %#v", manifest.Targeting)
+	}
+}
+
 func TestValidatePackageUsesPinnedOCIImage(t *testing.T) {
 	directory := t.TempDir()
 	digest := strings.Repeat("a", 64)

@@ -206,11 +206,12 @@ type commandRunner interface {
 
 func (Plugin) Manifest() plugins.Manifest {
 	return plugins.Manifest{
-		ID: pluginID, Name: "Managed secondary scheduler", Version: "0.1.0",
+		ID: pluginID, Name: "Managed secondary scheduler", Version: "0.1.1",
 		Description:     "Installs an isolated Kubernetes scheduler and assigns only workloads selected by a validated target binding.",
 		Schema:          json.RawMessage(`{"type":"object","additionalProperties":false,"required":["clusterConnectionRef","applicationDeploymentRef","targetBindingRef"],"properties":{"clusterConnectionRef":{"type":"string","title":"Kubernetes cluster","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ClusterConnection","x-kubephos-artifact-version":"v1alpha1"},"applicationDeploymentRef":{"type":"string","title":"Application deployment","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ApplicationDeployment","x-kubephos-artifact-version":"v1alpha1"},"targetBindingRef":{"type":"string","title":"Workload binding","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"TargetBinding","x-kubephos-artifact-version":"v1alpha1"}}}`),
 		ArtifactInputs:  []domain.ArtifactContract{{Type: "ClusterConnection", Version: "v1alpha1"}, {Type: "ApplicationDeployment", Version: "v1alpha1"}, {Type: "TargetBinding", Version: "v1alpha1"}},
 		ArtifactOutputs: []domain.ArtifactContract{{Type: "SchedulerDeployment", Version: "v1alpha1"}},
+		Targeting:       &plugins.Targeting{RequiredTrait: "schedulable"},
 		Capabilities:    []string{"scheduler.kubernetes.install", "scheduler.kubernetes.bind", "scheduler.kubernetes.preflight", "scheduler.kubernetes.cleanup", "lifecycle.cleanup"},
 		Permissions:     []string{"cluster.admin"},
 	}

@@ -166,6 +166,9 @@ func Validate(ctx context.Context, registry *plugins.Registry, definition domain
 		if len(plan.Steps) == 0 {
 			return Result{}, fmt.Errorf("stage %q produced an empty plan", stage.ID)
 		}
+		if normalized.CleanupAfterRun && mutatingPlan(plan) && !manifest.HasCapability("lifecycle.cleanup") {
+			return Result{}, fmt.Errorf("stage %q has mutable steps but plugin %s does not declare lifecycle.cleanup", stage.ID, manifest.ID)
+		}
 		if err := artifacts.ValidatePlan(plan, manifest.ArtifactInputs, manifest.ArtifactOutputs); err != nil {
 			return Result{}, fmt.Errorf("stage %q artifact graph: %w", stage.ID, err)
 		}
@@ -225,6 +228,15 @@ func Validate(ctx context.Context, registry *plugins.Registry, definition domain
 		return Result{}, err
 	}
 	return Result{Definition: normalized, Resolution: resolution, Validation: validation, Hash: hash}, nil
+}
+
+func mutatingPlan(plan domain.Plan) bool {
+	for _, step := range plan.Steps {
+		if step.Mutating {
+			return true
+		}
+	}
+	return false
 }
 
 func normalize(definition domain.PipelineDefinition) (domain.PipelineDefinition, error) {

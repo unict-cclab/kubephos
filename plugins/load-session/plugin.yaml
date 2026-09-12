@@ -86,5 +86,7 @@ spec:
   capabilities:
     - load.session.control
     - load.session.preflight
+    - load.session.cleanup
+    - lifecycle.cleanup
   permissions:
     - cluster.admin

@@ -9,13 +9,14 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"kubephos.dev/kubephos/internal/domain"
 )
 
 func TestApplicationDeploymentLifecycle(t *testing.T) {
 	runner := &fakeRunner{}
-	plugin := Plugin{Runner: runner}
+	plugin := Plugin{Runner: runner, StabilityChecks: 1}
 	spec := json.RawMessage(`{"clusterConnectionRef":"art_cluster","manifestSetRef":"art_manifests","workloadTargetsRef":"art_workloads","serviceEndpointsRef":"art_endpoints"}`)
 	report := plugin.Validate(context.Background(), Invocation{Input: spec})
 	if !report.Valid {
@@ -115,6 +116,26 @@ func TestPrecheckRejectsManifestDigestMismatch(t *testing.T) {
 	}
 }
 
+func TestVerificationRejectsReadinessLostDuringStabilityWindow(t *testing.T) {
+	runner := &fakeRunner{failReadyAt: 2}
+	plugin := Plugin{Runner: runner, StabilityChecks: 2, StabilityInterval: time.Millisecond}
+	spec := json.RawMessage(`{"clusterConnectionRef":"art_cluster","manifestSetRef":"art_manifests","workloadTargetsRef":"art_workloads","serviceEndpointsRef":"art_endpoints"}`)
+	plan, err := plugin.Plan(context.Background(), spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	step := plan.Steps[0]
+	step.ResolvedInputs = testArtifacts()
+	value, err := plugin.Execute(context.Background(), step, discardLog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	health, err := plugin.Verify(context.Background(), step, value, discardLog)
+	if err != nil || health.Status != domain.HealthUnhealthy {
+		t.Fatalf("expected unstable workload rejection, got %#v %v", health, err)
+	}
+}
+
 func testArtifacts() map[string]domain.ResolvedArtifact {
 	certificate := base64.StdEncoding.EncodeToString([]byte("certificate"))
 	key := base64.StdEncoding.EncodeToString([]byte("private-key"))
@@ -131,8 +152,10 @@ func testArtifacts() map[string]domain.ResolvedArtifact {
 func discardLog(string, string) error { return nil }
 
 type fakeRunner struct {
-	installed bool
-	marker    string
+	installed   bool
+	marker      string
+	readyWaits  int
+	failReadyAt int
 }
 
 func (runner *fakeRunner) Run(_ context.Context, _ string, stdin []byte, args ...string) (string, error) {
@@ -176,6 +199,10 @@ func (runner *fakeRunner) Run(_ context.Context, _ string, stdin []byte, args ..
 		return "pod/frontend-123", nil
 	}
 	if strings.HasPrefix(command, "wait --for=condition=Ready pod ") {
+		runner.readyWaits++
+		if runner.failReadyAt > 0 && runner.readyWaits == runner.failReadyAt {
+			return "", errors.New("pod lost readiness")
+		}
 		return "ready", nil
 	}
 	if strings.HasPrefix(command, "get endpoints frontend ") {

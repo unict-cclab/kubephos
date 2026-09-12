@@ -265,9 +265,14 @@ func (w *Worker) startPipelineStage(ctx context.Context, owner string, run domai
 	if !manifest.Matches(resolved.PluginVersion, resolved.PluginDigest) || resolved.Plan.PluginID != resolved.PluginID {
 		return fmt.Errorf("stage %q plugin version or identity changed", resolved.ID)
 	}
-	validation := plugin.Validate(ctx, resolved.Spec)
-	if !validation.Valid {
-		return fmt.Errorf("stage %q configuration is no longer valid", resolved.ID)
+	validation := domain.ValidationReport{Valid: true}
+	if cleanupStage(resolved.Plan) {
+		validation.Issues = []domain.ValidationIssue{{Level: "info", Path: "pipeline", Message: "Cleanup stage was generated from an immutable, previously validated lifecycle."}}
+	} else {
+		validation = plugin.Validate(ctx, resolved.Spec)
+		if !validation.Valid {
+			return fmt.Errorf("stage %q configuration is no longer valid", resolved.ID)
+		}
 	}
 	validation.CheckedAt = time.Now().UTC()
 	validation.Issues = append(validation.Issues, domain.ValidationIssue{Level: "info", Path: "pipeline", Message: "Stage configuration and typed inputs were resolved from validated pipeline " + pipeline.Hash[:12] + "."})
@@ -283,6 +288,18 @@ func (w *Worker) startPipelineStage(ctx context.Context, owner string, run domai
 		Spec: resolved.Spec, Plan: resolved.Plan, Validation: validation, PlanHash: hash,
 	})
 	return err
+}
+
+func cleanupStage(plan domain.Plan) bool {
+	if len(plan.Steps) == 0 {
+		return false
+	}
+	for _, step := range plan.Steps {
+		if !step.Cleanup {
+			return false
+		}
+	}
+	return true
 }
 
 func pipelineStageHash(stage domain.ResolvedPipelineStage) (string, error) {

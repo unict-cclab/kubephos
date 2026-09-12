@@ -323,8 +323,8 @@ func (plugin TemplatePlugin) Verify(ctx context.Context, step domain.PlanStep, r
 	if err := json.Unmarshal(raw, &result); err != nil {
 		return domain.HealthReport{}, err
 	}
-	resource, err := connection.vm(ctx, input.VMID)
-	if err != nil || resource.Node != input.Node || resource.Template != 1 || resource.Status != "stopped" {
+	resource, err := connection.waitTemplateStatus(ctx, input.Node, input.VMID, 30*time.Second)
+	if err != nil || resource.Template != 1 || resource.Status != "stopped" {
 		return unhealthy("Created resource is not a stopped Proxmox template on the expected node", "template", "invalid"), nil
 	}
 	configuration, err := connection.config(ctx, input.Node, input.VMID)

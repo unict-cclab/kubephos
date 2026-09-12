@@ -3,7 +3,7 @@ kind: Plugin
 metadata:
   id: io.kubephos.scheduler.kubernetes.secondary
   name: Managed secondary scheduler
-  version: 0.1.0
+  version: 0.1.1
   description: Installs an isolated Kubernetes scheduler and assigns only workloads selected by a validated target binding.
 spec:
   protocol: v1alpha1
@@ -57,6 +57,8 @@ spec:
     outputs:
       - type: SchedulerDeployment
         version: v1alpha1
+  targeting:
+    requiredTrait: schedulable
   capabilities:
     - scheduler.kubernetes.install
     - scheduler.kubernetes.bind

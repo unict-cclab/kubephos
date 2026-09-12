@@ -21,9 +21,14 @@ type Manifest struct {
 	CredentialSchemas []CredentialSchema        `json:"credentialSchemas"`
 	ArtifactInputs    []domain.ArtifactContract `json:"artifactInputs"`
 	ArtifactOutputs   []domain.ArtifactContract `json:"artifactOutputs"`
+	Targeting         *Targeting                `json:"targeting,omitempty"`
 	Capabilities      []string                  `json:"capabilities"`
 	Permissions       []string                  `json:"permissions"`
 	Runtime           Runtime                   `json:"runtime"`
+}
+
+type Targeting struct {
+	RequiredTrait string `json:"requiredTrait"`
 }
 
 type Runtime struct {

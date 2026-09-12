@@ -606,6 +606,35 @@ func (c *client) vm(ctx context.Context, vmid int) (vmResource, error) {
 	return vmResource{}, apiError{Status: http.StatusNotFound}
 }
 
+func (c *client) vmStatus(ctx context.Context, node string, vmid int) (vmResource, error) {
+	var result vmResource
+	err := c.request(ctx, http.MethodGet, fmt.Sprintf("/api2/json/nodes/%s/qemu/%d/status/current", url.PathEscape(node), vmid), nil, &result)
+	return result, err
+}
+
+func (c *client) waitTemplateStatus(ctx context.Context, node string, vmid int, timeout time.Duration) (vmResource, error) {
+	deadline := time.Now().Add(timeout)
+	var last vmResource
+	var lastErr error
+	for {
+		last, lastErr = c.vmStatus(ctx, node, vmid)
+		if lastErr == nil && last.Template == 1 && last.Status == "stopped" {
+			return last, nil
+		}
+		if time.Now().After(deadline) {
+			if lastErr != nil {
+				return vmResource{}, lastErr
+			}
+			return last, fmt.Errorf("VM %d did not become a stopped template", vmid)
+		}
+		select {
+		case <-ctx.Done():
+			return vmResource{}, ctx.Err()
+		case <-time.After(time.Second):
+		}
+	}
+}
+
 func (c *client) config(ctx context.Context, node string, vmid int) (vmConfig, error) {
 	var result vmConfig
 	err := c.request(ctx, http.MethodGet, fmt.Sprintf("/api2/json/nodes/%s/qemu/%d/config", url.PathEscape(node), vmid), nil, &result)

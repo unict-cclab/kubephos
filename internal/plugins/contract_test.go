@@ -32,6 +32,11 @@ type publicPluginSchema struct {
 						Required []string `json:"required"`
 					} `json:"oneOf"`
 				} `json:"runtime"`
+				Targeting struct {
+					Properties map[string]struct {
+						Pattern string `json:"pattern"`
+					} `json:"properties"`
+				} `json:"targeting"`
 			} `json:"properties"`
 		} `json:"spec"`
 	} `json:"properties"`
@@ -70,6 +75,9 @@ func TestPublicPluginSchemaMatchesRuntimeContract(t *testing.T) {
 	}
 	if contract.Definitions["manifestValue"].Pattern != capabilityExpression.String() {
 		t.Fatal("public capability pattern differs from runtime contract")
+	}
+	if contract.Properties.Spec.Properties.Targeting.Properties["requiredTrait"].Pattern != targetTraitExpression.String() {
+		t.Fatal("public target trait pattern differs from runtime contract")
 	}
 	artifactProperties := contract.Definitions["artifactContracts"].Items.Properties
 	if artifactProperties["type"].Pattern != artifactTypeExpression.String() || artifactProperties["version"].Pattern != artifactVersionExpression.String() {

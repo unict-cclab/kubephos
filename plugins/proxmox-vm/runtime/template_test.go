@@ -35,12 +35,13 @@ func (guest *fakeTemplateGuest) Prepare(_ context.Context, address, user, privat
 func TestTemplateLifecycleValidatesCreatesVerifiesAndDeletes(t *testing.T) {
 	state := struct {
 		sync.Mutex
-		exists      bool
-		template    bool
-		status      string
-		name        string
-		tags        string
-		description string
+		exists       bool
+		template     bool
+		status       string
+		name         string
+		tags         string
+		description  string
+		statusChecks int
 	}{status: "stopped"}
 	server := httptest.NewTLSServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		state.Lock()
@@ -76,6 +77,13 @@ func TestTemplateLifecycleValidatesCreatesVerifiesAndDeletes(t *testing.T) {
 			write("UPID:pve:create")
 		case request.Method == http.MethodGet && request.URL.Path == "/api2/json/nodes/pve/qemu/8100/config":
 			write(map[string]string{"name": state.name, "tags": state.tags, "description": state.description, "boot": "order=scsi0;ide2", "scsi0": "local-lvm:vm-8100-disk-0,size=32G", "agent": "enabled=1", "net0": "virtio=AA:BB:CC:DD:EE:FF,bridge=vmbr0", "ciuser": "ubuntu", "nameserver": "1.1.1.1", "ipconfig0": "ip=dhcp"})
+		case request.Method == http.MethodGet && request.URL.Path == "/api2/json/nodes/pve/qemu/8100/status/current":
+			template := 0
+			if state.template && state.statusChecks > 0 {
+				template = 1
+			}
+			state.statusChecks++
+			write(map[string]any{"vmid": 8100, "name": state.name, "status": state.status, "template": template})
 		case request.Method == http.MethodPut && request.URL.Path == "/api2/json/nodes/pve/qemu/8100/resize":
 			write("UPID:pve:resize")
 		case request.Method == http.MethodPost && request.URL.Path == "/api2/json/nodes/pve/qemu/8100/status/start":

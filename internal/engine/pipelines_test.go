@@ -42,3 +42,15 @@ func TestTerminalOperation(t *testing.T) {
 		t.Fatal("running must not be terminal")
 	}
 }
+
+func TestCleanupStageRequiresOnlyCleanupSteps(t *testing.T) {
+	if cleanupStage(domain.Plan{}) {
+		t.Fatal("empty plan cannot be a cleanup stage")
+	}
+	if !cleanupStage(domain.Plan{Steps: []domain.PlanStep{{ID: "one", Cleanup: true}, {ID: "two", Cleanup: true}}}) {
+		t.Fatal("expected an all-cleanup plan")
+	}
+	if cleanupStage(domain.Plan{Steps: []domain.PlanStep{{ID: "cleanup", Cleanup: true}, {ID: "run"}}}) {
+		t.Fatal("mixed plans cannot bypass runtime configuration validation")
+	}
+}

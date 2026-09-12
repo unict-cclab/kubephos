@@ -72,6 +72,43 @@ func TestLoadSessionRejectsInvalidTransition(t *testing.T) {
 	}
 }
 
+func TestLoadSessionCleanupRestoresState(t *testing.T) {
+	runner := &fakeRunner{namespaceMarker: "application-marker"}
+	plugin := Plugin{Runner: runner}
+	start := testStep(t, "start", 2)
+	if _, err := plugin.Execute(context.Background(), start, discardLog); err != nil {
+		t.Fatal(err)
+	}
+	start.Cleanup = true
+	if health, err := plugin.Precheck(context.Background(), start, discardLog); err != nil || health.Status != domain.HealthHealthy {
+		t.Fatalf("start cleanup precheck failed %#v %v", health, err)
+	}
+	if err := plugin.Cleanup(context.Background(), start, nil, discardLog); err != nil {
+		t.Fatal(err)
+	}
+	if health, err := plugin.Verify(context.Background(), start, nil, discardLog); err != nil || health.Status != domain.HealthHealthy || runner.exists {
+		t.Fatalf("start cleanup verify failed %#v %v", health, err)
+	}
+
+	if _, err := plugin.Execute(context.Background(), testStep(t, "start", 2), discardLog); err != nil {
+		t.Fatal(err)
+	}
+	stop := testStep(t, "stop", 1)
+	if _, err := plugin.Execute(context.Background(), stop, discardLog); err != nil {
+		t.Fatal(err)
+	}
+	stop.Cleanup = true
+	if health, err := plugin.Precheck(context.Background(), stop, discardLog); err != nil || health.Status != domain.HealthHealthy {
+		t.Fatalf("stop cleanup precheck failed %#v %v", health, err)
+	}
+	if err := plugin.Cleanup(context.Background(), stop, nil, discardLog); err != nil {
+		t.Fatal(err)
+	}
+	if health, err := plugin.Verify(context.Background(), stop, nil, discardLog); err != nil || health.Status != domain.HealthHealthy || runner.state.Spec.Replicas != 2 {
+		t.Fatalf("stop cleanup verify failed %#v %v", health, err)
+	}
+}
+
 func testStep(t *testing.T, action string, replicas int) domain.PlanStep {
 	t.Helper()
 	spec := Spec{ClusterConnectionRef: "art_cluster", ApplicationDeploymentRef: "art_deployment", LoadProfileSetRef: "art_profiles", ProfileID: "default-load", Action: action, Replicas: replicas}
@@ -155,6 +192,17 @@ func (runner *fakeRunner) Run(_ context.Context, _ string, stdin []byte, args ..
 		runner.state.Spec.Replicas = value
 		runner.state.Status.ReadyReplicas = value
 		return "scaled", nil
+	}
+	if strings.HasPrefix(command, "annotate deployment/loadgenerator ") {
+		parts := strings.Split(args[4], "=")
+		if len(parts) != 2 {
+			return "", errors.New("invalid annotation")
+		}
+		if runner.state.Metadata.Annotations == nil {
+			runner.state.Metadata.Annotations = map[string]string{}
+		}
+		runner.state.Metadata.Annotations[parts[0]] = parts[1]
+		return "annotated", nil
 	}
 	if strings.HasPrefix(command, "rollout status deployment/loadgenerator ") {
 		runner.state.Status.ReadyReplicas = runner.state.Spec.Replicas
