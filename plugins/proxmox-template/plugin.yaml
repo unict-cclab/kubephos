@@ -1,0 +1,131 @@
+apiVersion: plugins.kubephos.io/v1alpha1
+kind: Plugin
+metadata:
+  id: io.kubephos.infrastructure.proxmox.machine-template
+  name: Proxmox VM template
+  version: 0.1.0
+  description: Creates and validates a reusable Proxmox VM template.
+spec:
+  protocol: v1alpha1
+  provider: proxmox
+  commands:
+    - describe
+    - validate
+    - plan
+    - precheck
+    - execute
+    - verify
+    - status
+    - cancel
+    - cleanup
+  configurationSchema:
+    type: object
+    additionalProperties: false
+    required:
+      - connectionRef
+      - name
+      - node
+      - vmid
+      - os
+      - storage
+      - imageStorage
+      - bridge
+      - diskGiB
+      - prefixLength
+      - dnsServer
+      - sshUser
+    properties:
+      connectionRef:
+        type: string
+        title: Proxmox connection
+        format: kubephos-connection-ref
+        x-kubephos-provider: proxmox
+      name:
+        type: string
+        title: Template name
+        pattern: "^[a-z0-9][a-z0-9-]{0,31}$"
+      node:
+        type: string
+        title: Proxmox node
+        minLength: 1
+        maxLength: 64
+      vmid:
+        type: integer
+        title: Template VMID
+        minimum: 100
+        maximum: 999999999
+      os:
+        type: string
+        title: Operating system
+        enum:
+          - ubuntu-24.04
+          - ubuntu-22.04
+          - debian-12
+        default: ubuntu-24.04
+      cloudImageURL:
+        type: string
+        title: Custom cloud image URL
+        default: ""
+      storage:
+        type: string
+        title: VM disk storage
+        minLength: 1
+        maxLength: 64
+      imageStorage:
+        type: string
+        title: Image staging storage
+        minLength: 1
+        maxLength: 64
+      bridge:
+        type: string
+        title: Network bridge
+        pattern: "^[A-Za-z0-9._-]{1,32}$"
+        default: vmbr0
+      diskGiB:
+        type: integer
+        title: Disk GiB
+        minimum: 8
+        maximum: 2048
+        default: 32
+      address:
+        type: string
+        title: Temporary address
+        description: Leave empty to use DHCP.
+        default: ""
+      prefixLength:
+        type: integer
+        title: Prefix length
+        minimum: 1
+        maximum: 32
+        default: 24
+      gateway:
+        type: string
+        title: Gateway
+        default: ""
+      dnsServer:
+        type: string
+        title: DNS server
+        default: 1.1.1.1
+      sshUser:
+        type: string
+        title: SSH user
+        pattern: "^[a-z_][a-z0-9_-]{0,31}$"
+        default: ubuntu
+  runtime:
+    executable: proxmox-template-plugin
+    timeout: 35m
+  artifacts:
+    outputs:
+      - type: MachineTemplate
+        version: v1alpha1
+  capabilities:
+    - infrastructure.provision
+    - infrastructure.deprovision
+    - infrastructure.machine-template.provision
+    - infrastructure.machine-template.deprovision
+    - infrastructure.preflight
+    - lifecycle.cleanup
+  permissions:
+    - network.proxmox.read
+    - network.proxmox.write
+    - secrets.read:proxmox-api-token

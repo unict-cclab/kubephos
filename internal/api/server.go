@@ -90,6 +90,11 @@ func NewServer(store *storage.Store, registry *plugins.Registry, artifactStore *
 	router.HandleFunc("POST /api/v1/credentials", server.createCredential)
 	router.HandleFunc("GET /api/v1/connections", server.listConnections)
 	router.HandleFunc("POST /api/v1/connections", server.createConnection)
+	router.HandleFunc("DELETE /api/v1/connections/{id}", server.deleteConnection)
+	router.HandleFunc("GET /api/v1/machine-templates", server.listMachineTemplates)
+	router.HandleFunc("POST /api/v1/machine-templates", server.createMachineTemplate)
+	router.HandleFunc("GET /api/v1/machine-templates/{id}", server.getMachineTemplate)
+	router.HandleFunc("DELETE /api/v1/machine-templates/{id}", server.deleteMachineTemplate)
 	router.HandleFunc("GET /api/v1/infrastructure/resources", server.listInfrastructureResources)
 	router.HandleFunc("GET /api/v1/terminal-targets", server.listTerminalTargets)
 	router.HandleFunc("POST /api/v1/terminals", server.createTerminal)
@@ -948,6 +953,295 @@ func (s *Server) createConnection(response http.ResponseWriter, request *http.Re
 	writeJSON(response, http.StatusCreated, connection)
 }
 
+func (s *Server) deleteConnection(response http.ResponseWriter, request *http.Request) {
+	err := s.store.DeleteProviderConnection(request.Context(), request.PathValue("id"))
+	if errors.Is(err, storage.ErrNotFound) {
+		writeError(response, http.StatusNotFound, "not_found", "Connection not found.")
+		return
+	}
+	if errors.Is(err, storage.ErrConflict) {
+		writeError(response, http.StatusConflict, "connection_in_use", "Delete the resources associated with this connection first.")
+		return
+	}
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, "database_error", "Could not delete provider connection.")
+		return
+	}
+	response.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) listMachineTemplates(response http.ResponseWriter, request *http.Request) {
+	items, err := s.store.ListManagedResources(request.Context(), "machine-template")
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, "database_error", "Could not list machine templates.")
+		return
+	}
+	writeJSON(response, http.StatusOK, map[string]any{"items": items})
+}
+
+func (s *Server) getMachineTemplate(response http.ResponseWriter, request *http.Request) {
+	resource, err := s.store.GetManagedResource(request.Context(), request.PathValue("id"))
+	if errors.Is(err, storage.ErrNotFound) || err == nil && resource.Kind != "machine-template" {
+		writeError(response, http.StatusNotFound, "not_found", "Machine template not found.")
+		return
+	}
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, "database_error", "Could not read machine template.")
+		return
+	}
+	writeJSON(response, http.StatusOK, resource)
+}
+
+func (s *Server) createMachineTemplate(response http.ResponseWriter, request *http.Request) {
+	var input struct {
+		WorkspaceID   string          `json:"workspaceId"`
+		ConnectionID  string          `json:"connectionId"`
+		Name          string          `json:"name"`
+		Configuration json.RawMessage `json:"configuration"`
+	}
+	if err := decodeJSON(request, &input); err != nil {
+		writeError(response, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	input.Name = strings.TrimSpace(input.Name)
+	input.ConnectionID = strings.TrimSpace(input.ConnectionID)
+	if input.Name == "" || len(input.Name) > 32 || !regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,31}$`).MatchString(input.Name) {
+		writeError(response, http.StatusUnprocessableEntity, "invalid_name", "Template name must be a lowercase label with at most 32 characters.")
+		return
+	}
+	connection, err := s.store.GetProviderConnectionConfiguration(request.Context(), input.ConnectionID)
+	if errors.Is(err, storage.ErrNotFound) {
+		writeError(response, http.StatusUnprocessableEntity, "invalid_connection", "Select an existing infrastructure connection.")
+		return
+	}
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, "database_error", "Could not validate the infrastructure connection.")
+		return
+	}
+	plugin, err := s.pluginForCapability(connection.Provider, "infrastructure.machine-template.provision")
+	if err != nil {
+		writeError(response, http.StatusUnprocessableEntity, "capability_unavailable", err.Error())
+		return
+	}
+	configuration := map[string]any{}
+	if len(input.Configuration) > 0 {
+		if err := json.Unmarshal(input.Configuration, &configuration); err != nil {
+			writeError(response, http.StatusBadRequest, "invalid_request", "Configuration must be a JSON object.")
+			return
+		}
+	}
+	configuration["connectionRef"] = connection.ID
+	configuration["name"] = input.Name
+	spec, err := json.Marshal(configuration)
+	if err != nil {
+		writeError(response, http.StatusBadRequest, "invalid_request", "Configuration could not be encoded.")
+		return
+	}
+	operation, failure := s.validatedManagedOperation(request.Context(), input.WorkspaceID, plugin, "Create VM template "+input.Name, spec)
+	if failure != nil {
+		failure.write(response)
+		return
+	}
+	operation.Status = domain.OperationQueued
+	manifest := plugin.Manifest()
+	resource, err := s.store.CreateManagedResource(request.Context(), domain.ManagedResource{ID: id.New("tmpl"), WorkspaceID: input.WorkspaceID, Name: input.Name, Kind: "machine-template", Provider: connection.Provider, ConnectionID: connection.ID, PluginID: manifest.ID, PluginVersion: manifest.Version, PluginDigest: manifest.Runtime.Digest, Spec: spec}, operation)
+	if err != nil {
+		var databaseError *pgconn.PgError
+		if errors.As(err, &databaseError) && databaseError.Code == "23505" {
+			writeError(response, http.StatusConflict, "template_conflict", "A template with this name already exists for the selected connection.")
+			return
+		}
+		writeError(response, http.StatusInternalServerError, "database_error", "Could not create the machine template workflow.")
+		return
+	}
+	writeJSON(response, http.StatusAccepted, resource)
+}
+
+func (s *Server) deleteMachineTemplate(response http.ResponseWriter, request *http.Request) {
+	resource, err := s.store.GetManagedResource(request.Context(), request.PathValue("id"))
+	if errors.Is(err, storage.ErrNotFound) || err == nil && resource.Kind != "machine-template" {
+		writeError(response, http.StatusNotFound, "not_found", "Machine template not found.")
+		return
+	}
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, "database_error", "Could not read machine template.")
+		return
+	}
+	if resource.Status != "ready" {
+		writeError(response, http.StatusConflict, "template_not_ready", "Only a ready machine template can be deleted.")
+		return
+	}
+	source, err := s.store.GetOperation(request.Context(), resource.OperationID)
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, "database_error", "Could not read the template lifecycle.")
+		return
+	}
+	operation, failure := s.validatedManagedCleanup(request.Context(), source)
+	if failure != nil {
+		failure.write(response)
+		return
+	}
+	operation.Status = domain.OperationQueued
+	if err := s.store.CreateManagedResourceDeletion(request.Context(), resource.ID, operation); errors.Is(err, storage.ErrConflict) {
+		writeError(response, http.StatusConflict, "template_in_use", "The template is still in use or already being deleted.")
+		return
+	} else if err != nil {
+		writeError(response, http.StatusInternalServerError, "database_error", "Could not create the template deletion workflow.")
+		return
+	}
+	resource, err = s.store.GetManagedResource(request.Context(), resource.ID)
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, "database_error", "Could not read the template deletion workflow.")
+		return
+	}
+	writeJSON(response, http.StatusAccepted, resource)
+}
+
+type managedOperationFailure struct {
+	status  int
+	code    string
+	message string
+	payload any
+}
+
+func (failure *managedOperationFailure) write(response http.ResponseWriter) {
+	if failure.payload != nil {
+		writeJSON(response, failure.status, failure.payload)
+		return
+	}
+	writeError(response, failure.status, failure.code, failure.message)
+}
+
+func (s *Server) pluginForCapability(provider, capability string) (plugins.Plugin, error) {
+	var selected plugins.Plugin
+	for _, manifest := range s.registry.Manifests() {
+		if manifest.Provider != provider || !manifest.HasCapability(capability) {
+			continue
+		}
+		if selected != nil {
+			return nil, fmt.Errorf("multiple %s implementations are installed for provider %s", capability, provider)
+		}
+		plugin, err := s.registry.Get(manifest.ID)
+		if err != nil {
+			return nil, err
+		}
+		selected = plugin
+	}
+	if selected == nil {
+		return nil, fmt.Errorf("no installed plugin provides %s for provider %s", capability, provider)
+	}
+	return selected, nil
+}
+
+func (s *Server) validatedManagedOperation(ctx context.Context, workspaceID string, plugin plugins.Plugin, title string, spec json.RawMessage) (domain.Operation, *managedOperationFailure) {
+	if _, err := s.store.GetWorkspace(ctx, workspaceID); errors.Is(err, storage.ErrNotFound) {
+		return domain.Operation{}, &managedOperationFailure{status: http.StatusUnprocessableEntity, code: "invalid_workspace", message: "Select an existing workspace."}
+	} else if err != nil {
+		return domain.Operation{}, &managedOperationFailure{status: http.StatusInternalServerError, code: "database_error", message: "Could not validate workspace."}
+	}
+	manifest := plugin.Manifest()
+	issues, err := schema.Validate(manifest.Schema, spec)
+	if err != nil {
+		return domain.Operation{}, &managedOperationFailure{status: http.StatusInternalServerError, code: "invalid_schema", message: err.Error()}
+	}
+	if len(issues) > 0 {
+		converted := make([]domain.ValidationIssue, 0, len(issues))
+		for _, issue := range issues {
+			converted = append(converted, domain.ValidationIssue{Level: "error", Path: issue.Path, Message: issue.Message})
+		}
+		validation := domain.ValidationReport{Valid: false, Issues: converted, CheckedAt: time.Now().UTC()}
+		return domain.Operation{}, &managedOperationFailure{status: http.StatusUnprocessableEntity, payload: map[string]any{"code": "validation_failed", "validation": validation}}
+	}
+	validation := plugin.Validate(ctx, spec)
+	if !validation.Valid {
+		return domain.Operation{}, &managedOperationFailure{status: http.StatusUnprocessableEntity, payload: map[string]any{"code": "validation_failed", "validation": validation}}
+	}
+	plan, err := plugin.Plan(ctx, spec)
+	if err != nil || len(plan.Steps) == 0 {
+		message := "The plugin produced an empty plan."
+		if err != nil {
+			message = err.Error()
+		}
+		return domain.Operation{}, &managedOperationFailure{status: http.StatusUnprocessableEntity, code: "planning_failed", message: message}
+	}
+	if err := validatePlanEffects(manifest, plan); err != nil {
+		return domain.Operation{}, &managedOperationFailure{status: http.StatusUnprocessableEntity, code: "invalid_plan_effects", message: err.Error()}
+	}
+	if err := artifacts.ValidatePlan(plan, manifest.ArtifactInputs, manifest.ArtifactOutputs); err != nil {
+		return domain.Operation{}, &managedOperationFailure{status: http.StatusUnprocessableEntity, code: "invalid_artifact_graph", message: err.Error()}
+	}
+	if err := s.validateExternalArtifactInputs(ctx, workspaceID, plan); err != nil {
+		return domain.Operation{}, &managedOperationFailure{status: http.StatusUnprocessableEntity, code: "invalid_artifact_reference", message: err.Error()}
+	}
+	if err := s.validateResourceEffects(ctx, workspaceID, manifest, plan); err != nil {
+		return domain.Operation{}, &managedOperationFailure{status: http.StatusConflict, code: "resource_conflict", message: err.Error()}
+	}
+	preflight := preflightPlan(ctx, plugin, plan, func(ctx context.Context, step domain.PlanStep) (domain.PlanStep, error) {
+		return s.resolvePreflightArtifactInputs(ctx, workspaceID, step)
+	})
+	validation.Issues = append(validation.Issues, preflight...)
+	for _, issue := range preflight {
+		if issue.Level == "error" {
+			validation.Valid = false
+		}
+	}
+	validation.CheckedAt = time.Now().UTC()
+	if !validation.Valid {
+		return domain.Operation{}, &managedOperationFailure{status: http.StatusUnprocessableEntity, payload: map[string]any{"code": "preflight_failed", "validation": validation}}
+	}
+	planHash, err := resolvedPlanHash(manifest, spec, plan)
+	if err != nil {
+		return domain.Operation{}, &managedOperationFailure{status: http.StatusInternalServerError, code: "planning_failed", message: "Could not fingerprint the validated plan."}
+	}
+	return domain.Operation{ID: id.New("op"), WorkspaceID: workspaceID, PluginID: manifest.ID, PluginVersion: manifest.Version, PluginDigest: manifest.Runtime.Digest, Title: title, Status: domain.OperationReady, Spec: spec, Plan: plan, Validation: validation, PlanHash: planHash}, nil
+}
+
+func (s *Server) validatedManagedCleanup(ctx context.Context, source domain.Operation) (domain.Operation, *managedOperationFailure) {
+	plugin, err := s.registry.Get(source.PluginID)
+	if err != nil {
+		return domain.Operation{}, &managedOperationFailure{status: http.StatusUnprocessableEntity, code: "invalid_plugin", message: err.Error()}
+	}
+	manifest := plugin.Manifest()
+	if !terminal(source.Status) || !manifest.Matches(source.PluginVersion, source.PluginDigest) || !manifest.HasCapability("lifecycle.cleanup") {
+		return domain.Operation{}, &managedOperationFailure{status: http.StatusConflict, code: "cleanup_unavailable", message: "A completed source lifecycle and its exact cleanup plugin are required."}
+	}
+	plan, err := cleanupPlan(source)
+	if err != nil {
+		return domain.Operation{}, &managedOperationFailure{status: http.StatusConflict, code: "cleanup_unavailable", message: err.Error()}
+	}
+	if err := validatePlanEffects(manifest, plan); err != nil {
+		return domain.Operation{}, &managedOperationFailure{status: http.StatusUnprocessableEntity, code: "invalid_plan_effects", message: err.Error()}
+	}
+	if err := artifacts.ValidatePlan(plan, manifest.ArtifactInputs, manifest.ArtifactOutputs); err != nil {
+		return domain.Operation{}, &managedOperationFailure{status: http.StatusUnprocessableEntity, code: "invalid_artifact_graph", message: err.Error()}
+	}
+	if err := s.validateExternalArtifactInputs(ctx, source.WorkspaceID, plan); err != nil {
+		return domain.Operation{}, &managedOperationFailure{status: http.StatusUnprocessableEntity, code: "invalid_artifact_reference", message: err.Error()}
+	}
+	if err := s.validateResourceEffects(ctx, source.WorkspaceID, manifest, plan); err != nil {
+		return domain.Operation{}, &managedOperationFailure{status: http.StatusConflict, code: "resource_conflict", message: err.Error()}
+	}
+	validation := domain.ValidationReport{Valid: true, CheckedAt: time.Now().UTC(), Issues: []domain.ValidationIssue{{Level: "info", Message: "Deletion is restricted to the resource created by the original validated lifecycle."}}}
+	preflight := preflightPlan(ctx, plugin, plan, func(ctx context.Context, step domain.PlanStep) (domain.PlanStep, error) {
+		return s.resolvePreflightArtifactInputs(ctx, source.WorkspaceID, step)
+	})
+	validation.Issues = append(validation.Issues, preflight...)
+	for _, issue := range preflight {
+		if issue.Level == "error" {
+			validation.Valid = false
+		}
+	}
+	if !validation.Valid {
+		return domain.Operation{}, &managedOperationFailure{status: http.StatusUnprocessableEntity, payload: map[string]any{"code": "preflight_failed", "validation": validation}}
+	}
+	spec, _ := json.Marshal(map[string]string{"sourceOperationId": source.ID, "sourcePlanHash": source.PlanHash})
+	planHash, err := resolvedPlanHash(manifest, spec, plan)
+	if err != nil {
+		return domain.Operation{}, &managedOperationFailure{status: http.StatusInternalServerError, code: "planning_failed", message: "Could not fingerprint the cleanup plan."}
+	}
+	return domain.Operation{ID: id.New("op"), WorkspaceID: source.WorkspaceID, PluginID: source.PluginID, PluginVersion: manifest.Version, PluginDigest: manifest.Runtime.Digest, Title: "Delete " + source.Title, Status: domain.OperationReady, Spec: spec, Plan: plan, Validation: validation, PlanHash: planHash}, nil
+}
+
 func (s *Server) listInfrastructureResources(response http.ResponseWriter, request *http.Request) {
 	items, err := s.store.ListInfrastructureResources(request.Context())
 	if err != nil {
@@ -1414,94 +1708,17 @@ func (s *Server) createOperation(response http.ResponseWriter, request *http.Req
 		writeError(response, http.StatusUnprocessableEntity, "invalid_title", "Title must contain between 1 and 120 characters.")
 		return
 	}
-	if _, err := s.store.GetWorkspace(request.Context(), input.WorkspaceID); errors.Is(err, storage.ErrNotFound) {
-		writeError(response, http.StatusUnprocessableEntity, "invalid_workspace", "Select an existing workspace.")
-		return
-	} else if err != nil {
-		writeError(response, http.StatusInternalServerError, "database_error", "Could not validate workspace.")
-		return
-	}
 	plugin, err := s.registry.Get(input.PluginID)
 	if err != nil {
 		writeError(response, http.StatusUnprocessableEntity, "invalid_plugin", err.Error())
 		return
 	}
-	manifest := plugin.Manifest()
-	issues, err := schema.Validate(manifest.Schema, input.Spec)
-	if err != nil {
-		writeError(response, http.StatusInternalServerError, "invalid_schema", err.Error())
+	operation, failure := s.validatedManagedOperation(request.Context(), input.WorkspaceID, plugin, input.Title, input.Spec)
+	if failure != nil {
+		failure.write(response)
 		return
 	}
-	if len(issues) > 0 {
-		converted := make([]domain.ValidationIssue, 0, len(issues))
-		for _, issue := range issues {
-			converted = append(converted, domain.ValidationIssue{Level: "error", Path: issue.Path, Message: issue.Message})
-		}
-		writeJSON(response, http.StatusUnprocessableEntity, map[string]any{"code": "validation_failed", "validation": domain.ValidationReport{Valid: false, Issues: converted, CheckedAt: time.Now().UTC()}})
-		return
-	}
-	validation := plugin.Validate(request.Context(), input.Spec)
-	if !validation.Valid {
-		writeJSON(response, http.StatusUnprocessableEntity, map[string]any{"code": "validation_failed", "validation": validation})
-		return
-	}
-	plan, err := plugin.Plan(request.Context(), input.Spec)
-	if err != nil {
-		writeError(response, http.StatusUnprocessableEntity, "planning_failed", err.Error())
-		return
-	}
-	if len(plan.Steps) == 0 {
-		writeError(response, http.StatusUnprocessableEntity, "empty_plan", "The plugin produced an empty plan.")
-		return
-	}
-	if err := validatePlanEffects(manifest, plan); err != nil {
-		writeError(response, http.StatusUnprocessableEntity, "invalid_plan_effects", err.Error())
-		return
-	}
-	if err := artifacts.ValidatePlan(plan, manifest.ArtifactInputs, manifest.ArtifactOutputs); err != nil {
-		writeError(response, http.StatusUnprocessableEntity, "invalid_artifact_graph", err.Error())
-		return
-	}
-	if err := s.validateExternalArtifactInputs(request.Context(), input.WorkspaceID, plan); err != nil {
-		writeError(response, http.StatusUnprocessableEntity, "invalid_artifact_reference", err.Error())
-		return
-	}
-	if err := s.validateResourceEffects(request.Context(), input.WorkspaceID, manifest, plan); err != nil {
-		writeError(response, http.StatusConflict, "resource_conflict", err.Error())
-		return
-	}
-	preflight := preflightPlan(request.Context(), plugin, plan, func(ctx context.Context, step domain.PlanStep) (domain.PlanStep, error) {
-		return s.resolvePreflightArtifactInputs(ctx, input.WorkspaceID, step)
-	})
-	validation.Issues = append(validation.Issues, preflight...)
-	for _, issue := range preflight {
-		if issue.Level == "error" {
-			validation.Valid = false
-		}
-	}
-	validation.CheckedAt = time.Now().UTC()
-	if !validation.Valid {
-		writeJSON(response, http.StatusUnprocessableEntity, map[string]any{"code": "preflight_failed", "validation": validation})
-		return
-	}
-	planHash, err := resolvedPlanHash(manifest, input.Spec, plan)
-	if err != nil {
-		writeError(response, http.StatusInternalServerError, "planning_failed", "Could not fingerprint the validated plan.")
-		return
-	}
-	operation, err := s.store.CreateOperation(request.Context(), domain.Operation{
-		ID:            id.New("op"),
-		WorkspaceID:   input.WorkspaceID,
-		PluginID:      input.PluginID,
-		PluginVersion: manifest.Version,
-		PluginDigest:  manifest.Runtime.Digest,
-		Title:         input.Title,
-		Status:        domain.OperationReady,
-		Spec:          input.Spec,
-		Plan:          plan,
-		Validation:    validation,
-		PlanHash:      planHash,
-	})
+	operation, err = s.store.CreateOperation(request.Context(), operation)
 	if err != nil {
 		writeError(response, http.StatusInternalServerError, "database_error", "Could not save the validated operation.")
 		return
@@ -1587,70 +1804,13 @@ func (s *Server) createCleanupOperation(response http.ResponseWriter, request *h
 		writeError(response, http.StatusInternalServerError, "database_error", "Could not read the source operation.")
 		return
 	}
-	if !terminal(source.Status) {
-		writeError(response, http.StatusConflict, "cleanup_unavailable", "Only a completed operation can be cleaned up explicitly.")
+	operation, failure := s.validatedManagedCleanup(request.Context(), source)
+	if failure != nil {
+		failure.write(response)
 		return
 	}
-	plugin, err := s.registry.Get(source.PluginID)
-	if err != nil {
-		writeError(response, http.StatusUnprocessableEntity, "invalid_plugin", err.Error())
-		return
-	}
-	manifest := plugin.Manifest()
-	if source.PluginVersion != "" && !manifest.Matches(source.PluginVersion, source.PluginDigest) {
-		writeError(response, http.StatusConflict, "plugin_changed", "The installed plug-in no longer matches the source operation.")
-		return
-	}
-	if !manifest.HasCapability("lifecycle.cleanup") {
-		writeError(response, http.StatusConflict, "cleanup_unavailable", "This plugin does not expose explicit cleanup.")
-		return
-	}
-	plan, err := cleanupPlan(source)
-	if err != nil {
-		writeError(response, http.StatusConflict, "cleanup_unavailable", err.Error())
-		return
-	}
-	if err := validatePlanEffects(manifest, plan); err != nil {
-		writeError(response, http.StatusUnprocessableEntity, "invalid_plan_effects", err.Error())
-		return
-	}
-	if err := artifacts.ValidatePlan(plan, manifest.ArtifactInputs, manifest.ArtifactOutputs); err != nil {
-		writeError(response, http.StatusUnprocessableEntity, "invalid_artifact_graph", err.Error())
-		return
-	}
-	if err := s.validateExternalArtifactInputs(request.Context(), source.WorkspaceID, plan); err != nil {
-		writeError(response, http.StatusUnprocessableEntity, "invalid_artifact_reference", err.Error())
-		return
-	}
-	if err := s.validateResourceEffects(request.Context(), source.WorkspaceID, manifest, plan); err != nil {
-		writeError(response, http.StatusConflict, "resource_conflict", err.Error())
-		return
-	}
-	validation := domain.ValidationReport{Valid: true, CheckedAt: time.Now().UTC(), Issues: []domain.ValidationIssue{{Level: "info", Message: "Cleanup targets only resources owned by the source operation."}}}
-	preflight := preflightPlan(request.Context(), plugin, plan, func(ctx context.Context, step domain.PlanStep) (domain.PlanStep, error) {
-		return s.resolvePreflightArtifactInputs(ctx, source.WorkspaceID, step)
-	})
-	validation.Issues = append(validation.Issues, preflight...)
-	for _, issue := range preflight {
-		if issue.Level == "error" {
-			validation.Valid = false
-		}
-	}
-	if !validation.Valid {
-		writeJSON(response, http.StatusUnprocessableEntity, map[string]any{"code": "preflight_failed", "validation": validation})
-		return
-	}
-	spec, _ := json.Marshal(map[string]string{"sourceOperationId": source.ID, "sourcePlanHash": source.PlanHash})
-	planHash, err := resolvedPlanHash(manifest, spec, plan)
-	if err != nil {
-		writeError(response, http.StatusInternalServerError, "planning_failed", "Could not fingerprint the cleanup plan.")
-		return
-	}
-	operation, err := s.store.CreateOperation(request.Context(), domain.Operation{
-		ID: id.New("op"), WorkspaceID: source.WorkspaceID, PluginID: source.PluginID, PluginVersion: manifest.Version, PluginDigest: manifest.Runtime.Digest,
-		Title: "Cleanup: " + source.Title, Status: domain.OperationReady, Spec: spec,
-		Plan: plan, Validation: validation, PlanHash: planHash,
-	})
+	operation.Title = "Cleanup: " + source.Title
+	operation, err = s.store.CreateOperation(request.Context(), operation)
 	if err != nil {
 		writeError(response, http.StatusInternalServerError, "database_error", "Could not save the validated cleanup operation.")
 		return

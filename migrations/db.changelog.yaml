@@ -125,3 +125,10 @@ databaseChangeLog:
         - sqlFile:
             path: changes/018-plugin-import-jobs.sql
             relativeToChangelogFile: true
+  - changeSet:
+      id: 019-managed-resources
+      author: kubephos
+      changes:
+        - sqlFile:
+            path: changes/019-managed-resources.sql
+            relativeToChangelogFile: true

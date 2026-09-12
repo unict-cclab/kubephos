@@ -1,7 +1,7 @@
 import {useEffect, useMemo, useState, type FormEvent} from 'react'
 import {ApiError, request} from '../api'
 import {readSchemaValues} from '../lib'
-import type {Application, Artifact, Connection, Credential, CredentialDefinition, Plugin, PluginRuntimeProfile, PluginRuntimeStatus, Session, Workspace} from '../types'
+import type {Application, Artifact, Connection, Credential, CredentialDefinition, JsonSchema, Plugin, PluginRuntimeProfile, PluginRuntimeStatus, Session, Workspace} from '../types'
 import {Dialog} from './Dialog'
 import {SchemaFields} from './SchemaFields'
 
@@ -191,6 +191,53 @@ export function ConnectionDialog({open, close, plugins, ...common}: CommonProps 
   </Dialog>
 }
 
+export function MachineTemplateDialog({open, close, plugins, workspaces, ...common}: CommonProps & {open: boolean; close: () => void; plugins: Plugin[]; workspaces: Workspace[]}) {
+  const plugin = plugins.find(item => item.capabilities?.includes('infrastructure.machine-template.provision'))
+  const connections = common.connections.filter(item => item.provider === plugin?.provider)
+  const schema = useMemo<JsonSchema>(() => {
+    if (!plugin) return {type: 'object', properties: {}}
+    const properties = Object.fromEntries(Object.entries(plugin.schema.properties ?? {}).filter(([name]) => name !== 'connectionRef' && name !== 'name'))
+    return {...plugin.schema, required: plugin.schema.required?.filter(name => name !== 'connectionRef' && name !== 'name'), properties}
+  }, [plugin])
+  const [error, setError] = useState('')
+  const [pending, setPending] = useState(false)
+  const submit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    if (!plugin) return
+    setPending(true)
+    setError('')
+    const form = event.currentTarget
+    const values = new FormData(form)
+    try {
+      await request('/machine-templates', {method: 'POST', body: JSON.stringify({
+        workspaceId: values.get('workspaceId'),
+        connectionId: values.get('connectionId'),
+        name: values.get('name'),
+        configuration: readSchemaValues(form, schema, 'template')
+      })}, common.session.csrfToken)
+      close()
+      await common.onDone('Template validated and queued.')
+    } catch (cause) {
+      setError(validationMessage(cause))
+    } finally {
+      setPending(false)
+    }
+  }
+  return <Dialog open={open} onClose={close} title="Create VM template" eyebrow="PROXMOX TEMPLATE" className="template-modal">
+    {!plugin ? <div className="empty-state"><div><strong>Template capability unavailable</strong>Install a compatible infrastructure plugin.</div></div> : <form onSubmit={submit} key={plugin.id}>
+      <div className="form-section"><strong>Destination</strong><p>KubePhos validates the Proxmox inventory before creating anything.</p></div>
+      {workspaces.length > 1 ? <label>Environment<select name="workspaceId" required>{workspaces.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label> : <input type="hidden" name="workspaceId" value={workspaces[0]?.id ?? ''} />}
+      <label>Proxmox connection<select name="connectionId" required>{connections.length ? connections.map(item => <option key={item.id} value={item.id}>{item.name}</option>) : <option value="">Create a Proxmox connection first</option>}</select></label>
+      <label>Template name<input name="name" pattern="[a-z0-9][a-z0-9-]{0,31}" maxLength={32} placeholder="ubuntu-k3s" required autoFocus /></label>
+      <div className="form-section"><strong>Machine and operating system</strong><p>Base packages and guest cleanup use managed defaults.</p></div>
+      <SchemaFields schema={schema} prefix="template" applications={common.applications} artifacts={common.artifacts} connections={common.connections} credentials={common.credentials} />
+      <ValidationCallout text="Node, VMID, storages, token permissions and network are checked again immediately before every mutating step." />
+      <p className="form-error">{error}</p>
+      <Actions close={close} pending={pending} disabled={!connections.length || !workspaces.length} label="Validate and create" />
+    </form>}
+  </Dialog>
+}
+
 export function ApplicationDialog({open, close, ...common}: CommonProps & {open: boolean; close: () => void}) {
   const [file, setFile] = useState<File | null>(null)
   const [error, setError] = useState('')
@@ -376,8 +423,8 @@ export function RuntimeDialog({open, close, runtime, ...common}: CommonProps & {
   </Dialog>
 }
 
-function Actions({close, pending, label}: {close: () => void; pending: boolean; label: string}) {
-  return <div className="modal-actions"><button className="button secondary" type="button" onClick={close}>Cancel</button><button className="button primary" disabled={pending}>{pending ? 'Please wait…' : label}</button></div>
+function Actions({close, pending, disabled = false, label}: {close: () => void; pending: boolean; disabled?: boolean; label: string}) {
+  return <div className="modal-actions"><button className="button secondary" type="button" onClick={close}>Cancel</button><button className="button primary" disabled={pending || disabled}>{pending ? 'Please wait…' : label}</button></div>
 }
 
 function ValidationCallout({text}: {text: string}) {

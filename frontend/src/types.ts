@@ -1,5 +1,5 @@
 export type Role = 'admin' | 'operator' | 'viewer'
-export type View = 'overview' | 'workspaces' | 'pipelines' | 'operations' | 'results' | 'catalog' | 'plugins' | 'infrastructure'
+export type View = 'overview' | 'infrastructure' | 'kubernetes' | 'experiments' | 'suites' | 'results' | 'advanced' | 'workspaces' | 'pipelines' | 'operations' | 'catalog' | 'plugins'
 
 export interface User {
   id: string
@@ -129,6 +129,12 @@ export interface ValidationIssue {
   level: string
   path?: string
   message: string
+}
+
+export interface ValidationReport {
+  valid: boolean
+  issues: ValidationIssue[]
+  checkedAt?: string
 }
 
 export interface HealthReport {
@@ -364,6 +370,25 @@ export interface Connection {
   name: string
   provider: string
   pluginId: string
+  createdAt: string
+  updatedAt: string
+}
+
+export interface ManagedResource {
+  id: string
+  workspaceId: string
+  name: string
+  kind: string
+  provider: string
+  connectionId?: string
+  operationId: string
+  deletionOperationId?: string
+  status: string
+  error?: string
+  validation: ValidationReport
+  spec: Record<string, unknown>
+  createdAt: string
+  updatedAt: string
 }
 
 export interface InfrastructureResource {
@@ -418,6 +443,7 @@ export interface PlatformData {
   applications: Application[]
   credentials: Credential[]
   connections: Connection[]
+  machineTemplates: ManagedResource[]
   resources: InfrastructureResource[]
   audit: AuditEvent[]
 }

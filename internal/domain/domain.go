@@ -185,6 +185,26 @@ type ProviderConnection struct {
 	UpdatedAt     time.Time       `json:"updatedAt"`
 }
 
+type ManagedResource struct {
+	ID                  string           `json:"id"`
+	WorkspaceID         string           `json:"workspaceId"`
+	Name                string           `json:"name"`
+	Kind                string           `json:"kind"`
+	Provider            string           `json:"provider"`
+	ConnectionID        string           `json:"connectionId,omitempty"`
+	PluginID            string           `json:"pluginId"`
+	PluginVersion       string           `json:"pluginVersion"`
+	PluginDigest        string           `json:"pluginDigest,omitempty"`
+	Spec                json.RawMessage  `json:"spec"`
+	OperationID         string           `json:"operationId"`
+	DeletionOperationID string           `json:"deletionOperationId,omitempty"`
+	Status              string           `json:"status"`
+	Error               string           `json:"error,omitempty"`
+	Validation          ValidationReport `json:"validation"`
+	CreatedAt           time.Time        `json:"createdAt"`
+	UpdatedAt           time.Time        `json:"updatedAt"`
+}
+
 type CatalogApplication struct {
 	ID          string          `json:"id"`
 	Reference   string          `json:"reference"`

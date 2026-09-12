@@ -493,6 +493,46 @@ func (s *Store) GetProviderConnectionConfiguration(ctx context.Context, connecti
 	return connection, err
 }
 
+func (s *Store) DeleteProviderConnection(ctx context.Context, connectionID string) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	var lockedID string
+	err = tx.QueryRow(ctx, `SELECT id FROM provider_connections WHERE id = $1 FOR UPDATE`, connectionID).Scan(&lockedID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrNotFound
+	}
+	if err != nil {
+		return err
+	}
+	var exists bool
+	err = tx.QueryRow(ctx, `
+		SELECT EXISTS(
+			SELECT 1
+			FROM managed_resources resource
+			LEFT JOIN operations deletion ON deletion.id = resource.deletion_operation_id
+			WHERE resource.connection_id = $1
+			  AND (resource.deletion_operation_id IS NULL OR deletion.status <> $2)
+		)
+	`, connectionID, domain.OperationSucceeded).Scan(&exists)
+	if err != nil {
+		return err
+	}
+	if exists {
+		return ErrConflict
+	}
+	command, err := tx.Exec(ctx, `DELETE FROM provider_connections WHERE id = $1`, connectionID)
+	if err != nil {
+		return err
+	}
+	if command.RowsAffected() != 1 {
+		return ErrNotFound
+	}
+	return tx.Commit(ctx)
+}
+
 func (s *Store) SyncCatalogApplications(ctx context.Context, applications []domain.CatalogApplication) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -845,51 +885,217 @@ func (s *Store) CreateOperation(ctx context.Context, operation domain.Operation)
 		return domain.Operation{}, err
 	}
 	defer tx.Rollback(ctx)
-	plan, err := json.Marshal(operation.Plan)
-	if err != nil {
-		return domain.Operation{}, err
-	}
-	validation, err := json.Marshal(operation.Validation)
-	if err != nil {
-		return domain.Operation{}, err
-	}
-	err = tx.QueryRow(ctx, `
-		INSERT INTO operations (id, workspace_id, plugin_id, plugin_version, plugin_digest, title, status, spec, plan, validation, plan_hash)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-		RETURNING created_at
-	`, operation.ID, operation.WorkspaceID, operation.PluginID, operation.PluginVersion, operation.PluginDigest, operation.Title, operation.Status, operation.Spec, plan, validation, operation.PlanHash).Scan(&operation.CreatedAt)
-	if err != nil {
-		return domain.Operation{}, err
-	}
-	for position, planned := range operation.Plan.Steps {
-		step := domain.OperationStep{
-			ID:          operation.ID + "_" + planned.ID,
-			OperationID: operation.ID,
-			Position:    position + 1,
-			Name:        planned.Name,
-			Status:      domain.StepPending,
-			Input:       planned.Input,
-		}
-		_, err = tx.Exec(ctx, `
-			INSERT INTO operation_steps (id, operation_id, position, name, status, input)
-			VALUES ($1, $2, $3, $4, $5, $6)
-		`, step.ID, step.OperationID, step.Position, step.Name, step.Status, step.Input)
-		if err != nil {
-			return domain.Operation{}, err
-		}
-		operation.Steps = append(operation.Steps, step)
-	}
-	_, err = tx.Exec(ctx, `
-		INSERT INTO operation_logs (operation_id, level, source, message)
-		VALUES ($1, 'info', 'validation', $2)
-	`, operation.ID, fmt.Sprintf("Validation passed. Plan %s is ready for confirmation.", operation.PlanHash[:12]))
-	if err != nil {
+	if err := insertOperation(ctx, tx, &operation); err != nil {
 		return domain.Operation{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return domain.Operation{}, err
 	}
 	return operation, nil
+}
+
+func insertOperation(ctx context.Context, tx pgx.Tx, operation *domain.Operation) error {
+	plan, err := json.Marshal(operation.Plan)
+	if err != nil {
+		return err
+	}
+	validation, err := json.Marshal(operation.Validation)
+	if err != nil {
+		return err
+	}
+	err = tx.QueryRow(ctx, `
+		INSERT INTO operations (id, workspace_id, plugin_id, plugin_version, plugin_digest, title, status, spec, plan, validation, plan_hash, queued_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, CASE WHEN $7 = $12 THEN now() ELSE NULL END)
+		RETURNING created_at, queued_at
+	`, operation.ID, operation.WorkspaceID, operation.PluginID, operation.PluginVersion, operation.PluginDigest, operation.Title, operation.Status, operation.Spec, plan, validation, operation.PlanHash, domain.OperationQueued).Scan(&operation.CreatedAt, &operation.QueuedAt)
+	if err != nil {
+		return err
+	}
+	operation.Steps = nil
+	for position, planned := range operation.Plan.Steps {
+		step := domain.OperationStep{ID: operation.ID + "_" + planned.ID, OperationID: operation.ID, Position: position + 1, Name: planned.Name, Status: domain.StepPending, Input: planned.Input}
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO operation_steps (id, operation_id, position, name, status, input)
+			VALUES ($1, $2, $3, $4, $5, $6)
+		`, step.ID, step.OperationID, step.Position, step.Name, step.Status, step.Input); err != nil {
+			return err
+		}
+		operation.Steps = append(operation.Steps, step)
+	}
+	message := fmt.Sprintf("Validation passed. Plan %s is ready for confirmation.", operation.PlanHash[:12])
+	source := "validation"
+	if operation.Status == domain.OperationQueued {
+		message = fmt.Sprintf("Validation passed. Plan %s was queued by the managed resource workflow.", operation.PlanHash[:12])
+		source = "queue"
+	}
+	_, err = tx.Exec(ctx, `
+		INSERT INTO operation_logs (operation_id, level, source, message)
+		VALUES ($1, 'info', $2, $3)
+	`, operation.ID, source, message)
+	return err
+}
+
+func (s *Store) CreateManagedResource(ctx context.Context, resource domain.ManagedResource, operation domain.Operation) (domain.ManagedResource, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return domain.ManagedResource{}, err
+	}
+	defer tx.Rollback(ctx)
+	if err := insertOperation(ctx, tx, &operation); err != nil {
+		return domain.ManagedResource{}, err
+	}
+	err = tx.QueryRow(ctx, `
+		INSERT INTO managed_resources (id, workspace_id, name, kind, provider, connection_id, plugin_id, plugin_version, plugin_digest, spec, operation_id)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+		RETURNING created_at, updated_at
+	`, resource.ID, resource.WorkspaceID, resource.Name, resource.Kind, resource.Provider, resource.ConnectionID, resource.PluginID, resource.PluginVersion, resource.PluginDigest, resource.Spec, operation.ID).Scan(&resource.CreatedAt, &resource.UpdatedAt)
+	if err != nil {
+		return domain.ManagedResource{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return domain.ManagedResource{}, err
+	}
+	resource.OperationID = operation.ID
+	resource.Status = "pending"
+	resource.Validation = operation.Validation
+	return resource, nil
+}
+
+func (s *Store) ListManagedResources(ctx context.Context, kind string) ([]domain.ManagedResource, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT resource.id, resource.workspace_id, resource.name, resource.kind, resource.provider, COALESCE(resource.connection_id, ''),
+		       resource.plugin_id, resource.plugin_version, resource.plugin_digest, resource.spec, resource.operation_id,
+		       COALESCE(resource.deletion_operation_id, ''), creation.status, creation.error, creation.validation,
+		       COALESCE(deletion.status, ''), COALESCE(deletion.error, ''), resource.created_at, resource.updated_at
+		FROM managed_resources resource
+		JOIN operations creation ON creation.id = resource.operation_id
+		LEFT JOIN operations deletion ON deletion.id = resource.deletion_operation_id
+		WHERE resource.kind = $1
+		  AND (resource.deletion_operation_id IS NULL OR deletion.status <> $2)
+		ORDER BY resource.created_at DESC
+	`, kind, domain.OperationSucceeded)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := []domain.ManagedResource{}
+	for rows.Next() {
+		resource, err := scanManagedResource(rows)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, resource)
+	}
+	return result, rows.Err()
+}
+
+func (s *Store) GetManagedResource(ctx context.Context, resourceID string) (domain.ManagedResource, error) {
+	row := s.pool.QueryRow(ctx, `
+		SELECT resource.id, resource.workspace_id, resource.name, resource.kind, resource.provider, COALESCE(resource.connection_id, ''),
+		       resource.plugin_id, resource.plugin_version, resource.plugin_digest, resource.spec, resource.operation_id,
+		       COALESCE(resource.deletion_operation_id, ''), creation.status, creation.error, creation.validation,
+		       COALESCE(deletion.status, ''), COALESCE(deletion.error, ''), resource.created_at, resource.updated_at
+		FROM managed_resources resource
+		JOIN operations creation ON creation.id = resource.operation_id
+		LEFT JOIN operations deletion ON deletion.id = resource.deletion_operation_id
+		WHERE resource.id = $1
+	`, resourceID)
+	resource, err := scanManagedResource(row)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.ManagedResource{}, ErrNotFound
+	}
+	return resource, err
+}
+
+func scanManagedResource(row pgx.Row) (domain.ManagedResource, error) {
+	var resource domain.ManagedResource
+	var creationStatus, creationError, deletionStatus, deletionError string
+	var validation []byte
+	err := row.Scan(&resource.ID, &resource.WorkspaceID, &resource.Name, &resource.Kind, &resource.Provider, &resource.ConnectionID,
+		&resource.PluginID, &resource.PluginVersion, &resource.PluginDigest, &resource.Spec, &resource.OperationID,
+		&resource.DeletionOperationID, &creationStatus, &creationError, &validation, &deletionStatus, &deletionError, &resource.CreatedAt, &resource.UpdatedAt)
+	if err != nil {
+		return domain.ManagedResource{}, err
+	}
+	if err := json.Unmarshal(validation, &resource.Validation); err != nil {
+		return domain.ManagedResource{}, err
+	}
+	resource.Status, resource.Error = managedResourceState(creationStatus, creationError, deletionStatus, deletionError)
+	return resource, nil
+}
+
+func managedResourceState(creationStatus, creationError, deletionStatus, deletionError string) (string, string) {
+	if deletionStatus != "" {
+		switch deletionStatus {
+		case domain.OperationSucceeded:
+			return "deleted", ""
+		case domain.OperationFailed, domain.OperationCanceled:
+			return "deletion-failed", deletionError
+		default:
+			return "deleting", ""
+		}
+	}
+	switch creationStatus {
+	case domain.OperationSucceeded:
+		return "ready", ""
+	case domain.OperationFailed, domain.OperationCanceled:
+		return "failed", creationError
+	default:
+		return "provisioning", ""
+	}
+}
+
+func (s *Store) CreateManagedResourceDeletion(ctx context.Context, resourceID string, operation domain.Operation) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	var creationStatus, deletionID string
+	err = tx.QueryRow(ctx, `
+		SELECT creation.status, COALESCE(resource.deletion_operation_id, '')
+		FROM managed_resources resource
+		JOIN operations creation ON creation.id = resource.operation_id
+		WHERE resource.id = $1
+		FOR UPDATE OF resource
+	`, resourceID).Scan(&creationStatus, &deletionID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrNotFound
+	}
+	if err != nil {
+		return err
+	}
+	if creationStatus != domain.OperationSucceeded || deletionID != "" {
+		return ErrConflict
+	}
+	var used bool
+	err = tx.QueryRow(ctx, `
+		SELECT EXISTS(
+			SELECT 1
+			FROM managed_resource_dependencies dependency
+			JOIN managed_resources consumer ON consumer.id = dependency.resource_id
+			LEFT JOIN operations deletion ON deletion.id = consumer.deletion_operation_id
+			WHERE dependency.depends_on_id = $1
+			  AND (consumer.deletion_operation_id IS NULL OR deletion.status <> $2)
+		)
+	`, resourceID, domain.OperationSucceeded).Scan(&used)
+	if err != nil {
+		return err
+	}
+	if used {
+		return ErrConflict
+	}
+	if err := insertOperation(ctx, tx, &operation); err != nil {
+		return err
+	}
+	command, err := tx.Exec(ctx, `UPDATE managed_resources SET deletion_operation_id = $2, updated_at = now() WHERE id = $1`, resourceID, operation.ID)
+	if err != nil {
+		return err
+	}
+	if command.RowsAffected() != 1 {
+		return ErrNotFound
+	}
+	return tx.Commit(ctx)
 }
 
 func (s *Store) QueueOperation(ctx context.Context, operationID, planHash string, acceptWarnings bool) (domain.Operation, error) {

@@ -1,6 +1,6 @@
 import {lazy, Suspense, useCallback, useEffect, useMemo, useState} from 'react'
 import {ApiError, request} from './api'
-import {ApplicationDialog, AuthDialog, ConnectionDialog, CredentialDialog, OperationDialog, PluginDialog, RuntimeDialog, WorkspaceDialog} from './components/Forms'
+import {ApplicationDialog, AuthDialog, ConnectionDialog, CredentialDialog, MachineTemplateDialog, OperationDialog, PluginDialog, RuntimeDialog, WorkspaceDialog} from './components/Forms'
 import {OperationDrawer} from './components/OperationDrawer'
 import {PipelineDialog} from './components/PipelineDialog'
 import {ToastRegion, type ToastMessage} from './components/ToastRegion'
@@ -10,7 +10,7 @@ import type {PlatformData, PluginPackage, Session, View, Workspace} from './type
 
 const TerminalDialog = lazy(() => import('./components/TerminalDialog').then(module => ({default: module.TerminalDialog})))
 
-const emptyData: PlatformData = {system: null, pluginRuntime: null, workspaces: [], pipelines: [], pipelineRuns: [], experiments: [], operations: [], artifacts: [], plugins: [], pluginPackages: [], pluginImports: [], applications: [], credentials: [], connections: [], resources: [], audit: []}
+const emptyData: PlatformData = {system: null, pluginRuntime: null, workspaces: [], pipelines: [], pipelineRuns: [], experiments: [], operations: [], artifacts: [], plugins: [], pluginPackages: [], pluginImports: [], applications: [], credentials: [], connections: [], machineTemplates: [], resources: [], audit: []}
 const viewMetadata: Record<View, [string, string]> = {
   overview: ['CONTROL PLANE', 'Overview'],
   workspaces: ['ENVIRONMENTS', 'Workspaces'],
@@ -19,20 +19,23 @@ const viewMetadata: Record<View, [string, string]> = {
   results: ['OBSERVATIONS', 'Results'],
   catalog: ['APPLICATIONS', 'Catalog'],
   plugins: ['CAPABILITIES', 'Plugins'],
-  infrastructure: ['MANAGED ACCESS', 'Infrastructure']
+  infrastructure: ['MANAGED INFRASTRUCTURE', 'Infrastructure'],
+  kubernetes: ['CLUSTERS', 'Kubernetes'],
+  experiments: ['REPEATABLE TESTS', 'Experiments'],
+  suites: ['COMPARISONS', 'Suites'],
+  advanced: ['PLATFORM TOOLS', 'Advanced']
 }
 const navigation: Array<[View, string, string]> = [
   ['overview', '⌂', 'Overview'],
-  ['workspaces', '◇', 'Workspaces'],
-  ['pipelines', '⇢', 'Pipelines'],
-  ['operations', '↻', 'Operations'],
+  ['infrastructure', '▦', 'Infrastructure'],
+  ['kubernetes', '⬡', 'Kubernetes'],
+  ['experiments', '▶', 'Experiments'],
+  ['suites', '⇄', 'Suites'],
   ['results', '⌁', 'Results'],
-  ['catalog', '◫', 'Catalog'],
-  ['plugins', '⌘', 'Plugins'],
-  ['infrastructure', '▦', 'Infrastructure']
+  ['advanced', '•••', 'Advanced']
 ]
 
-type Modal = 'workspace' | 'workspaceFlow' | 'operation' | 'pipeline' | 'credential' | 'connection' | 'application' | 'plugin' | 'runtime' | 'terminal' | null
+type Modal = 'workspace' | 'workspaceFlow' | 'operation' | 'pipeline' | 'credential' | 'connection' | 'machineTemplate' | 'application' | 'plugin' | 'runtime' | 'terminal' | null
 
 export default function App() {
   const [session, setSession] = useState<Session | null>(null)
@@ -57,7 +60,7 @@ export default function App() {
     if (!session?.authenticated) return
     setRefreshing(true)
     try {
-      const [system, pluginRuntime, workspaces, pipelines, pipelineRuns, experiments, operations, artifacts, plugins, pluginPackages, pluginImports, applications, credentials, connections, resources, audit] = await Promise.all([
+		const [system, pluginRuntime, workspaces, pipelines, pipelineRuns, experiments, operations, artifacts, plugins, pluginPackages, pluginImports, applications, credentials, connections, machineTemplates, resources, audit] = await Promise.all([
         request<PlatformData['system']>('/system'),
         request<PlatformData['pluginRuntime']>('/plugin-runtime'),
         request<{items: PlatformData['workspaces']}>('/workspaces'),
@@ -71,11 +74,12 @@ export default function App() {
         request<{items: PlatformData['pluginImports']}>('/plugin-imports'),
         request<{items: PlatformData['applications']}>('/catalog/applications'),
         request<{items: PlatformData['credentials']}>('/credentials'),
-        request<{items: PlatformData['connections']}>('/connections'),
-        request<{items: PlatformData['resources']}>('/infrastructure/resources'),
+		request<{items: PlatformData['connections']}>('/connections'),
+		request<{items: PlatformData['machineTemplates']}>('/machine-templates'),
+		request<{items: PlatformData['resources']}>('/infrastructure/resources'),
         request<{items: PlatformData['audit']}>('/audit?limit=20')
       ])
-      setData({system, pluginRuntime, workspaces: workspaces.items, pipelines: pipelines.items, pipelineRuns: pipelineRuns.items, experiments: experiments.items, operations: operations.items, artifacts: artifacts.items, plugins: plugins.items, pluginPackages: pluginPackages.items, pluginImports: pluginImports.items, applications: applications.items, credentials: credentials.items, connections: connections.items, resources: resources.items, audit: audit.items})
+		setData({system, pluginRuntime, workspaces: workspaces.items, pipelines: pipelines.items, pipelineRuns: pipelineRuns.items, experiments: experiments.items, operations: operations.items, artifacts: artifacts.items, plugins: plugins.items, pluginPackages: pluginPackages.items, pluginImports: pluginImports.items, applications: applications.items, credentials: credentials.items, connections: connections.items, machineTemplates: machineTemplates.items, resources: resources.items, audit: audit.items})
       setConnected(true)
       if (!silent) notify('Everything is up to date.')
     } catch (cause) {
@@ -144,6 +148,27 @@ export default function App() {
     }
   }
 
+  const deleteConnection = async (connectionID: string, name: string) => {
+    if (!window.confirm(`Delete connection ${name}?`)) return
+    try {
+      await request(`/connections/${connectionID}`, {method: 'DELETE'}, session?.csrfToken)
+      await afterMutation('Connection deleted.')
+    } catch (cause) {
+      notify(cause instanceof Error ? cause.message : 'Could not delete the connection.', true)
+    }
+  }
+
+  const deleteMachineTemplate = async (templateID: string, name: string) => {
+    if (!window.confirm(`Delete Proxmox template ${name}? The task will run in the background.`)) return
+    try {
+      const result = await request<{deletionOperationId?: string}>(`/machine-templates/${templateID}`, {method: 'DELETE'}, session?.csrfToken)
+      await afterMutation('Template deletion queued.')
+      if (result.deletionOperationId) setOperationID(result.deletionOperationId)
+    } catch (cause) {
+      notify(cause instanceof Error ? cause.message : 'Could not delete the template.', true)
+    }
+  }
+
   const openOperationForm = (selected: Workspace) => {
     if (!data.plugins.length) {
       notify('No plugin is installed.', true)
@@ -186,7 +211,7 @@ export default function App() {
         <div className="sidebar-footer"><div className={`health-dot ${healthy ? 'healthy' : 'unhealthy'}`} /><span><strong>{healthy ? 'All systems healthy' : connected ? 'Platform degraded' : 'Connection unavailable'}</strong><small>Version {data.system?.version ?? 'dev'}</small></span></div>
       </aside>
       <main className="main">
-        <header className="topbar"><div><p className="eyebrow">{eyebrow}</p><h1>{title}</h1></div><div className="topbar-actions"><span className="signed-user">{session.user?.username} · {session.user?.role}</span><button className="button secondary" onClick={logout}>Sign out</button><button className="button secondary" disabled={refreshing} onClick={() => load(false)}>{refreshing ? 'Refreshing…' : 'Refresh'}</button><button className="button primary" onClick={() => setModal('workspace')}>New workspace</button></div></header>
+		<header className="topbar"><div><p className="eyebrow">{eyebrow}</p><h1>{title}</h1></div><div className="topbar-actions"><span className="signed-user">{session.user?.username} · {session.user?.role}</span><button className="button secondary" onClick={logout}>Sign out</button><button className="button secondary" disabled={refreshing} onClick={() => load(false)}>{refreshing ? 'Refreshing…' : 'Refresh'}</button></div></header>
         <Views
           view={view}
           {...data}
@@ -205,7 +230,10 @@ export default function App() {
           activatePlugin={activatePlugin}
           deactivatePlugin={deactivatePlugin}
           addCredential={() => setModal('credential')}
-          addConnection={() => setModal('connection')}
+		  addConnection={() => setModal('connection')}
+		  addMachineTemplate={() => setModal('machineTemplate')}
+		  deleteConnection={deleteConnection}
+		  deleteMachineTemplate={deleteMachineTemplate}
           openInfrastructureCapability={openInfrastructureCapability}
           openTerminal={selected => {setWorkspace(selected); setModal('terminal')}}
         />
@@ -216,7 +244,8 @@ export default function App() {
     <WorkspaceFlowDialog open={modal === 'workspaceFlow'} close={() => setModal(null)} workspace={workspace} plugins={data.plugins} artifacts={data.artifacts} operations={data.operations} configure={configureWorkspaceCapability} />
     <OperationDialog key={`${workspace?.id ?? ''}-${operationPluginID ?? 'advanced'}-${JSON.stringify(operationPreset)}`} {...common} initialPluginID={operationPluginID} initialSpec={operationPreset} open={modal === 'operation'} close={() => setModal(null)} workspace={workspace} plugins={data.plugins} onCreated={async id => {await load(true); setOperationID(id)}} />
     <CredentialDialog {...common} open={modal === 'credential'} close={() => setModal(null)} plugins={data.plugins} />
-    <ConnectionDialog {...common} open={modal === 'connection'} close={() => setModal(null)} plugins={data.plugins} />
+	<ConnectionDialog {...common} open={modal === 'connection'} close={() => setModal(null)} plugins={data.plugins} />
+	<MachineTemplateDialog {...common} open={modal === 'machineTemplate'} close={() => setModal(null)} plugins={data.plugins} workspaces={data.workspaces} />
     <ApplicationDialog {...common} open={modal === 'application'} close={() => setModal(null)} />
     <PluginDialog {...common} open={modal === 'plugin'} close={() => setModal(null)} />
     <RuntimeDialog {...common} open={modal === 'runtime'} close={() => setModal(null)} runtime={data.pluginRuntime} />

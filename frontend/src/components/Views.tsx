@@ -1,6 +1,5 @@
-import {useEffect, useState} from 'react'
 import {formatDate, shortID} from '../lib'
-import type {Application, Artifact, AuditEvent, Connection, Credential, Experiment, InfrastructureResource, Operation, Pipeline, PipelineRun, Plugin, PluginImportJob, PluginPackage, PluginRuntimeStatus, Session, SystemStatus, View, Workspace} from '../types'
+import type {Application, Artifact, AuditEvent, Connection, Credential, Experiment, InfrastructureResource, ManagedResource, Operation, Pipeline, PipelineRun, Plugin, PluginImportJob, PluginPackage, PluginRuntimeStatus, Session, SystemStatus, View, Workspace} from '../types'
 import {PipelinesView} from './PipelinesView'
 import {ResultsView} from './ResultsView'
 
@@ -20,6 +19,7 @@ interface ViewProps {
   applications: Application[]
   credentials: Credential[]
   connections: Connection[]
+  machineTemplates: ManagedResource[]
   resources: InfrastructureResource[]
   audit: AuditEvent[]
   session: Session
@@ -38,6 +38,9 @@ interface ViewProps {
   deactivatePlugin: (pluginPackage: PluginPackage) => Promise<void>
   addCredential: () => void
   addConnection: () => void
+  addMachineTemplate: () => void
+  deleteConnection: (id: string, name: string) => Promise<void>
+  deleteMachineTemplate: (id: string, name: string) => Promise<void>
   openInfrastructureCapability: (workspace: Workspace, pluginID: string) => void
   openTerminal: (workspace: Workspace) => void
 }
@@ -76,6 +79,18 @@ export function Views(props: ViewProps) {
     </section>
     <section className={`view ${props.view === 'infrastructure' ? 'active' : ''}`}>
       <Infrastructure {...props} />
+    </section>
+    <section className={`view ${props.view === 'kubernetes' ? 'active' : ''}`}>
+      <ProductNext eyebrow="CLUSTERS" title="Kubernetes clusters" copy="Create clusters from a Proxmox connection, a VM template, Harbor, NFS and zoned node pools." />
+    </section>
+    <section className={`view ${props.view === 'experiments' ? 'active' : ''}`}>
+      <ProductNext eyebrow="CONFIGURE ONCE" title="Experiment configurations" copy="Choose an application, load, chaos and scheduling strategies, then create isolated repeatable runs." />
+    </section>
+    <section className={`view ${props.view === 'suites' ? 'active' : ''}`}>
+      <ProductNext eyebrow="COMPARE" title="Experiment suites" copy="Run multiple configurations with controlled ordering and compare aggregate scientific results." />
+    </section>
+    <section className={`view ${props.view === 'advanced' ? 'active' : ''}`}>
+      <Advanced props={props} />
     </section>
   </>
 }
@@ -168,29 +183,30 @@ function ApplicationGrid({items}: {items: Application[]}) {
 }
 
 function Infrastructure(props: ViewProps) {
-  const accessPlugins = infrastructureControls(props.plugins)
-  const terminalAvailable = props.plugins.some(plugin => plugin.capabilities?.includes('infrastructure.ssh.terminal'))
-  const [workspaceID, setWorkspaceID] = useState(props.workspaces[0]?.id ?? '')
-  useEffect(() => {
-    if (!props.workspaces.some(workspace => workspace.id === workspaceID)) setWorkspaceID(props.workspaces[0]?.id ?? '')
-  }, [props.workspaces, workspaceID])
-  const selectedWorkspace = props.workspaces.find(workspace => workspace.id === workspaceID)
   return <>
-    <Heading eyebrow="ONE ACCESS POINT" title="Infrastructure Console" action={<div className="topbar-actions">{props.isAdmin && <><button className="button secondary" onClick={props.addCredential}>Add credential</button><button className="button primary" onClick={props.addConnection}>Add connection</button></>}</div>} />
-    <p className="section-copy infrastructure-copy">Managed access without remembering addresses or opening another terminal.</p>
-    <Heading eyebrow="AUDITED TOOLS" title="Interactive access" copy="Every available tool is contributed by a plugin and still follows validation, confirmation and health gates." />
-    <div className="console-toolbar"><label>Workspace<select value={workspaceID} onChange={event => setWorkspaceID(event.target.value)} disabled={!props.workspaces.length}>{props.workspaces.length ? props.workspaces.map(workspace => <option value={workspace.id} key={workspace.id}>{workspace.name}</option>) : <option value="">Create a workspace first</option>}</select></label></div>
-    <div className="workspace-grid">{terminalAvailable && <article className="feature-card terminal-card"><span className="feature-icon">$_</span><div><h3>Managed terminal</h3><p>Open an interactive SSH session to a running machine from verified artifacts.</p><small>infrastructure.ssh.terminal</small></div><button className="button secondary compact" disabled={!selectedWorkspace} onClick={() => selectedWorkspace && props.openTerminal(selectedWorkspace)}>Open</button></article>}{accessPlugins.length ? accessPlugins.map(plugin => <article className="feature-card" key={plugin.id}><span className="feature-icon">›_</span><div><h3>{plugin.name}</h3><p>{plugin.description}</p><small>{plugin.capabilities?.filter(capability => capability.endsWith('.control')).join(' · ')}</small></div><button className="button secondary compact" disabled={!selectedWorkspace} onClick={() => selectedWorkspace && props.openInfrastructureCapability(selectedWorkspace, plugin.id)}>Open</button></article>) : !terminalAvailable && <Empty title="No interactive access plugin">Install a conforming plugin that declares an infrastructure control capability.</Empty>}</div>
-    <Heading eyebrow="REUSABLE ACCESS" title="Provider connections" copy="Validate infrastructure access once, then select it in every compatible operation." />
-    <div className="credential-list">{props.connections.length ? props.connections.map(item => <InfoRow key={item.id} icon="↗" title={item.name} detail={`${item.provider} · ${item.pluginId}`} status="Validated" />) : <Empty title="No provider connections">Add and validate a reusable infrastructure connection.</Empty>}</div>
-    <Heading eyebrow="OWNERSHIP BOUNDARY" title="Resource inventory" copy="Discovered resources remain protected until KubePhos can prove ownership." />
-    <div className="credential-list">{props.resources.length ? props.resources.map(item => <article className="resource-row" key={item.id}><span className="feature-icon">□</span><div><h3>{item.name}</h3><p>{item.kind} · {item.externalId} · {item.state}</p></div><div className="resource-badges"><Status value={item.ownership} /><span className="protection">{item.protection}</span></div></article>) : <Empty title="No resources discovered">Run an infrastructure discovery operation to populate the ledger.</Empty>}</div>
-    <Heading eyebrow="SERVER-SIDE VAULT" title="Credentials" copy="Values are encrypted and never returned to the browser." />
-    <div className="credential-list">{props.credentials.length ? props.credentials.map(item => <InfoRow key={item.id} icon="⌁" title={item.name} detail={`${item.kind} · fingerprint ${item.fingerprint}`} status="Encrypted" />) : <Empty title="No credentials stored">Add a credential declared by an installed plugin.</Empty>}</div>
-    <Heading eyebrow="TRACEABILITY" title="Audit trail" copy="Every API mutation is recorded without request payloads." />
-    <div className="audit-list">{props.audit.length ? props.audit.map(item => <article className="audit-row" key={item.sequence}><span className="audit-sequence">#{item.sequence}</span><div><h3>{item.action}</h3><p>{item.actor} · {item.targetType}{item.targetId ? ` · ${shortID(item.targetId)}` : ''}</p></div><Status value={item.outcome} /><time>{formatDate(item.createdAt)}</time></article>) : <Empty title="No audit events">Mutating actions will appear here.</Empty>}</div>
-    <div className="notice"><strong>Safety boundary</strong><p>Imported infrastructure is read-only by default. Credentials remain server-side and every write produces an audit event.</p></div>
+    <Heading eyebrow="START HERE" title="Infrastructure" action={props.isAdmin && <div className="topbar-actions"><button className="button secondary" onClick={props.addConnection}>New connection</button><button className="button primary" disabled={!props.connections.length} onClick={props.addMachineTemplate}>New VM template</button></div>} />
+    <p className="section-copy infrastructure-copy">Connect Proxmox once, then create the building blocks used by every cluster.</p>
+    <div className="stats-grid infrastructure-stats"><Stat label="Connections" value={props.connections.length} caption="validated providers" /><Stat label="VM templates" value={props.machineTemplates.length} caption="reusable Proxmox templates" /><Stat label="Ready" value={props.machineTemplates.filter(item => item.status === 'ready').length} caption="available for provisioning" /></div>
+    <Heading eyebrow="1 · ACCESS" title="Proxmox connections" copy="Credentials stay encrypted. A connection cannot be removed while active resources use it." />
+    <div className="credential-list">{props.connections.length ? props.connections.map(item => <article className="credential-row" key={item.id}><span className="feature-icon">↗</span><div><h3>{item.name}</h3><p>{item.provider} · validated {formatDate(item.createdAt ?? new Date().toISOString())}</p></div><div className="card-actions"><Status value="ready" />{props.isAdmin && <button className="button danger compact" onClick={() => props.deleteConnection(item.id, item.name)}>Delete</button>}</div></article>) : <Empty title="No Proxmox connection">Create a connection; KubePhos will validate endpoint, credentials and permissions.</Empty>}</div>
+    <Heading eyebrow="2 · BASE IMAGE" title="Proxmox VM templates" copy="These are real Proxmox templates, prepared and verified in the background." />
+    <div className="managed-grid">{props.machineTemplates.length ? props.machineTemplates.map(item => <article className="managed-card" key={item.id}><div className="managed-card-head"><span className="feature-icon">◇</span><Status value={item.status} /></div><h3>{item.name}</h3><p>{item.provider} · node {specText(item, 'node')} · VMID {specText(item, 'vmid')}</p><dl><div><dt>OS</dt><dd>{specText(item, 'os')}</dd></div><div><dt>Disk</dt><dd>{specText(item, 'diskGiB')} GiB</dd></div><div><dt>Storage</dt><dd>{specText(item, 'storage')}</dd></div><div><dt>Created</dt><dd>{formatDate(item.createdAt)}</dd></div></dl>{item.error && <p className="managed-error">{item.error}</p>}<div className="managed-actions"><button className="text-button" onClick={() => props.openOperation(item.deletionOperationId || item.operationId)}>View activity</button>{props.isAdmin && <button className="button danger compact" disabled={item.status !== 'ready'} onClick={() => props.deleteMachineTemplate(item.id, item.name)}>Delete</button>}</div></article>) : <Empty title="No VM template">Create the first reusable machine template from a supported cloud image.</Empty>}</div>
+    <div className="next-step-card"><span>Next</span><div><strong>Managed Harbor and NFS</strong><p>The next infrastructure step will reuse a ready VM template and keep both services inside the selected Proxmox environment.</p></div></div>
   </>
+}
+
+function specText(resource: ManagedResource, field: string): string {
+  const value = resource.spec?.[field]
+  return value === undefined || value === null || value === '' ? '—' : String(value)
+}
+
+function ProductNext({eyebrow, title, copy}: {eyebrow: string; title: string; copy: string}) {
+  return <><Heading eyebrow={eyebrow} title={title} /><div className="product-next"><span>○</span><div><strong>Coming in the next implementation slice</strong><p>{copy}</p></div></div></>
+}
+
+function Advanced({props}: {props: ViewProps}) {
+  const sections: Array<[View, string, string]> = [['workspaces', 'Workspaces', 'Isolation and development environments'], ['pipelines', 'Pipelines', 'Reusable plugin flows'], ['operations', 'Operations', 'Logs, plans and background tasks'], ['catalog', 'Catalog', 'Application contracts'], ['plugins', 'Plugins', 'Capabilities and runtime']]
+  return <><Heading eyebrow="POWER TOOLS" title="Advanced" copy="Internal concepts remain available without cluttering the normal workflow." /><div className="workspace-grid">{sections.map(([view, title, copy]) => <button className="advanced-card" key={view} onClick={() => props.navigate(view)}><span>→</span><div><strong>{title}</strong><p>{copy}</p></div></button>)}</div></>
 }
 
 export function infrastructureControls(plugins: Plugin[]): Plugin[] {

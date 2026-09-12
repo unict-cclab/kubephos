@@ -213,8 +213,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 
 .status::before { width: 6px; height: 6px; border-radius: 50%; background: currentColor; content: ""; }
 .status.succeeded, .status.ready, .status.available { background: #e8f5ee; color: var(--green); }
-.status.failed, .status.canceled { background: #fae9e8; color: var(--red); }
-.status.queued, .status.prechecking, .status.running, .status.verifying { background: #e9f0f8; color: var(--blue); }
+.status.failed, .status.canceled, .status.deletion-failed { background: #fae9e8; color: var(--red); }
+.status.queued, .status.prechecking, .status.running, .status.verifying, .status.provisioning, .status.deleting { background: #e9f0f8; color: var(--blue); }
 .status-dot { width: 8px; height: 8px; flex: 0 0 auto; border-radius: 50%; background: #aeb8b1; }
 .status-dot.succeeded, .status-dot.ready { background: var(--green); }
 .status-dot.failed, .status-dot.canceled { background: var(--red); }
@@ -240,6 +240,33 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .application-card dd { margin: 4px 0 0; font-size: 11px; font-weight: 750; }
 .digest { display: block; overflow: hidden; color: #929b94; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
 .workspace-card, .feature-card { position: relative; min-height: 190px; border: 1px solid var(--line); border-radius: 15px; padding: 22px; background: var(--surface); }
+.infrastructure-stats { grid-template-columns: repeat(3, minmax(0, 1fr)); margin-bottom: 34px; }
+.managed-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 15px; }
+.managed-card { display: flex; min-height: 280px; flex-direction: column; border: 1px solid var(--line); border-radius: 15px; padding: 20px; background: var(--surface); }
+.managed-card-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; }
+.managed-card h3 { margin: 0; font-size: 17px; letter-spacing: -.025em; }
+.managed-card > p { margin: 6px 0 16px; color: var(--muted); font-size: 11px; line-height: 1.5; }
+.managed-card dl { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 0; }
+.managed-card dl div { min-width: 0; border-top: 1px solid var(--line); padding-top: 9px; }
+.managed-card dt { color: var(--muted); font-size: 8px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
+.managed-card dd { margin: 4px 0 0; overflow: hidden; font-size: 11px; font-weight: 750; text-overflow: ellipsis; white-space: nowrap; }
+.managed-card .managed-error { margin: 12px 0 0; border-radius: 8px; padding: 9px; background: #fae9e8; color: var(--red); }
+.managed-actions { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: auto; padding-top: 18px; }
+.next-step-card, .product-next { display: flex; align-items: center; gap: 16px; margin-top: 22px; border: 1px dashed #bdc8c0; border-radius: 15px; padding: 20px; background: rgba(255,255,255,.55); }
+.next-step-card > span { border-radius: 999px; padding: 6px 9px; background: #e8f5ee; color: var(--green); font-size: 9px; font-weight: 850; letter-spacing: .08em; text-transform: uppercase; }
+.next-step-card strong, .product-next strong { font-size: 13px; }
+.next-step-card p, .product-next p { margin: 4px 0 0; color: var(--muted); font-size: 11px; line-height: 1.5; }
+.product-next { min-height: 180px; justify-content: center; margin-top: 18px; background: var(--surface); }
+.product-next > span { color: var(--green); font-size: 28px; }
+.advanced-card { display: flex; min-height: 120px; align-items: center; gap: 15px; border: 1px solid var(--line); border-radius: 14px; padding: 20px; background: var(--surface); cursor: pointer; text-align: left; }
+.advanced-card > span { color: var(--green); font-size: 20px; }
+.advanced-card strong { font-size: 14px; }
+.advanced-card p { margin: 5px 0 0; color: var(--muted); font-size: 11px; }
+.form-section { margin: 22px 0 -4px; border-top: 1px solid var(--line); padding-top: 17px; }
+.form-section:first-child { margin-top: 0; border-top: 0; padding-top: 0; }
+.form-section strong { font-size: 13px; }
+.form-section p { margin: 4px 0 0; color: var(--muted); font-size: 10px; line-height: 1.5; }
+.template-modal { width: min(760px, calc(100% - 28px)); }
 .workspace-card { display: flex; flex-direction: column; }
 .workspace-card .workspace-icon { display: grid; width: 42px; height: 42px; place-items: center; margin-bottom: 22px; border-radius: 11px; background: #e6f1ea; color: var(--green); font-weight: 900; }
 .workspace-card .card-footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: auto; padding-top: 18px; }
@@ -625,6 +652,7 @@ summary { color: var(--muted); font-size: 12px; font-weight: 750; cursor: pointe
   .stats-grid { grid-template-columns: repeat(2, 1fr); }
   .workspace-grid { grid-template-columns: repeat(2, 1fr); }
   .catalog-grid { grid-template-columns: 1fr; }
+  .managed-grid { grid-template-columns: repeat(2, 1fr); }
   .operation-row { grid-template-columns: 1.5fr 1fr 100px 24px; }
   .operation-row .date { display: none; }
   .results-layout { grid-template-columns: 235px minmax(0, 1fr); }
@@ -633,7 +661,7 @@ summary { color: var(--muted); font-size: 12px; font-weight: 750; cursor: pointe
 @media (max-width: 720px) {
   .sidebar { position: static; width: auto; padding: 16px; }
   .brand { padding-bottom: 16px; }
-  .navigation { grid-template-columns: repeat(8, 1fr); overflow-x: auto; }
+  .navigation { grid-template-columns: repeat(7, 1fr); overflow-x: auto; }
   .nav-item { justify-content: center; padding: 10px; font-size: 0; }
   .nav-item span { font-size: 18px; }
   .sidebar-footer { display: none; }
@@ -645,6 +673,7 @@ summary { color: var(--muted); font-size: 12px; font-weight: 750; cursor: pointe
   .hero { min-height: 330px; flex-direction: column; align-items: flex-start; padding: 28px; }
   .button.light { align-self: flex-start; }
   .stats-grid, .workspace-grid { grid-template-columns: 1fr; }
+  .managed-grid, .infrastructure-stats { grid-template-columns: 1fr; }
   .operation-row { grid-template-columns: 1fr auto; }
   .operation-row > :nth-child(2), .operation-row > :nth-child(4) { display: none; }
   .section-heading { align-items: flex-start; flex-direction: column; gap: 8px; }
