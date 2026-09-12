@@ -1,7 +1,7 @@
 import {fireEvent, render, screen, waitFor} from '@testing-library/react'
 import {afterEach, beforeAll, describe, expect, it, vi} from 'vitest'
-import type {Artifact} from '../types'
-import {RuntimeDialog} from './Forms'
+import type {Artifact, Plugin} from '../types'
+import {ConnectionDialog, RuntimeDialog} from './Forms'
 
 const artifacts: Artifact[] = [
   artifact('art_executor_endpoint', 'op_executor', 'executor-endpoint', 'OCIExecutorEndpoint', false),
@@ -60,6 +60,75 @@ describe('RuntimeDialog', () => {
   })
 })
 
+describe('ConnectionDialog', () => {
+  it('creates and links a Proxmox API credential in one flow', async () => {
+    const fetch = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({id: 'cred_created', name: 'Lab token', kind: 'proxmox-api-token', fingerprint: 'sha256:test'}), {status: 201, headers: {'Content-Type': 'application/json'}}))
+      .mockResolvedValueOnce(new Response(JSON.stringify({id: 'conn_created'}), {status: 201, headers: {'Content-Type': 'application/json'}}))
+    vi.stubGlobal('fetch', fetch)
+    const close = vi.fn()
+    const onDone = vi.fn().mockResolvedValue(undefined)
+    render(<ConnectionDialog open close={close} plugins={[proxmoxPlugin]} session={{authenticated: true, csrfToken: 'csrf'}} applications={[]} artifacts={[]} connections={[]} credentials={[]} onDone={onDone} />)
+
+    fireEvent.change(screen.getByRole('textbox', {name: 'Name'}), {target: {value: 'Lab Proxmox'}})
+    fireEvent.change(screen.getByRole('textbox', {name: 'Credential name'}), {target: {value: 'Lab token'}})
+    fireEvent.change(screen.getByRole('textbox', {name: 'Token ID'}), {target: {value: 'root@pam!kubephos'}})
+    fireEvent.change(screen.getByLabelText('Token secret'), {target: {value: 'secret-value'}})
+    fireEvent.change(screen.getByRole('textbox', {name: 'Proxmox endpoint'}), {target: {value: 'https://proxmox.test:8006'}})
+    fireEvent.change(screen.getByRole('textbox', {name: 'First managed VM address'}), {target: {value: '192.168.1.120'}})
+    fireEvent.change(screen.getByRole('textbox', {name: 'Network gateway'}), {target: {value: '192.168.1.1'}})
+    fireEvent.change(screen.getByRole('textbox', {name: 'DNS server'}), {target: {value: '1.1.1.1'}})
+    fireEvent.click(screen.getByRole('button', {name: 'Validate and save'}))
+
+    await waitFor(() => expect(fetch).toHaveBeenCalledTimes(2))
+    expect(JSON.parse(fetch.mock.calls[0][1].body)).toEqual({name: 'Lab token', kind: 'proxmox-api-token', value: {tokenId: 'root@pam!kubephos', tokenSecret: 'secret-value'}})
+    expect(JSON.parse(fetch.mock.calls[1][1].body)).toMatchObject({
+      name: 'Lab Proxmox',
+      pluginId: 'io.kubephos.infrastructure.proxmox.discovery',
+      configuration: {endpoint: 'https://proxmox.test:8006', credentialRef: 'cred_created', addressStart: '192.168.1.120', gateway: '192.168.1.1', dnsServer: '1.1.1.1'}
+    })
+    expect(close).toHaveBeenCalledOnce()
+    expect(onDone).toHaveBeenCalledWith('Provider connection validated and saved.')
+  })
+})
+
 function artifact(id: string, operationId: string, name: string, type: string, sensitive: boolean): Artifact {
   return {id, operationId, name, type, version: 'v1alpha1', mediaType: 'application/json', digest: 'sha256:test', sizeBytes: 1, sensitive, verifiedAt: '2026-09-10T00:00:00Z'}
+}
+
+const proxmoxPlugin: Plugin = {
+  id: 'io.kubephos.infrastructure.proxmox.discovery',
+  provider: 'proxmox',
+  name: 'Proxmox discovery',
+  version: '0.1.0',
+  description: 'Proxmox connection',
+  capabilities: ['infrastructure.discovery'],
+  runtime: {kind: 'process'},
+  schema: {
+    type: 'object',
+    required: ['endpoint', 'credentialRef', 'verifyTLS', 'vmidStart', 'addressStart', 'prefixLength', 'gateway', 'dnsServer'],
+    properties: {
+      endpoint: {type: 'string', title: 'Proxmox endpoint'},
+      credentialRef: {type: 'string', title: 'API credential', format: 'kubephos-secret-ref', 'x-kubephos-secret-kind': 'proxmox-api-token'},
+      verifyTLS: {type: 'boolean', title: 'Verify TLS certificate', default: true},
+      vmidStart: {type: 'integer', title: 'First managed VMID', default: 110},
+      addressStart: {type: 'string', title: 'First managed VM address'},
+      prefixLength: {type: 'integer', title: 'Network prefix length', default: 24},
+      gateway: {type: 'string', title: 'Network gateway'},
+      dnsServer: {type: 'string', title: 'DNS server'}
+    }
+  },
+  credentialSchemas: [{
+    kind: 'proxmox-api-token',
+    name: 'Proxmox API token',
+    description: 'Token ID and secret generated in Proxmox.',
+    schema: {
+      type: 'object',
+      required: ['tokenId', 'tokenSecret'],
+      properties: {
+        tokenId: {type: 'string', title: 'Token ID'},
+        tokenSecret: {type: 'string', title: 'Token secret', writeOnly: true}
+      }
+    }
+  }]
 }

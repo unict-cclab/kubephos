@@ -162,19 +162,50 @@ export function ConnectionDialog({open, close, plugins, ...common}: CommonProps 
   const [pluginID, setPluginID] = useState('')
   const [error, setError] = useState('')
   const [pending, setPending] = useState(false)
+  const [credentialMode, setCredentialMode] = useState<'new' | 'saved'>('new')
+  const [createdCredential, setCreatedCredential] = useState<Credential | null>(null)
   const selected = compatible.find(item => item.id === pluginID) ?? compatible[0]
+  const credentialInput = useMemo(() => connectionCredentialInput(selected), [selected])
+  const connectionSchema = useMemo(() => credentialInput ? schemaWithout(selected.schema, credentialInput.property) : selected?.schema ?? {type: 'object', properties: {}}, [credentialInput, selected])
+  const savedCredentials = common.credentials.filter(item => item.kind === credentialInput?.definition.kind)
+
+  useEffect(() => {
+    if (!open) return
+    setCredentialMode('new')
+    setCreatedCredential(null)
+    setError('')
+  }, [open, selected?.id])
+
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     if (!selected) return
     setPending(true)
     setError('')
     const form = event.currentTarget
+    const values = new FormData(form)
+    let storedDuringSubmit = false
     try {
-      await request('/connections', {method: 'POST', body: JSON.stringify({name: new FormData(form).get('name'), pluginId: selected.id, configuration: readSchemaValues(form, selected.schema, 'connection')})}, common.session.csrfToken)
+      const configuration = readSchemaValues(form, connectionSchema, 'connection')
+      if (credentialInput) {
+        let credentialRef = credentialMode === 'saved' ? String(values.get('credentialRef') ?? '') : createdCredential?.id ?? ''
+        if (!credentialRef) {
+          const credential = await request<Credential>('/credentials', {method: 'POST', body: JSON.stringify({
+            name: values.get('credentialName'),
+            kind: credentialInput.definition.kind,
+            value: readSchemaValues(form, credentialInput.definition.schema, 'connectionCredential')
+          })}, common.session.csrfToken)
+          setCreatedCredential(credential)
+          credentialRef = credential.id
+          storedDuringSubmit = true
+        }
+        configuration[credentialInput.property] = credentialRef
+      }
+      await request('/connections', {method: 'POST', body: JSON.stringify({name: values.get('name'), pluginId: selected.id, configuration})}, common.session.csrfToken)
       close()
       await common.onDone('Provider connection validated and saved.')
     } catch (cause) {
-      setError(validationMessage(cause))
+      const message = validationMessage(cause)
+      setError(storedDuringSubmit ? `The API credential was encrypted and saved. Correct the connection settings and retry; it will be reused. ${message}` : message)
     } finally {
       setPending(false)
     }
@@ -183,7 +214,14 @@ export function ConnectionDialog({open, close, plugins, ...common}: CommonProps 
     <form onSubmit={submit} key={selected?.id ?? ''}>
       <label>Provider capability<select value={selected?.id ?? ''} onChange={event => setPluginID(event.target.value)} required>{compatible.map(item => <option key={item.id} value={item.id}>{item.name} · {item.provider}</option>)}</select></label>
       <label>Name<input name="name" maxLength={80} placeholder="Development Proxmox" required /></label>
-      {selected && <SchemaFields schema={selected.schema} prefix="connection" applications={common.applications} artifacts={common.artifacts} connections={common.connections} credentials={common.credentials} />}
+      {credentialInput && <>
+        <div className="form-section pool-section"><div><strong>API access</strong><p>Create the encrypted credential here, or reuse one already stored.</p></div>{savedCredentials.length > 0 && <button className="button secondary compact" type="button" onClick={() => setCredentialMode(mode => mode === 'new' ? 'saved' : 'new')}>{credentialMode === 'new' ? 'Use saved credential' : 'Enter new credential'}</button>}</div>
+        {credentialMode === 'saved' ? <label>API credential<select name="credentialRef" required>{savedCredentials.map(item => <option key={item.id} value={item.id}>{item.name} · {item.fingerprint}</option>)}</select></label> : createdCredential ? <div className="validation-callout"><span>✓</span><p><strong>Credential encrypted.</strong> {createdCredential.name} will be reused when you retry validation.</p></div> : <>
+          <label>Credential name<input name="credentialName" maxLength={80} defaultValue="Proxmox API token" required /></label>
+          <SchemaFields schema={credentialInput.definition.schema} prefix="connectionCredential" applications={common.applications} artifacts={common.artifacts} connections={common.connections} credentials={common.credentials} />
+        </>}
+      </>}
+      {selected && <SchemaFields schema={connectionSchema} prefix="connection" applications={common.applications} artifacts={common.artifacts} connections={common.connections} credentials={common.credentials} />}
       <ValidationCallout text="Credentials remain encrypted and operations receive only this connection reference." />
       <p className="form-error">{error}</p>
       <Actions close={close} pending={pending} label="Validate and save" />
@@ -576,6 +614,25 @@ function credentialDefinitions(plugins: Plugin[]): CredentialDefinition[] {
   const definitions = new Map<string, CredentialDefinition>()
   for (const plugin of plugins) for (const definition of plugin.credentialSchemas ?? []) definitions.set(definition.kind, definition)
   return [...definitions.values()].sort((left, right) => left.name.localeCompare(right.name))
+}
+
+function connectionCredentialInput(plugin: Plugin | undefined): {property: string; definition: CredentialDefinition} | null {
+  if (!plugin) return null
+  for (const [property, schema] of Object.entries(plugin.schema.properties ?? {})) {
+    if (schema.format !== 'kubephos-secret-ref') continue
+    const kind = schema['x-kubephos-secret-kind']
+    const definition = plugin.credentialSchemas?.find(item => item.kind === kind)
+    if (definition) return {property, definition}
+  }
+  return null
+}
+
+function schemaWithout(schema: JsonSchema, property: string): JsonSchema {
+  return {
+    ...schema,
+    required: schema.required?.filter(item => item !== property),
+    properties: Object.fromEntries(Object.entries(schema.properties ?? {}).filter(([name]) => name !== property))
+  }
 }
 
 function errorMessage(cause: unknown): string {
