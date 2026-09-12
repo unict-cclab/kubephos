@@ -1,7 +1,7 @@
 import {fireEvent, render, screen, waitFor} from '@testing-library/react'
 import {afterEach, beforeAll, describe, expect, it, vi} from 'vitest'
-import type {Artifact, Plugin} from '../types'
-import {ConnectionDialog, RuntimeDialog} from './Forms'
+import type {Artifact, Connection, ManagedResource, Plugin, Workspace} from '../types'
+import {ConnectionDialog, InfrastructureServiceDialog, RuntimeDialog} from './Forms'
 
 const artifacts: Artifact[] = [
   artifact('art_executor_endpoint', 'op_executor', 'executor-endpoint', 'OCIExecutorEndpoint', false),
@@ -89,6 +89,33 @@ describe('ConnectionDialog', () => {
   })
 })
 
+describe('InfrastructureServiceDialog', () => {
+  it('keeps the selected service and entered values across data refreshes', async () => {
+    const props = {
+      open: true,
+      close: () => {},
+      workspaces: [workspace],
+      templates: [machineTemplate],
+      session: {authenticated: true, csrfToken: 'csrf'},
+      applications: [],
+      artifacts: [],
+      connections: [connection],
+      credentials: [],
+      onDone: async () => {}
+    }
+    const view = render(<InfrastructureServiceDialog {...props} />)
+
+    fireEvent.click(screen.getByRole('button', {name: /NFS/}))
+    fireEvent.change(screen.getByRole('textbox', {name: 'Service name'}), {target: {value: 'shared-data'}})
+    expect(screen.getByRole('button', {name: 'Create NFS'})).toBeInTheDocument()
+
+    view.rerender(<InfrastructureServiceDialog {...props} workspaces={[{...workspace}]} connections={[{...connection}]} templates={[{...machineTemplate}]} />)
+
+    await waitFor(() => expect(screen.getByRole('button', {name: 'Create NFS'})).toBeInTheDocument())
+    expect(screen.getByRole('textbox', {name: 'Service name'})).toHaveValue('shared-data')
+  })
+})
+
 function artifact(id: string, operationId: string, name: string, type: string, sensitive: boolean): Artifact {
   return {id, operationId, name, type, version: 'v1alpha1', mediaType: 'application/json', digest: 'sha256:test', sizeBytes: 1, sensitive, verifiedAt: '2026-09-10T00:00:00Z'}
 }
@@ -123,4 +150,11 @@ const proxmoxPlugin: Plugin = {
       }
     }
   }]
+}
+
+const workspace: Workspace = {id: 'ws_default', name: 'Default', description: '', status: 'ready', createdAt: '2026-09-12T00:00:00Z'}
+const connection: Connection = {id: 'conn_proxmox', name: 'Proxmox', provider: 'proxmox', pluginId: proxmoxPlugin.id, createdAt: '2026-09-12T00:00:00Z', updatedAt: '2026-09-12T00:00:00Z'}
+const machineTemplate: ManagedResource = {
+  id: 'tmpl_ready', workspaceId: workspace.id, name: 'ubuntu', kind: 'machine-template', provider: 'proxmox', connectionId: connection.id,
+  status: 'ready', validation: {valid: true, issues: []}, spec: {}, createdAt: '2026-09-12T00:00:00Z', updatedAt: '2026-09-12T00:00:00Z'
 }

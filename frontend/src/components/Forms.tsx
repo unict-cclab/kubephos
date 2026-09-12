@@ -278,18 +278,20 @@ export function MachineTemplateDialog({open, close, plugins, workspaces, ...comm
 }
 
 export function InfrastructureServiceDialog({open, close, workspaces, templates, ...common}: CommonProps & {open: boolean; close: () => void; workspaces: Workspace[]; templates: ManagedResource[]}) {
-  const [workspaceID, setWorkspaceID] = useState(workspaces[0]?.id ?? '')
-  const [connectionID, setConnectionID] = useState(common.connections[0]?.id ?? '')
+  const defaultWorkspaceID = workspaces[0]?.id ?? ''
+  const defaultConnectionID = common.connections[0]?.id ?? ''
+  const [workspaceID, setWorkspaceID] = useState(defaultWorkspaceID)
+  const [connectionID, setConnectionID] = useState(defaultConnectionID)
   const [kind, setKind] = useState<'harbor' | 'nfs'>('harbor')
   const [error, setError] = useState('')
   const [pending, setPending] = useState(false)
   useEffect(() => {
     if (!open) return
-    setWorkspaceID(workspaces[0]?.id ?? '')
-    setConnectionID(common.connections[0]?.id ?? '')
+    setWorkspaceID(defaultWorkspaceID)
+    setConnectionID(defaultConnectionID)
     setKind('harbor')
     setError('')
-  }, [open, workspaces, common.connections])
+  }, [open, defaultWorkspaceID, defaultConnectionID])
   const availableTemplates = templates.filter(item => item.status === 'ready' && item.workspaceId === workspaceID && item.connectionId === connectionID)
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
@@ -346,18 +348,20 @@ export function InfrastructureServiceDialog({open, close, workspaces, templates,
 type ClusterPoolDraft = {name: string; count: number; zones: string}
 
 export function KubernetesClusterDialog({open, close, workspaces, templates, services, ...common}: CommonProps & {open: boolean; close: () => void; workspaces: Workspace[]; templates: ManagedResource[]; services: ManagedResource[]}) {
-  const [workspaceID, setWorkspaceID] = useState(workspaces[0]?.id ?? '')
-  const [connectionID, setConnectionID] = useState(common.connections[0]?.id ?? '')
+  const defaultWorkspaceID = workspaces[0]?.id ?? ''
+  const defaultConnectionID = common.connections[0]?.id ?? ''
+  const [workspaceID, setWorkspaceID] = useState(defaultWorkspaceID)
+  const [connectionID, setConnectionID] = useState(defaultConnectionID)
   const [applicationPools, setApplicationPools] = useState<ClusterPoolDraft[]>([{name: 'applications', count: 2, zones: 'zone-a'}])
   const [error, setError] = useState('')
   const [pending, setPending] = useState(false)
   useEffect(() => {
     if (!open) return
-    setWorkspaceID(workspaces[0]?.id ?? '')
-    setConnectionID(common.connections[0]?.id ?? '')
+    setWorkspaceID(defaultWorkspaceID)
+    setConnectionID(defaultConnectionID)
     setApplicationPools([{name: 'applications', count: 2, zones: 'zone-a'}])
     setError('')
-  }, [open, workspaces, common.connections])
+  }, [open, defaultWorkspaceID, defaultConnectionID])
   const compatible = (item: ManagedResource) => item.status === 'ready' && item.workspaceId === workspaceID && item.connectionId === connectionID
   const availableTemplates = templates.filter(compatible)
   const harbor = services.filter(item => item.kind === 'harbor' && compatible(item))
