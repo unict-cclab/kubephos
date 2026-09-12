@@ -3,7 +3,7 @@ kind: Plugin
 metadata:
   id: io.kubephos.infrastructure.proxmox.discovery
   name: Proxmox discovery
-  version: 0.1.0
+  version: 0.1.1
   description: Validates a Proxmox connection and inventories existing resources without modifying them.
 spec:
   protocol: v1alpha1
@@ -25,11 +25,6 @@ spec:
       - endpoint
       - credentialRef
       - verifyTLS
-      - vmidStart
-      - addressStart
-      - prefixLength
-      - gateway
-      - dnsServer
     properties:
       endpoint:
         type: string
@@ -47,29 +42,6 @@ spec:
         title: Verify TLS certificate
         description: Disable only for a development server using a private certificate.
         default: true
-      vmidStart:
-        type: integer
-        title: First managed VMID
-        description: VMID mapped to the first managed VM address.
-        minimum: 100
-        maximum: 999999999
-        default: 110
-      addressStart:
-        type: string
-        title: First managed VM address
-        description: First free IPv4 address reserved for KubePhos machines.
-      prefixLength:
-        type: integer
-        title: Network prefix length
-        minimum: 8
-        maximum: 30
-        default: 24
-      gateway:
-        type: string
-        title: Network gateway
-      dnsServer:
-        type: string
-        title: DNS server
   credentialSchemas:
     - kind: proxmox-api-token
       name: Proxmox API token

@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -28,11 +27,6 @@ type Spec struct {
 	Endpoint      string `json:"endpoint"`
 	CredentialRef string `json:"credentialRef"`
 	VerifyTLS     bool   `json:"verifyTLS"`
-	VMIDStart     int    `json:"vmidStart"`
-	AddressStart  string `json:"addressStart"`
-	PrefixLength  int    `json:"prefixLength"`
-	Gateway       string `json:"gateway"`
-	DNSServer     string `json:"dnsServer"`
 }
 
 type credential struct {
@@ -54,7 +48,7 @@ type client struct {
 }
 
 func (Plugin) Manifest() plugins.Manifest {
-	return plugins.Manifest{ID: "io.kubephos.infrastructure.proxmox.discovery", Provider: "proxmox", Name: "Proxmox discovery", Version: "0.1.0", Description: "Validates a Proxmox connection and inventories existing resources without modifying them."}
+	return plugins.Manifest{ID: "io.kubephos.infrastructure.proxmox.discovery", Provider: "proxmox", Name: "Proxmox discovery", Version: "0.1.1", Description: "Validates a Proxmox connection and inventories existing resources without modifying them."}
 }
 
 func (Plugin) Validate(ctx context.Context, invocation Invocation) domain.ValidationReport {
@@ -63,11 +57,6 @@ func (Plugin) Validate(ctx context.Context, invocation Invocation) domain.Valida
 	if err != nil {
 		report.Valid = false
 		report.Issues = append(report.Issues, domain.ValidationIssue{Level: "error", Path: "$", Message: err.Error()})
-		return report
-	}
-	if err := validateNetworkProfile(spec); err != nil {
-		report.Valid = false
-		report.Issues = append(report.Issues, domain.ValidationIssue{Level: "error", Path: "addressStart", Message: err.Error()})
 		return report
 	}
 	version, err := connection.version(ctx)
@@ -98,30 +87,6 @@ func (Plugin) Validate(ctx context.Context, invocation Invocation) domain.Valida
 	}
 	report.Issues = append(report.Issues, domain.ValidationIssue{Level: "info", Message: fmt.Sprintf("Proxmox %s is reachable and %d node(s) are online. Discovery is read-only.", version.Version, online)})
 	return report
-}
-
-func validateNetworkProfile(spec Spec) error {
-	if spec.VMIDStart < 100 || spec.VMIDStart > 999999999 {
-		return errors.New("the managed VMID range start must be between 100 and 999999999")
-	}
-	address := net.ParseIP(spec.AddressStart)
-	gateway := net.ParseIP(spec.Gateway)
-	dns := net.ParseIP(spec.DNSServer)
-	if address == nil || address.To4() == nil || gateway == nil || gateway.To4() == nil || dns == nil || dns.To4() == nil {
-		return errors.New("the managed network profile requires valid IPv4 addresses")
-	}
-	if spec.PrefixLength < 8 || spec.PrefixLength > 30 {
-		return errors.New("the managed network prefix must be between 8 and 30")
-	}
-	network := &net.IPNet{IP: address.Mask(net.CIDRMask(spec.PrefixLength, 32)), Mask: net.CIDRMask(spec.PrefixLength, 32)}
-	broadcast := append(net.IP(nil), network.IP...)
-	for index := range broadcast {
-		broadcast[index] |= ^network.Mask[index]
-	}
-	if !network.Contains(gateway) || address.Equal(network.IP) || address.Equal(broadcast) || gateway.Equal(network.IP) || gateway.Equal(broadcast) || address.Equal(gateway) {
-		return errors.New("the address pool start and gateway must be distinct usable addresses in the managed subnet")
-	}
-	return nil
 }
 
 func (Plugin) Plan(ctx context.Context, raw json.RawMessage) (domain.Plan, error) {

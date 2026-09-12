@@ -75,9 +75,6 @@ describe('ConnectionDialog', () => {
     fireEvent.change(screen.getByRole('textbox', {name: 'Token ID'}), {target: {value: 'root@pam!kubephos'}})
     fireEvent.change(screen.getByLabelText('Token secret'), {target: {value: 'secret-value'}})
     fireEvent.change(screen.getByRole('textbox', {name: 'Proxmox endpoint'}), {target: {value: 'https://proxmox.test:8006'}})
-    fireEvent.change(screen.getByRole('textbox', {name: 'First managed VM address'}), {target: {value: '192.168.1.120'}})
-    fireEvent.change(screen.getByRole('textbox', {name: 'Network gateway'}), {target: {value: '192.168.1.1'}})
-    fireEvent.change(screen.getByRole('textbox', {name: 'DNS server'}), {target: {value: '1.1.1.1'}})
     fireEvent.click(screen.getByRole('button', {name: 'Validate and save'}))
 
     await waitFor(() => expect(fetch).toHaveBeenCalledTimes(2))
@@ -85,7 +82,7 @@ describe('ConnectionDialog', () => {
     expect(JSON.parse(fetch.mock.calls[1][1].body)).toMatchObject({
       name: 'Lab Proxmox',
       pluginId: 'io.kubephos.infrastructure.proxmox.discovery',
-      configuration: {endpoint: 'https://proxmox.test:8006', credentialRef: 'cred_created', addressStart: '192.168.1.120', gateway: '192.168.1.1', dnsServer: '1.1.1.1'}
+      configuration: {endpoint: 'https://proxmox.test:8006', credentialRef: 'cred_created', verifyTLS: true}
     })
     expect(close).toHaveBeenCalledOnce()
     expect(onDone).toHaveBeenCalledWith('Provider connection validated and saved.')
@@ -106,16 +103,11 @@ const proxmoxPlugin: Plugin = {
   runtime: {kind: 'process'},
   schema: {
     type: 'object',
-    required: ['endpoint', 'credentialRef', 'verifyTLS', 'vmidStart', 'addressStart', 'prefixLength', 'gateway', 'dnsServer'],
+    required: ['endpoint', 'credentialRef', 'verifyTLS'],
     properties: {
       endpoint: {type: 'string', title: 'Proxmox endpoint'},
       credentialRef: {type: 'string', title: 'API credential', format: 'kubephos-secret-ref', 'x-kubephos-secret-kind': 'proxmox-api-token'},
-      verifyTLS: {type: 'boolean', title: 'Verify TLS certificate', default: true},
-      vmidStart: {type: 'integer', title: 'First managed VMID', default: 110},
-      addressStart: {type: 'string', title: 'First managed VM address'},
-      prefixLength: {type: 'integer', title: 'Network prefix length', default: 24},
-      gateway: {type: 'string', title: 'Network gateway'},
-      dnsServer: {type: 'string', title: 'DNS server'}
+      verifyTLS: {type: 'boolean', title: 'Verify TLS certificate', default: true}
     }
   },
   credentialSchemas: [{

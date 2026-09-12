@@ -44,6 +44,10 @@ type TopologySpec struct {
 	Node               string `json:"node"`
 	TemplateVMID       int    `json:"templateVMID"`
 	BaseVMID           int    `json:"baseVMID"`
+	AddressStart       string `json:"addressStart"`
+	PrefixLength       int    `json:"prefixLength"`
+	Gateway            string `json:"gateway"`
+	DNSServer          string `json:"dnsServer"`
 	NamePrefix         string `json:"namePrefix"`
 	MachineCount       int    `json:"machineCount"`
 	Cores              int    `json:"cores"`
@@ -156,9 +160,9 @@ type guestIPAddress struct {
 
 func (TopologyPlugin) Manifest() plugins.Manifest {
 	return plugins.Manifest{
-		ID: topologyPluginID, Provider: "proxmox", Name: "Proxmox machine topology", Version: "0.3.0",
+		ID: topologyPluginID, Provider: "proxmox", Name: "Proxmox machine topology", Version: "0.3.1",
 		Description:     "Creates a validated group of isolated machines from one Proxmox template.",
-		Schema:          json.RawMessage(`{"type":"object","additionalProperties":false,"required":["connectionRef","node","templateVMID","baseVMID","namePrefix","machineCount","cores","memoryMiB","diskGiB","sshUser","cleanupAfterTest"],"properties":{"connectionRef":{"type":"string","title":"Proxmox connection","format":"kubephos-connection-ref","x-kubephos-provider":"proxmox"},"machineTemplateRef":{"type":"string","title":"Managed machine template","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"MachineTemplate","x-kubephos-artifact-version":"v1alpha1"},"node":{"type":"string","title":"Proxmox node","minLength":1,"maxLength":64},"templateVMID":{"type":"integer","title":"Template VMID","minimum":100,"maximum":999999999},"baseVMID":{"type":"integer","title":"First new VMID","minimum":100,"maximum":999999988},"namePrefix":{"type":"string","title":"Machine group name","pattern":"^[a-z0-9][a-z0-9-]{0,19}$","default":"cluster"},"machineCount":{"type":"integer","title":"Number of machines","minimum":1,"maximum":12,"default":3},"cores":{"type":"integer","title":"CPU cores per machine","minimum":1,"maximum":32,"default":2},"memoryMiB":{"type":"integer","title":"Memory MiB per machine","minimum":512,"maximum":131072,"default":4096},"diskGiB":{"type":"integer","title":"Disk GiB per machine","minimum":8,"maximum":2048,"default":32},"sshUser":{"type":"string","title":"SSH user","pattern":"^[a-z_][a-z0-9_-]{0,31}$","default":"ubuntu"},"cleanupAfterTest":{"type":"boolean","title":"Remove machines after validation","default":false}}}`),
+		Schema:          json.RawMessage(`{"type":"object","additionalProperties":false,"required":["connectionRef","node","templateVMID","baseVMID","addressStart","prefixLength","gateway","dnsServer","namePrefix","machineCount","cores","memoryMiB","diskGiB","sshUser","cleanupAfterTest"],"properties":{"connectionRef":{"type":"string","title":"Proxmox connection","format":"kubephos-connection-ref","x-kubephos-provider":"proxmox"},"machineTemplateRef":{"type":"string","title":"Managed machine template","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"MachineTemplate","x-kubephos-artifact-version":"v1alpha1"},"node":{"type":"string","title":"Proxmox node","minLength":1,"maxLength":64},"templateVMID":{"type":"integer","title":"Template VMID","minimum":100,"maximum":999999999},"baseVMID":{"type":"integer","title":"First new VMID","minimum":100,"maximum":999999988},"addressStart":{"type":"string","title":"First machine address"},"prefixLength":{"type":"integer","title":"Network prefix length","minimum":8,"maximum":30,"default":24},"gateway":{"type":"string","title":"Network gateway"},"dnsServer":{"type":"string","title":"DNS server"},"namePrefix":{"type":"string","title":"Machine group name","pattern":"^[a-z0-9][a-z0-9-]{0,19}$","default":"cluster"},"machineCount":{"type":"integer","title":"Number of machines","minimum":1,"maximum":12,"default":3},"cores":{"type":"integer","title":"CPU cores per machine","minimum":1,"maximum":32,"default":2},"memoryMiB":{"type":"integer","title":"Memory MiB per machine","minimum":512,"maximum":131072,"default":4096},"diskGiB":{"type":"integer","title":"Disk GiB per machine","minimum":8,"maximum":2048,"default":32},"sshUser":{"type":"string","title":"SSH user","pattern":"^[a-z_][a-z0-9_-]{0,31}$","default":"ubuntu"},"cleanupAfterTest":{"type":"boolean","title":"Remove machines after validation","default":false}}}`),
 		ArtifactInputs:  []domain.ArtifactContract{{Type: "MachineTemplate", Version: "v1alpha1"}},
 		ArtifactOutputs: []domain.ArtifactContract{{Type: "MachineSet", Version: "v1alpha1"}, {Type: "MachineAccess", Version: "v1alpha1"}},
 		Capabilities:    []string{"infrastructure.machine-topology.provision", "infrastructure.provision", "infrastructure.deprovision", "infrastructure.preflight", "lifecycle.cleanup"},
@@ -175,8 +179,8 @@ func (TopologyPlugin) Validate(ctx context.Context, invocation Invocation) domai
 	if issue := validateTopologyValues(spec); issue != nil {
 		return invalidReport(report, issue.Path, issue.Message)
 	}
-	if _, err := topologyAddresses(configuration, spec.BaseVMID, spec.MachineCount); err != nil {
-		return invalidReport(report, "connectionRef", err.Error())
+	if _, err := topologyAddresses(spec.AddressStart, spec.PrefixLength, spec.Gateway, spec.DNSServer, spec.MachineCount); err != nil {
+		return invalidReport(report, "addressStart", err.Error())
 	}
 	resources, err := connection.resources(ctx)
 	if err != nil {
@@ -220,11 +224,10 @@ func (TopologyPlugin) Plan(ctx context.Context, invocation Invocation) (domain.P
 	if err := json.Unmarshal(invocation.Input, &spec); err != nil {
 		return domain.Plan{}, err
 	}
-	configuration, err := resolveConnection(spec.ConnectionRef, invocation.Connections)
-	if err != nil {
+	if _, err := resolveConnection(spec.ConnectionRef, invocation.Connections); err != nil {
 		return domain.Plan{}, err
 	}
-	addresses, err := topologyAddresses(configuration, spec.BaseVMID, spec.MachineCount)
+	addresses, err := topologyAddresses(spec.AddressStart, spec.PrefixLength, spec.Gateway, spec.DNSServer, spec.MachineCount)
 	if err != nil {
 		return domain.Plan{}, err
 	}
@@ -239,7 +242,7 @@ func (TopologyPlugin) Plan(ctx context.Context, invocation Invocation) (domain.P
 		machines[index] = plannedMachine{VMID: spec.BaseVMID + index, Name: fmt.Sprintf("kubephos-%s-%02d-%s", spec.NamePrefix, index+1, marker[:6]), Address: addresses[index]}
 		createEffects[index] = domain.ResourceEffect{Action: "create", ExternalID: externalID(machines[index].VMID), Kind: "virtual-machine", Name: machines[index].Name}
 	}
-	base := topologyStepInput{ConnectionRef: spec.ConnectionRef, MachineTemplateRef: spec.MachineTemplateRef, Node: spec.Node, TemplateVMID: spec.TemplateVMID, Cores: spec.Cores, MemoryMiB: spec.MemoryMiB, DiskGiB: spec.DiskGiB, SSHUser: spec.SSHUser, PrefixLength: configuration.PrefixLength, Gateway: configuration.Gateway, DNSServer: configuration.DNSServer, Marker: marker, Machines: machines}
+	base := topologyStepInput{ConnectionRef: spec.ConnectionRef, MachineTemplateRef: spec.MachineTemplateRef, Node: spec.Node, TemplateVMID: spec.TemplateVMID, Cores: spec.Cores, MemoryMiB: spec.MemoryMiB, DiskGiB: spec.DiskGiB, SSHUser: spec.SSHUser, PrefixLength: spec.PrefixLength, Gateway: spec.Gateway, DNSServer: spec.DNSServer, Marker: marker, Machines: machines}
 	create := base
 	create.Action = "provision"
 	createInput, err := json.Marshal(create)
@@ -942,28 +945,21 @@ func (plugin TopologyPlugin) sshAccess() sshAccess {
 	return networkSSHAccess{}
 }
 
-func topologyAddresses(configuration connectionConfig, baseVMID, count int) ([]string, error) {
-	start := net.ParseIP(configuration.AddressStart).To4()
-	gateway := net.ParseIP(configuration.Gateway).To4()
-	dns := net.ParseIP(configuration.DNSServer).To4()
+func topologyAddresses(addressStart string, prefixLength int, gatewayAddress, dnsServer string, count int) ([]string, error) {
+	start := net.ParseIP(addressStart).To4()
+	gateway := net.ParseIP(gatewayAddress).To4()
+	dns := net.ParseIP(dnsServer).To4()
 	if start == nil || gateway == nil || dns == nil {
 		return nil, errors.New("managed network profile requires valid IPv4 addresses")
 	}
-	if configuration.PrefixLength < 8 || configuration.PrefixLength > 30 {
+	if prefixLength < 8 || prefixLength > 30 {
 		return nil, errors.New("managed network prefix must be between 8 and 30")
 	}
 	if count < 1 {
 		return nil, errors.New("managed network allocation must contain at least one address")
 	}
-	if configuration.VMIDStart < 100 || baseVMID < configuration.VMIDStart {
-		return nil, errors.New("managed VMID range starts before the network profile")
-	}
-	mask := binary.BigEndian.Uint32(net.CIDRMask(configuration.PrefixLength, 32))
-	mappedStart := uint64(binary.BigEndian.Uint32(start)) + uint64(baseVMID-configuration.VMIDStart)
-	if mappedStart > uint64(^uint32(0)) {
-		return nil, errors.New("managed network address mapping exceeds IPv4")
-	}
-	startValue := uint32(mappedStart)
+	mask := binary.BigEndian.Uint32(net.CIDRMask(prefixLength, 32))
+	startValue := binary.BigEndian.Uint32(start)
 	gatewayValue := binary.BigEndian.Uint32(gateway)
 	networkValue := startValue & mask
 	broadcastValue := networkValue | ^mask

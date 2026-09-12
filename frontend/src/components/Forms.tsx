@@ -303,6 +303,10 @@ export function InfrastructureServiceDialog({open, close, workspaces, templates,
         kind,
         name: values.get('name'),
         vmid: Number(values.get('vmid')),
+        address: values.get('address'),
+        prefixLength: Number(values.get('prefixLength')),
+        gateway: values.get('gateway'),
+        dnsServer: values.get('dnsServer'),
         cores: Number(values.get('cores')),
         memoryMiB: Number(values.get('memoryMiB')),
         diskGiB: Number(values.get('diskGiB'))
@@ -327,6 +331,9 @@ export function InfrastructureServiceDialog({open, close, workspaces, templates,
       <label>Proxmox connection<select value={connectionID} onChange={event => setConnectionID(event.target.value)} required>{common.connections.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
       <label>VM template<select name="templateId" required>{availableTemplates.length ? availableTemplates.map(item => <option key={item.id} value={item.id}>{item.name}</option>) : <option value="">No ready template for this environment</option>}</select></label>
       <div className="field-row"><label>Service name<input name="name" pattern="[a-z0-9][a-z0-9-]{0,31}" maxLength={32} placeholder={kind === 'harbor' ? 'main-registry' : 'shared-data'} required autoFocus /></label><label>Proxmox VM ID<input name="vmid" type="number" min={100} max={999999999} required /></label></div>
+      <div className="form-section"><strong>Machine network</strong><p>This address belongs only to the dedicated {kind === 'harbor' ? 'Harbor' : 'NFS'} VM.</p></div>
+      <div className="field-row"><label>IP address<input name="address" placeholder="192.168.1.120" required /></label><label>Prefix length<input name="prefixLength" type="number" min={8} max={30} defaultValue={24} required /></label></div>
+      <div className="field-row"><label>Gateway<input name="gateway" placeholder="192.168.1.1" required /></label><label>DNS server<input name="dnsServer" defaultValue="1.1.1.1" required /></label></div>
       <details className="advanced-fields"><summary>Capacity</summary><p>Managed defaults are suitable for development and experiments.</p><div className="field-row"><label>CPU cores<input name="cores" type="number" min={1} max={32} defaultValue={defaults.cores} /></label><label>Memory MiB<input name="memoryMiB" type="number" min={512} max={131072} defaultValue={defaults.memory} /></label></div><label>Disk GiB<input name="diskGiB" type="number" min={8} max={2048} defaultValue={defaults.disk} /></label></details>
       <ValidationCallout text="Template ownership, VM ID, capacity, network, SSH and service health are validated at creation and again before each stage." />
       <p className="form-error">{error}</p>
@@ -368,6 +375,10 @@ export function KubernetesClusterDialog({open, close, workspaces, templates, ser
         nfsId: values.get('nfsId'),
         name: values.get('name'),
         baseVMID: Number(values.get('baseVMID')),
+        addressStart: values.get('addressStart'),
+        prefixLength: Number(values.get('prefixLength')),
+        gateway: values.get('gateway'),
+        dnsServer: values.get('dnsServer'),
         controlPlanes: Number(values.get('controlPlanes')),
         controlPlaneZones: parseZones(String(values.get('controlPlaneZones') ?? '')),
         managementPool: {name: 'management', count: Number(values.get('managementCount')), zones: parseZones(String(values.get('managementZones') ?? ''))},
@@ -394,6 +405,9 @@ export function KubernetesClusterDialog({open, close, workspaces, templates, ser
       <label>NFS storage<select name="nfsId" required>{nfs.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
       <div className="form-section"><strong>Cluster identity</strong><p>Kubernetes and managed component versions follow this KubePhos release.</p></div>
       <div className="field-row"><label>Cluster name<input name="name" pattern="[a-z0-9][a-z0-9-]{0,31}" maxLength={32} placeholder="development" required autoFocus /></label><label>First VM ID<input name="baseVMID" type="number" min={100} max={999999988} required /></label></div>
+      <div className="form-section"><strong>Cluster node network</strong><p>Nodes receive consecutive addresses starting from the first address.</p></div>
+      <div className="field-row"><label>First node IP<input name="addressStart" placeholder="192.168.1.130" required /></label><label>Prefix length<input name="prefixLength" type="number" min={8} max={30} defaultValue={24} required /></label></div>
+      <div className="field-row"><label>Gateway<input name="gateway" placeholder="192.168.1.1" required /></label><label>DNS server<input name="dnsServer" defaultValue="1.1.1.1" required /></label></div>
       <div className="form-section"><strong>Control plane</strong><p>Zones are comma-separated logical failure domains.</p></div>
       <div className="field-row"><label>Nodes<select name="controlPlanes" defaultValue="1"><option value="1">1 · development</option><option value="3">3 · high availability</option></select></label><label>Zones<input name="controlPlaneZones" defaultValue="zone-a" pattern="[a-z0-9,-]+" required /></label></div>
       <div className="form-section"><strong>Management pool</strong><p>Observability and support components use this dedicated capacity.</p></div>

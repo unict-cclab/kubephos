@@ -1169,6 +1169,10 @@ func (s *Server) createInfrastructureService(response http.ResponseWriter, reque
 		Kind         string `json:"kind"`
 		Name         string `json:"name"`
 		VMID         int    `json:"vmid"`
+		Address      string `json:"address"`
+		PrefixLength int    `json:"prefixLength"`
+		Gateway      string `json:"gateway"`
+		DNSServer    string `json:"dnsServer"`
 		Cores        int    `json:"cores"`
 		MemoryMiB    int    `json:"memoryMiB"`
 		DiskGiB      int    `json:"diskGiB"`
@@ -1182,6 +1186,9 @@ func (s *Server) createInfrastructureService(response http.ResponseWriter, reque
 	input.TemplateID = strings.TrimSpace(input.TemplateID)
 	input.Kind = strings.TrimSpace(input.Kind)
 	input.Name = strings.TrimSpace(input.Name)
+	input.Address = strings.TrimSpace(input.Address)
+	input.Gateway = strings.TrimSpace(input.Gateway)
+	input.DNSServer = strings.TrimSpace(input.DNSServer)
 	if input.Kind != "harbor" && input.Kind != "nfs" {
 		writeError(response, http.StatusUnprocessableEntity, "invalid_kind", "Service kind must be harbor or nfs.")
 		return
@@ -1257,6 +1264,7 @@ func (s *Server) createInfrastructureService(response http.ResponseWriter, reque
 	topologySpec, _ := json.Marshal(map[string]any{
 		"connectionRef": connection.ID, "machineTemplateRef": template.ArtifactID, "node": templateSpec.Node,
 		"templateVMID": templateSpec.VMID, "baseVMID": input.VMID, "namePrefix": input.Name, "machineCount": 1,
+		"addressStart": input.Address, "prefixLength": input.PrefixLength, "gateway": input.Gateway, "dnsServer": input.DNSServer,
 		"cores": input.Cores, "memoryMiB": input.MemoryMiB, "diskGiB": input.DiskGiB, "sshUser": templateSpec.SSHUser, "cleanupAfterTest": false,
 	})
 	serviceSpec := map[string]any{"machineSetRef": "", "machineAccessRef": ""}
@@ -2009,6 +2017,10 @@ func (s *Server) createKubernetesCluster(response http.ResponseWriter, request *
 		NFSID             string                 `json:"nfsId"`
 		Name              string                 `json:"name"`
 		BaseVMID          int                    `json:"baseVMID"`
+		AddressStart      string                 `json:"addressStart"`
+		PrefixLength      int                    `json:"prefixLength"`
+		Gateway           string                 `json:"gateway"`
+		DNSServer         string                 `json:"dnsServer"`
 		ControlPlanes     int                    `json:"controlPlanes"`
 		ControlPlaneZones []string               `json:"controlPlaneZones"`
 		ManagementPool    managedNodePoolInput   `json:"managementPool"`
@@ -2027,6 +2039,9 @@ func (s *Server) createKubernetesCluster(response http.ResponseWriter, request *
 	input.HarborID = strings.TrimSpace(input.HarborID)
 	input.NFSID = strings.TrimSpace(input.NFSID)
 	input.Name = strings.TrimSpace(input.Name)
+	input.AddressStart = strings.TrimSpace(input.AddressStart)
+	input.Gateway = strings.TrimSpace(input.Gateway)
+	input.DNSServer = strings.TrimSpace(input.DNSServer)
 	labelPattern := regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,31}$`)
 	if !labelPattern.MatchString(input.Name) {
 		writeError(response, http.StatusUnprocessableEntity, "invalid_name", "Cluster name must be a lowercase label with at most 32 characters.")
@@ -2139,7 +2154,7 @@ func (s *Server) createKubernetesCluster(response http.ResponseWriter, request *
 		writeError(response, http.StatusUnprocessableEntity, "capability_unavailable", err.Error())
 		return
 	}
-	topologySpec, _ := json.Marshal(map[string]any{"connectionRef": connection.ID, "machineTemplateRef": template.ArtifactID, "node": templateSpec.Node, "templateVMID": templateSpec.VMID, "baseVMID": input.BaseVMID, "namePrefix": input.Name, "machineCount": totalMachines, "cores": input.Cores, "memoryMiB": input.MemoryMiB, "diskGiB": input.DiskGiB, "sshUser": templateSpec.SSHUser, "cleanupAfterTest": false})
+	topologySpec, _ := json.Marshal(map[string]any{"connectionRef": connection.ID, "machineTemplateRef": template.ArtifactID, "node": templateSpec.Node, "templateVMID": templateSpec.VMID, "baseVMID": input.BaseVMID, "addressStart": input.AddressStart, "prefixLength": input.PrefixLength, "gateway": input.Gateway, "dnsServer": input.DNSServer, "namePrefix": input.Name, "machineCount": totalMachines, "cores": input.Cores, "memoryMiB": input.MemoryMiB, "diskGiB": input.DiskGiB, "sshUser": templateSpec.SSHUser, "cleanupAfterTest": false})
 	nodePools := []map[string]any{{"name": input.ManagementPool.Name, "role": "management", "count": input.ManagementPool.Count, "zones": input.ManagementPool.Zones}}
 	for _, pool := range input.ApplicationPools {
 		nodePools = append(nodePools, map[string]any{"name": pool.Name, "role": "application", "count": pool.Count, "zones": pool.Zones})

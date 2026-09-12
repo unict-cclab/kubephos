@@ -3,7 +3,7 @@ kind: Plugin
 metadata:
   id: io.kubephos.infrastructure.proxmox.topology
   name: Proxmox machine topology
-  version: 0.3.0
+  version: 0.3.1
   description: Creates a validated group of isolated machines from one Proxmox template.
 spec:
   protocol: v1alpha1
@@ -26,6 +26,10 @@ spec:
       - node
       - templateVMID
       - baseVMID
+      - addressStart
+      - prefixLength
+      - gateway
+      - dnsServer
       - namePrefix
       - machineCount
       - cores
@@ -60,6 +64,21 @@ spec:
         title: First new VMID
         minimum: 100
         maximum: 999999988
+      addressStart:
+        type: string
+        title: First machine address
+      prefixLength:
+        type: integer
+        title: Network prefix length
+        minimum: 8
+        maximum: 30
+        default: 24
+      gateway:
+        type: string
+        title: Network gateway
+      dnsServer:
+        type: string
+        title: DNS server
       namePrefix:
         type: string
         title: Machine group name

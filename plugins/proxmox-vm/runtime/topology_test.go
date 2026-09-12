@@ -17,8 +17,8 @@ import (
 )
 
 func TestTopologyPlanDeclaresAtomicMachineSet(t *testing.T) {
-	spec := json.RawMessage(`{"connectionRef":"conn_test","node":"pve","templateVMID":8000,"baseVMID":9000,"namePrefix":"dev","machineCount":3,"cores":2,"memoryMiB":4096,"diskGiB":32,"sshUser":"ubuntu","cleanupAfterTest":false}`)
-	invocation := Invocation{Input: spec, Connections: map[string]json.RawMessage{"conn_test": json.RawMessage(`{"endpoint":"https://proxmox.test","credentialRef":"cred_test","verifyTLS":false,"vmidStart":9000,"addressStart":"10.10.0.10","prefixLength":24,"gateway":"10.10.0.1","dnsServer":"1.1.1.1"}`)}}
+	spec := json.RawMessage(`{"connectionRef":"conn_test","node":"pve","templateVMID":8000,"baseVMID":9000,"addressStart":"10.10.0.10","prefixLength":24,"gateway":"10.10.0.1","dnsServer":"1.1.1.1","namePrefix":"dev","machineCount":3,"cores":2,"memoryMiB":4096,"diskGiB":32,"sshUser":"ubuntu","cleanupAfterTest":false}`)
+	invocation := Invocation{Input: spec, Connections: map[string]json.RawMessage{"conn_test": json.RawMessage(`{"endpoint":"https://proxmox.test","credentialRef":"cred_test","verifyTLS":false}`)}}
 	plan, err := (TopologyPlugin{}).Plan(context.Background(), invocation)
 	if err != nil {
 		t.Fatal(err)
@@ -205,19 +205,18 @@ func TestProxmoxSSHKeyEncodingUsesPercentEscapes(t *testing.T) {
 }
 
 func TestTopologyAddressesAreDeterministicAndBounded(t *testing.T) {
-	configuration := connectionConfig{VMIDStart: 9000, AddressStart: "10.10.0.253", PrefixLength: 24, Gateway: "10.10.0.1", DNSServer: "1.1.1.1"}
-	addresses, err := topologyAddresses(configuration, 9000, 2)
+	addresses, err := topologyAddresses("10.10.0.253", 24, "10.10.0.1", "1.1.1.1", 2)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if strings.Join(addresses, ",") != "10.10.0.253,10.10.0.254" {
 		t.Fatalf("unexpected addresses %#v", addresses)
 	}
-	if _, err := topologyAddresses(configuration, 9000, 3); err == nil {
+	if _, err := topologyAddresses("10.10.0.253", 24, "10.10.0.1", "1.1.1.1", 3); err == nil {
 		t.Fatal("expected broadcast boundary rejection")
 	}
-	if _, err := topologyAddresses(configuration, 8999, 1); err == nil {
-		t.Fatal("expected VMID range boundary rejection")
+	if _, err := topologyAddresses("10.10.0.10", 24, "10.11.0.1", "1.1.1.1", 1); err == nil {
+		t.Fatal("expected gateway subnet rejection")
 	}
 }
 
@@ -459,11 +458,11 @@ func newTopologyServer(t *testing.T, failVMID int) (*httptest.Server, *topologyS
 }
 
 func topologyInvocation(endpoint string, cleanup bool) (Invocation, json.RawMessage) {
-	spec := json.RawMessage(fmt.Sprintf(`{"connectionRef":"conn_test","node":"pve","templateVMID":8000,"baseVMID":9000,"namePrefix":"dev","machineCount":3,"cores":2,"memoryMiB":4096,"diskGiB":32,"sshUser":"ubuntu","cleanupAfterTest":%t}`, cleanup))
+	spec := json.RawMessage(fmt.Sprintf(`{"connectionRef":"conn_test","node":"pve","templateVMID":8000,"baseVMID":9000,"addressStart":"10.10.0.10","prefixLength":24,"gateway":"10.10.0.1","dnsServer":"1.1.1.1","namePrefix":"dev","machineCount":3,"cores":2,"memoryMiB":4096,"diskGiB":32,"sshUser":"ubuntu","cleanupAfterTest":%t}`, cleanup))
 	return Invocation{
 		Input:       spec,
 		Secrets:     map[string]json.RawMessage{"cred_test": json.RawMessage(`{"tokenId":"test@pam!kubephos","tokenSecret":"top-secret"}`)},
-		Connections: map[string]json.RawMessage{"conn_test": json.RawMessage(fmt.Sprintf(`{"endpoint":%q,"credentialRef":"cred_test","verifyTLS":false,"vmidStart":9000,"addressStart":"10.10.0.10","prefixLength":24,"gateway":"10.10.0.1","dnsServer":"1.1.1.1"}`, endpoint))},
+		Connections: map[string]json.RawMessage{"conn_test": json.RawMessage(fmt.Sprintf(`{"endpoint":%q,"credentialRef":"cred_test","verifyTLS":false}`, endpoint))},
 	}, spec
 }
 
