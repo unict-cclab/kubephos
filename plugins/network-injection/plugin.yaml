@@ -1,0 +1,80 @@
+apiVersion: plugins.kubephos.io/v1alpha1
+kind: Plugin
+metadata:
+  id: io.kubephos.chaos.network.zones
+  name: Inter-zone network injection
+  version: 0.1.0
+  description: Applies and verifies a symmetric latency profile between every application zone.
+spec:
+  protocol: v1alpha1
+  commands:
+    - describe
+    - validate
+    - plan
+    - precheck
+    - execute
+    - verify
+    - status
+    - cancel
+    - cleanup
+  configurationSchema:
+    type: object
+    additionalProperties: false
+    required:
+      - clusterConnectionRef
+      - applicationDeploymentRef
+      - managedPlatformRef
+      - latencyMilliseconds
+      - jitterMilliseconds
+    properties:
+      clusterConnectionRef:
+        type: string
+        title: Kubernetes cluster
+        format: kubephos-artifact-ref
+        x-kubephos-artifact-type: ClusterConnection
+        x-kubephos-artifact-version: v1alpha1
+      applicationDeploymentRef:
+        type: string
+        title: Application deployment
+        format: kubephos-artifact-ref
+        x-kubephos-artifact-type: ApplicationDeployment
+        x-kubephos-artifact-version: v1alpha1
+      managedPlatformRef:
+        type: string
+        title: Managed chaos runtime
+        format: kubephos-artifact-ref
+        x-kubephos-artifact-type: ManagedPlatformCapability
+        x-kubephos-artifact-version: v1alpha1
+      latencyMilliseconds:
+        type: integer
+        title: Cross-zone latency in ms
+        minimum: 1
+        maximum: 5000
+        default: 50
+      jitterMilliseconds:
+        type: integer
+        title: Jitter in ms
+        minimum: 0
+        maximum: 5000
+        default: 0
+  runtime:
+    executable: network-injection-plugin
+    timeout: 10m
+  artifacts:
+    inputs:
+      - type: ClusterConnection
+        version: v1alpha1
+      - type: ApplicationDeployment
+        version: v1alpha1
+      - type: ManagedPlatformCapability
+        version: v1alpha1
+    outputs:
+      - type: NetworkInjection
+        version: v1alpha1
+  capabilities:
+    - chaos.network.zones
+    - chaos.network.preflight
+    - chaos.network.cleanup
+    - lifecycle.cleanup
+  permissions:
+    - cluster.admin

@@ -3,7 +3,7 @@ kind: Plugin
 metadata:
   id: io.kubephos.applications.inspect
   name: Application package materializer
-  version: 0.2.0
+  version: 0.3.0
   description: Resolves, materializes and verifies a pinned application package and its declared interface.
 spec:
   protocol: v1alpha1
@@ -44,7 +44,7 @@ spec:
         version: v1alpha1
       - type: ServiceEndpoints
         version: v1alpha1
-      - type: LoadProfileSet
+      - type: LoadScenarioSet
         version: v1alpha1
   capabilities:
     - applications.inspect

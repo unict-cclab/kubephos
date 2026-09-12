@@ -48,8 +48,8 @@ export function ExperimentConfigurationsView(props: Props) {
   }
   return <>
     <div className="section-heading"><div><p className="eyebrow">CONFIGURE ONCE</p><h2>Experiment configurations</h2></div>{props.isAdmin && <button className="button primary" disabled={!ready} onClick={() => setCreating(true)}>New configuration</button>}</div>
-    <p className="section-copy infrastructure-copy">Select a cluster and an application, then compose only the capabilities you want to test. Empty capability groups use the Kubernetes defaults.</p>
-    <div className="stats-grid infrastructure-stats"><article className="stat-card"><span>Configurations</span><strong>{props.items.length}</strong><small>reusable definitions</small></article><article className="stat-card"><span>Ready clusters</span><strong>{props.clusters.filter(item => item.status === 'ready').length}</strong><small>validated targets</small></article><article className="stat-card"><span>Capabilities</span><strong>{experimentPlugins(props.plugins).length}</strong><small>compatible plugins</small></article></div>
+    <p className="section-copy infrastructure-copy">Choose the cluster, application, network conditions, monitoring and load profile. Advanced components are optional.</p>
+    <div className="stats-grid infrastructure-stats"><article className="stat-card"><span>Configurations</span><strong>{props.items.length}</strong><small>reusable definitions</small></article><article className="stat-card"><span>Ready clusters</span><strong>{props.clusters.filter(item => item.status === 'ready').length}</strong><small>validated targets</small></article><article className="stat-card"><span>Experiment tools</span><strong>{experimentPlugins(props.plugins).length}</strong><small>available implementations</small></article></div>
     {error && <p className="form-error page-error">{error}</p>}
     <div className="managed-grid experiment-config-grid">{props.items.length ? props.items.map(item => {
       const cluster = props.clusters.find(clusterItem => clusterItem.id === item.clusterResourceId)
@@ -60,7 +60,7 @@ export function ExperimentConfigurationsView(props: Props) {
         <div className="managed-card-head"><span className="feature-icon">▶</span><Status value={item.validation.valid ? 'validated' : 'invalid'} /></div>
         <h3>{item.name}</h3><p>{item.description || 'Reusable experiment configuration'}</p>
         <dl><div><dt>Cluster</dt><dd>{cluster?.name ?? 'Unavailable'}</dd></div><div><dt>Application</dt><dd>{application?.name ?? item.applicationRef}</dd></div><div><dt>Components</dt><dd>{components.length || 'Kubernetes defaults'}</dd></div><div><dt>Validated</dt><dd>{formatDate(item.validation.checkedAt ?? item.updatedAt)}</dd></div></dl>
-        {!!components.length && <div className="trait-list">{components.slice(0, 5).map(component => <span key={component.id}>{component.capability}</span>)}</div>}
+        {!!components.length && <div className="trait-list">{components.slice(0, 5).map(component => <span key={component.id}>{componentTitle(component.capability)}</span>)}</div>}
         {!!instances.length && <details className="advanced-fields"><summary>{instances.length} instance{instances.length === 1 ? '' : 's'}</summary><div className="instance-list">{instances.slice(0, 5).map(instance => <div className="instance-row" key={instance.id}><span><strong>{instance.name}</strong><small>{instance.variants[0]?.trials.length ?? 0} sequential runs · {formatDate(instance.createdAt)}</small></span><Status value={instance.status} />{instance.variants[0]?.trials.find(trial => trial.operationId)?.operationId && <button className="button secondary compact" onClick={() => props.openOperation(instance.variants[0].trials.find(trial => trial.operationId)!.operationId)}>Logs</button>}</div>)}</div></details>}
         <div className="managed-actions">{props.isAdmin && <button className="button primary compact" onClick={() => setRunning(item)}>Run</button>}<button className="button secondary compact" onClick={() => clone(item)}>Clone</button>{props.isAdmin && <button className="button danger compact" disabled={instances.length > 0} title={instances.length ? 'Used configurations are retained for reproducibility' : ''} onClick={() => remove(item)}>Delete</button>}</div>
       </article>
@@ -70,31 +70,71 @@ export function ExperimentConfigurationsView(props: Props) {
   </>
 }
 
-function ExperimentConfigurationDialog({open, close, clusters, workspaces, applications, plugins, session, changed}: Props & {open: boolean; close: () => void}) {
+export function ExperimentConfigurationDialog({open, close, clusters, workspaces, applications, plugins, session, changed}: Props & {open: boolean; close: () => void}) {
   const compatiblePlugins = useMemo(() => experimentPlugins(plugins), [plugins])
+  const advancedPlugins = compatiblePlugins.filter(item => primaryCapabilities(item).some(capability => !['load.', 'metrics.', 'chaos.'].some(prefix => capability.startsWith(prefix))))
   const [workspaceId, setWorkspaceId] = useState(workspaces[0]?.id ?? '')
   const availableClusters = clusters.filter(item => item.status === 'ready' && item.workspaceId === workspaceId)
+  const [clusterResourceId, setClusterResourceId] = useState('')
   const [applicationRef, setApplicationRef] = useState(applications[0]?.reference ?? '')
   const [components, setComponents] = useState<ComponentDraft[]>([])
   const [sequence, setSequence] = useState(1)
   const [pending, setPending] = useState(false)
   const [error, setError] = useState('')
   const application = applications.find(item => item.reference === applicationRef)
+  const selectedCluster = clusters.find(item => item.id === clusterResourceId)
+  const zones = applicationZones(selectedCluster)
+  const loadComponent = components.find(item => item.capability.startsWith('load.'))
+  const metricsComponent = components.find(item => item.capability.startsWith('metrics.'))
+  const networkComponent = components.find(item => item.capability.startsWith('chaos.'))
+  const networkPlugin = compatiblePlugins.find(item => primaryCapabilities(item).some(capability => capability.startsWith('chaos.')))
+  const managedNetworkAvailable = typeof selectedCluster?.spec?.managedProfile === 'string' && selectedCluster.spec.managedProfile.length > 0
+  const advancedComponents = components.filter(item => !['load.', 'metrics.', 'chaos.'].some(prefix => item.capability.startsWith(prefix)))
   useEffect(() => {
-    if (!open || components.length) return
-    const metrics = compatiblePlugins.find(item => primaryCapabilities(item).includes('metrics.timeseries.collect'))
-    if (!metrics) return
-    setComponents([{key: sequence, pluginId: metrics.id, capability: 'metrics.timeseries.collect'}])
-    setSequence(value => value + 1)
+	if (!open) return
+	setWorkspaceId(current => workspaces.some(item => item.id === current) ? current : workspaces[0]?.id ?? '')
+	setApplicationRef(current => applications.some(item => item.reference === current) ? current : applications[0]?.reference ?? '')
+  }, [open, workspaces, applications])
+  useEffect(() => {
+	if (!open) return
+	setClusterResourceId(current => availableClusters.some(item => item.id === current) ? current : availableClusters[0]?.id ?? '')
+  }, [open, workspaceId, clusters])
+  useEffect(() => {
+	if (!open || zones.length >= 2 && managedNetworkAvailable) return
+	setComponents(items => items.some(item => item.capability.startsWith('chaos.')) ? items.filter(item => !item.capability.startsWith('chaos.')) : items)
+  }, [open, clusterResourceId, zones.length, managedNetworkAvailable])
+  useEffect(() => {
+	if (!open || components.length) return
+	const defaults = ['load.', 'metrics.'].flatMap(prefix => {
+	  const plugin = compatiblePlugins.find(item => primaryCapabilities(item).some(capability => capability.startsWith(prefix)))
+	  const capability = plugin && primaryCapabilities(plugin).find(value => value.startsWith(prefix))
+	  return plugin && capability ? [{key: sequence + (prefix === 'metrics.' ? 1 : 0), pluginId: plugin.id, capability}] : []
+	})
+	setComponents(defaults)
+	setSequence(value => value + defaults.length)
   }, [open, compatiblePlugins, components.length, sequence])
-  const addComponent = () => {
-    const plugin = compatiblePlugins[0]
+  const addAdvancedComponent = () => {
+	const plugin = advancedPlugins.find(item => !components.some(component => component.pluginId === item.id)) ?? advancedPlugins[0]
     if (!plugin) return
     const capabilities = primaryCapabilities(plugin)
     setComponents(items => {
       const next = {key: sequence, pluginId: plugin.id, capability: capabilities[0] ?? ''}
-      const metrics = items.findIndex(item => item.capability.startsWith('metrics.'))
-      return metrics < 0 ? [...items, next] : [...items.slice(0, metrics), next, ...items.slice(metrics)]
+	  const load = items.findIndex(item => item.capability.startsWith('load.'))
+	  return load < 0 ? [...items, next] : [...items.slice(0, load), next, ...items.slice(load)]
+    })
+    setSequence(value => value + 1)
+  }
+  const setNetworkEnabled = (enabled: boolean) => {
+    if (!enabled) {
+      setComponents(items => items.filter(item => !item.capability.startsWith('chaos.')))
+      return
+    }
+    if (!networkPlugin || networkComponent) return
+    const capability = primaryCapabilities(networkPlugin).find(item => item.startsWith('chaos.')) ?? ''
+    setComponents(items => {
+      const next = {key: sequence, pluginId: networkPlugin.id, capability}
+      const load = items.findIndex(item => item.capability.startsWith('load.'))
+      return load < 0 ? [...items, next] : [...items.slice(0, load), next, ...items.slice(load)]
     })
     setSequence(value => value + 1)
   }
@@ -107,7 +147,7 @@ function ExperimentConfigurationDialog({open, close, clusters, workspaces, appli
     try {
       await request('/experiment-configurations', {method: 'POST', body: JSON.stringify({
         workspaceId,
-        clusterResourceId: values.get('clusterResourceId'),
+        clusterResourceId,
         name: values.get('name'),
         description: values.get('description'),
         applicationRef,
@@ -115,7 +155,10 @@ function ExperimentConfigurationDialog({open, close, clusters, workspaces, appli
           applicationValues: readSchemaValues(form, application?.descriptor.spec?.valuesSchema ?? emptySchema, 'applicationValues', applications),
           components: components.map((component, index) => {
             const plugin = compatiblePlugins.find(item => item.id === component.pluginId)!
-            return {id: `component-${index + 1}`, pluginId: component.pluginId, capability: component.capability, configuration: readSchemaValues(form, configurableSchema(plugin.schema), `component-${component.key}`, applications), targets: {include: split(values.get(`include-${component.key}`)), exclude: split(values.get(`exclude-${component.key}`))}}
+            const configuration = readSchemaValues(form, experimentSchema(plugin.schema, component.capability), `component-${component.key}`, applications)
+			if (component.capability.startsWith('load.')) configuration.action = 'start'
+			if (component.capability.startsWith('load.')) configuration.zoneWeights = Object.fromEntries(zones.map(zone => [zone, Number(values.get(`zoneWeight-${component.key}-${zone}`) ?? 1)]))
+			return {id: `component-${index + 1}`, pluginId: component.pluginId, capability: component.capability, configuration, targets: {include: split(values.get(`include-${component.key}`)), exclude: split(values.get(`exclude-${component.key}`))}}
           })
         }
       })}, session.csrfToken)
@@ -130,28 +173,35 @@ function ExperimentConfigurationDialog({open, close, clusters, workspaces, appli
   }
   return <Dialog open={open} onClose={close} title="Create experiment configuration" eyebrow="VALIDATE BEFORE RUN" className="template-modal experiment-modal">
     <form onSubmit={submit}>
-      <div className="form-section"><strong>Environment</strong><p>The cluster must be fully ready. Health is checked again before every run and every step.</p></div>
+      <div className="form-section"><strong>1. Cluster</strong><p>Select a ready Kubernetes cluster. Its health is checked again before every run and every step.</p></div>
       {workspaces.length > 1 ? <label>Environment<select value={workspaceId} onChange={event => setWorkspaceId(event.target.value)} required>{workspaces.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label> : <input type="hidden" value={workspaceId} readOnly />}
-      <label>Kubernetes cluster<select name="clusterResourceId" required>{availableClusters.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
-      <div className="field-row"><label>Name<input name="name" maxLength={120} placeholder="Scheduler baseline" required autoFocus /></label><label>Application<select value={applicationRef} onChange={event => setApplicationRef(event.target.value)} required>{applications.map(item => <option key={item.reference} value={item.reference}>{item.name} · {item.version}</option>)}</select></label></div>
+      <label>Kubernetes cluster<select name="clusterResourceId" value={clusterResourceId} onChange={event => setClusterResourceId(event.target.value)} required disabled={!availableClusters.length}>{availableClusters.length ? availableClusters.map(item => <option key={item.id} value={item.id}>{item.name}</option>) : <option value="">No ready cluster in this environment</option>}</select></label>
+      <label>Name<input name="name" maxLength={120} placeholder="Scheduler baseline" required autoFocus /></label>
       <label>Description<textarea name="description" rows={2} maxLength={1000} placeholder="What this configuration is intended to measure" /></label>
-      <div className="form-section"><strong>Application settings</strong><p>The catalog contract supplies these fields; importing another application requires no KubePhos code change.</p></div>
+      <div className="form-section"><strong>2. Application</strong><p>Select the application and change only the values exposed by its catalog contract.</p></div>
+      <label>Application<select value={applicationRef} onChange={event => setApplicationRef(event.target.value)} required>{applications.map(item => <option key={item.reference} value={item.reference}>{item.name} · {item.version}</option>)}</select></label>
       {application && <SchemaFields schema={application.descriptor.spec?.valuesSchema ?? emptySchema} prefix="applicationValues" values={application.descriptor.spec?.defaults ?? {}} applications={applications} artifacts={[]} connections={[]} credentials={[]} />}
-      <div className="form-section pool-section"><div><strong>Experiment capabilities</strong><p>Add scheduler, autoscaler, descheduler, chaos, load or metrics plugins as needed. No scheduler means the default scheduler.</p></div><button className="button secondary compact" type="button" disabled={!compatiblePlugins.length || components.length >= 24} onClick={addComponent}>Add capability</button></div>
-      <div className="experiment-component-list">{components.map(component => {
+      <div className="form-section pool-section"><div><strong>3. Network between zones</strong><p>{networkComponent ? 'Traffic crossing application zones will use this network profile.' : !managedNetworkAvailable ? 'This cluster predates the managed network runtime.' : zones.length < 2 ? 'This cluster has fewer than two application zones.' : 'No network conditions will be injected.'}</p></div><label className="checkbox-field"><input type="checkbox" checked={Boolean(networkComponent)} disabled={!networkPlugin || !managedNetworkAvailable || zones.length < 2} onChange={event => setNetworkEnabled(event.target.checked)} /><span>Enable injection</span></label></div>
+      {networkComponent && networkPlugin && <section className="experiment-component"><SchemaFields schema={experimentSchema(networkPlugin.schema, networkComponent.capability)} prefix={`component-${networkComponent.key}`} applications={applications} artifacts={[]} connections={[]} credentials={[]} /></section>}
+      <div className="form-section"><strong>4. Monitoring</strong><p>Choose the query window and resolution used to collect the run results.</p></div>
+      {metricsComponent && (() => {const plugin = compatiblePlugins.find(item => item.id === metricsComponent.pluginId)!; return <section className="experiment-component"><SchemaFields schema={experimentSchema(plugin.schema, metricsComponent.capability)} prefix={`component-${metricsComponent.key}`} applications={applications} artifacts={[]} connections={[]} credentials={[]} /></section>})()}
+      <div className="form-section"><strong>5. Load profile</strong><p>Define the traffic intensity, temporal pattern and distribution across application zones.</p></div>
+      {loadComponent && (() => {const plugin = compatiblePlugins.find(item => item.id === loadComponent.pluginId)!; return <section className="experiment-component"><SchemaFields schema={experimentSchema(plugin.schema, loadComponent.capability)} prefix={`component-${loadComponent.key}`} applications={applications} artifacts={[]} connections={[]} credentials={[]} />{zones.length > 0 && <fieldset className="zone-weights"><legend>Geographic distribution</legend><p>Relative traffic weight for each application zone.</p><div className="capacity-grid">{zones.map(zone => <label key={zone}>{zone}<input name={`zoneWeight-${loadComponent.key}-${zone}`} type="number" min={0} max={1000} defaultValue={1} required /></label>)}</div></fieldset>}</section>})()}
+      <details className="advanced-fields"><summary>Advanced scheduling and scaling</summary>
+        <div className="form-section pool-section"><div><strong>Optional components</strong><p>Add a scheduler, descheduler or autoscaler only when the experiment needs one.</p></div><button className="button secondary compact" type="button" disabled={!advancedPlugins.length || components.length >= 15} onClick={addAdvancedComponent}>Add component</button></div>
+      <div className="experiment-component-list">{advancedComponents.map(component => {
         const plugin = compatiblePlugins.find(item => item.id === component.pluginId) ?? compatiblePlugins[0]
-        const capabilities = plugin ? primaryCapabilities(plugin) : []
         const componentIds = application?.descriptor.spec?.interface?.components?.map(item => item.id).join(', ') ?? ''
         return <section className="experiment-component" key={component.key}>
-          <div className="experiment-component-head"><strong>Capability {components.indexOf(component) + 1}</strong><button type="button" className="icon-button" aria-label="Remove capability" onClick={() => setComponents(items => items.filter(item => item.key !== component.key))}>×</button></div>
-          <div className="field-row"><label>Implementation<select value={plugin?.id ?? ''} onChange={event => {const selected = compatiblePlugins.find(item => item.id === event.target.value)!; setComponents(items => items.map(item => item.key === component.key ? {...item, pluginId: selected.id, capability: primaryCapabilities(selected)[0] ?? ''} : item))}}>{compatiblePlugins.map(item => <option key={item.id} value={item.id}>{item.name} · {item.version}</option>)}</select></label><label>Function<select value={component.capability} onChange={event => setComponents(items => items.map(item => item.key === component.key ? {...item, capability: event.target.value} : item))}>{capabilities.map(capability => <option key={capability}>{capability}</option>)}</select></label></div>
-          {plugin && <SchemaFields schema={configurableSchema(plugin.schema)} prefix={`component-${component.key}`} applications={applications} artifacts={[]} connections={[]} credentials={[]} />}
+		  <div className="experiment-component-head"><strong>{componentTitle(component.capability)}</strong><button type="button" className="icon-button" aria-label="Remove component" onClick={() => setComponents(items => items.filter(item => item.key !== component.key))}>×</button></div>
+          {plugin && <SchemaFields schema={experimentSchema(plugin.schema, component.capability)} prefix={`component-${component.key}`} applications={applications} artifacts={[]} connections={[]} credentials={[]} />}
+          <details className="advanced-fields"><summary>Implementation</summary><label>Component<select value={plugin?.id ?? ''} onChange={event => {const selected = advancedPlugins.find(item => item.id === event.target.value)!; setComponents(items => items.map(item => item.key === component.key ? {...item, pluginId: selected.id, capability: primaryCapabilities(selected)[0] ?? ''} : item))}}>{advancedPlugins.map(item => <option key={item.id} value={item.id}>{item.name} · {item.version}</option>)}</select></label></details>
           <details className="advanced-fields"><summary>Workload targets</summary><p>Leave both fields empty to use every compatible component. Available: {componentIds || 'declared by the application at runtime'}.</p><div className="field-row"><label>Only these components<input name={`include-${component.key}`} placeholder="frontend, checkoutservice" /></label><label>Exclude components<input name={`exclude-${component.key}`} placeholder="emailservice" /></label></div></details>
         </section>
-      })}</div>
-      <div className="validation-callout"><span>✓</span><p>Application schema, plugin versions, capabilities, parameters, targets, cluster ownership and readiness are validated now and snapshotted.</p></div>
+      })}</div></details>
+      <div className="validation-callout"><span>✓</span><p>Cluster, application, network, monitoring, load and optional components are validated now and checked again before every run.</p></div>
       <p className="form-error">{error}</p>
-      <div className="modal-actions"><button className="button secondary" type="button" onClick={close}>Cancel</button><button className="button primary" disabled={pending || !workspaceId || !availableClusters.length || !application}>{pending ? 'Validating…' : 'Validate and save'}</button></div>
+      <div className="modal-actions"><button className="button secondary" type="button" onClick={close}>Cancel</button><button className="button primary" disabled={pending || !workspaceId || !clusterResourceId || !application}>{pending ? 'Validating…' : 'Validate and save'}</button></div>
     </form>
   </Dialog>
 }
@@ -195,6 +245,31 @@ export function configurableSchema(schema: JsonSchema): JsonSchema {
   return {type: 'object', properties, required: (schema.required ?? []).filter(name => name in properties)}
 }
 
+function experimentSchema(schema: JsonSchema, capability: string): JsonSchema {
+  const result = configurableSchema(schema)
+  if (!capability.startsWith('load.')) return result
+  const hidden = new Set(['action', 'zoneWeights'])
+  const properties = Object.fromEntries(Object.entries(result.properties ?? {}).filter(([name]) => !hidden.has(name)))
+  return {...result, properties, required: (result.required ?? []).filter(name => !hidden.has(name))}
+}
+
+export function applicationZones(cluster?: ManagedResource): string[] {
+  const pools = cluster?.spec?.applicationPools
+  if (!Array.isArray(pools)) return []
+  const values = pools.flatMap(pool => pool && typeof pool === 'object' && 'zones' in pool && Array.isArray(pool.zones) ? pool.zones : [])
+  return [...new Set(values.filter((zone): zone is string => typeof zone === 'string' && zone.length > 0))].sort()
+}
+
+function componentTitle(capability: string): string {
+  if (capability.startsWith('load.')) return 'Load profile'
+  if (capability.startsWith('metrics.')) return 'Monitoring'
+  if (capability.startsWith('chaos.')) return 'Network injection between zones'
+  if (capability.startsWith('scheduler.')) return 'Scheduler'
+  if (capability.startsWith('descheduler.')) return 'Descheduler'
+  if (capability.startsWith('autoscaler.')) return 'Autoscaler'
+  return 'Optional component'
+}
+
 export function primaryCapabilities(plugin: Plugin): string[] {
   return (plugin.capabilities ?? []).filter(capability => capability !== 'lifecycle.cleanup' && !capability.endsWith('.preflight') && !capability.endsWith('.cleanup'))
 }
@@ -203,8 +278,7 @@ export function experimentPlugins(plugins: Plugin[]): Plugin[] {
   const prefixes = ['scheduler.', 'descheduler.', 'autoscaler.', 'chaos.', 'load.', 'metrics.']
   return plugins.filter(plugin => {
     const capabilities = primaryCapabilities(plugin)
-    const relevantInput = (plugin.artifactInputs ?? []).some(input => ['ApplicationDeployment', 'TargetBinding', 'WorkloadTargets', 'LoadProfileSet'].includes(input.type))
-    return capabilities.some(capability => prefixes.some(prefix => capability.startsWith(prefix))) || relevantInput
+	return capabilities.some(capability => prefixes.some(prefix => capability.startsWith(prefix)))
   })
 }
 

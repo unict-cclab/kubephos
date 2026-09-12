@@ -261,6 +261,9 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .experiment-component-head { display: flex; align-items: center; justify-content: space-between; }
 .experiment-component-head strong { font-size: 12px; }
 .experiment-component .advanced-fields { margin-top: 8px; background: var(--surface); }
+.zone-weights { margin: 14px 0 0; border: 0; border-top: 1px solid var(--line); padding: 14px 0 0; }
+.zone-weights legend { padding: 0 8px 0 0; font-size: 11px; font-weight: 800; }
+.zone-weights p { margin: 0 0 10px; color: var(--muted); font-size: 10px; }
 .next-step-card, .product-next { display: flex; align-items: center; gap: 16px; margin-top: 22px; border: 1px dashed #bdc8c0; border-radius: 15px; padding: 20px; background: rgba(255,255,255,.55); }
 .next-step-card > span { border-radius: 999px; padding: 6px 9px; background: #e8f5ee; color: var(--green); font-size: 9px; font-weight: 850; letter-spacing: .08em; text-transform: uppercase; }
 .next-step-card strong, .product-next strong { font-size: 13px; }

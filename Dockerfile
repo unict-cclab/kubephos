@@ -33,6 +33,8 @@ RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/nfs-plugin ./cmd/n
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/harbor-plugin ./cmd/harbor-plugin
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/nfs-csi-plugin ./cmd/nfs-csi-plugin
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/managed-observability-plugin ./cmd/managed-observability-plugin
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/managed-platform-plugin ./cmd/managed-platform-plugin
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/network-injection-plugin ./cmd/network-injection-plugin
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/oci-build-plugin ./cmd/oci-build-plugin
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/oci-executor-plugin ./cmd/oci-executor-plugin
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/ssh-command-plugin ./cmd/ssh-command-plugin
@@ -77,6 +79,10 @@ COPY --from=build /out/nfs-csi-plugin /opt/kubephos/plugins/nfs-csi/nfs-csi-plug
 COPY plugins/nfs-csi/plugin.yaml /opt/kubephos/plugins/nfs-csi/plugin.yaml
 COPY --from=build /out/managed-observability-plugin /opt/kubephos/plugins/managed-observability/managed-observability-plugin
 COPY plugins/managed-observability/plugin.yaml /opt/kubephos/plugins/managed-observability/plugin.yaml
+COPY --from=build /out/managed-platform-plugin /opt/kubephos/plugins/managed-platform/managed-platform-plugin
+COPY plugins/managed-platform/plugin.yaml /opt/kubephos/plugins/managed-platform/plugin.yaml
+COPY --from=build /out/network-injection-plugin /opt/kubephos/plugins/network-injection/network-injection-plugin
+COPY plugins/network-injection/plugin.yaml /opt/kubephos/plugins/network-injection/plugin.yaml
 COPY --from=build /out/oci-build-plugin /opt/kubephos/plugins/oci-build/oci-build-plugin
 COPY plugins/oci-build/plugin.yaml /opt/kubephos/plugins/oci-build/plugin.yaml
 COPY --from=build /out/oci-executor-plugin /opt/kubephos/plugins/oci-executor/oci-executor-plugin

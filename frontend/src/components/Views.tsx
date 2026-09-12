@@ -178,14 +178,14 @@ function ApplicationGrid({items}: {items: Application[]}) {
     const specification = application.descriptor.spec ?? {}
     const components = specification.interface?.components ?? []
     const endpoints = specification.interface?.endpoints ?? []
-    const loadDrivers = specification.interface?.loadDrivers ?? []
+    const loadScenarios = specification.interface?.loadScenarios ?? []
     const traits = [...new Set(components.flatMap(component => component.traits ?? []))].sort()
     const source = specification.package ?? {}
     return <article className="application-card" key={application.reference}>
       <div className="application-card-header"><span className="application-icon">{application.name.slice(0, 1).toUpperCase()}</span><Status value={application.origin} /></div>
       <h3>{application.name}</h3><p>{application.description || 'A contract-compatible application package.'}</p>
       <div className="trait-list">{traits.map(trait => <span key={trait}>{trait}</span>)}</div>
-      <dl><div><dt>Version</dt><dd>{application.version}</dd></div><div><dt>Components</dt><dd>{components.length}</dd></div><div><dt>Endpoints</dt><dd>{endpoints.length}</dd></div><div><dt>Load profiles</dt><dd>{loadDrivers.length}</dd></div><div><dt>Package</dt><dd>{source.type ?? 'unknown'} · {source.format ?? 'unknown'}</dd></div></dl>
+      <dl><div><dt>Version</dt><dd>{application.version}</dd></div><div><dt>Components</dt><dd>{components.length}</dd></div><div><dt>Endpoints</dt><dd>{endpoints.length}</dd></div><div><dt>Load scenarios</dt><dd>{loadScenarios.length}</dd></div><div><dt>Package</dt><dd>{source.type ?? 'unknown'} · {source.format ?? 'unknown'}</dd></div></dl>
       <small className="digest" title={application.digest}>{application.digest}</small>
     </article>
   })}</div>
@@ -212,7 +212,7 @@ function Kubernetes(props: ViewProps) {
     <Heading eyebrow="MANAGED CLUSTERS" title="Kubernetes clusters" action={props.isAdmin && <button className="button primary" disabled={!canCreate} onClick={props.addKubernetesCluster}>New cluster</button>} />
     <p className="section-copy infrastructure-copy">Create a complete cluster from a VM template, Harbor, NFS and a small pool layout. KubePhos verifies every transition.</p>
     <div className="stats-grid infrastructure-stats"><Stat label="Clusters" value={props.kubernetesClusters.length} caption="managed environments" /><Stat label="Ready" value={props.kubernetesClusters.filter(item => item.status === 'ready').length} caption="all health gates passed" /><Stat label="Nodes" value={props.kubernetesClusters.reduce((total, item) => total + clusterNodeCount(item), 0)} caption="declared capacity" /></div>
-    <div className="managed-grid">{props.kubernetesClusters.length ? props.kubernetesClusters.map(item => <article className="managed-card cluster-card" key={item.id}><div className="managed-card-head"><span className="feature-icon">⬡</span><Status value={item.status} /></div><h3>{item.name}</h3><p>K3s · {clusterNodeCount(item)} nodes · VMIDs from {specText(item, 'baseVMID')}</p><dl><div><dt>Control plane</dt><dd>{specText(item, 'controlPlanes')}</dd></div><div><dt>Management</dt><dd>{poolCount(item, 'managementPool')} nodes</dd></div><div><dt>Application</dt><dd>{applicationPoolCount(item)} nodes</dd></div><div><dt>Created</dt><dd>{formatDate(item.createdAt)}</dd></div></dl>{item.error && <p className="managed-error">{item.error}</p>}<div className="managed-actions">{managedOperationID(item, props.pipelineRuns) && <button className="text-button" onClick={() => props.openOperation(managedOperationID(item, props.pipelineRuns)!)}>View activity</button>}{item.status === 'ready' && <a className="button secondary compact" href={`/api/v1/kubernetes-clusters/${item.id}/kubeconfig`}>Kubeconfig</a>}{props.isAdmin && <button className="button danger compact" disabled={item.status !== 'ready' && item.status !== 'failed'} onClick={() => props.deleteKubernetesCluster(item.id, item.name)}>Delete</button>}</div></article>) : <Empty title="No Kubernetes cluster">Create Harbor and NFS first, then KubePhos can provision the first complete cluster.</Empty>}</div>
+    <div className="managed-grid">{props.kubernetesClusters.length ? props.kubernetesClusters.map(item => <article className="managed-card cluster-card" key={item.id}><div className="managed-card-head"><span className="feature-icon">⬡</span><Status value={item.status} /></div><h3>{item.name}</h3><p>K3s · {clusterNodeCount(item)} nodes · VMIDs from {specText(item, 'baseVMID')}</p><dl><div><dt>Control plane</dt><dd>{specText(item, 'controlPlanes')}</dd></div><div><dt>Management</dt><dd>{poolCount(item, 'managementPool')} nodes</dd></div><div><dt>Application</dt><dd>{applicationPoolCount(item)} nodes</dd></div><div><dt>Created</dt><dd>{formatDate(item.createdAt)}</dd></div>{item.status === 'ready' && specText(item, 'managedProfile') !== '—' && <><div><dt>Istio</dt><dd>Managed · ready</dd></div><div><dt>Chaos</dt><dd><a href={managedNodePortURL(item, 32300)} target="_blank" rel="noreferrer">{managedNodePortLabel(item, 32300)}</a></dd></div><div><dt>Grafana</dt><dd><a href={managedNodePortURL(item, 32000)} target="_blank" rel="noreferrer">{managedNodePortLabel(item, 32000)}</a></dd></div><div><dt>Prometheus</dt><dd><a href={managedNodePortURL(item, 32090)} target="_blank" rel="noreferrer">{managedNodePortLabel(item, 32090)}</a></dd></div></>}</dl>{item.error && <p className="managed-error">{item.error}</p>}<div className="managed-actions">{managedOperationID(item, props.pipelineRuns) && <button className="text-button" onClick={() => props.openOperation(managedOperationID(item, props.pipelineRuns)!)}>View activity</button>}{item.status === 'ready' && <a className="button secondary compact" href={`/api/v1/kubernetes-clusters/${item.id}/kubeconfig`}>Kubeconfig</a>}{props.isAdmin && <button className="button danger compact" disabled={item.status !== 'ready' && item.status !== 'failed'} onClick={() => props.deleteKubernetesCluster(item.id, item.name)}>Delete</button>}</div></article>) : <Empty title="No Kubernetes cluster">Create Harbor and NFS first, then KubePhos can provision the first complete cluster.</Empty>}</div>
   </>
 }
 
@@ -224,6 +224,14 @@ function poolCount(resource: ManagedResource, field: string): number {
 function applicationPoolCount(resource: ManagedResource): number {
   const pools = resource.spec?.applicationPools
   return Array.isArray(pools) ? pools.reduce((total, pool) => total + (pool && typeof pool === 'object' && typeof pool.count === 'number' ? pool.count : 0), 0) : 0
+}
+
+function managedNodePortLabel(resource: ManagedResource, port: number): string {
+  return `${specText(resource, 'addressStart')}:${port}`
+}
+
+function managedNodePortURL(resource: ManagedResource, port: number): string {
+  return `http://${managedNodePortLabel(resource, port)}`
 }
 
 function managedOperationID(resource: ManagedResource, runs: PipelineRun[]): string | undefined {

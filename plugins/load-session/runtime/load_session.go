@@ -9,7 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
+	"net"
 	"net/url"
 	"os"
 	"os/exec"
@@ -29,7 +29,7 @@ const (
 	artifactAPI             = "artifacts.kubephos.dev/v1alpha1"
 	ownershipKey            = "kubephos.dev/ownership-marker"
 	applicationOwnershipKey = "kubephos.dev/application-marker"
-	loadProfileKey          = "kubephos.dev/load-profile"
+	loadProfileKey          = "kubephos.dev/load-scenario"
 	previousReplicasKey     = "kubephos.dev/load-previous-replicas"
 )
 
@@ -42,12 +42,17 @@ type Invocation struct {
 }
 
 type Spec struct {
-	ClusterConnectionRef     string `json:"clusterConnectionRef"`
-	ApplicationDeploymentRef string `json:"applicationDeploymentRef"`
-	LoadProfileSetRef        string `json:"loadProfileSetRef"`
-	ProfileID                string `json:"profileId"`
-	Action                   string `json:"action"`
-	Replicas                 int    `json:"replicas"`
+	ClusterConnectionRef     string         `json:"clusterConnectionRef"`
+	ApplicationDeploymentRef string         `json:"applicationDeploymentRef"`
+	LoadScenarioSetRef       string         `json:"loadScenarioSetRef"`
+	ScenarioID               string         `json:"scenarioId"`
+	Action                   string         `json:"action"`
+	Replicas                 int            `json:"replicas"`
+	Users                    int            `json:"users,omitempty"`
+	SpawnRate                int            `json:"spawnRate,omitempty"`
+	Pattern                  string         `json:"pattern,omitempty"`
+	DurationSeconds          int            `json:"durationSeconds,omitempty"`
+	ZoneWeights              map[string]int `json:"zoneWeights,omitempty"`
 }
 
 type clusterConnection struct {
@@ -98,17 +103,18 @@ type loadProfileSet struct {
 		Digest         string `json:"digest"`
 	} `json:"metadata"`
 	Spec struct {
-		Profiles []loadProfile `json:"profiles"`
+		Scenarios []loadProfile `json:"scenarios"`
 	} `json:"spec"`
 }
 
 type loadProfile struct {
 	ID             string         `json:"id"`
+	Engine         string         `json:"engine"`
 	TargetEndpoint string         `json:"targetEndpoint"`
-	Replicas       int            `json:"replicas"`
-	Workload       workloadTarget `json:"workload"`
-	Manifest       string         `json:"manifest"`
-	ManifestDigest string         `json:"manifestDigest"`
+	RuntimeImage   string         `json:"runtimeImage"`
+	Script         string         `json:"script"`
+	ScriptDigest   string         `json:"scriptDigest"`
+	Workload       workloadTarget `json:"-"`
 }
 
 type workloadTarget struct {
@@ -136,12 +142,44 @@ type loadSessionSpec struct {
 	ApplicationRef   string         `json:"applicationRef"`
 	ClusterServer    string         `json:"clusterServer"`
 	Namespace        string         `json:"namespace"`
-	ProfileID        string         `json:"profileId"`
+	ScenarioID       string         `json:"scenarioId"`
 	Action           string         `json:"action"`
 	State            string         `json:"state"`
 	Replicas         int            `json:"replicas"`
 	PreviousReplicas int            `json:"previousReplicas"`
+	Pattern          string         `json:"pattern"`
+	DurationSeconds  int            `json:"durationSeconds"`
+	ZoneWeights      map[string]int `json:"zoneWeights,omitempty"`
 	Workload         workloadTarget `json:"workload"`
+}
+
+type loadTarget struct {
+	URL    string `json:"url"`
+	Zone   string `json:"zone,omitempty"`
+	Weight int    `json:"weight"`
+}
+
+type serviceState struct {
+	Spec struct {
+		Ports []struct {
+			Port     int `json:"port"`
+			NodePort int `json:"nodePort"`
+		} `json:"ports"`
+	} `json:"spec"`
+}
+
+type nodeStateList struct {
+	Items []struct {
+		Metadata struct {
+			Labels map[string]string `json:"labels"`
+		} `json:"metadata"`
+		Status struct {
+			Addresses []struct {
+				Type    string `json:"type"`
+				Address string `json:"address"`
+			} `json:"addresses"`
+		} `json:"status"`
+	} `json:"items"`
 }
 
 type result struct {
@@ -160,32 +198,16 @@ type workloadState struct {
 	} `json:"status"`
 }
 
-type manifestResource struct {
-	APIVersion string `yaml:"apiVersion"`
-	Kind       string `yaml:"kind"`
-	Metadata   struct {
-		Name      string `yaml:"name"`
-		Namespace string `yaml:"namespace"`
-	} `yaml:"metadata"`
-	Spec struct {
-		Template struct {
-			Metadata struct {
-				Labels map[string]string `yaml:"labels"`
-			} `yaml:"metadata"`
-		} `yaml:"template"`
-	} `yaml:"spec"`
-}
-
 type commandRunner interface {
 	Run(context.Context, string, []byte, ...string) (string, error)
 }
 
 func (Plugin) Manifest() plugins.Manifest {
 	return plugins.Manifest{
-		ID: pluginID, Name: "Interactive Kubernetes load session", Version: "0.1.0",
-		Description:     "Starts, stops or resumes a declared load profile without coupling KubePhos to a load-testing tool.",
-		Schema:          json.RawMessage(`{"type":"object","additionalProperties":false,"required":["clusterConnectionRef","applicationDeploymentRef","loadProfileSetRef","profileId","action","replicas"],"properties":{"clusterConnectionRef":{"type":"string","title":"Kubernetes cluster","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ClusterConnection","x-kubephos-artifact-version":"v1alpha1"},"applicationDeploymentRef":{"type":"string","title":"Application deployment","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ApplicationDeployment","x-kubephos-artifact-version":"v1alpha1"},"loadProfileSetRef":{"type":"string","title":"Load profiles","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"LoadProfileSet","x-kubephos-artifact-version":"v1alpha1"},"profileId":{"type":"string","title":"Load profile","description":"Stable profile ID declared by the application package.","minLength":1,"maxLength":63,"default":"default-load"},"action":{"type":"string","title":"Action","x-kubephos-primary-action":true,"enum":["start","stop","resume"],"default":"start"},"replicas":{"type":"integer","title":"Load intensity","description":"Number of load driver replicas used by start or resume.","minimum":1,"maximum":1000,"default":1}}}`),
-		ArtifactInputs:  []domain.ArtifactContract{{Type: "ClusterConnection", Version: "v1alpha1"}, {Type: "ApplicationDeployment", Version: "v1alpha1"}, {Type: "LoadProfileSet", Version: "v1alpha1"}},
+		ID: pluginID, Name: "Interactive Kubernetes load session", Version: "0.3.0",
+		Description:     "Starts, stops or resumes a generic Locust runtime using the immutable scenario declared by an application.",
+		Schema:          json.RawMessage(`{"type":"object","additionalProperties":false,"required":["clusterConnectionRef","applicationDeploymentRef","loadScenarioSetRef","scenarioId","action","replicas","users","spawnRate","pattern","durationSeconds"],"properties":{"clusterConnectionRef":{"type":"string","title":"Kubernetes cluster","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ClusterConnection","x-kubephos-artifact-version":"v1alpha1"},"applicationDeploymentRef":{"type":"string","title":"Application deployment","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ApplicationDeployment","x-kubephos-artifact-version":"v1alpha1"},"loadScenarioSetRef":{"type":"string","title":"Load scenarios","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"LoadScenarioSet","x-kubephos-artifact-version":"v1alpha1"},"scenarioId":{"type":"string","title":"Application journey","description":"Immutable Locust scenario supplied by the selected application.","minLength":1,"maxLength":63,"default":"storefront-journey"},"action":{"type":"string","title":"Action","x-kubephos-primary-action":true,"enum":["start","stop","resume"],"default":"start"},"replicas":{"type":"integer","title":"Load workers","minimum":1,"maximum":100,"default":1},"users":{"type":"integer","title":"Concurrent users per worker","minimum":1,"maximum":100000,"default":10},"spawnRate":{"type":"integer","title":"Users started per second","minimum":1,"maximum":100000,"default":1},"pattern":{"type":"string","title":"Temporal profile","enum":["constant","ramp","steps"],"default":"constant"},"durationSeconds":{"type":"integer","title":"Duration in seconds","description":"Use zero for an interactive session that runs until stopped.","minimum":0,"maximum":7200,"default":900},"zoneWeights":{"type":"object","title":"Geographic distribution","additionalProperties":true}}}`),
+		ArtifactInputs:  []domain.ArtifactContract{{Type: "ClusterConnection", Version: "v1alpha1"}, {Type: "ApplicationDeployment", Version: "v1alpha1"}, {Type: "LoadScenarioSet", Version: "v1alpha1"}},
 		ArtifactOutputs: []domain.ArtifactContract{{Type: "LoadSession", Version: "v1alpha1"}},
 		Capabilities:    []string{"load.session.control", "load.session.preflight", "load.session.cleanup", "lifecycle.cleanup"},
 		Permissions:     []string{"cluster.admin"},
@@ -201,7 +223,7 @@ func (Plugin) Validate(ctx context.Context, invocation Invocation) domain.Valida
 	if err := json.Unmarshal(invocation.Input, &spec); err != nil {
 		return invalid(report, "$", "Configuration must be valid JSON.")
 	}
-	refs := []struct{ path, value string }{{"clusterConnectionRef", spec.ClusterConnectionRef}, {"applicationDeploymentRef", spec.ApplicationDeploymentRef}, {"loadProfileSetRef", spec.LoadProfileSetRef}}
+	refs := []struct{ path, value string }{{"clusterConnectionRef", spec.ClusterConnectionRef}, {"applicationDeploymentRef", spec.ApplicationDeploymentRef}, {"loadScenarioSetRef", spec.LoadScenarioSetRef}}
 	seen := map[string]bool{}
 	for _, ref := range refs {
 		if !strings.HasPrefix(ref.value, "art_") {
@@ -212,14 +234,31 @@ func (Plugin) Validate(ctx context.Context, invocation Invocation) domain.Valida
 		}
 		seen[ref.value] = true
 	}
-	if spec.ProfileID == "" || len(spec.ProfileID) > 63 || strings.ContainsAny(spec.ProfileID, "\n\r") {
-		return invalid(report, "profileId", "Select a valid declared load profile.")
+	if spec.ScenarioID == "" || len(spec.ScenarioID) > 63 || strings.ContainsAny(spec.ScenarioID, "\n\r") {
+		return invalid(report, "scenarioId", "Select a valid declared load scenario.")
 	}
 	if spec.Action != "start" && spec.Action != "stop" && spec.Action != "resume" {
 		return invalid(report, "action", "Action must be start, stop or resume.")
 	}
-	if spec.Replicas < 1 || spec.Replicas > 1000 {
-		return invalid(report, "replicas", "Load intensity must be between 1 and 1000.")
+	if spec.Replicas < 1 || spec.Replicas > 100 {
+		return invalid(report, "replicas", "Load workers must be between 1 and 100.")
+	}
+	if spec.Users != 0 && (spec.Users < 1 || spec.Users > 100000) {
+		return invalid(report, "users", "Concurrent users must be between 1 and 100000.")
+	}
+	if spec.SpawnRate != 0 && (spec.SpawnRate < 1 || spec.SpawnRate > 100000) {
+		return invalid(report, "spawnRate", "Spawn rate must be between 1 and 100000.")
+	}
+	if spec.Pattern != "" && spec.Pattern != "constant" && spec.Pattern != "ramp" && spec.Pattern != "steps" {
+		return invalid(report, "pattern", "Temporal profile must be constant, ramp or steps.")
+	}
+	if spec.DurationSeconds < 0 || spec.DurationSeconds > 7200 {
+		return invalid(report, "durationSeconds", "Duration must be between 0 and 7200 seconds.")
+	}
+	for zone, weight := range spec.ZoneWeights {
+		if strings.TrimSpace(zone) == "" || weight < 0 || weight > 1000 {
+			return invalid(report, "zoneWeights", "Zone weights must contain valid zone names and values between 0 and 1000.")
+		}
 	}
 	report.Issues = append(report.Issues, domain.ValidationIssue{Level: "info", Message: "KubePhos will revalidate the cluster, application ownership, load profile, current session state and target endpoint before changing load."})
 	return report
@@ -236,6 +275,7 @@ func (Plugin) Plan(ctx context.Context, raw json.RawMessage) (domain.Plan, error
 	if spec.Action != "start" && spec.Action != "stop" && spec.Action != "resume" {
 		return domain.Plan{}, errors.New("action must be start, stop or resume")
 	}
+	spec = withDefaults(spec)
 	input, err := json.Marshal(spec)
 	if err != nil {
 		return domain.Plan{}, err
@@ -245,7 +285,7 @@ func (Plugin) Plan(ctx context.Context, raw json.RawMessage) (domain.Plan, error
 		ArtifactInputs: []domain.ArtifactInput{
 			{Name: "cluster-connection", Type: "ClusterConnection", Version: "v1alpha1", ArtifactID: spec.ClusterConnectionRef},
 			{Name: "application-deployment", Type: "ApplicationDeployment", Version: "v1alpha1", ArtifactID: spec.ApplicationDeploymentRef},
-			{Name: "load-profile-set", Type: "LoadProfileSet", Version: "v1alpha1", ArtifactID: spec.LoadProfileSetRef},
+			{Name: "load-scenario-set", Type: "LoadScenarioSet", Version: "v1alpha1", ArtifactID: spec.LoadScenarioSetRef},
 		},
 		Outputs: []domain.ArtifactOutput{{Name: "load-session", Type: "LoadSession", Version: "v1alpha1", MediaType: "application/json", Source: "/loadSession"}},
 	}}}, nil
@@ -297,7 +337,11 @@ func (plugin Plugin) Precheck(ctx context.Context, step domain.PlanStep, log plu
 		if exists {
 			return unhealthy("The declared load workload already exists; use resume only after a KubePhos stop", "loadSession", "conflict"), nil
 		}
-		manifest, err := ownedManifest(profile.Manifest, deployment.Metadata.OwnershipMarker, profile.ID)
+		targets, err := resolveLoadTargets(ctx, runner, cluster.Spec.Kubeconfig, deployment.Spec.Namespace, endpoint, spec)
+		if err != nil {
+			return unhealthy(err.Error(), "geographicDistribution", "invalid"), nil
+		}
+		manifest, err := loadManifest(profile, deployment.Metadata.OwnershipMarker, spec, targets)
 		if err != nil {
 			return unhealthy(err.Error(), "manifest", "invalid"), nil
 		}
@@ -323,7 +367,7 @@ func (plugin Plugin) Precheck(ctx context.Context, step domain.PlanStep, log plu
 }
 
 func (plugin Plugin) Execute(ctx context.Context, step domain.PlanStep, log plugins.Logger) (json.RawMessage, error) {
-	spec, cluster, deployment, _, profile, _, err := resolve(step)
+	spec, cluster, deployment, _, profile, endpoint, err := resolve(step)
 	if err != nil {
 		return nil, err
 	}
@@ -345,7 +389,11 @@ func (plugin Plugin) Execute(ctx context.Context, step domain.PlanStep, log plug
 		if exists {
 			return nil, errors.New("load workload appeared after precheck")
 		}
-		manifest, err := ownedManifest(profile.Manifest, deployment.Metadata.OwnershipMarker, profile.ID)
+		targets, err := resolveLoadTargets(ctx, runner, cluster.Spec.Kubeconfig, deployment.Spec.Namespace, endpoint, spec)
+		if err != nil {
+			return nil, err
+		}
+		manifest, err := loadManifest(profile, deployment.Metadata.OwnershipMarker, spec, targets)
 		if err != nil {
 			return nil, err
 		}
@@ -354,6 +402,17 @@ func (plugin Plugin) Execute(ctx context.Context, step domain.PlanStep, log plug
 		}
 		if _, err := runner.Run(ctx, cluster.Spec.Kubeconfig, nil, "scale", resource, "-n", deployment.Spec.Namespace, "--replicas", fmt.Sprint(spec.Replicas)); err != nil {
 			return nil, err
+		}
+		if spec.DurationSeconds > 0 {
+			if err := waitForReady(ctx, runner, cluster.Spec.Kubeconfig, deployment.Spec.Namespace, profile, spec.Replicas, log); err != nil {
+				return nil, err
+			}
+			if err := waitForLoadDuration(ctx, time.Duration(spec.DurationSeconds)*time.Second, log); err != nil {
+				return nil, err
+			}
+			if _, err := runner.Run(ctx, cluster.Spec.Kubeconfig, nil, "scale", resource, "-n", deployment.Spec.Namespace, "--replicas", "0"); err != nil {
+				return nil, err
+			}
 		}
 	case "stop", "resume":
 		if !ownedBy(state, deployment, profile) {
@@ -372,13 +431,17 @@ func (plugin Plugin) Execute(ctx context.Context, step domain.PlanStep, log plug
 	}
 	replicas := spec.Replicas
 	stateValue := "running"
+	if spec.Action == "start" && spec.DurationSeconds > 0 {
+		replicas = 0
+		stateValue = "completed"
+	}
 	if spec.Action == "stop" {
 		replicas = 0
 		stateValue = "stopped"
 	}
 	value := result{LoadSession: loadSession{
 		APIVersion: artifactAPI, Kind: "LoadSession", Metadata: loadSessionMetadata{Name: deployment.Spec.Namespace + "/" + profile.ID, Version: "v1alpha1"},
-		Spec: loadSessionSpec{ApplicationRef: deployment.Spec.ApplicationRef, ClusterServer: cluster.Spec.Server, Namespace: deployment.Spec.Namespace, ProfileID: profile.ID, Action: spec.Action, State: stateValue, Replicas: replicas, PreviousReplicas: previous, Workload: profile.Workload},
+		Spec: loadSessionSpec{ApplicationRef: deployment.Spec.ApplicationRef, ClusterServer: cluster.Spec.Server, Namespace: deployment.Spec.Namespace, ScenarioID: profile.ID, Action: spec.Action, State: stateValue, Replicas: replicas, PreviousReplicas: previous, Pattern: spec.Pattern, DurationSeconds: spec.DurationSeconds, ZoneWeights: spec.ZoneWeights, Workload: profile.Workload},
 	}}
 	return json.Marshal(value)
 }
@@ -423,6 +486,10 @@ func (plugin Plugin) Verify(ctx context.Context, step domain.PlanStep, raw json.
 	}
 	expectedReplicas := spec.Replicas
 	expectedState := "running"
+	if spec.Action == "start" && spec.DurationSeconds > 0 {
+		expectedReplicas = 0
+		expectedState = "completed"
+	}
 	if spec.Action == "stop" {
 		expectedReplicas = 0
 		expectedState = "stopped"
@@ -466,7 +533,7 @@ func (plugin Plugin) Cleanup(ctx context.Context, step domain.PlanStep, raw json
 		if err := log("warning", "Removing the load workload created by the failed start operation"); err != nil {
 			return err
 		}
-		_, err = runner.Run(ctx, cluster.Spec.Kubeconfig, nil, "delete", resource, "-n", deployment.Spec.Namespace, "--wait=true", "--timeout=5m")
+		_, err = runner.Run(ctx, cluster.Spec.Kubeconfig, nil, "delete", resource, "configmap/"+profile.Workload.Name, "-n", deployment.Spec.Namespace, "--ignore-not-found", "--wait=true", "--timeout=5m")
 		return err
 	}
 	previous, err := storedPreviousReplicas(state)
@@ -486,7 +553,7 @@ func storedPreviousReplicas(state workloadState) (int, error) {
 		return 0, errors.New("previous load intensity is unavailable for compensation")
 	}
 	previous, err := strconv.Atoi(value)
-	if err != nil || previous < 0 || previous > 1000 {
+	if err != nil || previous < 0 || previous > 100 {
 		return 0, errors.New("previous load intensity is invalid")
 	}
 	return previous, nil
@@ -497,9 +564,10 @@ func resolve(step domain.PlanStep) (Spec, clusterConnection, applicationDeployme
 	if err := json.Unmarshal(step.Input, &spec); err != nil {
 		return Spec{}, clusterConnection{}, applicationDeployment{}, loadProfileSet{}, loadProfile{}, serviceEndpoint{}, err
 	}
+	spec = withDefaults(spec)
 	clusterRaw, clusterOK := step.ResolvedInputs["cluster-connection"]
 	deploymentRaw, deploymentOK := step.ResolvedInputs["application-deployment"]
-	profilesRaw, profilesOK := step.ResolvedInputs["load-profile-set"]
+	profilesRaw, profilesOK := step.ResolvedInputs["load-scenario-set"]
 	if !clusterOK || !deploymentOK || !profilesOK {
 		return Spec{}, clusterConnection{}, applicationDeployment{}, loadProfileSet{}, loadProfile{}, serviceEndpoint{}, errors.New("one or more verified load session inputs are unavailable")
 	}
@@ -516,14 +584,15 @@ func resolve(step domain.PlanStep) (Spec, clusterConnection, applicationDeployme
 		return Spec{}, clusterConnection{}, applicationDeployment{}, loadProfileSet{}, loadProfile{}, serviceEndpoint{}, err
 	}
 	var profile loadProfile
-	for _, candidate := range profiles.Spec.Profiles {
-		if candidate.ID == spec.ProfileID {
+	for _, candidate := range profiles.Spec.Scenarios {
+		if candidate.ID == spec.ScenarioID {
 			profile = candidate
 		}
 	}
 	if profile.ID == "" {
-		return Spec{}, clusterConnection{}, applicationDeployment{}, loadProfileSet{}, loadProfile{}, serviceEndpoint{}, fmt.Errorf("load profile %s is not declared", spec.ProfileID)
+		return Spec{}, clusterConnection{}, applicationDeployment{}, loadProfileSet{}, loadProfile{}, serviceEndpoint{}, fmt.Errorf("load scenario %s is not declared", spec.ScenarioID)
 	}
+	profile.Workload = scenarioWorkload(profile.ID)
 	var endpoint serviceEndpoint
 	for _, candidate := range deployment.Spec.Endpoints {
 		if candidate.ID == profile.TargetEndpoint {
@@ -550,40 +619,19 @@ func validateArtifacts(cluster clusterConnection, deployment applicationDeployme
 	if deployment.APIVersion != artifactAPI || deployment.Kind != "ApplicationDeployment" || deployment.Metadata.Name == "" || deployment.Metadata.Version != "v1alpha1" || deployment.Metadata.OwnershipMarker == "" || deployment.Spec.ApplicationRef == "" || deployment.Spec.ClusterServer != cluster.Spec.Server || deployment.Spec.Namespace != deployment.Metadata.Name {
 		return errors.New("application deployment identity is invalid")
 	}
-	if profiles.APIVersion != artifactAPI || profiles.Kind != "LoadProfileSet" || profiles.Metadata.ApplicationRef != deployment.Spec.ApplicationRef || len(profiles.Spec.Profiles) == 0 {
-		return errors.New("load profile set identity is invalid")
+	if profiles.APIVersion != artifactAPI || profiles.Kind != "LoadScenarioSet" || profiles.Metadata.ApplicationRef != deployment.Spec.ApplicationRef || len(profiles.Spec.Scenarios) == 0 {
+		return errors.New("load scenario set identity is invalid")
 	}
-	digest, err := digestJSON(profiles.Spec.Profiles)
+	digest, err := digestJSON(profiles.Spec.Scenarios)
 	if err != nil || digest != profiles.Metadata.Digest {
-		return errors.New("load profile set digest is invalid")
+		return errors.New("load scenario set digest is invalid")
 	}
-	if profile.ID == "" || profile.TargetEndpoint != endpoint.ID || profile.Replicas < 1 || profile.Replicas > 1000 || profile.Workload.ID != profile.ID || profile.Workload.APIVersion == "" || profile.Workload.Kind == "" || profile.Workload.Name == "" || len(profile.Workload.Selector) == 0 {
-		return errors.New("load profile interface is invalid")
+	if profile.ID == "" || profile.Engine != "locust" || profile.TargetEndpoint != endpoint.ID || profile.RuntimeImage == "" || strings.ContainsAny(profile.RuntimeImage, "\n\r ") || profile.Script == "" || profile.Workload.ID != profile.ID || profile.Workload.APIVersion == "" || profile.Workload.Kind == "" || profile.Workload.Name == "" || len(profile.Workload.Selector) == 0 {
+		return errors.New("load scenario interface is invalid")
 	}
-	manifestDigest := sha256.Sum256([]byte(profile.Manifest))
-	if profile.ManifestDigest != "sha256:"+hex.EncodeToString(manifestDigest[:]) {
-		return errors.New("load profile manifest digest is invalid")
-	}
-	var resource manifestResource
-	decoder := yaml.NewDecoder(bytes.NewReader([]byte(profile.Manifest)))
-	if err := decoder.Decode(&resource); err != nil {
-		return fmt.Errorf("decode load profile manifest: %w", err)
-	}
-	var extra any
-	err = decoder.Decode(&extra)
-	if err == nil {
-		return errors.New("load profile manifest must contain exactly one resource")
-	}
-	if !errors.Is(err, io.EOF) {
-		return fmt.Errorf("decode trailing load profile manifest: %w", err)
-	}
-	if resource.APIVersion != profile.Workload.APIVersion || resource.Kind != profile.Workload.Kind || resource.Metadata.Name != profile.Workload.Name || resource.Metadata.Namespace != "" {
-		return errors.New("load profile manifest does not match its declared workload")
-	}
-	for key, expected := range profile.Workload.Selector {
-		if resource.Spec.Template.Metadata.Labels[key] != expected {
-			return errors.New("load profile selector does not match its Pod template")
-		}
+	scriptDigest := sha256.Sum256([]byte(profile.Script))
+	if profile.ScriptDigest != "sha256:"+hex.EncodeToString(scriptDigest[:]) {
+		return errors.New("load scenario script digest is invalid")
 	}
 	return nil
 }
@@ -735,7 +783,7 @@ func waitForStopped(ctx context.Context, runner commandRunner, kubeconfig, names
 }
 
 func validateResult(session loadSession, spec Spec, cluster clusterConnection, deployment applicationDeployment, profile loadProfile, state string, replicas int) error {
-	if session.APIVersion != artifactAPI || session.Kind != "LoadSession" || session.Metadata.Name != deployment.Spec.Namespace+"/"+profile.ID || session.Metadata.Version != "v1alpha1" || session.Spec.ApplicationRef != deployment.Spec.ApplicationRef || session.Spec.ClusterServer != cluster.Spec.Server || session.Spec.Namespace != deployment.Spec.Namespace || session.Spec.ProfileID != profile.ID || session.Spec.Action != spec.Action || session.Spec.State != state || session.Spec.Replicas != replicas || session.Spec.Workload.Name != profile.Workload.Name {
+	if session.APIVersion != artifactAPI || session.Kind != "LoadSession" || session.Metadata.Name != deployment.Spec.Namespace+"/"+profile.ID || session.Metadata.Version != "v1alpha1" || session.Spec.ApplicationRef != deployment.Spec.ApplicationRef || session.Spec.ClusterServer != cluster.Spec.Server || session.Spec.Namespace != deployment.Spec.Namespace || session.Spec.ScenarioID != profile.ID || session.Spec.Action != spec.Action || session.Spec.State != state || session.Spec.Replicas != replicas || session.Spec.Pattern != spec.Pattern || session.Spec.DurationSeconds != spec.DurationSeconds || session.Spec.Workload.Name != profile.Workload.Name {
 		return errors.New("load session artifact does not match the validated transition")
 	}
 	return nil
@@ -767,24 +815,230 @@ func digestJSON(value any) (string, error) {
 	return "sha256:" + hex.EncodeToString(digest[:]), nil
 }
 
-func ownedManifest(value, marker, profileID string) ([]byte, error) {
-	var resource map[string]any
-	if err := yaml.Unmarshal([]byte(value), &resource); err != nil {
+func withDefaults(spec Spec) Spec {
+	if spec.Users == 0 {
+		spec.Users = 10
+	}
+	if spec.SpawnRate == 0 {
+		spec.SpawnRate = 1
+	}
+	if spec.Pattern == "" {
+		spec.Pattern = "constant"
+	}
+	return spec
+}
+
+func scenarioWorkload(scenarioID string) workloadTarget {
+	name := "kubephos-load-" + scenarioID
+	if len(name) > 63 {
+		digest := sha256.Sum256([]byte(name))
+		name = name[:50] + "-" + hex.EncodeToString(digest[:])[:12]
+	}
+	selector := map[string]string{"app.kubernetes.io/name": "kubephos-load", "kubephos.dev/load-scenario": scenarioID}
+	return workloadTarget{ID: scenarioID, APIVersion: "apps/v1", Kind: "Deployment", Name: name, Selector: selector}
+}
+
+func resolveLoadTargets(ctx context.Context, runner commandRunner, kubeconfig, namespace string, endpoint serviceEndpoint, spec Spec) ([]loadTarget, error) {
+	path := endpoint.Path
+	if path == "" {
+		path = "/"
+	}
+	fallback := []loadTarget{{URL: fmt.Sprintf("%s://%s:%d%s", strings.ToLower(endpoint.Protocol), endpoint.Service, endpoint.Port, path), Weight: 1}}
+	if len(spec.ZoneWeights) == 0 {
+		return fallback, nil
+	}
+	total := 0
+	for _, weight := range spec.ZoneWeights {
+		total += weight
+	}
+	if total == 0 {
+		return nil, errors.New("at least one application zone must have a positive traffic weight")
+	}
+	serviceRaw, err := runner.Run(ctx, kubeconfig, nil, "get", "service", endpoint.Service, "-n", namespace, "-o", "json")
+	if err != nil {
+		return nil, fmt.Errorf("read geographic load endpoint: %w", err)
+	}
+	var service serviceState
+	if err := json.Unmarshal([]byte(serviceRaw), &service); err != nil || len(service.Spec.Ports) == 0 || service.Spec.Ports[0].NodePort == 0 {
+		return nil, errors.New("the selected application load endpoint must expose a NodePort for geographic traffic")
+	}
+	nodesRaw, err := runner.Run(ctx, kubeconfig, nil, "get", "nodes", "-l", "kubephos.dev/role=application", "-o", "json")
+	if err != nil {
+		return nil, fmt.Errorf("read application nodes: %w", err)
+	}
+	var nodes nodeStateList
+	if err := json.Unmarshal([]byte(nodesRaw), &nodes); err != nil {
 		return nil, err
 	}
-	metadata, ok := resource["metadata"].(map[string]any)
-	if !ok {
-		return nil, errors.New("load profile manifest metadata is invalid")
+	zoneCounts := map[string]int{}
+	for _, node := range nodes.Items {
+		if zone := node.Metadata.Labels["topology.kubernetes.io/zone"]; spec.ZoneWeights[zone] > 0 {
+			zoneCounts[zone]++
+		}
 	}
-	annotations, _ := metadata["annotations"].(map[string]any)
-	if annotations == nil {
-		annotations = map[string]any{}
+	targets := []loadTarget{}
+	seenZones := map[string]bool{}
+	for _, node := range nodes.Items {
+		zone := node.Metadata.Labels["topology.kubernetes.io/zone"]
+		weight := spec.ZoneWeights[zone]
+		if weight <= 0 || zoneCounts[zone] == 0 {
+			continue
+		}
+		address := ""
+		for _, candidate := range node.Status.Addresses {
+			if candidate.Type == "InternalIP" {
+				address = candidate.Address
+				break
+			}
+		}
+		if address == "" {
+			continue
+		}
+		seenZones[zone] = true
+		targets = append(targets, loadTarget{URL: strings.ToLower(endpoint.Protocol) + "://" + net.JoinHostPort(address, fmt.Sprint(service.Spec.Ports[0].NodePort)) + path, Zone: zone, Weight: weight})
 	}
-	annotations[applicationOwnershipKey] = marker
-	annotations[loadProfileKey] = profileID
-	metadata["annotations"] = annotations
-	return yaml.Marshal(resource)
+	for zone, weight := range spec.ZoneWeights {
+		if weight > 0 && !seenZones[zone] {
+			return nil, fmt.Errorf("application zone %s has no reachable node proxy", zone)
+		}
+	}
+	if len(targets) == 0 {
+		return nil, errors.New("no geographic load target is reachable")
+	}
+	sort.Slice(targets, func(left, right int) bool {
+		if targets[left].Zone == targets[right].Zone {
+			return targets[left].URL < targets[right].URL
+		}
+		return targets[left].Zone < targets[right].Zone
+	})
+	return targets, nil
 }
+
+func waitForLoadDuration(ctx context.Context, duration time.Duration, log plugins.Logger) error {
+	deadline := time.NewTimer(duration)
+	defer deadline.Stop()
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+	started := time.Now()
+	for {
+		select {
+		case <-deadline.C:
+			return nil
+		case <-ticker.C:
+			remaining := duration - time.Since(started)
+			if remaining < 0 {
+				remaining = 0
+			}
+			if err := log("info", fmt.Sprintf("Load profile is active; %s remaining", remaining.Round(time.Second))); err != nil {
+				return err
+			}
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+}
+
+func loadManifest(profile loadProfile, marker string, spec Spec, targets []loadTarget) ([]byte, error) {
+	annotations := map[string]any{applicationOwnershipKey: marker, loadProfileKey: profile.ID}
+	labels := map[string]any{"app.kubernetes.io/name": "kubephos-load", "kubephos.dev/load-scenario": profile.ID}
+	targetValue, err := json.Marshal(targets)
+	if err != nil {
+		return nil, err
+	}
+	configMap := map[string]any{
+		"apiVersion": "v1",
+		"kind":       "ConfigMap",
+		"metadata":   map[string]any{"name": profile.Workload.Name, "annotations": annotations, "labels": labels},
+		"data":       map[string]any{"application.py": profile.Script, "locustfile.py": locustWrapper},
+	}
+	deployment := map[string]any{
+		"apiVersion": "apps/v1",
+		"kind":       "Deployment",
+		"metadata":   map[string]any{"name": profile.Workload.Name, "annotations": annotations, "labels": labels},
+		"spec": map[string]any{
+			"replicas": 0,
+			"selector": map[string]any{"matchLabels": labels},
+			"template": map[string]any{
+				"metadata": map[string]any{"labels": labels, "annotations": annotations},
+				"spec": map[string]any{
+					"nodeSelector": map[string]any{"kubephos.dev/role": "management"},
+					"containers": []any{map[string]any{
+						"name": "locust", "image": profile.RuntimeImage, "imagePullPolicy": "IfNotPresent",
+						"command": []any{"locust"},
+						"args":    []any{"-f", "/scenario/locustfile.py", "--headless", "--users", fmt.Sprint(spec.Users), "--spawn-rate", fmt.Sprint(spec.SpawnRate)},
+						"env": []any{
+							map[string]any{"name": "KUBEPHOS_TARGETS", "value": string(targetValue)},
+							map[string]any{"name": "KUBEPHOS_USERS", "value": fmt.Sprint(spec.Users)},
+							map[string]any{"name": "KUBEPHOS_SPAWN_RATE", "value": fmt.Sprint(spec.SpawnRate)},
+							map[string]any{"name": "KUBEPHOS_PATTERN", "value": spec.Pattern},
+							map[string]any{"name": "KUBEPHOS_DURATION", "value": fmt.Sprint(spec.DurationSeconds)},
+						},
+						"volumeMounts": []any{map[string]any{"name": "scenario", "mountPath": "/scenario", "readOnly": true}},
+						"resources":    map[string]any{"requests": map[string]any{"cpu": "100m", "memory": "128Mi"}, "limits": map[string]any{"cpu": "1", "memory": "512Mi"}},
+					}},
+					"volumes": []any{map[string]any{"name": "scenario", "configMap": map[string]any{"name": profile.Workload.Name}}},
+				},
+			},
+		},
+	}
+	configValue, err := yaml.Marshal(configMap)
+	if err != nil {
+		return nil, err
+	}
+	deploymentValue, err := yaml.Marshal(deployment)
+	if err != nil {
+		return nil, err
+	}
+	return append(append(configValue, []byte("---\n")...), deploymentValue...), nil
+}
+
+const locustWrapper = `import importlib.util
+import json
+import math
+import os
+import random
+from locust import HttpUser, LoadTestShape
+
+module_spec = importlib.util.spec_from_file_location("kubephos_application", "/scenario/application.py")
+module = importlib.util.module_from_spec(module_spec)
+module_spec.loader.exec_module(module)
+targets = json.loads(os.environ["KUBEPHOS_TARGETS"])
+users = int(os.environ["KUBEPHOS_USERS"])
+spawn_rate = int(os.environ["KUBEPHOS_SPAWN_RATE"])
+pattern = os.environ["KUBEPHOS_PATTERN"]
+duration = int(os.environ["KUBEPHOS_DURATION"])
+
+def choose_target():
+    zones = {}
+    for target in targets:
+        zones.setdefault(target.get("zone", "default"), []).append(target)
+    weighted_zones = [(zone, values[0].get("weight", 1)) for zone, values in zones.items()]
+    zone = random.choices([item[0] for item in weighted_zones], weights=[item[1] for item in weighted_zones], k=1)[0]
+    return random.choice(zones[zone])["url"]
+
+def wrap_initializer(initializer):
+    def initialize(instance, environment):
+        instance.host = choose_target()
+        initializer(instance, environment)
+    return initialize
+
+for name, value in vars(module).items():
+    if isinstance(value, type) and issubclass(value, HttpUser) and value is not HttpUser:
+        value.__init__ = wrap_initializer(value.__init__)
+        globals()[name] = value
+
+class KubePhosLoadShape(LoadTestShape):
+    def tick(self):
+        elapsed = self.get_run_time()
+        progress = min(elapsed / duration, 1.0) if duration > 0 else 1.0
+        if pattern == "ramp":
+            target = max(1, math.ceil(users * progress))
+        elif pattern == "steps":
+            target = max(1, math.ceil(users * min(math.floor(progress * 4) + 1, 4) / 4))
+        else:
+            target = users
+        return target, spawn_rate
+`
 
 func invalid(report domain.ValidationReport, path, message string) domain.ValidationReport {
 	report.Valid = false

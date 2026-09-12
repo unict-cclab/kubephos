@@ -1908,6 +1908,20 @@ func (s *Server) experimentInstancePipeline(ctx context.Context, configuration d
 		artifactContractKey("ClusterConnection", "v1alpha1"):       {ExternalID: clusterConnection.ID},
 		artifactContractKey("ObservabilityCapability", "v1alpha1"): {ExternalID: observability.ID},
 	}
+	for _, component := range definition.Components {
+		plugin, err := s.registry.Get(component.PluginID)
+		if err != nil {
+			return domain.PipelineDefinition{}, &managedOperationFailure{status: http.StatusConflict, code: "plugin_changed", message: err.Error()}
+		}
+		if manifestNeedsArtifact(plugin.Manifest(), "ManagedPlatformCapability", "v1alpha1") {
+			managedPlatform, err := s.store.GetPipelineRunArtifact(ctx, cluster.PipelineRunID, "managed-platform-capability")
+			if err != nil || managedPlatform.Type != "ManagedPlatformCapability" || managedPlatform.Version != "v1alpha1" {
+				return domain.PipelineDefinition{}, &managedOperationFailure{status: http.StatusConflict, code: "platform_invalid", message: "Managed Istio and Chaos Mesh are unavailable on the cluster."}
+			}
+			sources[artifactContractKey("ManagedPlatformCapability", "v1alpha1")] = experimentArtifactSource{ExternalID: managedPlatform.ID}
+			break
+		}
+	}
 	registerExperimentOutputs(sources, "application", inspectPlugin.Manifest())
 	deploySpec := map[string]any{}
 	deployBindings, failure := experimentArtifactBindings(deploySpec, deployPlugin.Manifest(), sources, configuration.ApplicationRef)
@@ -2033,6 +2047,7 @@ func (s *Server) createKubernetesCluster(response http.ResponseWriter, request *
 		ControlPlaneCapacity managedMachineCapacity `json:"controlPlaneCapacity"`
 		ManagementPool       managedNodePoolInput   `json:"managementPool"`
 		ApplicationPools     []managedNodePoolInput `json:"applicationPools"`
+		ManagedProfile       string                 `json:"managedProfile"`
 	}
 	if err := decodeJSON(request, &input); err != nil {
 		writeError(response, http.StatusBadRequest, "invalid_request", err.Error())
@@ -2047,6 +2062,7 @@ func (s *Server) createKubernetesCluster(response http.ResponseWriter, request *
 	input.AddressStart = strings.TrimSpace(input.AddressStart)
 	input.Gateway = strings.TrimSpace(input.Gateway)
 	input.DNSServer = strings.TrimSpace(input.DNSServer)
+	input.ManagedProfile = "2026.09"
 	labelPattern := regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,31}$`)
 	if !labelPattern.MatchString(input.Name) {
 		writeError(response, http.StatusUnprocessableEntity, "invalid_name", "Cluster name must be a lowercase label with at most 32 characters.")
@@ -2166,6 +2182,11 @@ func (s *Server) createKubernetesCluster(response http.ResponseWriter, request *
 		writeError(response, http.StatusUnprocessableEntity, "capability_unavailable", err.Error())
 		return
 	}
+	platformPlugin, err := s.pluginForCapability("", "platform.managed.install")
+	if err != nil {
+		writeError(response, http.StatusUnprocessableEntity, "capability_unavailable", err.Error())
+		return
+	}
 	observabilityPlugin, err := s.pluginForCapability("", "observability.metrics.install")
 	if err != nil {
 		writeError(response, http.StatusUnprocessableEntity, "capability_unavailable", err.Error())
@@ -2184,11 +2205,13 @@ func (s *Server) createKubernetesCluster(response http.ResponseWriter, request *
 	}
 	clusterSpec, _ := json.Marshal(map[string]any{"machineSetRef": "", "machineAccessRef": "", "clusterName": input.Name, "controlPlanes": input.ControlPlanes, "controlPlaneZones": input.ControlPlaneZones, "nodePools": nodePools, "registryEndpointRef": harbor.ArtifactID, "registryCredentialRef": registryCredential.ID})
 	storageSpec, _ := json.Marshal(map[string]any{"clusterConnectionRef": "", "sharedStorageEndpointRef": nfs.ArtifactID, "storageClassName": "shared-storage"})
+	platformSpec, _ := json.Marshal(map[string]any{"clusterConnectionRef": ""})
 	observabilitySpec, _ := json.Marshal(map[string]any{"clusterConnectionRef": "", "storageClassCapabilityRef": "", "scrapeInterval": "15s", "retention": "7d"})
 	definition := domain.PipelineDefinition{Stages: []domain.PipelineStage{
 		{ID: "machines", PluginID: topologyPlugin.Manifest().ID, Title: "Provision cluster machines", Spec: topologySpec},
 		{ID: "kubernetes", PluginID: clusterPlugin.Manifest().ID, Title: "Bootstrap Kubernetes", Spec: clusterSpec, Bindings: []domain.PipelineBinding{{Path: "/machineSetRef", FromStage: "machines", FromOutput: "machine-set"}, {Path: "/machineAccessRef", FromStage: "machines", FromOutput: "machine-access"}}},
 		{ID: "storage", PluginID: storagePlugin.Manifest().ID, Title: "Attach managed storage", Spec: storageSpec, Bindings: []domain.PipelineBinding{{Path: "/clusterConnectionRef", FromStage: "kubernetes", FromOutput: "cluster-connection"}}},
+		{ID: "platform", PluginID: platformPlugin.Manifest().ID, Title: "Install managed platform", Spec: platformSpec, Bindings: []domain.PipelineBinding{{Path: "/clusterConnectionRef", FromStage: "kubernetes", FromOutput: "cluster-connection"}}},
 		{ID: "observability", PluginID: observabilityPlugin.Manifest().ID, Title: "Install managed observability", Spec: observabilitySpec, Bindings: []domain.PipelineBinding{{Path: "/clusterConnectionRef", FromStage: "kubernetes", FromOutput: "cluster-connection"}, {Path: "/storageClassCapabilityRef", FromStage: "storage", FromOutput: "storage-class-capability"}}},
 	}, Result: domain.PipelineOutput{Stage: "observability", Output: "observability-capability"}}
 	validated, failure := s.validatedManagedPipeline(request.Context(), input.WorkspaceID, definition)

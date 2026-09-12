@@ -24,15 +24,17 @@ import (
 )
 
 const (
-	pluginID     = "io.kubephos.observability.managed"
-	artifactAPI  = "artifacts.kubephos.dev/v1alpha1"
-	chartVersion = "86.0.0"
-	chartURL     = "https://github.com/prometheus-community/helm-charts/releases/download/kube-prometheus-stack-86.0.0/kube-prometheus-stack-86.0.0.tgz"
-	chartDigest  = "aee1f7e4d82c484d9d9742c2f629a9e523bb9f23e6f5c4ac5f78128487fab41a"
-	releaseName  = "kubephos-observability"
-	namespace    = "kubephos-observability"
-	ownershipKey = "kubephos.dev/ownership-marker"
-	grafanaUser  = "admin"
+	pluginID       = "io.kubephos.observability.managed"
+	artifactAPI    = "artifacts.kubephos.dev/v1alpha1"
+	chartVersion   = "86.0.0"
+	chartURL       = "https://github.com/prometheus-community/helm-charts/releases/download/kube-prometheus-stack-86.0.0/kube-prometheus-stack-86.0.0.tgz"
+	chartDigest    = "aee1f7e4d82c484d9d9742c2f629a9e523bb9f23e6f5c4ac5f78128487fab41a"
+	releaseName    = "kubephos-observability"
+	namespace      = "kubephos-observability"
+	ownershipKey   = "kubephos.dev/ownership-marker"
+	grafanaUser    = "admin"
+	grafanaPort    = 32000
+	prometheusPort = 32090
 )
 
 var managedCRDs = []string{
@@ -123,6 +125,7 @@ type serviceEndpoint struct {
 	Name        string `json:"name"`
 	ServiceName string `json:"serviceName"`
 	Port        int    `json:"port"`
+	NodePort    int    `json:"nodePort"`
 	Scheme      string `json:"scheme"`
 }
 
@@ -157,9 +160,11 @@ type serviceList struct {
 			Labels map[string]string `json:"labels"`
 		} `json:"metadata"`
 		Spec struct {
+			Type  string `json:"type"`
 			Ports []struct {
-				Name string `json:"name"`
-				Port int    `json:"port"`
+				Name     string `json:"name"`
+				Port     int    `json:"port"`
+				NodePort int    `json:"nodePort"`
 			} `json:"ports"`
 		} `json:"spec"`
 	} `json:"items"`
@@ -524,11 +529,15 @@ func managedValues(input stepInput, storageClass, password string) ([]byte, erro
 			"adminUser": grafanaUser, "adminPassword": password,
 			"initChownData": map[string]any{"enabled": false},
 			"persistence":   map[string]any{"enabled": true, "storageClassName": storageClass, "accessModes": []string{"ReadWriteOnce"}, "size": "2Gi"},
+			"service":       map[string]any{"type": "NodePort", "nodePort": grafanaPort},
 		},
-		"prometheus": map[string]any{"prometheusSpec": map[string]any{
-			"scrapeInterval": input.ScrapeInterval, "evaluationInterval": input.ScrapeInterval, "retention": input.Retention,
-			"storageSpec": map[string]any{"volumeClaimTemplate": map[string]any{"spec": map[string]any{"storageClassName": storageClass, "accessModes": []string{"ReadWriteOnce"}, "resources": map[string]any{"requests": map[string]string{"storage": "10Gi"}}}}},
-		}},
+		"prometheus": map[string]any{
+			"service": map[string]any{"type": "NodePort", "nodePort": prometheusPort},
+			"prometheusSpec": map[string]any{
+				"scrapeInterval": input.ScrapeInterval, "evaluationInterval": input.ScrapeInterval, "retention": input.Retention,
+				"storageSpec": map[string]any{"volumeClaimTemplate": map[string]any{"spec": map[string]any{"storageClassName": storageClass, "accessModes": []string{"ReadWriteOnce"}, "resources": map[string]any{"requests": map[string]string{"storage": "10Gi"}}}}},
+			},
+		},
 	}
 	return yaml.Marshal(values)
 }
@@ -588,14 +597,23 @@ func discoverEndpoints(ctx context.Context, runner clusterRunner, kubeconfig str
 			continue
 		}
 		port := 0
+		nodePort := 0
 		for _, candidate := range item.Spec.Ports {
 			if candidate.Name == "http-web" || candidate.Name == "service" || candidate.Name == "http" || len(item.Spec.Ports) == 1 {
 				port = candidate.Port
+				nodePort = candidate.NodePort
 				break
 			}
 		}
+		expectedNodePort := prometheusPort
+		if name == "grafana" {
+			expectedNodePort = grafanaPort
+		}
+		if item.Spec.Type != "NodePort" || nodePort != expectedNodePort {
+			return nil, fmt.Errorf("managed %s service must expose NodePort %d", name, expectedNodePort)
+		}
 		if port > 0 {
-			values = append(values, serviceEndpoint{Name: name, ServiceName: item.Metadata.Name, Port: port, Scheme: "http"})
+			values = append(values, serviceEndpoint{Name: name, ServiceName: item.Metadata.Name, Port: port, NodePort: nodePort, Scheme: "http"})
 		}
 	}
 	if endpointByName(values, "prometheus").Name == "" || endpointByName(values, "grafana").Name == "" {
@@ -626,6 +644,9 @@ func validateResult(value result, input stepInput, cluster clusterConnection) er
 	credential := value.GrafanaCredential
 	if capability.APIVersion != artifactAPI || capability.Kind != "ObservabilityCapability" || capability.Metadata.Name != "managed-observability" || capability.Metadata.Version != chartVersion || capability.Spec.ClusterServer != cluster.Spec.Server || capability.Spec.Namespace != namespace || capability.Spec.ScrapeInterval != input.ScrapeInterval || capability.Spec.Retention != input.Retention || capability.Spec.MetricsAPI != "prometheus-v1" || len(capability.Spec.Endpoints) != 2 {
 		return errors.New("observability capability does not match the validated plan")
+	}
+	if endpointByName(capability.Spec.Endpoints, "grafana").NodePort != grafanaPort || endpointByName(capability.Spec.Endpoints, "prometheus").NodePort != prometheusPort {
+		return errors.New("observability NodePort contract does not match the managed release")
 	}
 	if credential.APIVersion != artifactAPI || credential.Kind != "ServiceCredential" || credential.Metadata.Name != "grafana-admin" || credential.Metadata.Role != "management" || credential.Spec.Namespace != namespace || credential.Spec.Service != endpointByName(capability.Spec.Endpoints, "grafana").ServiceName || credential.Spec.Username != grafanaUser || credential.Spec.Password == "" {
 		return errors.New("Grafana credential does not match the managed endpoint")

@@ -47,11 +47,13 @@ type Metadata struct {
 }
 
 type Spec struct {
-	Package      Package        `json:"package" yaml:"package"`
-	Interface    Interface      `json:"interface" yaml:"interface"`
-	ValuesSchema map[string]any `json:"valuesSchema" yaml:"valuesSchema"`
-	Defaults     map[string]any `json:"defaults" yaml:"defaults"`
-	Overlays     []Overlay      `json:"overlays,omitempty" yaml:"overlays,omitempty"`
+	Package             Package              `json:"package" yaml:"package"`
+	Interface           Interface            `json:"interface" yaml:"interface"`
+	ValuesSchema        map[string]any       `json:"valuesSchema" yaml:"valuesSchema"`
+	Defaults            map[string]any       `json:"defaults" yaml:"defaults"`
+	AdditionalManifests []AdditionalManifest `json:"additionalManifests,omitempty" yaml:"additionalManifests,omitempty"`
+	ExcludeResources    []Workload           `json:"excludeResources,omitempty" yaml:"excludeResources,omitempty"`
+	Overlays            []Overlay            `json:"overlays,omitempty" yaml:"overlays,omitempty"`
 }
 
 type Package struct {
@@ -65,9 +67,9 @@ type Package struct {
 }
 
 type Interface struct {
-	Components  []Component  `json:"components" yaml:"components"`
-	Endpoints   []Endpoint   `json:"endpoints,omitempty" yaml:"endpoints,omitempty"`
-	LoadDrivers []LoadDriver `json:"loadDrivers,omitempty" yaml:"loadDrivers,omitempty"`
+	Components    []Component    `json:"components" yaml:"components"`
+	Endpoints     []Endpoint     `json:"endpoints,omitempty" yaml:"endpoints,omitempty"`
+	LoadScenarios []LoadScenario `json:"loadScenarios,omitempty" yaml:"loadScenarios,omitempty"`
 }
 
 type Component struct {
@@ -92,12 +94,17 @@ type Endpoint struct {
 	Path      string `json:"path,omitempty" yaml:"path,omitempty"`
 }
 
-type LoadDriver struct {
-	ID             string            `json:"id" yaml:"id"`
-	Workload       Workload          `json:"workload" yaml:"workload"`
-	Selector       map[string]string `json:"selector" yaml:"selector"`
-	TargetEndpoint string            `json:"targetEndpoint" yaml:"targetEndpoint"`
-	Replicas       int               `json:"replicas" yaml:"replicas"`
+type LoadScenario struct {
+	ID             string `json:"id" yaml:"id"`
+	Engine         string `json:"engine" yaml:"engine"`
+	Script         string `json:"script" yaml:"script"`
+	RuntimeImage   string `json:"runtimeImage" yaml:"runtimeImage"`
+	TargetEndpoint string `json:"targetEndpoint" yaml:"targetEndpoint"`
+}
+
+type AdditionalManifest struct {
+	ID      string `json:"id" yaml:"id"`
+	Content string `json:"content" yaml:"content"`
 }
 
 type Overlay struct {
@@ -276,30 +283,44 @@ func validate(descriptor Descriptor, origin string) error {
 			return fmt.Errorf("%s.path must start with /", path)
 		}
 	}
-	loadDriverIDs := map[string]bool{}
-	for position, driver := range descriptor.Spec.Interface.LoadDrivers {
-		path := fmt.Sprintf("spec.interface.loadDrivers[%d]", position)
-		if !namePattern.MatchString(driver.ID) || loadDriverIDs[driver.ID] {
+	loadScenarioIDs := map[string]bool{}
+	for position, scenario := range descriptor.Spec.Interface.LoadScenarios {
+		path := fmt.Sprintf("spec.interface.loadScenarios[%d]", position)
+		if !namePattern.MatchString(scenario.ID) || loadScenarioIDs[scenario.ID] {
 			return fmt.Errorf("%s.id is invalid or duplicated", path)
 		}
-		loadDriverIDs[driver.ID] = true
-		if strings.TrimSpace(driver.Workload.APIVersion) == "" || strings.TrimSpace(driver.Workload.Kind) == "" || !namePattern.MatchString(driver.Workload.Name) {
-			return fmt.Errorf("%s.workload is invalid", path)
+		loadScenarioIDs[scenario.ID] = true
+		if scenario.Engine != "locust" {
+			return fmt.Errorf("%s.engine must be locust", path)
 		}
-		if len(driver.Selector) == 0 {
-			return fmt.Errorf("%s.selector cannot be empty", path)
+		if !safePackagePath(scenario.Script) || !strings.HasSuffix(strings.ToLower(scenario.Script), ".py") {
+			return fmt.Errorf("%s.script must be a relative Python file", path)
 		}
-		for key, value := range driver.Selector {
-			if strings.TrimSpace(key) == "" || strings.TrimSpace(value) == "" || strings.ContainsAny(key+value, "\n\r,=") {
-				return fmt.Errorf("%s.selector is invalid", path)
-			}
+		if strings.TrimSpace(scenario.RuntimeImage) == "" || strings.ContainsAny(scenario.RuntimeImage, "\n\r ") {
+			return fmt.Errorf("%s.runtimeImage is invalid", path)
 		}
-		if !endpointIDs[driver.TargetEndpoint] {
+		if !endpointIDs[scenario.TargetEndpoint] {
 			return fmt.Errorf("%s.targetEndpoint is invalid", path)
 		}
-		if driver.Replicas < 1 || driver.Replicas > 1000 {
-			return fmt.Errorf("%s.replicas must be between 1 and 1000", path)
+	}
+	manifestIDs := map[string]bool{}
+	for position, manifest := range descriptor.Spec.AdditionalManifests {
+		path := fmt.Sprintf("spec.additionalManifests[%d]", position)
+		if !namePattern.MatchString(manifest.ID) || manifestIDs[manifest.ID] {
+			return fmt.Errorf("%s.id is invalid or duplicated", path)
 		}
+		manifestIDs[manifest.ID] = true
+		if strings.TrimSpace(manifest.Content) == "" || len(manifest.Content) > maxDescriptorBytes {
+			return fmt.Errorf("%s.content is empty or too large", path)
+		}
+	}
+	excluded := map[string]bool{}
+	for position, resource := range descriptor.Spec.ExcludeResources {
+		path := fmt.Sprintf("spec.excludeResources[%d]", position)
+		if strings.TrimSpace(resource.APIVersion) == "" || strings.TrimSpace(resource.Kind) == "" || !namePattern.MatchString(resource.Name) || excluded[workloadKey(resource)] {
+			return fmt.Errorf("%s is invalid or duplicated", path)
+		}
+		excluded[workloadKey(resource)] = true
 	}
 	if descriptor.Spec.ValuesSchema == nil || descriptor.Spec.ValuesSchema["type"] != "object" {
 		return errors.New("spec.valuesSchema must be an object schema")
@@ -335,9 +356,6 @@ func validateOverlays(descriptor Descriptor) error {
 	targets := map[string]bool{}
 	for _, component := range descriptor.Spec.Interface.Components {
 		targets[workloadKey(component.Workload)] = true
-	}
-	for _, driver := range descriptor.Spec.Interface.LoadDrivers {
-		targets[workloadKey(driver.Workload)] = true
 	}
 	for _, endpoint := range descriptor.Spec.Interface.Endpoints {
 		targets["v1|Service|"+endpoint.Service] = true
@@ -375,6 +393,11 @@ func validateOverlays(descriptor Descriptor) error {
 		}
 	}
 	return nil
+}
+
+func safePackagePath(value string) bool {
+	cleaned := filepath.ToSlash(filepath.Clean(strings.TrimSpace(value)))
+	return cleaned != "." && cleaned == strings.TrimSpace(value) && !strings.HasPrefix(cleaned, "/") && !strings.HasPrefix(cleaned, "../")
 }
 
 func workloadKey(value Workload) string {

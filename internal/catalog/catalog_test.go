@@ -1,6 +1,7 @@
 package catalog
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -107,8 +108,8 @@ func TestParseAcceptsRepositoryRoot(t *testing.T) {
 	}
 }
 
-func TestParseValidatesLoadDriverEndpoint(t *testing.T) {
-	raw := strings.Replace(validDescriptor, "  valuesSchema:", "    loadDrivers:\n      - id: default-load\n        workload: {apiVersion: apps/v1, kind: Deployment, name: loadgenerator}\n        selector: {app: loadgenerator}\n        targetEndpoint: missing\n        replicas: 1\n  valuesSchema:", 1)
+func TestParseValidatesLoadScenarioEndpoint(t *testing.T) {
+	raw := strings.Replace(validDescriptor, "  valuesSchema:", "    loadScenarios:\n      - id: default-load\n        engine: locust\n        script: load/locustfile.py\n        runtimeImage: example.test/load:1.0.0\n        targetEndpoint: missing\n  valuesSchema:", 1)
 	if _, err := Parse([]byte(raw), "imported"); err == nil {
 		t.Fatal("expected unknown load target endpoint to be rejected")
 	}
@@ -148,5 +149,12 @@ func TestBuiltInCatalog(t *testing.T) {
 	}
 	if len(applications) != 1 || applications[0].ID != "dev.kubephos.online-boutique" {
 		t.Fatalf("unexpected built-in catalog: %#v", applications)
+	}
+	var descriptor Descriptor
+	if err := json.Unmarshal(applications[0].Descriptor, &descriptor); err != nil {
+		t.Fatal(err)
+	}
+	if len(descriptor.Spec.Interface.LoadScenarios) != 1 || descriptor.Spec.Interface.LoadScenarios[0].TargetEndpoint != "node-proxy-http" || len(descriptor.Spec.AdditionalManifests) != 1 || len(descriptor.Spec.ExcludeResources) != 2 {
+		t.Fatalf("online boutique traffic contract is incomplete: %#v", descriptor.Spec)
 	}
 }

@@ -3,8 +3,8 @@ kind: Plugin
 metadata:
   id: io.kubephos.load.kubernetes.session
   name: Interactive Kubernetes load session
-  version: 0.1.0
-  description: Starts, stops or resumes a declared load profile without coupling KubePhos to a load-testing tool.
+  version: 0.3.0
+  description: Starts, stops or resumes a generic Locust runtime using the immutable scenario declared by an application.
 spec:
   protocol: v1alpha1
   commands:
@@ -23,10 +23,14 @@ spec:
     required:
       - clusterConnectionRef
       - applicationDeploymentRef
-      - loadProfileSetRef
-      - profileId
+      - loadScenarioSetRef
+      - scenarioId
       - action
       - replicas
+      - users
+      - spawnRate
+      - pattern
+      - durationSeconds
     properties:
       clusterConnectionRef:
         type: string
@@ -40,19 +44,19 @@ spec:
         format: kubephos-artifact-ref
         x-kubephos-artifact-type: ApplicationDeployment
         x-kubephos-artifact-version: v1alpha1
-      loadProfileSetRef:
+      loadScenarioSetRef:
         type: string
-        title: Load profiles
+        title: Load scenarios
         format: kubephos-artifact-ref
-        x-kubephos-artifact-type: LoadProfileSet
+        x-kubephos-artifact-type: LoadScenarioSet
         x-kubephos-artifact-version: v1alpha1
-      profileId:
+      scenarioId:
         type: string
-        title: Load profile
-        description: Stable profile ID declared by the application package.
+        title: Application journey
+        description: Immutable Locust scenario supplied by the selected application.
         minLength: 1
         maxLength: 63
-        default: default-load
+        default: storefront-journey
       action:
         type: string
         title: Action
@@ -64,21 +68,51 @@ spec:
         default: start
       replicas:
         type: integer
-        title: Load intensity
-        description: Number of load driver replicas used by start or resume.
+        title: Load workers
         minimum: 1
-        maximum: 1000
+        maximum: 100
         default: 1
+      users:
+        type: integer
+        title: Concurrent users per worker
+        minimum: 1
+        maximum: 100000
+        default: 10
+      spawnRate:
+        type: integer
+        title: Users started per second
+        minimum: 1
+        maximum: 100000
+        default: 1
+      pattern:
+        type: string
+        title: Temporal profile
+        enum:
+          - constant
+          - ramp
+          - steps
+        default: constant
+      durationSeconds:
+        type: integer
+        title: Duration in seconds
+        description: Use zero for an interactive session that runs until stopped.
+        minimum: 0
+        maximum: 7200
+        default: 900
+      zoneWeights:
+        type: object
+        title: Geographic distribution
+        additionalProperties: true
   runtime:
     executable: load-session-plugin
-    timeout: 20m
+    timeout: 3h
   artifacts:
     inputs:
       - type: ClusterConnection
         version: v1alpha1
       - type: ApplicationDeployment
         version: v1alpha1
-      - type: LoadProfileSet
+      - type: LoadScenarioSet
         version: v1alpha1
     outputs:
       - type: LoadSession

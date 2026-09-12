@@ -382,7 +382,7 @@ export interface Application {
   descriptor: {
     spec?: {
       package?: {type?: string; format?: string}
-      interface?: {components?: ApplicationComponent[]; endpoints?: unknown[]; loadDrivers?: unknown[]}
+      interface?: {components?: ApplicationComponent[]; endpoints?: unknown[]; loadScenarios?: unknown[]}
       valuesSchema?: JsonSchema
       defaults?: Record<string, unknown>
     }

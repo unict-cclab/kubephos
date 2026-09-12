@@ -50,7 +50,7 @@ func TestValidateRequiresResolvedCatalogEntry(t *testing.T) {
 	}
 }
 
-func TestPartitionManifestSeparatesDeclaredLoadDriver(t *testing.T) {
+func TestMaterializeManifestExcludesAndAddsDeclaredResources(t *testing.T) {
 	manifest := []byte(`apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -73,23 +73,29 @@ spec:
 # package footer
 `)
 	descriptor := catalog.Descriptor{}
-	descriptor.Spec.Interface.LoadDrivers = []catalog.LoadDriver{{ID: "default-load", Workload: catalog.Workload{APIVersion: "apps/v1", Kind: "Deployment", Name: "loadgenerator"}, Selector: map[string]string{"app": "loadgenerator"}, TargetEndpoint: "http", Replicas: 2}}
-	application, profiles, err := partitionManifest(manifest, descriptor)
+	descriptor.Spec.ExcludeResources = []catalog.Workload{{APIVersion: "apps/v1", Kind: "Deployment", Name: "loadgenerator"}}
+	descriptor.Spec.AdditionalManifests = []catalog.AdditionalManifest{{ID: "gateway", Content: "apiVersion: apps/v1\nkind: DaemonSet\nmetadata:\n  name: node-proxy\nspec:\n  template:\n    metadata:\n      labels:\n        app: node-proxy\n"}}
+	application, err := materializeManifest(manifest, descriptor)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(application), "loadgenerator") || !strings.Contains(string(application), "name: api") {
+	if strings.Contains(string(application), "loadgenerator") || !strings.Contains(string(application), "name: api") || !strings.Contains(string(application), "name: node-proxy") {
 		t.Fatalf("unexpected application manifest: %s", application)
 	}
-	if len(profiles) != 1 || profiles[0].ID != "default-load" || profiles[0].Replicas != 2 || !strings.Contains(profiles[0].Manifest, "name: loadgenerator") {
-		t.Fatalf("unexpected profiles: %#v", profiles)
+	if _, err := materializeManifest([]byte("apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: api\n"), descriptor); err == nil {
+		t.Fatal("expected a missing exclusion to fail")
 	}
-	combined := appendManifestDocument(application, []byte(profiles[0].Manifest))
-	verified, verifiedProfiles, err := partitionManifest(combined, descriptor)
-	applicationIdentity, applicationErr := canonicalManifestDigest(application)
-	verifiedIdentity, verifiedErr := canonicalManifestDigest(verified)
-	if err != nil || applicationErr != nil || verifiedErr != nil || applicationIdentity != verifiedIdentity || len(verifiedProfiles) != 1 {
-		t.Fatalf("partition is not stable: %v\napplication=%q\nverified=%q", err, application, verified)
+}
+
+func TestBuildLoadScenariosKeepsApplicationScriptImmutable(t *testing.T) {
+	descriptor := catalog.Descriptor{}
+	descriptor.Spec.Interface.LoadScenarios = []catalog.LoadScenario{{ID: "journey", Engine: "locust", Script: "load/locustfile.py", RuntimeImage: "example.test/locust:1.0.0", TargetEndpoint: "http"}}
+	scenarios, err := buildLoadScenarios(map[string][]byte{"load/locustfile.py": []byte("from locust import HttpUser\n")}, descriptor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(scenarios) != 1 || scenarios[0].ID != "journey" || scenarios[0].ScriptDigest == "" || !validLoadScenarios(scenarios, descriptor) {
+		t.Fatalf("unexpected load scenarios: %#v", scenarios)
 	}
 }
 
@@ -106,7 +112,7 @@ func TestPlanDeclaresTypedInterfaceArtifacts(t *testing.T) {
 	if len(plan.Steps) != 1 || len(plan.Steps[0].Outputs) != 4 {
 		t.Fatalf("unexpected typed outputs: %#v", plan.Steps)
 	}
-	if plan.Steps[0].Outputs[0].Type != "ManifestSet" || plan.Steps[0].Outputs[1].Type != "WorkloadTargets" || plan.Steps[0].Outputs[2].Type != "ServiceEndpoints" || plan.Steps[0].Outputs[3].Type != "LoadProfileSet" {
+	if plan.Steps[0].Outputs[0].Type != "ManifestSet" || plan.Steps[0].Outputs[1].Type != "WorkloadTargets" || plan.Steps[0].Outputs[2].Type != "ServiceEndpoints" || plan.Steps[0].Outputs[3].Type != "LoadScenarioSet" {
 		t.Fatalf("unexpected artifact types: %#v", plan.Steps[0].Outputs)
 	}
 }

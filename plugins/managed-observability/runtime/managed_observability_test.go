@@ -258,7 +258,7 @@ func (runner *fakeRunner) Kubectl(_ context.Context, _ string, stdin []byte, arg
 		return "annotated", nil
 	}
 	if command == "get services -n "+namespace+" -o json" {
-		return `{"items":[{"metadata":{"name":"kubephos-observability-prometheus-node-exporter","labels":{"app.kubernetes.io/name":"prometheus-node-exporter"}},"spec":{"ports":[{"name":"metrics","port":9100}]}},{"metadata":{"name":"kubephos-observability-grafana","labels":{"app.kubernetes.io/name":"grafana"}},"spec":{"ports":[{"name":"service","port":80}]}},{"metadata":{"name":"kubephos-observability-kube-prometheus-prometheus","labels":{"app.kubernetes.io/name":"prometheus"}},"spec":{"ports":[{"name":"http-web","port":9090}]}}]}`, nil
+		return `{"items":[{"metadata":{"name":"kubephos-observability-prometheus-node-exporter","labels":{"app.kubernetes.io/name":"prometheus-node-exporter"}},"spec":{"ports":[{"name":"metrics","port":9100}]}},{"metadata":{"name":"kubephos-observability-grafana","labels":{"app.kubernetes.io/name":"grafana"}},"spec":{"type":"NodePort","ports":[{"name":"service","port":80,"nodePort":32000}]}},{"metadata":{"name":"kubephos-observability-kube-prometheus-prometheus","labels":{"app.kubernetes.io/name":"prometheus"}},"spec":{"type":"NodePort","ports":[{"name":"http-web","port":9090,"nodePort":32090}]}}]}`, nil
 	}
 	if command == "get pods -n "+namespace+" -o json" {
 		return readyPods(), nil
