@@ -502,7 +502,12 @@ func (s *Store) FailPipelineRunStage(ctx context.Context, runStageID, status, me
 }
 
 func (s *Store) CompletePipelineRun(ctx context.Context, runID, owner, artifactID string) error {
-	command, err := s.pool.Exec(ctx, `
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	command, err := tx.Exec(ctx, `
 		UPDATE pipeline_runs
 		SET status = $3, result_artifact_id = NULLIF($4, ''), completed_at = now(), lease_owner = NULL, lease_until = NULL
 		WHERE id = $1 AND lease_owner = $2 AND status = $5
@@ -514,7 +519,14 @@ func (s *Store) CompletePipelineRun(ctx context.Context, runID, owner, artifactI
 	if command.RowsAffected() != 1 {
 		return ErrConflict
 	}
-	return nil
+	if _, err := tx.Exec(ctx, `
+		UPDATE managed_resources
+		SET deleted_at = now(), updated_at = now()
+		WHERE deletion_pipeline_run_id = $1 AND deleted_at IS NULL
+	`, runID); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 func (s *Store) BeginPipelineRunTermination(ctx context.Context, runID, owner, status, message string) error {

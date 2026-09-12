@@ -181,3 +181,10 @@ databaseChangeLog:
         - sqlFile:
             path: changes/026-default-workspace.sql
             relativeToChangelogFile: true
+  - changeSet:
+      id: 027-reusable-managed-resource-names
+      author: kubephos
+      changes:
+        - sqlFile:
+            path: changes/027-reusable-managed-resource-names.sql
+            relativeToChangelogFile: true

@@ -1598,7 +1598,12 @@ func (s *Store) SetStepState(ctx context.Context, operationID, stepID, status st
 }
 
 func (s *Store) CompleteOperation(ctx context.Context, operationID string) error {
-	_, err := s.pool.Exec(ctx, `
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	_, err = tx.Exec(ctx, `
 		UPDATE operations
 		SET status = $2, completed_at = now(), lease_owner = NULL, lease_until = NULL
 		WHERE id = $1
@@ -1606,7 +1611,20 @@ func (s *Store) CompleteOperation(ctx context.Context, operationID string) error
 	if err != nil {
 		return err
 	}
-	return s.AppendLog(ctx, operationID, "", "info", "engine", "Operation completed after all health gates passed.")
+	if _, err := tx.Exec(ctx, `
+		UPDATE managed_resources
+		SET deleted_at = now(), updated_at = now()
+		WHERE deletion_operation_id = $1 AND deleted_at IS NULL
+	`, operationID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO operation_logs (operation_id, step_id, level, source, message)
+		VALUES ($1, NULL, 'info', 'engine', 'Operation completed after all health gates passed.')
+	`, operationID); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 func (s *Store) FailOperation(ctx context.Context, operationID, status, failure string) error {
