@@ -3,6 +3,7 @@ package k3s
 import (
 	"context"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -38,10 +39,21 @@ type Invocation struct {
 }
 
 type Spec struct {
-	MachineSetRef    string `json:"machineSetRef"`
-	MachineAccessRef string `json:"machineAccessRef"`
-	ClusterName      string `json:"clusterName"`
-	ControlPlanes    int    `json:"controlPlanes"`
+	MachineSetRef         string     `json:"machineSetRef"`
+	MachineAccessRef      string     `json:"machineAccessRef"`
+	ClusterName           string     `json:"clusterName"`
+	ControlPlanes         int        `json:"controlPlanes"`
+	ControlPlaneZones     []string   `json:"controlPlaneZones,omitempty"`
+	NodePools             []NodePool `json:"nodePools,omitempty"`
+	RegistryEndpointRef   string     `json:"registryEndpointRef,omitempty"`
+	RegistryCredentialRef string     `json:"registryCredentialRef,omitempty"`
+}
+
+type NodePool struct {
+	Name  string   `json:"name"`
+	Role  string   `json:"role"`
+	Count int      `json:"count"`
+	Zones []string `json:"zones"`
 }
 
 type machineSet struct {
@@ -70,6 +82,34 @@ type machineAccess struct {
 		PublicKey  string `json:"publicKey"`
 		PrivateKey string `json:"privateKey"`
 	} `json:"spec"`
+}
+
+type registryEndpoint struct {
+	APIVersion string `json:"apiVersion"`
+	Kind       string `json:"kind"`
+	Spec       struct {
+		Protocol string `json:"protocol"`
+		Host     string `json:"host"`
+		URL      string `json:"url"`
+		CABundle string `json:"caBundle"`
+		Insecure bool   `json:"insecure"`
+	} `json:"spec"`
+}
+
+type registryCredential struct {
+	APIVersion string `json:"apiVersion"`
+	Kind       string `json:"kind"`
+	Spec       struct {
+		Server   string `json:"server"`
+		Username string `json:"username"`
+		Password string `json:"password"`
+	} `json:"spec"`
+}
+
+type registryProfile struct {
+	Endpoint   registryEndpoint
+	Credential registryCredential
+	Enabled    bool
 }
 
 type clusterResult struct {
@@ -115,6 +155,8 @@ type clusterInventorySpec struct {
 type clusterNode struct {
 	Name    string `json:"name"`
 	Role    string `json:"role"`
+	Pool    string `json:"pool,omitempty"`
+	Zone    string `json:"zone,omitempty"`
 	Ready   bool   `json:"ready"`
 	Version string `json:"version"`
 }
@@ -143,10 +185,10 @@ type commandRunner interface {
 
 func (Plugin) Manifest() plugins.Manifest {
 	return plugins.Manifest{
-		ID: pluginID, Name: "Kubernetes cluster bootstrap", Version: "0.1.0",
+		ID: pluginID, Name: "Kubernetes cluster bootstrap", Version: "0.2.0",
 		Description:     "Builds a managed K3s cluster from a verified machine topology.",
-		Schema:          json.RawMessage(`{"type":"object","additionalProperties":false,"required":["machineSetRef","machineAccessRef","clusterName","controlPlanes"],"properties":{"machineSetRef":{"type":"string","title":"Machine topology","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"MachineSet","x-kubephos-artifact-version":"v1alpha1"},"machineAccessRef":{"type":"string","title":"Machine access","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"MachineAccess","x-kubephos-artifact-version":"v1alpha1"},"clusterName":{"type":"string","title":"Cluster name","pattern":"^[a-z0-9][a-z0-9-]{0,31}$","default":"development"},"controlPlanes":{"type":"integer","title":"Control plane nodes","enum":[1,3],"default":1}}}`),
-		ArtifactInputs:  []domain.ArtifactContract{{Type: "MachineSet", Version: "v1alpha1"}, {Type: "MachineAccess", Version: "v1alpha1"}},
+		Schema:          json.RawMessage(`{"type":"object","additionalProperties":false,"required":["machineSetRef","machineAccessRef","clusterName","controlPlanes"],"properties":{"machineSetRef":{"type":"string","title":"Machine topology","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"MachineSet","x-kubephos-artifact-version":"v1alpha1"},"machineAccessRef":{"type":"string","title":"Machine access","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"MachineAccess","x-kubephos-artifact-version":"v1alpha1"},"clusterName":{"type":"string","title":"Cluster name","pattern":"^[a-z0-9][a-z0-9-]{0,31}$","default":"development"},"controlPlanes":{"type":"integer","title":"Control plane nodes","enum":[1,3],"default":1},"controlPlaneZones":{"type":"array","title":"Control plane zones","minItems":1,"maxItems":12,"items":{"type":"string","pattern":"^[a-z0-9][a-z0-9-]{0,31}$"}},"nodePools":{"type":"array","title":"Node pools","maxItems":12,"items":{"type":"object","additionalProperties":false,"required":["name","role","count","zones"],"properties":{"name":{"type":"string","pattern":"^[a-z0-9][a-z0-9-]{0,31}$"},"role":{"type":"string","enum":["management","application"]},"count":{"type":"integer","minimum":1,"maximum":12},"zones":{"type":"array","minItems":1,"maxItems":12,"items":{"type":"string","pattern":"^[a-z0-9][a-z0-9-]{0,31}$"}}}}},"registryEndpointRef":{"type":"string","title":"Managed registry","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"RegistryEndpoint","x-kubephos-artifact-version":"v1alpha1"},"registryCredentialRef":{"type":"string","title":"Registry pull credential","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"RegistryCredential","x-kubephos-artifact-version":"v1alpha1"}}}`),
+		ArtifactInputs:  []domain.ArtifactContract{{Type: "MachineSet", Version: "v1alpha1"}, {Type: "MachineAccess", Version: "v1alpha1"}, {Type: "RegistryEndpoint", Version: "v1alpha1"}, {Type: "RegistryCredential", Version: "v1alpha1"}},
 		ArtifactOutputs: []domain.ArtifactContract{{Type: "ClusterConnection", Version: "v1alpha1"}, {Type: "ClusterInventory", Version: "v1alpha1"}},
 		Capabilities:    []string{"cluster.bootstrap", "cluster.preflight", "cluster.cleanup", "lifecycle.cleanup"},
 		Permissions:     []string{"network.ssh", "cluster.admin"},
@@ -174,6 +216,12 @@ func (Plugin) Validate(ctx context.Context, invocation Invocation) domain.Valida
 	if spec.ControlPlanes != 1 && spec.ControlPlanes != 3 {
 		return invalid(report, "controlPlanes", "Use one or three control plane nodes.")
 	}
+	if err := validatePoolConfiguration(spec); err != nil {
+		return invalid(report, "nodePools", err.Error())
+	}
+	if (spec.RegistryEndpointRef == "") != (spec.RegistryCredentialRef == "") || spec.RegistryEndpointRef != "" && (!strings.HasPrefix(spec.RegistryEndpointRef, "art_") || !strings.HasPrefix(spec.RegistryCredentialRef, "art_") || spec.RegistryEndpointRef == spec.RegistryCredentialRef) {
+		return invalid(report, "registryEndpointRef", "Select a managed registry endpoint and its matching pull credential together.")
+	}
 	report.Issues = append(report.Issues, domain.ValidationIssue{Level: "info", Message: fmt.Sprintf("KubePhos will install managed K3s %s after validating every machine.", k3sVersion)})
 	return report
 }
@@ -186,12 +234,19 @@ func (Plugin) Plan(ctx context.Context, raw json.RawMessage) (domain.Plan, error
 	if err := json.Unmarshal(raw, &spec); err != nil {
 		return domain.Plan{}, err
 	}
+	inputs := []domain.ArtifactInput{
+		{Name: "machines", Type: "MachineSet", Version: "v1alpha1", ArtifactID: spec.MachineSetRef},
+		{Name: "machine-access", Type: "MachineAccess", Version: "v1alpha1", ArtifactID: spec.MachineAccessRef},
+	}
+	if spec.RegistryEndpointRef != "" {
+		inputs = append(inputs,
+			domain.ArtifactInput{Name: "registry-endpoint", Type: "RegistryEndpoint", Version: "v1alpha1", ArtifactID: spec.RegistryEndpointRef},
+			domain.ArtifactInput{Name: "registry-credential", Type: "RegistryCredential", Version: "v1alpha1", ArtifactID: spec.RegistryCredentialRef},
+		)
+	}
 	return domain.Plan{PluginID: pluginID, Steps: []domain.PlanStep{{
 		ID: "bootstrap-cluster", Name: "Bootstrap and verify Kubernetes", Input: raw, Mutating: true,
-		ArtifactInputs: []domain.ArtifactInput{
-			{Name: "machines", Type: "MachineSet", Version: "v1alpha1", ArtifactID: spec.MachineSetRef},
-			{Name: "machine-access", Type: "MachineAccess", Version: "v1alpha1", ArtifactID: spec.MachineAccessRef},
-		},
+		ArtifactInputs: inputs,
 		Outputs: []domain.ArtifactOutput{
 			{Name: "cluster-connection", Type: "ClusterConnection", Version: "v1alpha1", MediaType: "application/json", Source: "/clusterConnection", Sensitive: true},
 			{Name: "cluster-inventory", Type: "ClusterInventory", Version: "v1alpha1", MediaType: "application/json", Source: "/clusterInventory"},
@@ -207,8 +262,15 @@ func (p Plugin) Precheck(ctx context.Context, step domain.PlanStep, log plugins.
 	if (spec.ControlPlanes != 1 && spec.ControlPlanes != 3) || len(machines.Spec.Machines) < spec.ControlPlanes {
 		return unhealthy("The topology does not contain enough machines for the requested control plane", "capacity", "insufficient"), nil
 	}
+	if err := validatePoolCapacity(spec, len(machines.Spec.Machines)); err != nil {
+		return unhealthy(err.Error(), "nodePools", "invalid"), nil
+	}
 	if err := validateMachineArtifacts(machines, access); err != nil {
 		return unhealthy(err.Error(), "artifacts", "invalid"), nil
+	}
+	_, err = resolveRegistry(step, spec)
+	if err != nil {
+		return unhealthy(err.Error(), "registry", "invalid"), nil
 	}
 	if err := log("info", fmt.Sprintf("Validating SSH and sudo access on %d machines", len(machines.Spec.Machines))); err != nil {
 		return domain.HealthReport{}, err
@@ -242,10 +304,26 @@ func (p Plugin) Execute(ctx context.Context, step domain.PlanStep, log plugins.L
 	primary := machines.Spec.Machines[0]
 	server := "https://" + net.JoinHostPort(primary.Address, "6443")
 	runner := p.runner()
+	registry, err := resolveRegistry(step, spec)
+	if err != nil {
+		return nil, err
+	}
+	if registry.Enabled {
+		if err := log("info", "Installing the managed registry trust and pull identity on every machine"); err != nil {
+			return nil, err
+		}
+		command, err := registryConfigurationCommand(registry)
+		if err != nil {
+			return nil, err
+		}
+		if err := runAll(ctx, runner, machines.Spec.Machines, access, func(machine, int) string { return command }); err != nil {
+			return nil, fmt.Errorf("configure managed registry: %w", err)
+		}
+	}
 	if err := log("info", fmt.Sprintf("Installing K3s %s on the first control plane", k3sVersion)); err != nil {
 		return nil, err
 	}
-	if _, err := runner.Run(ctx, primary, access, installCommand("server", primary.Name, server, token, true)); err != nil {
+	if _, err := runner.Run(ctx, primary, access, installCommandWithLabels("server", primary.Name, server, token, true, machineLabels(spec, 0))); err != nil {
 		return nil, fmt.Errorf("install first control plane: %w", err)
 	}
 	if err := waitForAPI(ctx, runner, primary, access, 5*time.Minute); err != nil {
@@ -261,7 +339,7 @@ func (p Plugin) Execute(ctx context.Context, step domain.PlanStep, log plugins.L
 			if index+1 < spec.ControlPlanes {
 				role = "server"
 			}
-			return installCommand(role, machine.Name, server, token, false)
+			return installCommandWithLabels(role, machine.Name, server, token, false, machineLabels(spec, index+1))
 		}); err != nil {
 			return nil, fmt.Errorf("join Kubernetes nodes: %w", err)
 		}
@@ -272,6 +350,14 @@ func (p Plugin) Execute(ctx context.Context, step domain.PlanStep, log plugins.L
 	}
 	if err := validateInventoryTopology(inventory, machines.Spec.Machines, spec.ControlPlanes); err != nil {
 		return nil, err
+	}
+	if err := validateInventoryPools(inventory, spec); err != nil {
+		return nil, err
+	}
+	if registry.Enabled {
+		if err := verifyRegistryProfile(ctx, runner, machines, access, registry); err != nil {
+			return nil, err
+		}
 	}
 	kubeconfig, err := runner.Run(ctx, primary, access, "sudo cat /etc/rancher/k3s/k3s.yaml")
 	if err != nil {
@@ -295,7 +381,7 @@ func (p Plugin) Verify(ctx context.Context, step domain.PlanStep, raw json.RawMe
 		return domain.HealthReport{}, err
 	}
 	if step.Cleanup {
-		command := "test ! -x /usr/local/bin/k3s && test ! -e /etc/systemd/system/k3s.service && test ! -e /etc/systemd/system/k3s-agent.service"
+		command := "test ! -x /usr/local/bin/k3s && test ! -e /etc/systemd/system/k3s.service && test ! -e /etc/systemd/system/k3s-agent.service && test ! -e /etc/rancher/k3s/registries.yaml && test ! -e /etc/rancher/k3s/kubephos-registry-ca.crt && test ! -e /usr/local/share/ca-certificates/kubephos-registry-ca.crt"
 		if err := runAll(ctx, p.runner(), machines.Spec.Machines, access, func(machine, int) string { return command }); err != nil {
 			return unhealthy("K3s cleanup verification failed: "+err.Error(), "installation", "present"), nil
 		}
@@ -326,6 +412,18 @@ func (p Plugin) Verify(ctx context.Context, step domain.PlanStep, raw json.RawMe
 	if err := validateInventoryTopology(inventory, machines.Spec.Machines, spec.ControlPlanes); err != nil {
 		return unhealthy(err.Error(), "nodes", "mismatch"), nil
 	}
+	if err := validateInventoryPools(inventory, spec); err != nil {
+		return unhealthy(err.Error(), "nodePools", "mismatch"), nil
+	}
+	registry, err := resolveRegistry(step, spec)
+	if err != nil {
+		return unhealthy(err.Error(), "registry", "invalid"), nil
+	}
+	if registry.Enabled {
+		if err := verifyRegistryProfile(ctx, p.runner(), machines, access, registry); err != nil {
+			return unhealthy(err.Error(), "registry", "unhealthy"), nil
+		}
+	}
 	if len(result.ClusterInventory.Spec.Nodes) != len(inventory.Spec.Nodes) {
 		return unhealthy("Persisted cluster inventory is incomplete", "inventory", "invalid"), nil
 	}
@@ -343,7 +441,7 @@ func (p Plugin) Cleanup(ctx context.Context, step domain.PlanStep, _ json.RawMes
 	if err := log("warning", "Removing the incomplete K3s installation from the reserved machines"); err != nil {
 		return err
 	}
-	command := "if [ -x /usr/local/bin/k3s-agent-uninstall.sh ]; then sudo /usr/local/bin/k3s-agent-uninstall.sh; elif [ -x /usr/local/bin/k3s-uninstall.sh ]; then sudo /usr/local/bin/k3s-uninstall.sh; fi"
+	command := "if [ -x /usr/local/bin/k3s-agent-uninstall.sh ]; then sudo /usr/local/bin/k3s-agent-uninstall.sh; elif [ -x /usr/local/bin/k3s-uninstall.sh ]; then sudo /usr/local/bin/k3s-uninstall.sh; fi; sudo rm -f /etc/rancher/k3s/registries.yaml /etc/rancher/k3s/kubephos-registry-ca.crt /usr/local/share/ca-certificates/kubephos-registry-ca.crt; sudo update-ca-certificates >/dev/null"
 	return runAll(ctx, p.runner(), machines.Spec.Machines, access, func(machine, int) string { return command })
 }
 
@@ -378,6 +476,54 @@ func resolve(step domain.PlanStep) (Spec, machineSet, machineAccess, error) {
 	return spec, machines, access, nil
 }
 
+func resolveRegistry(step domain.PlanStep, spec Spec) (registryProfile, error) {
+	if spec.RegistryEndpointRef == "" && spec.RegistryCredentialRef == "" {
+		return registryProfile{}, nil
+	}
+	endpointValue, endpointOK := step.ResolvedInputs["registry-endpoint"]
+	credentialValue, credentialOK := step.ResolvedInputs["registry-credential"]
+	if !endpointOK || !credentialOK || endpointValue.ID != spec.RegistryEndpointRef || credentialValue.ID != spec.RegistryCredentialRef || endpointValue.Type != "RegistryEndpoint" || endpointValue.Version != "v1alpha1" || credentialValue.Type != "RegistryCredential" || credentialValue.Version != "v1alpha1" || !credentialValue.Sensitive {
+		return registryProfile{}, errors.New("verified managed registry artifacts are unavailable or incompatible")
+	}
+	var endpoint registryEndpoint
+	var credential registryCredential
+	if err := json.Unmarshal(endpointValue.Value, &endpoint); err != nil {
+		return registryProfile{}, errors.New("managed registry endpoint is invalid")
+	}
+	if err := json.Unmarshal(credentialValue.Value, &credential); err != nil {
+		return registryProfile{}, errors.New("managed registry credential is invalid")
+	}
+	if endpoint.APIVersion != clusterAPIVersion || endpoint.Kind != "RegistryEndpoint" || endpoint.Spec.Protocol != "oci" || endpoint.Spec.Insecure || endpoint.Spec.Host == "" || endpoint.Spec.URL != "https://"+endpoint.Spec.Host || !strings.Contains(endpoint.Spec.CABundle, "BEGIN CERTIFICATE") || credential.APIVersion != clusterAPIVersion || credential.Kind != "RegistryCredential" || credential.Spec.Server != endpoint.Spec.Host || credential.Spec.Username == "" || credential.Spec.Password == "" {
+		return registryProfile{}, errors.New("managed registry identity, TLS or credential does not satisfy the cluster contract")
+	}
+	return registryProfile{Endpoint: endpoint, Credential: credential, Enabled: true}, nil
+}
+
+func registryConfigurationCommand(profile registryProfile) (string, error) {
+	configuration := map[string]any{
+		"mirrors": map[string]any{profile.Endpoint.Spec.Host: map[string]any{"endpoint": []string{profile.Endpoint.Spec.URL}}},
+		"configs": map[string]any{profile.Endpoint.Spec.Host: map[string]any{
+			"auth": map[string]string{"username": profile.Credential.Spec.Username, "password": profile.Credential.Spec.Password},
+			"tls":  map[string]string{"ca_file": "/etc/rancher/k3s/kubephos-registry-ca.crt"},
+		}},
+	}
+	raw, err := yaml.Marshal(configuration)
+	if err != nil {
+		return "", err
+	}
+	ca := base64.StdEncoding.EncodeToString([]byte(profile.Endpoint.Spec.CABundle))
+	config := base64.StdEncoding.EncodeToString(raw)
+	return "sudo install -d -m 0755 /etc/rancher/k3s; printf %s " + shellQuote(ca) + " | base64 -d | sudo tee /etc/rancher/k3s/kubephos-registry-ca.crt /usr/local/share/ca-certificates/kubephos-registry-ca.crt >/dev/null; printf %s " + shellQuote(config) + " | base64 -d | sudo tee /etc/rancher/k3s/registries.yaml >/dev/null; sudo chmod 0600 /etc/rancher/k3s/registries.yaml; sudo update-ca-certificates >/dev/null", nil
+}
+
+func verifyRegistryProfile(ctx context.Context, runner commandRunner, machines machineSet, access machineAccess, profile registryProfile) error {
+	command := "sudo test -s /etc/rancher/k3s/registries.yaml && sudo test -s /etc/rancher/k3s/kubephos-registry-ca.crt && curl --connect-timeout 5 --max-time 15 --cacert /etc/rancher/k3s/kubephos-registry-ca.crt -fsS -u " + shellQuote(profile.Credential.Spec.Username+":"+profile.Credential.Spec.Password) + " " + shellQuote(profile.Endpoint.Spec.URL+"/v2/") + " >/dev/null"
+	if err := runAll(ctx, runner, machines.Spec.Machines, access, func(machine, int) string { return command }); err != nil {
+		return fmt.Errorf("managed registry verification failed: %w", err)
+	}
+	return nil
+}
+
 func validateMachineArtifacts(machines machineSet, access machineAccess) error {
 	if machines.APIVersion != clusterAPIVersion || machines.Kind != "MachineSet" || len(machines.Spec.Machines) == 0 {
 		return errors.New("machine topology identity is invalid")
@@ -405,6 +551,125 @@ func validateMachineArtifacts(machines machineSet, access machineAccess) error {
 	return nil
 }
 
+func validatePoolConfiguration(spec Spec) error {
+	if len(spec.NodePools) == 0 && len(spec.ControlPlaneZones) == 0 {
+		return nil
+	}
+	if len(spec.ControlPlaneZones) == 0 {
+		return errors.New("at least one control plane zone is required")
+	}
+	label := regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,31}$`)
+	seenPools := map[string]bool{}
+	management := 0
+	for _, pool := range spec.NodePools {
+		if !label.MatchString(pool.Name) || seenPools[pool.Name] {
+			return fmt.Errorf("node pool name %q is invalid or duplicated", pool.Name)
+		}
+		seenPools[pool.Name] = true
+		if pool.Role != "management" && pool.Role != "application" {
+			return fmt.Errorf("node pool %q has an unsupported role", pool.Name)
+		}
+		if pool.Count < 1 || pool.Count > 12 || len(pool.Zones) == 0 {
+			return fmt.Errorf("node pool %q requires capacity and at least one zone", pool.Name)
+		}
+		if pool.Role == "management" {
+			management++
+		}
+		seenZones := map[string]bool{}
+		for _, zone := range pool.Zones {
+			if !label.MatchString(zone) || seenZones[zone] {
+				return fmt.Errorf("node pool %q has an invalid or duplicated zone", pool.Name)
+			}
+			seenZones[zone] = true
+		}
+	}
+	if management != 1 {
+		return errors.New("exactly one management node pool is required")
+	}
+	return nil
+}
+
+func validatePoolCapacity(spec Spec, machineCount int) error {
+	if len(spec.NodePools) == 0 && len(spec.ControlPlaneZones) == 0 {
+		return nil
+	}
+	workers := 0
+	for _, pool := range spec.NodePools {
+		workers += pool.Count
+	}
+	if spec.ControlPlanes+workers != machineCount {
+		return fmt.Errorf("the topology has %d machines but control plane and node pools require %d", machineCount, spec.ControlPlanes+workers)
+	}
+	return nil
+}
+
+func machineLabels(spec Spec, position int) map[string]string {
+	if len(spec.NodePools) == 0 && len(spec.ControlPlaneZones) == 0 {
+		return nil
+	}
+	if position < spec.ControlPlanes {
+		return map[string]string{"kubephos.dev/pool": "control-plane", "kubephos.dev/role": "control-plane", "topology.kubernetes.io/zone": spec.ControlPlaneZones[position%len(spec.ControlPlaneZones)]}
+	}
+	worker := position - spec.ControlPlanes
+	for _, pool := range spec.NodePools {
+		if worker < pool.Count {
+			return map[string]string{"kubephos.dev/pool": pool.Name, "kubephos.dev/role": pool.Role, "topology.kubernetes.io/zone": pool.Zones[worker%len(pool.Zones)]}
+		}
+		worker -= pool.Count
+	}
+	return nil
+}
+
+func validateInventoryPools(inventory clusterInventory, spec Spec) error {
+	if len(spec.NodePools) == 0 && len(spec.ControlPlaneZones) == 0 {
+		return nil
+	}
+	expected := map[string]int{"control-plane": spec.ControlPlanes}
+	expectedZones := map[string]map[string]int{"control-plane": {}}
+	for index := 0; index < spec.ControlPlanes; index++ {
+		expectedZones["control-plane"][spec.ControlPlaneZones[index%len(spec.ControlPlaneZones)]]++
+	}
+	for _, pool := range spec.NodePools {
+		expected[pool.Name] = pool.Count
+		expectedZones[pool.Name] = map[string]int{}
+		for index := 0; index < pool.Count; index++ {
+			expectedZones[pool.Name][pool.Zones[index%len(pool.Zones)]]++
+		}
+	}
+	actual := map[string]int{}
+	actualZones := map[string]map[string]int{}
+	for _, node := range inventory.Spec.Nodes {
+		if node.Pool == "" || node.Zone == "" {
+			return fmt.Errorf("node %q is missing its managed pool or zone label", node.Name)
+		}
+		if node.Role == "control-plane" && node.Pool != "control-plane" || node.Role != "control-plane" && node.Pool == "control-plane" {
+			return fmt.Errorf("node %q role and managed pool do not match", node.Name)
+		}
+		actual[node.Pool]++
+		if actualZones[node.Pool] == nil {
+			actualZones[node.Pool] = map[string]int{}
+		}
+		actualZones[node.Pool][node.Zone]++
+	}
+	if len(actual) != len(expected) {
+		return errors.New("the Kubernetes node pool set does not match the validated configuration")
+	}
+	for pool, count := range expected {
+		if actual[pool] != count {
+			return fmt.Errorf("node pool %q has %d nodes instead of %d", pool, actual[pool], count)
+		}
+		if len(actualZones[pool]) != len(expectedZones[pool]) {
+			return fmt.Errorf("node pool %q zones do not match the validated layout", pool)
+		}
+		for zone, zoneCount := range expectedZones[pool] {
+			if actualZones[pool][zone] != zoneCount {
+				return fmt.Errorf("node pool %q zone %q has %d nodes instead of %d", pool, zone, actualZones[pool][zone], zoneCount)
+			}
+		}
+	}
+	return nil
+}
+
 func invalid(report domain.ValidationReport, path, message string) domain.ValidationReport {
 	report.Valid = false
 	report.Issues = append(report.Issues, domain.ValidationIssue{Level: "error", Path: path, Message: message})
@@ -416,12 +681,24 @@ func unhealthy(summary, key, value string) domain.HealthReport {
 }
 
 func installCommand(role, nodeName, server, token string, first bool) string {
+	return installCommandWithLabels(role, nodeName, server, token, first, nil)
+}
+
+func installCommandWithLabels(role, nodeName, server, token string, first bool, labels map[string]string) string {
 	arguments := role + " --node-name " + shellQuote(nodeName)
 	if first {
 		host, _, _ := net.SplitHostPort(strings.TrimPrefix(server, "https://"))
 		arguments += " --cluster-init --tls-san " + shellQuote(host)
 	} else {
 		arguments += " --server " + shellQuote(server)
+	}
+	keys := make([]string, 0, len(labels))
+	for key := range labels {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		arguments += " --node-label " + shellQuote(key+"="+labels[key])
 	}
 	return "curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION=" + shellQuote(k3sVersion) + " K3S_TOKEN=" + shellQuote(token) + " sh -s - " + arguments
 }
@@ -510,7 +787,7 @@ func readInventory(ctx context.Context, runner commandRunner, primary machine, a
 				ready = true
 			}
 		}
-		nodes = append(nodes, clusterNode{Name: item.Metadata.Name, Role: role, Ready: ready, Version: item.Status.NodeInfo.KubeletVersion})
+		nodes = append(nodes, clusterNode{Name: item.Metadata.Name, Role: role, Pool: item.Metadata.Labels["kubephos.dev/pool"], Zone: item.Metadata.Labels["topology.kubernetes.io/zone"], Ready: ready, Version: item.Status.NodeInfo.KubeletVersion})
 	}
 	sort.Slice(nodes, func(i, j int) bool { return nodes[i].Name < nodes[j].Name })
 	return clusterInventory{APIVersion: clusterAPIVersion, Kind: "ClusterInventory", Metadata: clusterInventoryMetadata{Name: name}, Spec: clusterInventorySpec{Distribution: "k3s", Version: k3sVersion, Nodes: nodes}}, nil

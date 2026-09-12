@@ -297,6 +297,84 @@ export function InfrastructureServiceDialog({open, close, workspaces, templates,
   </Dialog>
 }
 
+type ClusterPoolDraft = {name: string; count: number; zones: string}
+
+export function KubernetesClusterDialog({open, close, workspaces, templates, services, ...common}: CommonProps & {open: boolean; close: () => void; workspaces: Workspace[]; templates: ManagedResource[]; services: ManagedResource[]}) {
+  const [workspaceID, setWorkspaceID] = useState(workspaces[0]?.id ?? '')
+  const [connectionID, setConnectionID] = useState(common.connections[0]?.id ?? '')
+  const [applicationPools, setApplicationPools] = useState<ClusterPoolDraft[]>([{name: 'applications', count: 2, zones: 'zone-a'}])
+  const [error, setError] = useState('')
+  const [pending, setPending] = useState(false)
+  useEffect(() => {
+    if (!open) return
+    setWorkspaceID(workspaces[0]?.id ?? '')
+    setConnectionID(common.connections[0]?.id ?? '')
+    setApplicationPools([{name: 'applications', count: 2, zones: 'zone-a'}])
+    setError('')
+  }, [open, workspaces, common.connections])
+  const compatible = (item: ManagedResource) => item.status === 'ready' && item.workspaceId === workspaceID && item.connectionId === connectionID
+  const availableTemplates = templates.filter(compatible)
+  const harbor = services.filter(item => item.kind === 'harbor' && compatible(item))
+  const nfs = services.filter(item => item.kind === 'nfs' && compatible(item))
+  const submit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    setPending(true)
+    setError('')
+    const values = new FormData(event.currentTarget)
+    try {
+      await request('/kubernetes-clusters', {method: 'POST', body: JSON.stringify({
+        workspaceId: workspaceID,
+        connectionId: connectionID,
+        templateId: values.get('templateId'),
+        harborId: values.get('harborId'),
+        nfsId: values.get('nfsId'),
+        name: values.get('name'),
+        baseVMID: Number(values.get('baseVMID')),
+        controlPlanes: Number(values.get('controlPlanes')),
+        controlPlaneZones: parseZones(String(values.get('controlPlaneZones') ?? '')),
+        managementPool: {name: 'management', count: Number(values.get('managementCount')), zones: parseZones(String(values.get('managementZones') ?? ''))},
+        applicationPools: applicationPools.map(pool => ({name: pool.name, count: pool.count, zones: parseZones(pool.zones)})),
+        cores: Number(values.get('cores')),
+        memoryMiB: Number(values.get('memoryMiB')),
+        diskGiB: Number(values.get('diskGiB'))
+      })}, common.session.csrfToken)
+      close()
+      await common.onDone('Cluster validation passed and provisioning started.')
+    } catch (cause) {
+      setError(validationMessage(cause))
+    } finally {
+      setPending(false)
+    }
+  }
+  const ready = availableTemplates.length > 0 && harbor.length > 0 && nfs.length > 0
+  return <Dialog open={open} onClose={close} title="Create Kubernetes cluster" eyebrow="VALIDATED CLUSTER" className="template-modal cluster-modal">
+    <form onSubmit={submit}>
+      <div className="form-section"><strong>Infrastructure</strong><p>Select existing managed building blocks. Their ownership and health are checked before any VM is created.</p></div>
+      {workspaces.length > 1 ? <label>Environment<select value={workspaceID} onChange={event => setWorkspaceID(event.target.value)} required>{workspaces.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label> : <input type="hidden" value={workspaceID} readOnly />}
+      <label>Proxmox connection<select value={connectionID} onChange={event => setConnectionID(event.target.value)} required>{common.connections.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
+      <div className="field-row"><label>VM template<select name="templateId" required>{availableTemplates.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label><label>Harbor registry<select name="harborId" required>{harbor.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label></div>
+      <label>NFS storage<select name="nfsId" required>{nfs.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
+      <div className="form-section"><strong>Cluster identity</strong><p>Kubernetes and managed component versions follow this KubePhos release.</p></div>
+      <div className="field-row"><label>Cluster name<input name="name" pattern="[a-z0-9][a-z0-9-]{0,31}" maxLength={32} placeholder="development" required autoFocus /></label><label>First VM ID<input name="baseVMID" type="number" min={100} max={999999988} required /></label></div>
+      <div className="form-section"><strong>Control plane</strong><p>Zones are comma-separated logical failure domains.</p></div>
+      <div className="field-row"><label>Nodes<select name="controlPlanes" defaultValue="1"><option value="1">1 · development</option><option value="3">3 · high availability</option></select></label><label>Zones<input name="controlPlaneZones" defaultValue="zone-a" pattern="[a-z0-9,-]+" required /></label></div>
+      <div className="form-section"><strong>Management pool</strong><p>Observability and support components use this dedicated capacity.</p></div>
+      <div className="field-row"><label>Nodes<input name="managementCount" type="number" min={1} max={12} defaultValue={1} required /></label><label>Zones<input name="managementZones" defaultValue="zone-a" pattern="[a-z0-9,-]+" required /></label></div>
+      <div className="form-section pool-section"><div><strong>Application pools</strong><p>Workloads are placed on nodes labelled with their pool and zone.</p></div><button className="button secondary compact" type="button" disabled={applicationPools.length >= 8} onClick={() => setApplicationPools(items => [...items, {name: `applications-${items.length + 1}`, count: 1, zones: 'zone-a'}])}>Add pool</button></div>
+      <div className="pool-editor">{applicationPools.map((pool, index) => <div className="pool-row" key={index}><label>Pool name<input value={pool.name} pattern="[a-z0-9][a-z0-9-]{0,31}" onChange={event => setApplicationPools(items => items.map((item, position) => position === index ? {...item, name: event.target.value} : item))} required /></label><label>Nodes<input type="number" value={pool.count} min={1} max={12} onChange={event => setApplicationPools(items => items.map((item, position) => position === index ? {...item, count: Number(event.target.value)} : item))} required /></label><label>Zones<input value={pool.zones} pattern="[a-z0-9,-]+" onChange={event => setApplicationPools(items => items.map((item, position) => position === index ? {...item, zones: event.target.value} : item))} required /></label>{applicationPools.length > 1 && <button type="button" className="icon-button pool-remove" aria-label={`Remove ${pool.name}`} onClick={() => setApplicationPools(items => items.filter((_, position) => position !== index))}>×</button>}</div>)}</div>
+      <details className="advanced-fields"><summary>Machine capacity</summary><p>The same reliable capacity is used for every node in this first provider profile.</p><div className="field-row"><label>CPU cores<input name="cores" type="number" min={1} max={32} defaultValue={4} /></label><label>Memory MiB<input name="memoryMiB" type="number" min={1024} max={131072} defaultValue={8192} /></label></div><label>Disk GiB<input name="diskGiB" type="number" min={8} max={2048} defaultValue={80} /></label></details>
+      <ValidationCallout text="VM IDs, addresses, template, registry trust, NFS, SSH, Kubernetes API, nodes, zones, storage class and observability are gated in order." />
+      {!ready && <p className="form-hint">A ready VM template, Harbor service and NFS service are required on the same connection.</p>}
+      <p className="form-error">{error}</p>
+      <Actions close={close} pending={pending} disabled={!ready || !workspaceID || !connectionID} label="Validate and create" />
+    </form>
+  </Dialog>
+}
+
+function parseZones(value: string): string[] {
+  return [...new Set(value.split(',').map(item => item.trim()).filter(Boolean))]
+}
+
 export function ApplicationDialog({open, close, ...common}: CommonProps & {open: boolean; close: () => void}) {
   const [file, setFile] = useState<File | null>(null)
   const [error, setError] = useState('')

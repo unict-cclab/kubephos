@@ -100,6 +100,11 @@ func NewServer(store *storage.Store, registry *plugins.Registry, artifactStore *
 	router.HandleFunc("POST /api/v1/infrastructure-services", server.createInfrastructureService)
 	router.HandleFunc("GET /api/v1/infrastructure-services/{id}", server.getInfrastructureService)
 	router.HandleFunc("DELETE /api/v1/infrastructure-services/{id}", server.deleteInfrastructureService)
+	router.HandleFunc("GET /api/v1/kubernetes-clusters", server.listKubernetesClusters)
+	router.HandleFunc("POST /api/v1/kubernetes-clusters", server.createKubernetesCluster)
+	router.HandleFunc("GET /api/v1/kubernetes-clusters/{id}", server.getKubernetesCluster)
+	router.HandleFunc("DELETE /api/v1/kubernetes-clusters/{id}", server.deleteKubernetesCluster)
+	router.HandleFunc("GET /api/v1/kubernetes-clusters/{id}/kubeconfig", server.downloadKubeconfig)
 	router.HandleFunc("GET /api/v1/infrastructure/resources", server.listInfrastructureResources)
 	router.HandleFunc("GET /api/v1/terminal-targets", server.listTerminalTargets)
 	router.HandleFunc("POST /api/v1/terminals", server.createTerminal)
@@ -1280,6 +1285,247 @@ func (s *Server) createInfrastructureService(response http.ResponseWriter, reque
 	writeJSON(response, http.StatusAccepted, resource)
 }
 
+type managedNodePoolInput struct {
+	Name  string   `json:"name"`
+	Count int      `json:"count"`
+	Zones []string `json:"zones"`
+}
+
+func (s *Server) listKubernetesClusters(response http.ResponseWriter, request *http.Request) {
+	items, err := s.store.ListManagedResources(request.Context(), "kubernetes-cluster")
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, "database_error", "Could not list Kubernetes clusters.")
+		return
+	}
+	writeJSON(response, http.StatusOK, map[string]any{"items": items})
+}
+
+func (s *Server) getKubernetesCluster(response http.ResponseWriter, request *http.Request) {
+	resource, err := s.store.GetManagedResource(request.Context(), request.PathValue("id"))
+	if errors.Is(err, storage.ErrNotFound) || err == nil && resource.Kind != "kubernetes-cluster" {
+		writeError(response, http.StatusNotFound, "not_found", "Kubernetes cluster not found.")
+		return
+	}
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, "database_error", "Could not read the Kubernetes cluster.")
+		return
+	}
+	writeJSON(response, http.StatusOK, resource)
+}
+
+func (s *Server) createKubernetesCluster(response http.ResponseWriter, request *http.Request) {
+	var input struct {
+		WorkspaceID       string                 `json:"workspaceId"`
+		ConnectionID      string                 `json:"connectionId"`
+		TemplateID        string                 `json:"templateId"`
+		HarborID          string                 `json:"harborId"`
+		NFSID             string                 `json:"nfsId"`
+		Name              string                 `json:"name"`
+		BaseVMID          int                    `json:"baseVMID"`
+		ControlPlanes     int                    `json:"controlPlanes"`
+		ControlPlaneZones []string               `json:"controlPlaneZones"`
+		ManagementPool    managedNodePoolInput   `json:"managementPool"`
+		ApplicationPools  []managedNodePoolInput `json:"applicationPools"`
+		Cores             int                    `json:"cores"`
+		MemoryMiB         int                    `json:"memoryMiB"`
+		DiskGiB           int                    `json:"diskGiB"`
+	}
+	if err := decodeJSON(request, &input); err != nil {
+		writeError(response, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	input.WorkspaceID = strings.TrimSpace(input.WorkspaceID)
+	input.ConnectionID = strings.TrimSpace(input.ConnectionID)
+	input.TemplateID = strings.TrimSpace(input.TemplateID)
+	input.HarborID = strings.TrimSpace(input.HarborID)
+	input.NFSID = strings.TrimSpace(input.NFSID)
+	input.Name = strings.TrimSpace(input.Name)
+	labelPattern := regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,31}$`)
+	if !labelPattern.MatchString(input.Name) {
+		writeError(response, http.StatusUnprocessableEntity, "invalid_name", "Cluster name must be a lowercase label with at most 32 characters.")
+		return
+	}
+	if input.ControlPlanes != 1 && input.ControlPlanes != 3 {
+		writeError(response, http.StatusUnprocessableEntity, "invalid_control_plane", "Use one or three control plane nodes.")
+		return
+	}
+	if len(input.ControlPlaneZones) == 0 {
+		input.ControlPlaneZones = []string{"zone-a"}
+	}
+	if input.ManagementPool.Name == "" {
+		input.ManagementPool = managedNodePoolInput{Name: "management", Count: 1, Zones: []string{"zone-a"}}
+	}
+	if len(input.ApplicationPools) == 0 {
+		input.ApplicationPools = []managedNodePoolInput{{Name: "applications", Count: 2, Zones: []string{"zone-a"}}}
+	}
+	seenPools := map[string]bool{input.ManagementPool.Name: true}
+	if !validManagedPool(input.ManagementPool, labelPattern) {
+		writeError(response, http.StatusUnprocessableEntity, "invalid_pool", "The management pool requires a valid name, node count and at least one zone.")
+		return
+	}
+	totalMachines := input.ControlPlanes + input.ManagementPool.Count
+	for _, pool := range input.ApplicationPools {
+		if !validManagedPool(pool, labelPattern) || seenPools[pool.Name] {
+			writeError(response, http.StatusUnprocessableEntity, "invalid_pool", "Application pools require unique names, a node count and at least one valid zone.")
+			return
+		}
+		seenPools[pool.Name] = true
+		totalMachines += pool.Count
+	}
+	if totalMachines > 12 {
+		writeError(response, http.StatusUnprocessableEntity, "invalid_capacity", "A cluster can contain at most 12 machines in the current provider profile.")
+		return
+	}
+	connection, err := s.store.GetProviderConnectionConfiguration(request.Context(), input.ConnectionID)
+	if errors.Is(err, storage.ErrNotFound) {
+		writeError(response, http.StatusUnprocessableEntity, "invalid_connection", "Select an existing infrastructure connection.")
+		return
+	}
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, "database_error", "Could not validate the infrastructure connection.")
+		return
+	}
+	template, failure := s.managedDependency(request.Context(), input.TemplateID, "machine-template", input.WorkspaceID, connection.ID)
+	if failure != nil {
+		failure.write(response)
+		return
+	}
+	harbor, failure := s.managedDependency(request.Context(), input.HarborID, "harbor", input.WorkspaceID, connection.ID)
+	if failure != nil {
+		failure.write(response)
+		return
+	}
+	nfs, failure := s.managedDependency(request.Context(), input.NFSID, "nfs", input.WorkspaceID, connection.ID)
+	if failure != nil {
+		failure.write(response)
+		return
+	}
+	registryCredential, err := s.store.GetPipelineRunArtifact(request.Context(), harbor.PipelineRunID, "registry-push-credential")
+	if err != nil || registryCredential.Type != "RegistryCredential" || !registryCredential.Sensitive {
+		writeError(response, http.StatusConflict, "registry_invalid", "The selected Harbor pull identity is unavailable.")
+		return
+	}
+	var templateSpec struct {
+		Node    string `json:"node"`
+		VMID    int    `json:"vmid"`
+		DiskGiB int    `json:"diskGiB"`
+		SSHUser string `json:"sshUser"`
+	}
+	if err := json.Unmarshal(template.Spec, &templateSpec); err != nil || templateSpec.Node == "" || templateSpec.VMID < 100 || templateSpec.SSHUser == "" {
+		writeError(response, http.StatusConflict, "template_invalid", "The saved machine template configuration is incomplete.")
+		return
+	}
+	if input.BaseVMID < 100 || input.BaseVMID > 999999988 || input.BaseVMID+totalMachines-1 > 999999999 {
+		writeError(response, http.StatusUnprocessableEntity, "invalid_vmid", "The consecutive cluster VM ID range is invalid.")
+		return
+	}
+	if input.Cores == 0 {
+		input.Cores = 4
+	}
+	if input.MemoryMiB == 0 {
+		input.MemoryMiB = 8192
+	}
+	if input.DiskGiB == 0 {
+		input.DiskGiB = 80
+	}
+	if input.Cores < 1 || input.Cores > 32 || input.MemoryMiB < 1024 || input.MemoryMiB > 131072 || input.DiskGiB < templateSpec.DiskGiB || input.DiskGiB > 2048 {
+		writeError(response, http.StatusUnprocessableEntity, "invalid_capacity", "Machine capacity is outside the supported range or smaller than the template disk.")
+		return
+	}
+	topologyPlugin, err := s.pluginForCapability(connection.Provider, "infrastructure.machine-topology.provision")
+	if err != nil {
+		writeError(response, http.StatusUnprocessableEntity, "capability_unavailable", err.Error())
+		return
+	}
+	clusterPlugin, err := s.pluginForCapability("", "cluster.bootstrap")
+	if err != nil {
+		writeError(response, http.StatusUnprocessableEntity, "capability_unavailable", err.Error())
+		return
+	}
+	storagePlugin, err := s.pluginForCapability("", "storage.kubernetes.attach")
+	if err != nil {
+		writeError(response, http.StatusUnprocessableEntity, "capability_unavailable", err.Error())
+		return
+	}
+	observabilityPlugin, err := s.pluginForCapability("", "observability.metrics.install")
+	if err != nil {
+		writeError(response, http.StatusUnprocessableEntity, "capability_unavailable", err.Error())
+		return
+	}
+	topologySpec, _ := json.Marshal(map[string]any{"connectionRef": connection.ID, "machineTemplateRef": template.ArtifactID, "node": templateSpec.Node, "templateVMID": templateSpec.VMID, "baseVMID": input.BaseVMID, "namePrefix": input.Name, "machineCount": totalMachines, "cores": input.Cores, "memoryMiB": input.MemoryMiB, "diskGiB": input.DiskGiB, "sshUser": templateSpec.SSHUser, "cleanupAfterTest": false})
+	nodePools := []map[string]any{{"name": input.ManagementPool.Name, "role": "management", "count": input.ManagementPool.Count, "zones": input.ManagementPool.Zones}}
+	for _, pool := range input.ApplicationPools {
+		nodePools = append(nodePools, map[string]any{"name": pool.Name, "role": "application", "count": pool.Count, "zones": pool.Zones})
+	}
+	clusterSpec, _ := json.Marshal(map[string]any{"machineSetRef": "", "machineAccessRef": "", "clusterName": input.Name, "controlPlanes": input.ControlPlanes, "controlPlaneZones": input.ControlPlaneZones, "nodePools": nodePools, "registryEndpointRef": harbor.ArtifactID, "registryCredentialRef": registryCredential.ID})
+	storageSpec, _ := json.Marshal(map[string]any{"clusterConnectionRef": "", "sharedStorageEndpointRef": nfs.ArtifactID, "storageClassName": "shared-storage"})
+	observabilitySpec, _ := json.Marshal(map[string]any{"clusterConnectionRef": "", "storageClassCapabilityRef": "", "scrapeInterval": "15s", "retention": "7d"})
+	definition := domain.PipelineDefinition{Stages: []domain.PipelineStage{
+		{ID: "machines", PluginID: topologyPlugin.Manifest().ID, Title: "Provision cluster machines", Spec: topologySpec},
+		{ID: "kubernetes", PluginID: clusterPlugin.Manifest().ID, Title: "Bootstrap Kubernetes", Spec: clusterSpec, Bindings: []domain.PipelineBinding{{Path: "/machineSetRef", FromStage: "machines", FromOutput: "machine-set"}, {Path: "/machineAccessRef", FromStage: "machines", FromOutput: "machine-access"}}},
+		{ID: "storage", PluginID: storagePlugin.Manifest().ID, Title: "Attach managed storage", Spec: storageSpec, Bindings: []domain.PipelineBinding{{Path: "/clusterConnectionRef", FromStage: "kubernetes", FromOutput: "cluster-connection"}}},
+		{ID: "observability", PluginID: observabilityPlugin.Manifest().ID, Title: "Install managed observability", Spec: observabilitySpec, Bindings: []domain.PipelineBinding{{Path: "/clusterConnectionRef", FromStage: "kubernetes", FromOutput: "cluster-connection"}, {Path: "/storageClassCapabilityRef", FromStage: "storage", FromOutput: "storage-class-capability"}}},
+	}, Result: domain.PipelineOutput{Stage: "observability", Output: "observability-capability"}}
+	validated, failure := s.validatedManagedPipeline(request.Context(), input.WorkspaceID, definition)
+	if failure != nil {
+		failure.write(response)
+		return
+	}
+	resourceID := id.New("cluster")
+	pipeline := domain.Pipeline{ID: id.New("pipe"), WorkspaceID: input.WorkspaceID, Name: "managed-cluster-" + resourceID, Definition: validated.Definition, Resolution: validated.Resolution, Validation: validated.Validation, Hash: validated.Hash}
+	run := pipelineRunForManagedPipeline(pipeline, "Provision "+input.Name)
+	managedSpec, _ := json.Marshal(input)
+	manifest := clusterPlugin.Manifest()
+	dependencies := []domain.ManagedResourceDependency{{ResourceID: resourceID, DependsOnID: template.ID, Relation: "machine-template"}, {ResourceID: resourceID, DependsOnID: harbor.ID, Relation: "registry"}, {ResourceID: resourceID, DependsOnID: nfs.ID, Relation: "shared-storage"}}
+	resource, err := s.store.CreateManagedPipelineResource(request.Context(), domain.ManagedResource{ID: resourceID, WorkspaceID: input.WorkspaceID, Name: input.Name, Kind: "kubernetes-cluster", Provider: connection.Provider, ConnectionID: connection.ID, PluginID: manifest.ID, PluginVersion: manifest.Version, PluginDigest: manifest.Runtime.Digest, Spec: managedSpec}, pipeline, run, dependencies)
+	if err != nil {
+		var databaseError *pgconn.PgError
+		if errors.As(err, &databaseError) && databaseError.Code == "23505" {
+			writeError(response, http.StatusConflict, "cluster_conflict", "A cluster with this name already exists for the selected connection.")
+			return
+		}
+		writeError(response, http.StatusInternalServerError, "database_error", "Could not create the Kubernetes cluster workflow.")
+		return
+	}
+	writeJSON(response, http.StatusAccepted, resource)
+}
+
+func validManagedPool(pool managedNodePoolInput, pattern *regexp.Regexp) bool {
+	if !pattern.MatchString(pool.Name) || pool.Count < 1 || pool.Count > 12 || len(pool.Zones) == 0 || len(pool.Zones) > 12 {
+		return false
+	}
+	seen := map[string]bool{}
+	for _, zone := range pool.Zones {
+		if !pattern.MatchString(zone) || seen[zone] {
+			return false
+		}
+		seen[zone] = true
+	}
+	return true
+}
+
+func (s *Server) managedDependency(ctx context.Context, resourceID, kind, workspaceID, connectionID string) (domain.ManagedResource, *managedOperationFailure) {
+	resource, err := s.store.GetManagedResource(ctx, resourceID)
+	if errors.Is(err, storage.ErrNotFound) || err == nil && resource.Kind != kind {
+		return domain.ManagedResource{}, &managedOperationFailure{status: http.StatusUnprocessableEntity, code: "invalid_dependency", message: "Select a ready " + kind + " resource."}
+	}
+	if err != nil {
+		return domain.ManagedResource{}, &managedOperationFailure{status: http.StatusInternalServerError, code: "database_error", message: "Could not validate the selected dependency."}
+	}
+	if resource.Status != "ready" || resource.ArtifactID == "" || resource.WorkspaceID != workspaceID || resource.ConnectionID != connectionID {
+		return domain.ManagedResource{}, &managedOperationFailure{status: http.StatusConflict, code: "dependency_not_ready", message: "The selected " + kind + " must be ready and belong to the same environment and connection."}
+	}
+	return resource, nil
+}
+
+func pipelineRunForManagedPipeline(pipeline domain.Pipeline, name string) domain.PipelineRun {
+	run := domain.PipelineRun{ID: id.New("run"), PipelineID: pipeline.ID, WorkspaceID: pipeline.WorkspaceID, Name: name, PipelineHash: pipeline.Hash, ResultType: pipeline.Resolution.Result.Type, ResultVersion: pipeline.Resolution.Result.Version}
+	for position, stage := range pipeline.Definition.Stages {
+		run.Stages = append(run.Stages, domain.PipelineRunStage{ID: run.ID + "_" + stage.ID, RunID: run.ID, Position: position + 1, StageID: stage.ID, PluginID: stage.PluginID, Title: stage.Title, Status: domain.StepPending})
+	}
+	return run
+}
+
 func (s *Server) deleteInfrastructureService(response http.ResponseWriter, request *http.Request) {
 	resource, err := s.store.GetManagedResource(request.Context(), request.PathValue("id"))
 	if errors.Is(err, storage.ErrNotFound) || err == nil && resource.Kind != "harbor" && resource.Kind != "nfs" {
@@ -1290,13 +1536,30 @@ func (s *Server) deleteInfrastructureService(response http.ResponseWriter, reque
 		writeError(response, http.StatusInternalServerError, "database_error", "Could not read the infrastructure service.")
 		return
 	}
+	s.deleteManagedPipelineResource(response, request, resource, "service")
+}
+
+func (s *Server) deleteKubernetesCluster(response http.ResponseWriter, request *http.Request) {
+	resource, err := s.store.GetManagedResource(request.Context(), request.PathValue("id"))
+	if errors.Is(err, storage.ErrNotFound) || err == nil && resource.Kind != "kubernetes-cluster" {
+		writeError(response, http.StatusNotFound, "not_found", "Kubernetes cluster not found.")
+		return
+	}
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, "database_error", "Could not read the Kubernetes cluster.")
+		return
+	}
+	s.deleteManagedPipelineResource(response, request, resource, "cluster")
+}
+
+func (s *Server) deleteManagedPipelineResource(response http.ResponseWriter, request *http.Request, resource domain.ManagedResource, label string) {
 	if resource.Status != "ready" && resource.Status != "failed" || resource.PipelineRunID == "" {
-		writeError(response, http.StatusConflict, "service_not_ready", "Only a completed infrastructure service lifecycle can be deleted.")
+		writeError(response, http.StatusConflict, label+"_not_ready", "Only a completed managed lifecycle can be deleted.")
 		return
 	}
 	sourceRun, err := s.store.GetPipelineRun(request.Context(), resource.PipelineRunID)
 	if err != nil || !terminal(sourceRun.Status) || len(sourceRun.Stages) == 0 {
-		writeError(response, http.StatusConflict, "cleanup_unavailable", "The completed service lifecycle is unavailable.")
+		writeError(response, http.StatusConflict, "cleanup_unavailable", "The completed managed lifecycle is unavailable.")
 		return
 	}
 	definition := domain.PipelineDefinition{}
@@ -1330,7 +1593,7 @@ func (s *Server) deleteInfrastructureService(response http.ResponseWriter, reque
 			writeError(response, http.StatusConflict, "cleanup_unavailable", "The failed lifecycle cannot be dismissed in its current state.")
 			return
 		} else if err != nil {
-			writeError(response, http.StatusInternalServerError, "database_error", "Could not dismiss the failed service lifecycle.")
+			writeError(response, http.StatusInternalServerError, "database_error", "Could not dismiss the failed managed lifecycle.")
 			return
 		}
 		response.WriteHeader(http.StatusNoContent)
@@ -1342,23 +1605,61 @@ func (s *Server) deleteInfrastructureService(response http.ResponseWriter, reque
 		return
 	}
 	pipeline := domain.Pipeline{ID: id.New("pipe"), WorkspaceID: resource.WorkspaceID, Name: "delete-managed-" + resource.ID, Definition: definition, Resolution: resolution, Validation: validation, Hash: hash}
-	run := domain.PipelineRun{ID: id.New("run"), PipelineID: pipeline.ID, WorkspaceID: resource.WorkspaceID, Name: "Delete " + resource.Name, PipelineHash: pipeline.Hash}
-	for position, stage := range definition.Stages {
-		run.Stages = append(run.Stages, domain.PipelineRunStage{ID: run.ID + "_" + stage.ID, RunID: run.ID, Position: position + 1, StageID: stage.ID, PluginID: stage.PluginID, Title: stage.Title, Status: domain.StepPending})
-	}
+	run := pipelineRunForManagedPipeline(pipeline, "Delete "+resource.Name)
 	if err := s.store.CreateManagedPipelineResourceDeletion(request.Context(), resource.ID, pipeline, run); errors.Is(err, storage.ErrConflict) {
-		writeError(response, http.StatusConflict, "service_in_use", "The service is still in use or already being deleted.")
+		writeError(response, http.StatusConflict, label+"_in_use", "The resource is still in use or already being deleted.")
 		return
 	} else if err != nil {
-		writeError(response, http.StatusInternalServerError, "database_error", "Could not create the service deletion workflow.")
+		writeError(response, http.StatusInternalServerError, "database_error", "Could not create the managed deletion workflow.")
 		return
 	}
 	resource, err = s.store.GetManagedResource(request.Context(), resource.ID)
 	if err != nil {
-		writeError(response, http.StatusInternalServerError, "database_error", "Could not read the service deletion workflow.")
+		writeError(response, http.StatusInternalServerError, "database_error", "Could not read the managed deletion workflow.")
 		return
 	}
 	writeJSON(response, http.StatusAccepted, resource)
+}
+
+func (s *Server) downloadKubeconfig(response http.ResponseWriter, request *http.Request) {
+	resource, err := s.store.GetManagedResource(request.Context(), request.PathValue("id"))
+	if errors.Is(err, storage.ErrNotFound) || err == nil && resource.Kind != "kubernetes-cluster" {
+		writeError(response, http.StatusNotFound, "not_found", "Kubernetes cluster not found.")
+		return
+	}
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, "database_error", "Could not read the Kubernetes cluster.")
+		return
+	}
+	if resource.Status != "ready" {
+		writeError(response, http.StatusConflict, "cluster_not_ready", "Kubeconfig is available only after every cluster health gate passes.")
+		return
+	}
+	artifact, err := s.store.GetPipelineRunArtifact(request.Context(), resource.PipelineRunID, "cluster-connection")
+	if err != nil || artifact.Type != "ClusterConnection" || !artifact.Sensitive || artifact.VerifiedAt.IsZero() {
+		writeError(response, http.StatusConflict, "kubeconfig_unavailable", "The verified cluster connection is unavailable.")
+		return
+	}
+	raw, err := s.readArtifactPayload(request.Context(), artifact)
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, "artifact_error", "Could not decrypt the cluster connection.")
+		return
+	}
+	var connection struct {
+		Kind string `json:"kind"`
+		Spec struct {
+			Kubeconfig string `json:"kubeconfig"`
+		} `json:"spec"`
+	}
+	if err := json.Unmarshal(raw, &connection); err != nil || connection.Kind != "ClusterConnection" || strings.TrimSpace(connection.Spec.Kubeconfig) == "" {
+		writeError(response, http.StatusConflict, "kubeconfig_invalid", "The stored cluster connection is invalid.")
+		return
+	}
+	response.Header().Set("Content-Type", "application/yaml")
+	response.Header().Set("Content-Disposition", `attachment; filename="`+resource.Name+`-kubeconfig.yaml"`)
+	response.Header().Set("Cache-Control", "no-store")
+	response.WriteHeader(http.StatusOK)
+	_, _ = io.WriteString(response, connection.Spec.Kubeconfig)
 }
 
 type managedOperationFailure struct {

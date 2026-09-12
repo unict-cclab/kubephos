@@ -21,6 +21,7 @@ interface ViewProps {
   connections: Connection[]
   machineTemplates: ManagedResource[]
   infrastructureServices: ManagedResource[]
+  kubernetesClusters: ManagedResource[]
   resources: InfrastructureResource[]
   audit: AuditEvent[]
   session: Session
@@ -44,6 +45,8 @@ interface ViewProps {
   deleteConnection: (id: string, name: string) => Promise<void>
   deleteMachineTemplate: (id: string, name: string) => Promise<void>
   deleteInfrastructureService: (id: string, name: string) => Promise<void>
+  addKubernetesCluster: () => void
+  deleteKubernetesCluster: (id: string, name: string) => Promise<void>
   openInfrastructureCapability: (workspace: Workspace, pluginID: string) => void
   openTerminal: (workspace: Workspace) => void
 }
@@ -84,7 +87,7 @@ export function Views(props: ViewProps) {
       <Infrastructure {...props} />
     </section>
     <section className={`view ${props.view === 'kubernetes' ? 'active' : ''}`}>
-      <ProductNext eyebrow="CLUSTERS" title="Kubernetes clusters" copy="Create clusters from a Proxmox connection, a VM template, Harbor, NFS and zoned node pools." />
+      <Kubernetes {...props} />
     </section>
     <section className={`view ${props.view === 'experiments' ? 'active' : ''}`}>
       <ProductNext eyebrow="CONFIGURE ONCE" title="Experiment configurations" copy="Choose an application, load, chaos and scheduling strategies, then create isolated repeatable runs." />
@@ -197,6 +200,32 @@ function Infrastructure(props: ViewProps) {
     <Heading eyebrow="3 · PLATFORM SERVICES" title="Harbor and NFS" action={props.isAdmin && <button className="button primary" disabled={!props.machineTemplates.some(item => item.status === 'ready')} onClick={props.addInfrastructureService}>New service</button>} />
     <div className="managed-grid">{props.infrastructureServices.length ? props.infrastructureServices.map(item => <article className="managed-card" key={item.id}><div className="managed-card-head"><span className="feature-icon">{item.kind === 'harbor' ? '▣' : '▤'}</span><Status value={item.status} /></div><h3>{item.name}</h3><p>{item.kind === 'harbor' ? 'Harbor registry' : 'NFS storage'} · VMID {specText(item, 'vmid')}</p><dl><div><dt>CPU</dt><dd>{specText(item, 'cores')} cores</dd></div><div><dt>Memory</dt><dd>{specText(item, 'memoryMiB')} MiB</dd></div><div><dt>Disk</dt><dd>{specText(item, 'diskGiB')} GiB</dd></div><div><dt>Created</dt><dd>{formatDate(item.createdAt)}</dd></div></dl>{item.error && <p className="managed-error">{item.error}</p>}<div className="managed-actions">{item.pipelineRunId && <button className="text-button" onClick={() => props.navigate('pipelines')}>View progress</button>}{props.isAdmin && <button className="button danger compact" disabled={item.status !== 'ready' && item.status !== 'failed'} onClick={() => props.deleteInfrastructureService(item.id, item.name)}>Delete</button>}</div></article>) : <Empty title="No platform service">Create Harbor or NFS from a ready VM template. Capacity and installation use managed defaults.</Empty>}</div>
   </>
+}
+
+function Kubernetes(props: ViewProps) {
+  const readyServices = props.infrastructureServices.filter(item => item.status === 'ready')
+  const canCreate = props.machineTemplates.some(item => item.status === 'ready') && readyServices.some(item => item.kind === 'harbor') && readyServices.some(item => item.kind === 'nfs')
+  return <>
+    <Heading eyebrow="MANAGED CLUSTERS" title="Kubernetes clusters" action={props.isAdmin && <button className="button primary" disabled={!canCreate} onClick={props.addKubernetesCluster}>New cluster</button>} />
+    <p className="section-copy infrastructure-copy">Create a complete cluster from a VM template, Harbor, NFS and a small pool layout. KubePhos verifies every transition.</p>
+    <div className="stats-grid infrastructure-stats"><Stat label="Clusters" value={props.kubernetesClusters.length} caption="managed environments" /><Stat label="Ready" value={props.kubernetesClusters.filter(item => item.status === 'ready').length} caption="all health gates passed" /><Stat label="Nodes" value={props.kubernetesClusters.reduce((total, item) => total + clusterNodeCount(item), 0)} caption="declared capacity" /></div>
+    <div className="managed-grid">{props.kubernetesClusters.length ? props.kubernetesClusters.map(item => <article className="managed-card cluster-card" key={item.id}><div className="managed-card-head"><span className="feature-icon">⬡</span><Status value={item.status} /></div><h3>{item.name}</h3><p>K3s · {clusterNodeCount(item)} nodes · VMIDs from {specText(item, 'baseVMID')}</p><dl><div><dt>Control plane</dt><dd>{specText(item, 'controlPlanes')}</dd></div><div><dt>Management</dt><dd>{poolCount(item, 'managementPool')} nodes</dd></div><div><dt>Application</dt><dd>{applicationPoolCount(item)} nodes</dd></div><div><dt>Created</dt><dd>{formatDate(item.createdAt)}</dd></div></dl>{item.error && <p className="managed-error">{item.error}</p>}<div className="managed-actions">{item.pipelineRunId && <button className="text-button" onClick={() => props.navigate('pipelines')}>View progress</button>}{item.status === 'ready' && <a className="button secondary compact" href={`/api/v1/kubernetes-clusters/${item.id}/kubeconfig`}>Kubeconfig</a>}{props.isAdmin && <button className="button danger compact" disabled={item.status !== 'ready' && item.status !== 'failed'} onClick={() => props.deleteKubernetesCluster(item.id, item.name)}>Delete</button>}</div></article>) : <Empty title="No Kubernetes cluster">Create Harbor and NFS first, then KubePhos can provision the first complete cluster.</Empty>}</div>
+  </>
+}
+
+function poolCount(resource: ManagedResource, field: string): number {
+  const pool = resource.spec?.[field]
+  return pool && typeof pool === 'object' && 'count' in pool && typeof pool.count === 'number' ? pool.count : 0
+}
+
+function applicationPoolCount(resource: ManagedResource): number {
+  const pools = resource.spec?.applicationPools
+  return Array.isArray(pools) ? pools.reduce((total, pool) => total + (pool && typeof pool === 'object' && typeof pool.count === 'number' ? pool.count : 0), 0) : 0
+}
+
+function clusterNodeCount(resource: ManagedResource): number {
+  const controlPlanes = Number(resource.spec?.controlPlanes ?? 0)
+  return controlPlanes + poolCount(resource, 'managementPool') + applicationPoolCount(resource)
 }
 
 function specText(resource: ManagedResource, field: string): string {

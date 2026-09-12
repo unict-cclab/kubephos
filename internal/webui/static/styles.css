@@ -275,6 +275,13 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .service-kind-picker button.selected { border-color: var(--green); background: #eef5ef; box-shadow: 0 0 0 3px rgba(23,117,84,.08); }
 .advanced-fields { margin: 18px 0; }
 .advanced-fields > p { margin: 8px 0 0; color: var(--muted); font-size: 10px; }
+.cluster-modal { width: min(840px, calc(100% - 28px)); }
+.pool-section { display: flex; align-items: center; justify-content: space-between; gap: 18px; }
+.pool-editor { display: grid; gap: 9px; margin: 15px 0 20px; }
+.pool-row { display: grid; grid-template-columns: minmax(0, 1.25fr) 90px minmax(0, 1fr) 34px; align-items: end; gap: 10px; border: 1px solid var(--line); border-radius: 11px; padding: 0 12px; background: #fbfcfa; }
+.pool-row label { margin: 11px 0; }
+.pool-remove { margin-bottom: 11px; }
+.form-hint { border-radius: 9px; padding: 10px 12px; background: #fff3df; color: #785019; font-size: 11px; }
 .workspace-card { display: flex; flex-direction: column; }
 .workspace-card .workspace-icon { display: grid; width: 42px; height: 42px; place-items: center; margin-bottom: 22px; border-radius: 11px; background: #e6f1ea; color: var(--green); font-weight: 900; }
 .workspace-card .card-footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: auto; padding-top: 18px; }
@@ -686,6 +693,8 @@ summary { color: var(--muted); font-size: 12px; font-weight: 750; cursor: pointe
   .operation-row > :nth-child(2), .operation-row > :nth-child(4) { display: none; }
   .section-heading { align-items: flex-start; flex-direction: column; gap: 8px; }
   .field-row { grid-template-columns: 1fr; gap: 0; }
+  .pool-row { grid-template-columns: 1fr 90px; }
+  .pool-row label:nth-child(3) { grid-column: 1 / -1; }
   .schema-fields { grid-template-columns: 1fr; }
   .schema-fields .wide { grid-column: auto; }
   .drawer-panel { padding: 22px 16px; }

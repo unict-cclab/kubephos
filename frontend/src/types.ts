@@ -450,6 +450,7 @@ export interface PlatformData {
   connections: Connection[]
   machineTemplates: ManagedResource[]
   infrastructureServices: ManagedResource[]
+  kubernetesClusters: ManagedResource[]
   resources: InfrastructureResource[]
   audit: AuditEvent[]
 }

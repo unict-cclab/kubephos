@@ -88,6 +88,34 @@ func TestPrecheckRejectsDirtyMachine(t *testing.T) {
 	}
 }
 
+func TestManagedPoolsAssignStableRolesAndZones(t *testing.T) {
+	spec := Spec{ControlPlanes: 3, ControlPlaneZones: []string{"zone-a", "zone-b"}, NodePools: []NodePool{{Name: "management", Role: "management", Count: 2, Zones: []string{"zone-a", "zone-b"}}, {Name: "applications", Role: "application", Count: 3, Zones: []string{"zone-a", "zone-b"}}}}
+	if err := validatePoolConfiguration(spec); err != nil {
+		t.Fatal(err)
+	}
+	if err := validatePoolCapacity(spec, 8); err != nil {
+		t.Fatal(err)
+	}
+	expected := []struct{ pool, role, zone string }{{"control-plane", "control-plane", "zone-a"}, {"control-plane", "control-plane", "zone-b"}, {"control-plane", "control-plane", "zone-a"}, {"management", "management", "zone-a"}, {"management", "management", "zone-b"}, {"applications", "application", "zone-a"}, {"applications", "application", "zone-b"}, {"applications", "application", "zone-a"}}
+	for position, value := range expected {
+		labels := machineLabels(spec, position)
+		if labels["kubephos.dev/pool"] != value.pool || labels["kubephos.dev/role"] != value.role || labels["topology.kubernetes.io/zone"] != value.zone {
+			t.Fatalf("machine %d has unexpected labels %#v", position, labels)
+		}
+	}
+}
+
+func TestPlanIncludesOptionalManagedRegistryContracts(t *testing.T) {
+	spec := json.RawMessage(`{"machineSetRef":"art_machines","machineAccessRef":"art_access","clusterName":"dev","controlPlanes":1,"registryEndpointRef":"art_registry","registryCredentialRef":"art_registry_credential"}`)
+	plan, err := (Plugin{}).Plan(context.Background(), spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.Steps[0].ArtifactInputs) != 4 || plan.Steps[0].ArtifactInputs[2].Type != "RegistryEndpoint" || plan.Steps[0].ArtifactInputs[3].Type != "RegistryCredential" {
+		t.Fatalf("unexpected registry inputs %#v", plan.Steps[0].ArtifactInputs)
+	}
+}
+
 type fakeRunner struct {
 	lock      sync.Mutex
 	installed map[string]string
@@ -131,7 +159,7 @@ func (r *fakeRunner) Run(_ context.Context, target machine, _ machineAccess, com
 	case strings.HasPrefix(command, "if [ -x /usr/local/bin/k3s-agent-uninstall.sh ]"):
 		delete(r.installed, target.Name)
 		return "", nil
-	case command == "test ! -x /usr/local/bin/k3s && test ! -e /etc/systemd/system/k3s.service && test ! -e /etc/systemd/system/k3s-agent.service":
+	case strings.HasPrefix(command, "test ! -x /usr/local/bin/k3s && test ! -e /etc/systemd/system/k3s.service"):
 		if _, exists := r.installed[target.Name]; exists {
 			return "", errors.New("k3s remains installed")
 		}

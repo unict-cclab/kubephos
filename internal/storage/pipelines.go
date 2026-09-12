@@ -196,6 +196,27 @@ func (s *Store) GetPipelineRun(ctx context.Context, runID string) (domain.Pipeli
 	return run, err
 }
 
+func (s *Store) GetPipelineRunArtifact(ctx context.Context, runID, outputName string) (domain.Artifact, error) {
+	var artifact domain.Artifact
+	err := s.pool.QueryRow(ctx, `
+		SELECT artifact.id, artifact.operation_id, run.workspace_id, COALESCE(artifact.step_id, ''), COALESCE(artifact.output_name, ''), artifact.name,
+		       artifact.artifact_type, artifact.artifact_version, artifact.media_type, artifact.storage_key, artifact.digest, artifact.size_bytes,
+		       artifact.storage_digest, artifact.stored_size_bytes, artifact.encryption_nonce, artifact.sensitive, artifact.verified_at, artifact.created_at
+		FROM pipeline_runs run
+		JOIN pipeline_run_stages stage ON stage.run_id = run.id
+		JOIN artifacts artifact ON artifact.operation_id = stage.operation_id
+		WHERE run.id = $1 AND artifact.output_name = $2
+		ORDER BY stage.position, artifact.created_at
+		LIMIT 1
+	`, runID, outputName).Scan(&artifact.ID, &artifact.OperationID, &artifact.WorkspaceID, &artifact.StepID, &artifact.OutputName, &artifact.Name,
+		&artifact.Type, &artifact.Version, &artifact.MediaType, &artifact.StorageKey, &artifact.Digest, &artifact.SizeBytes,
+		&artifact.StorageDigest, &artifact.StoredSizeBytes, &artifact.EncryptionNonce, &artifact.Sensitive, &artifact.VerifiedAt, &artifact.CreatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.Artifact{}, ErrNotFound
+	}
+	return artifact, err
+}
+
 func scanPipelineRun(row scanner) (domain.PipelineRun, error) {
 	var run domain.PipelineRun
 	err := row.Scan(&run.ID, &run.PipelineID, &run.WorkspaceID, &run.Name, &run.Status, &run.PipelineHash, &run.ResultType, &run.ResultVersion, &run.ResultArtifactID, &run.CancelRequested, &run.Error, &run.CreatedAt, &run.QueuedAt, &run.ScheduledFor, &run.StartedAt, &run.CompletedAt)
