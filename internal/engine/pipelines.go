@@ -61,22 +61,42 @@ func (w *Worker) reconcilePipelineRun(ctx context.Context, owner string, run dom
 	if pipeline.Hash != run.PipelineHash || pipeline.WorkspaceID != run.WorkspaceID {
 		return w.failPipelineRun(ctx, owner, run, -1, errors.New("validated pipeline identity changed"))
 	}
+	if run.TerminalStatus != "" {
+		complete, cleanupErr := w.reconcilePipelineCleanup(ctx, owner, run)
+		if cleanupErr != nil {
+			run.Error = errors.Join(errors.New(run.Error), cleanupErr).Error()
+			if err := w.store.FailPipelineRun(ctx, run.ID, owner, run.TerminalStatus, run.Error); err != nil {
+				return err
+			}
+			released = true
+			return nil
+		}
+		if !complete {
+			release()
+			return nil
+		}
+		if err := w.store.FailPipelineRun(ctx, run.ID, owner, run.TerminalStatus, run.Error); err != nil {
+			return err
+		}
+		released = true
+		return nil
+	}
 	produced := map[string]map[string]string{}
 	for position := range run.Stages {
 		runStage := run.Stages[position]
 		if runStage.OperationID == "" {
 			if run.CancelRequested {
-				return w.cancelPipelineRun(ctx, owner, run, position, "Canceled before the next stage started.")
+				return w.deferPipelineTermination(ctx, owner, run, pipeline, position, domain.OperationCanceled, errors.New("canceled before the next stage started"))
 			}
 			if err := w.startPipelineStage(ctx, owner, run, pipeline, position, produced); err != nil {
-				return w.failPipelineRun(ctx, owner, run, position, err)
+				return w.deferPipelineTermination(ctx, owner, run, pipeline, position, domain.OperationFailed, err)
 			}
 			release()
 			return nil
 		}
 		operation, err := w.store.GetOperation(ctx, runStage.OperationID)
 		if err != nil {
-			return w.failPipelineRun(ctx, owner, run, position, fmt.Errorf("load stage operation: %w", err))
+			return w.deferPipelineTermination(ctx, owner, run, pipeline, position, domain.OperationFailed, fmt.Errorf("load stage operation: %w", err))
 		}
 		if err := w.store.SyncPipelineRunStage(ctx, runStage.ID, operation); err != nil {
 			return err
@@ -98,9 +118,9 @@ func (w *Worker) reconcilePipelineRun(ctx context.Context, owner string, run dom
 			}
 			produced[runStage.StageID] = outputs
 		case domain.OperationFailed:
-			return w.failPipelineRun(ctx, owner, run, position, fmt.Errorf("stage %q failed: %s", runStage.Title, operation.Error))
+			return w.deferPipelineTermination(ctx, owner, run, pipeline, position, domain.OperationFailed, fmt.Errorf("stage %q failed: %s", runStage.Title, operation.Error))
 		case domain.OperationCanceled:
-			return w.cancelPipelineRun(ctx, owner, run, position, "Stage operation was canceled.")
+			return w.deferPipelineTermination(ctx, owner, run, pipeline, position, domain.OperationCanceled, errors.New("stage operation was canceled"))
 		default:
 			release()
 			return nil
@@ -116,20 +136,115 @@ func (w *Worker) reconcilePipelineRun(ctx context.Context, owner string, run dom
 	resultOutputs := produced[pipeline.Definition.Result.Stage]
 	artifactID := resultOutputs[pipeline.Definition.Result.Output]
 	if artifactID == "" {
-		return w.failPipelineRun(ctx, owner, run, len(run.Stages)-1, errors.New("validated result artifact was not produced"))
+		return w.deferPipelineTermination(ctx, owner, run, pipeline, len(run.Stages)-1, domain.OperationFailed, errors.New("validated result artifact was not produced"))
 	}
 	artifact, err := w.store.GetArtifact(ctx, artifactID)
 	if err != nil {
-		return w.failPipelineRun(ctx, owner, run, len(run.Stages)-1, fmt.Errorf("load result artifact: %w", err))
+		return w.deferPipelineTermination(ctx, owner, run, pipeline, len(run.Stages)-1, domain.OperationFailed, fmt.Errorf("load result artifact: %w", err))
 	}
 	if artifact.Type != run.ResultType || artifact.Version != run.ResultVersion || artifact.VerifiedAt.IsZero() {
-		return w.failPipelineRun(ctx, owner, run, len(run.Stages)-1, errors.New("result artifact does not satisfy the validated contract"))
+		return w.deferPipelineTermination(ctx, owner, run, pipeline, len(run.Stages)-1, domain.OperationFailed, errors.New("result artifact does not satisfy the validated contract"))
+	}
+	if pipeline.Definition.CleanupAfterRun {
+		complete, err := w.reconcilePipelineCleanup(ctx, owner, run)
+		if err != nil {
+			return w.failPipelineRun(ctx, owner, run, -1, err)
+		}
+		if !complete {
+			release()
+			return nil
+		}
 	}
 	if err := w.store.CompletePipelineRun(ctx, run.ID, owner, artifactID); err != nil {
 		return err
 	}
 	released = true
 	return nil
+}
+
+func (w *Worker) reconcilePipelineCleanup(ctx context.Context, owner string, run domain.PipelineRun) (bool, error) {
+	for position := len(run.Stages) - 1; position >= 0; position-- {
+		stage := run.Stages[position]
+		if stage.CleanupStatus == domain.StepSucceeded || stage.CleanupStatus == "skipped" {
+			continue
+		}
+		if stage.OperationID == "" {
+			if err := w.store.SkipPipelineRunStageCleanup(ctx, run.ID, stage.ID, owner); err != nil {
+				return false, err
+			}
+			continue
+		}
+		if stage.CleanupOperationID == "" {
+			source, err := w.store.GetOperation(ctx, stage.OperationID)
+			if err != nil {
+				return false, fmt.Errorf("load cleanup source for stage %q: %w", stage.Title, err)
+			}
+			plan, err := workflows.CleanupPlan(source)
+			if errors.Is(err, workflows.ErrNoCleanupSteps) {
+				if err := w.store.SkipPipelineRunStageCleanup(ctx, run.ID, stage.ID, owner); err != nil {
+					return false, err
+				}
+				continue
+			}
+			if err != nil {
+				return false, fmt.Errorf("plan cleanup for stage %q: %w", stage.Title, err)
+			}
+			plugin, err := w.registry.Get(source.PluginID)
+			if err != nil {
+				return false, err
+			}
+			manifest := plugin.Manifest()
+			if !manifest.Matches(source.PluginVersion, source.PluginDigest) || !manifest.HasCapability("lifecycle.cleanup") {
+				return false, fmt.Errorf("stage %q cleanup capability or plugin identity changed", stage.Title)
+			}
+			validation := domain.ValidationReport{Valid: true, CheckedAt: time.Now().UTC(), Issues: []domain.ValidationIssue{{Level: "info", Path: "pipeline", Message: "Cleanup was generated from the completed validated stage operation."}}}
+			hash, err := pipelineStageHash(domain.ResolvedPipelineStage{PluginID: source.PluginID, PluginVersion: source.PluginVersion, PluginDigest: source.PluginDigest, Spec: source.Spec, Plan: plan})
+			if err != nil {
+				return false, err
+			}
+			_, err = w.store.CreatePipelineCleanupOperation(ctx, run.ID, stage.ID, owner, domain.Operation{
+				ID: id.New("op"), WorkspaceID: run.WorkspaceID, PluginID: source.PluginID,
+				PluginVersion: source.PluginVersion, PluginDigest: source.PluginDigest,
+				Title: run.Name + " · Reset · " + stage.Title, Status: domain.OperationQueued,
+				Spec: source.Spec, Plan: plan, Validation: validation, PlanHash: hash,
+			})
+			return false, err
+		}
+		operation, err := w.store.GetOperation(ctx, stage.CleanupOperationID)
+		if err != nil {
+			return false, fmt.Errorf("load cleanup for stage %q: %w", stage.Title, err)
+		}
+		if err := w.store.SyncPipelineRunStageCleanup(ctx, stage.ID, operation); err != nil {
+			return false, err
+		}
+		switch operation.Status {
+		case domain.OperationSucceeded:
+			continue
+		case domain.OperationFailed:
+			return false, fmt.Errorf("cleanup for stage %q failed: %s", stage.Title, operation.Error)
+		case domain.OperationCanceled:
+			return false, fmt.Errorf("cleanup for stage %q was canceled", stage.Title)
+		default:
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
+func (w *Worker) deferPipelineTermination(ctx context.Context, owner string, run domain.PipelineRun, pipeline domain.Pipeline, position int, status string, cause error) error {
+	if position >= 0 && position < len(run.Stages) {
+		stageStatus := domain.StepFailed
+		if status == domain.OperationCanceled {
+			stageStatus = domain.StepCanceled
+		}
+		if err := w.store.FailPipelineRunStage(ctx, run.Stages[position].ID, stageStatus, cause.Error()); err != nil {
+			return err
+		}
+	}
+	if !pipeline.Definition.CleanupAfterRun {
+		return w.store.FailPipelineRun(ctx, run.ID, owner, status, cause.Error())
+	}
+	return w.store.BeginPipelineRunTermination(ctx, run.ID, owner, status, cause.Error())
 }
 
 func (w *Worker) startPipelineStage(ctx context.Context, owner string, run domain.PipelineRun, pipeline domain.Pipeline, position int, produced map[string]map[string]string) error {

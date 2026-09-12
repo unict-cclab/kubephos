@@ -53,8 +53,9 @@ type Pipeline struct {
 }
 
 type PipelineDefinition struct {
-	Stages []PipelineStage `json:"stages"`
-	Result PipelineOutput  `json:"result"`
+	Stages          []PipelineStage `json:"stages"`
+	Result          PipelineOutput  `json:"result"`
+	CleanupAfterRun bool            `json:"cleanupAfterRun,omitempty"`
 }
 
 type PipelineStage struct {
@@ -94,52 +95,60 @@ type ResolvedPipelineStage struct {
 }
 
 type PipelineRun struct {
-	ID               string             `json:"id"`
-	PipelineID       string             `json:"pipelineId"`
-	WorkspaceID      string             `json:"workspaceId"`
-	Name             string             `json:"name"`
-	Status           string             `json:"status"`
-	PipelineHash     string             `json:"pipelineHash"`
-	ResultType       string             `json:"resultType"`
-	ResultVersion    string             `json:"resultVersion"`
-	ResultArtifactID string             `json:"resultArtifactId,omitempty"`
-	CancelRequested  bool               `json:"cancelRequested"`
-	Error            string             `json:"error,omitempty"`
-	CreatedAt        time.Time          `json:"createdAt"`
-	QueuedAt         *time.Time         `json:"queuedAt,omitempty"`
-	ScheduledFor     *time.Time         `json:"scheduledFor,omitempty"`
-	StartedAt        *time.Time         `json:"startedAt,omitempty"`
-	CompletedAt      *time.Time         `json:"completedAt,omitempty"`
-	Stages           []PipelineRunStage `json:"stages"`
+	ID                string             `json:"id"`
+	PipelineID        string             `json:"pipelineId"`
+	WorkspaceID       string             `json:"workspaceId"`
+	ClusterResourceID string             `json:"clusterResourceId,omitempty"`
+	Name              string             `json:"name"`
+	Status            string             `json:"status"`
+	PipelineHash      string             `json:"pipelineHash"`
+	ResultType        string             `json:"resultType"`
+	ResultVersion     string             `json:"resultVersion"`
+	ResultArtifactID  string             `json:"resultArtifactId,omitempty"`
+	CancelRequested   bool               `json:"cancelRequested"`
+	TerminalStatus    string             `json:"-"`
+	Error             string             `json:"error,omitempty"`
+	CreatedAt         time.Time          `json:"createdAt"`
+	QueuedAt          *time.Time         `json:"queuedAt,omitempty"`
+	ScheduledFor      *time.Time         `json:"scheduledFor,omitempty"`
+	StartedAt         *time.Time         `json:"startedAt,omitempty"`
+	CompletedAt       *time.Time         `json:"completedAt,omitempty"`
+	Stages            []PipelineRunStage `json:"stages"`
 }
 
 type PipelineRunStage struct {
-	ID          string          `json:"id"`
-	RunID       string          `json:"runId"`
-	Position    int             `json:"position"`
-	StageID     string          `json:"stageId"`
-	PluginID    string          `json:"pluginId"`
-	Title       string          `json:"title"`
-	Status      string          `json:"status"`
-	OperationID string          `json:"operationId,omitempty"`
-	Spec        json.RawMessage `json:"spec,omitempty"`
-	Error       string          `json:"error,omitempty"`
-	StartedAt   *time.Time      `json:"startedAt,omitempty"`
-	CompletedAt *time.Time      `json:"completedAt,omitempty"`
+	ID                 string          `json:"id"`
+	RunID              string          `json:"runId"`
+	Position           int             `json:"position"`
+	StageID            string          `json:"stageId"`
+	PluginID           string          `json:"pluginId"`
+	Title              string          `json:"title"`
+	Status             string          `json:"status"`
+	OperationID        string          `json:"operationId,omitempty"`
+	Spec               json.RawMessage `json:"spec,omitempty"`
+	Error              string          `json:"error,omitempty"`
+	StartedAt          *time.Time      `json:"startedAt,omitempty"`
+	CompletedAt        *time.Time      `json:"completedAt,omitempty"`
+	CleanupOperationID string          `json:"cleanupOperationId,omitempty"`
+	CleanupStatus      string          `json:"cleanupStatus,omitempty"`
+	CleanupError       string          `json:"cleanupError,omitempty"`
+	CleanupStartedAt   *time.Time      `json:"cleanupStartedAt,omitempty"`
+	CleanupCompletedAt *time.Time      `json:"cleanupCompletedAt,omitempty"`
 }
 
 type Experiment struct {
-	ID            string              `json:"id"`
-	WorkspaceID   string              `json:"workspaceId"`
-	Name          string              `json:"name"`
-	Description   string              `json:"description"`
-	Status        string              `json:"status"`
-	ResultType    string              `json:"resultType"`
-	ResultVersion string              `json:"resultVersion"`
-	Variants      []ExperimentVariant `json:"variants"`
-	ScheduledFor  *time.Time          `json:"scheduledFor,omitempty"`
-	CreatedAt     time.Time           `json:"createdAt"`
-	UpdatedAt     time.Time           `json:"updatedAt"`
+	ID              string              `json:"id"`
+	WorkspaceID     string              `json:"workspaceId"`
+	ConfigurationID string              `json:"configurationId,omitempty"`
+	Name            string              `json:"name"`
+	Description     string              `json:"description"`
+	Status          string              `json:"status"`
+	ResultType      string              `json:"resultType"`
+	ResultVersion   string              `json:"resultVersion"`
+	Variants        []ExperimentVariant `json:"variants"`
+	ScheduledFor    *time.Time          `json:"scheduledFor,omitempty"`
+	CreatedAt       time.Time           `json:"createdAt"`
+	UpdatedAt       time.Time           `json:"updatedAt"`
 }
 
 type ExperimentVariant struct {

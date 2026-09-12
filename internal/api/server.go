@@ -110,6 +110,7 @@ func NewServer(store *storage.Store, registry *plugins.Registry, artifactStore *
 	router.HandleFunc("GET /api/v1/experiment-configurations/{id}", server.getExperimentConfiguration)
 	router.HandleFunc("POST /api/v1/experiment-configurations/{id}/clone", server.cloneExperimentConfiguration)
 	router.HandleFunc("DELETE /api/v1/experiment-configurations/{id}", server.deleteExperimentConfiguration)
+	router.HandleFunc("POST /api/v1/experiment-instances", server.createExperimentInstance)
 	router.HandleFunc("GET /api/v1/infrastructure/resources", server.listInfrastructureResources)
 	router.HandleFunc("GET /api/v1/terminal-targets", server.listTerminalTargets)
 	router.HandleFunc("POST /api/v1/terminals", server.createTerminal)
@@ -1486,8 +1487,8 @@ func (s *Server) validatedExperimentConfiguration(ctx context.Context, input exp
 	} else if len(issues) > 0 {
 		return domain.ExperimentConfiguration{}, experimentConfigurationIssues("applicationValues", issues)
 	}
-	if len(input.Definition.Components) > 24 {
-		return domain.ExperimentConfiguration{}, &managedOperationFailure{status: http.StatusUnprocessableEntity, code: "invalid_components", message: "An experiment configuration can contain at most 24 component instances."}
+	if len(input.Definition.Components) > 15 {
+		return domain.ExperimentConfiguration{}, &managedOperationFailure{status: http.StatusUnprocessableEntity, code: "invalid_components", message: "An experiment configuration can contain at most 15 component instances."}
 	}
 	componentPattern := regexp.MustCompile(`^[a-z][a-z0-9-]{0,62}$`)
 	applicationComponents := map[string]bool{}
@@ -1582,6 +1583,265 @@ func validExperimentTargets(include, exclude []string, pattern *regexp.Regexp, a
 		}
 	}
 	return true
+}
+
+type experimentInstanceInput struct {
+	ConfigurationID string     `json:"configurationId"`
+	Name            string     `json:"name"`
+	Runs            int        `json:"runs"`
+	ScheduledFor    *time.Time `json:"scheduledFor"`
+}
+
+type experimentArtifactSource struct {
+	ExternalID string
+	StageID    string
+}
+
+func (s *Server) createExperimentInstance(response http.ResponseWriter, request *http.Request) {
+	var input experimentInstanceInput
+	if err := decodeJSON(request, &input); err != nil {
+		writeError(response, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	input.ConfigurationID = strings.TrimSpace(input.ConfigurationID)
+	input.Name = strings.TrimSpace(input.Name)
+	if input.Name == "" || len([]rune(input.Name)) > 120 || input.Runs < 1 || input.Runs > 20 {
+		writeError(response, http.StatusUnprocessableEntity, "invalid_instance", "Name is required and runs must be between 1 and 20.")
+		return
+	}
+	if input.ScheduledFor != nil {
+		value := input.ScheduledFor.UTC()
+		if value.Before(time.Now().UTC().Add(-time.Minute)) {
+			writeError(response, http.StatusUnprocessableEntity, "invalid_schedule", "Scheduled time cannot be in the past.")
+			return
+		}
+		input.ScheduledFor = &value
+	}
+	configuration, err := s.store.GetExperimentConfiguration(request.Context(), input.ConfigurationID)
+	if errors.Is(err, storage.ErrNotFound) {
+		writeError(response, http.StatusNotFound, "not_found", "Experiment configuration not found.")
+		return
+	}
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, "database_error", "Could not read the experiment configuration.")
+		return
+	}
+	var definition experimentConfigurationDefinitionInput
+	if err := json.Unmarshal(configuration.Definition, &definition); err != nil {
+		writeError(response, http.StatusConflict, "invalid_snapshot", "The saved experiment configuration is invalid.")
+		return
+	}
+	for _, component := range definition.Components {
+		plugin, err := s.registry.Get(component.PluginID)
+		if err != nil || !plugin.Manifest().Matches(component.PluginVersion, component.PluginDigest) {
+			writeError(response, http.StatusConflict, "plugin_changed", "A configured plugin changed. Clone and validate the configuration again.")
+			return
+		}
+	}
+	revalidated, failure := s.validatedExperimentConfiguration(request.Context(), experimentConfigurationInput{
+		WorkspaceID: configuration.WorkspaceID, ClusterResourceID: configuration.ClusterResourceID,
+		Name: configuration.Name, Description: configuration.Description, ApplicationRef: configuration.ApplicationRef, Definition: definition,
+	})
+	if failure != nil {
+		failure.write(response)
+		return
+	}
+	if revalidated.ApplicationDigest != configuration.ApplicationDigest {
+		writeError(response, http.StatusConflict, "application_changed", "The application package changed. Clone and validate the configuration again.")
+		return
+	}
+	pipelineDefinition, failure := s.experimentInstancePipeline(request.Context(), configuration, definition)
+	if failure != nil {
+		failure.write(response)
+		return
+	}
+	validated, failure := s.validatedManagedPipeline(request.Context(), configuration.WorkspaceID, pipelineDefinition)
+	if failure != nil {
+		failure.write(response)
+		return
+	}
+	instanceID := id.New("exp")
+	pipeline, err := s.store.CreatePipeline(request.Context(), domain.Pipeline{
+		ID: id.New("pipe"), WorkspaceID: configuration.WorkspaceID, Name: input.Name + " · " + instanceID,
+		Description: "Immutable execution pipeline for " + configuration.Name,
+		Definition:  validated.Definition, Resolution: validated.Resolution, Validation: validated.Validation, Hash: validated.Hash,
+	})
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, "database_error", "Could not save the validated execution pipeline.")
+		return
+	}
+	variantID := id.New("variant")
+	experiment := domain.Experiment{
+		ID: instanceID, WorkspaceID: configuration.WorkspaceID, ConfigurationID: configuration.ID,
+		Name: input.Name, Description: configuration.Description, Status: domain.OperationQueued,
+		ResultType: validated.Resolution.Result.Type, ResultVersion: validated.Resolution.Result.Version, ScheduledFor: input.ScheduledFor,
+		Variants: []domain.ExperimentVariant{{ID: variantID, ExperimentID: instanceID, Position: 1, Name: configuration.Name, PipelineID: pipeline.ID, PipelineHash: pipeline.Hash, Configuration: configuration.Definition}},
+	}
+	runs := map[string]domain.PipelineRun{}
+	for position := 1; position <= input.Runs; position++ {
+		trialID := id.New("trial")
+		run := domain.PipelineRun{
+			ID: id.New("run"), PipelineID: pipeline.ID, WorkspaceID: configuration.WorkspaceID, ClusterResourceID: configuration.ClusterResourceID,
+			Name: fmt.Sprintf("%s · Run %d", input.Name, position), Status: domain.OperationQueued, PipelineHash: pipeline.Hash,
+			ResultType: experiment.ResultType, ResultVersion: experiment.ResultVersion, ScheduledFor: input.ScheduledFor,
+		}
+		for stagePosition, stage := range validated.Definition.Stages {
+			run.Stages = append(run.Stages, domain.PipelineRunStage{ID: id.New("runstage"), RunID: run.ID, Position: stagePosition + 1, StageID: stage.ID, PluginID: stage.PluginID, Title: stage.Title, Status: domain.StepPending, CleanupStatus: domain.StepPending})
+		}
+		experiment.Variants[0].Trials = append(experiment.Variants[0].Trials, domain.ExperimentTrial{ID: trialID, VariantID: variantID, Position: position, Status: domain.OperationQueued, PipelineRunID: run.ID})
+		runs[trialID] = run
+	}
+	created, err := s.store.CreatePipelineExperiment(request.Context(), experiment, runs)
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, "database_error", "Could not queue the experiment instance.")
+		return
+	}
+	writeJSON(response, http.StatusCreated, created)
+}
+
+func (s *Server) experimentInstancePipeline(ctx context.Context, configuration domain.ExperimentConfiguration, definition experimentConfigurationDefinitionInput) (domain.PipelineDefinition, *managedOperationFailure) {
+	cluster, err := s.store.GetManagedResource(ctx, configuration.ClusterResourceID)
+	if err != nil || cluster.Status != "ready" || cluster.PipelineRunID == "" {
+		return domain.PipelineDefinition{}, &managedOperationFailure{status: http.StatusConflict, code: "cluster_not_ready", message: "The configured cluster is not ready."}
+	}
+	clusterConnection, err := s.store.GetPipelineRunArtifact(ctx, cluster.PipelineRunID, "cluster-connection")
+	if err != nil || clusterConnection.Type != "ClusterConnection" || clusterConnection.Version != "v1alpha1" {
+		return domain.PipelineDefinition{}, &managedOperationFailure{status: http.StatusConflict, code: "cluster_invalid", message: "The cluster connection is unavailable."}
+	}
+	observability, err := s.store.GetPipelineRunArtifact(ctx, cluster.PipelineRunID, "observability-capability")
+	if err != nil || observability.Type != "ObservabilityCapability" || observability.Version != "v1alpha1" {
+		return domain.PipelineDefinition{}, &managedOperationFailure{status: http.StatusConflict, code: "observability_invalid", message: "Managed observability is unavailable on the cluster."}
+	}
+	inspectPlugin, err := s.pluginForCapability("", "applications.inspect")
+	if err != nil {
+		return domain.PipelineDefinition{}, &managedOperationFailure{status: http.StatusConflict, code: "capability_unavailable", message: err.Error()}
+	}
+	deployPlugin, err := s.pluginForCapability("", "applications.kubernetes.deploy")
+	if err != nil {
+		return domain.PipelineDefinition{}, &managedOperationFailure{status: http.StatusConflict, code: "capability_unavailable", message: err.Error()}
+	}
+	bindingPlugin, err := s.pluginForCapability("", "targets.bind")
+	if err != nil {
+		return domain.PipelineDefinition{}, &managedOperationFailure{status: http.StatusConflict, code: "capability_unavailable", message: err.Error()}
+	}
+	applicationValues := definition.ApplicationValues
+	if len(applicationValues) == 0 {
+		applicationValues = json.RawMessage(`{}`)
+	}
+	inspectSpec := map[string]any{"applicationRef": configuration.ApplicationRef}
+	var values any
+	if err := json.Unmarshal(applicationValues, &values); err != nil {
+		return domain.PipelineDefinition{}, &managedOperationFailure{status: http.StatusConflict, code: "invalid_snapshot", message: "Application values are invalid."}
+	}
+	inspectSpec["values"] = values
+	definitionResult := domain.PipelineDefinition{CleanupAfterRun: true}
+	definitionResult.Stages = append(definitionResult.Stages, domain.PipelineStage{ID: "application", PluginID: inspectPlugin.Manifest().ID, Title: "Prepare application package", Spec: marshalRaw(inspectSpec)})
+	sources := map[string]experimentArtifactSource{
+		artifactContractKey("ClusterConnection", "v1alpha1"):       {ExternalID: clusterConnection.ID},
+		artifactContractKey("ObservabilityCapability", "v1alpha1"): {ExternalID: observability.ID},
+	}
+	registerExperimentOutputs(sources, "application", inspectPlugin.Manifest())
+	deploySpec := map[string]any{}
+	deployBindings, failure := experimentArtifactBindings(deploySpec, deployPlugin.Manifest(), sources, configuration.ApplicationRef)
+	if failure != nil {
+		return domain.PipelineDefinition{}, failure
+	}
+	definitionResult.Stages = append(definitionResult.Stages, domain.PipelineStage{ID: "deploy", PluginID: deployPlugin.Manifest().ID, Title: "Deploy isolated application", Spec: marshalRaw(deploySpec), Bindings: deployBindings})
+	registerExperimentOutputs(sources, "deploy", deployPlugin.Manifest())
+	for index, component := range definition.Components {
+		plugin, err := s.registry.Get(component.PluginID)
+		if err != nil {
+			return domain.PipelineDefinition{}, &managedOperationFailure{status: http.StatusConflict, code: "plugin_changed", message: err.Error()}
+		}
+		manifest := plugin.Manifest()
+		if manifestNeedsArtifact(manifest, "TargetBinding", "v1alpha1") {
+			bindingID := fmt.Sprintf("targets-%d", index+1)
+			bindingSpec := map[string]any{"requiredTrait": "*", "includeComponentIds": component.Targets.Include, "excludeComponentIds": component.Targets.Exclude}
+			bindings, failure := experimentArtifactBindings(bindingSpec, bindingPlugin.Manifest(), sources, configuration.ApplicationRef)
+			if failure != nil {
+				return domain.PipelineDefinition{}, failure
+			}
+			definitionResult.Stages = append(definitionResult.Stages, domain.PipelineStage{ID: bindingID, PluginID: bindingPlugin.Manifest().ID, Title: "Select targets for " + component.ID, Spec: marshalRaw(bindingSpec), Bindings: bindings})
+			registerExperimentOutputs(sources, bindingID, bindingPlugin.Manifest())
+		}
+		var componentSpec map[string]any
+		if err := json.Unmarshal(component.Configuration, &componentSpec); err != nil || componentSpec == nil {
+			return domain.PipelineDefinition{}, &managedOperationFailure{status: http.StatusConflict, code: "invalid_snapshot", message: "Component configuration " + component.ID + " is invalid."}
+		}
+		bindings, failure := experimentArtifactBindings(componentSpec, manifest, sources, configuration.ApplicationRef)
+		if failure != nil {
+			return domain.PipelineDefinition{}, failure
+		}
+		stageID := fmt.Sprintf("capability-%d", index+1)
+		definitionResult.Stages = append(definitionResult.Stages, domain.PipelineStage{ID: stageID, PluginID: component.PluginID, Title: component.Capability, Spec: marshalRaw(componentSpec), Bindings: bindings})
+		registerExperimentOutputs(sources, stageID, manifest)
+		if len(manifest.ArtifactOutputs) == 1 {
+			definitionResult.Result = domain.PipelineOutput{Stage: stageID, Type: manifest.ArtifactOutputs[0].Type, Version: manifest.ArtifactOutputs[0].Version}
+		}
+	}
+	if definitionResult.Result.Stage == "" {
+		return domain.PipelineDefinition{}, &managedOperationFailure{status: http.StatusUnprocessableEntity, code: "missing_result", message: "Add a result-producing capability such as the metrics collector."}
+	}
+	if len(definitionResult.Stages) > 32 {
+		return domain.PipelineDefinition{}, &managedOperationFailure{status: http.StatusUnprocessableEntity, code: "too_many_stages", message: "The configuration expands to more than 32 validated stages."}
+	}
+	return definitionResult, nil
+}
+
+func experimentArtifactBindings(spec map[string]any, manifest plugins.Manifest, sources map[string]experimentArtifactSource, applicationRef string) ([]domain.PipelineBinding, *managedOperationFailure) {
+	var schemaDefinition struct {
+		Properties map[string]struct {
+			Format  string `json:"format"`
+			Type    string `json:"x-kubephos-artifact-type"`
+			Version string `json:"x-kubephos-artifact-version"`
+		} `json:"properties"`
+	}
+	if err := json.Unmarshal(manifest.Schema, &schemaDefinition); err != nil {
+		return nil, &managedOperationFailure{status: http.StatusConflict, code: "invalid_plugin", message: "Plugin " + manifest.ID + " has an invalid schema."}
+	}
+	bindings := []domain.PipelineBinding{}
+	for name, property := range schemaDefinition.Properties {
+		switch property.Format {
+		case "kubephos-application-ref":
+			spec[name] = applicationRef
+		case "kubephos-artifact-ref":
+			source, ok := sources[artifactContractKey(property.Type, property.Version)]
+			if !ok {
+				return nil, &managedOperationFailure{status: http.StatusUnprocessableEntity, code: "missing_input", message: "Plugin " + manifest.ID + " requires unavailable " + property.Type + "/" + property.Version + "."}
+			}
+			if source.ExternalID != "" {
+				spec[name] = source.ExternalID
+			} else {
+				spec[name] = ""
+				bindings = append(bindings, domain.PipelineBinding{Path: "/" + name, FromStage: source.StageID})
+			}
+		}
+	}
+	return bindings, nil
+}
+
+func registerExperimentOutputs(sources map[string]experimentArtifactSource, stageID string, manifest plugins.Manifest) {
+	for _, output := range manifest.ArtifactOutputs {
+		sources[artifactContractKey(output.Type, output.Version)] = experimentArtifactSource{StageID: stageID}
+	}
+}
+
+func manifestNeedsArtifact(manifest plugins.Manifest, artifactType, version string) bool {
+	for _, input := range manifest.ArtifactInputs {
+		if input.Type == artifactType && input.Version == version {
+			return true
+		}
+	}
+	return false
+}
+
+func artifactContractKey(artifactType, version string) string {
+	return artifactType + "\x00" + version
+}
+
+func marshalRaw(value any) json.RawMessage {
+	raw, _ := json.Marshal(value)
+	return raw
 }
 
 func (s *Server) createKubernetesCluster(response http.ResponseWriter, request *http.Request) {
@@ -2715,35 +2975,7 @@ func (s *Server) createCleanupOperation(response http.ResponseWriter, request *h
 }
 
 func cleanupPlan(source domain.Operation) (domain.Plan, error) {
-	if len(source.Plan.Steps) != len(source.Steps) {
-		return domain.Plan{}, errors.New("source operation step history is incomplete")
-	}
-	steps := make([]domain.PlanStep, 0, len(source.Plan.Steps))
-	for position := len(source.Plan.Steps) - 1; position >= 0; position-- {
-		planned := source.Plan.Steps[position]
-		status := source.Steps[position].Status
-		if planned.Cleanup || (status != domain.StepSucceeded && status != domain.StepFailed && status != domain.StepCanceled) {
-			continue
-		}
-		effects := make([]domain.ResourceEffect, 0, len(planned.Effects))
-		for _, effect := range planned.Effects {
-			if effect.Action == "create" {
-				effect.Action = "delete"
-				effects = append(effects, effect)
-			}
-		}
-		if !planned.Mutating && len(effects) == 0 {
-			continue
-		}
-		steps = append(steps, domain.PlanStep{
-			ID: "cleanup-" + planned.ID, Name: "Clean up " + planned.Name, Input: planned.Input,
-			Mutating: true, Cleanup: true, ArtifactInputs: planned.ArtifactInputs, Effects: effects,
-		})
-	}
-	if len(steps) == 0 {
-		return domain.Plan{}, errors.New("the source operation has no mutable steps eligible for cleanup")
-	}
-	return domain.Plan{PluginID: source.PluginID, Steps: steps}, nil
+	return workflows.CleanupPlan(source)
 }
 
 func (s *Server) validateExternalArtifactInputs(ctx context.Context, workspaceID string, plan domain.Plan) error {

@@ -661,6 +661,12 @@ summary { color: var(--muted); font-size: 12px; font-weight: 750; cursor: pointe
 .log-line.error .message { color: #ff938f; }
 .log-line.warning .message { color: #f5c875; }
 .log-empty { color: #65746a; }
+.instance-list { display: grid; gap: 8px; margin-top: 10px; }
+.instance-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 9px; padding: 9px 0; border-top: 1px solid var(--line); }
+.instance-row span:first-child { min-width: 0; }
+.instance-row strong, .instance-row small { display: block; }
+.instance-row strong { overflow: hidden; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.instance-row small { margin-top: 3px; color: var(--muted); font-size: 9px; }
 
 .toast-region { position: fixed; z-index: 50; right: 22px; bottom: 22px; display: grid; gap: 8px; }
 .toast { min-width: 260px; max-width: 380px; border: 0; border-radius: 11px; padding: 13px 15px; background: var(--dark); color: #fff; box-shadow: var(--shadow); font-size: 12px; cursor: pointer; text-align: left; animation: toast-in .2s ease; }

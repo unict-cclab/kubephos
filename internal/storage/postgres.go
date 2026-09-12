@@ -260,10 +260,10 @@ func (s *Store) CreateCompletedExperiment(ctx context.Context, experiment domain
 	}
 	defer tx.Rollback(ctx)
 	if err := tx.QueryRow(ctx, `
-		INSERT INTO experiments (id, workspace_id, name, description, status, result_type, result_version)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
+		INSERT INTO experiments (id, workspace_id, configuration_id, name, description, status, result_type, result_version)
+		VALUES ($1, $2, NULLIF($3, ''), $4, $5, $6, $7, $8)
 		RETURNING created_at, updated_at
-	`, experiment.ID, experiment.WorkspaceID, experiment.Name, experiment.Description, experiment.Status, experiment.ResultType, experiment.ResultVersion).Scan(&experiment.CreatedAt, &experiment.UpdatedAt); err != nil {
+	`, experiment.ID, experiment.WorkspaceID, experiment.ConfigurationID, experiment.Name, experiment.Description, experiment.Status, experiment.ResultType, experiment.ResultVersion).Scan(&experiment.CreatedAt, &experiment.UpdatedAt); err != nil {
 		return domain.Experiment{}, err
 	}
 	for variantIndex := range experiment.Variants {
@@ -319,7 +319,7 @@ func (s *Store) CreateCompletedExperiment(ctx context.Context, experiment domain
 
 func (s *Store) ListExperiments(ctx context.Context, limit int) ([]domain.Experiment, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT id, workspace_id, name, description, status, result_type, result_version, scheduled_for, created_at, updated_at
+		SELECT id, workspace_id, COALESCE(configuration_id, ''), name, description, status, result_type, result_version, scheduled_for, created_at, updated_at
 		FROM experiments
 		ORDER BY created_at DESC
 		LIMIT $1
@@ -330,7 +330,7 @@ func (s *Store) ListExperiments(ctx context.Context, limit int) ([]domain.Experi
 	result := []domain.Experiment{}
 	for rows.Next() {
 		var experiment domain.Experiment
-		if err := rows.Scan(&experiment.ID, &experiment.WorkspaceID, &experiment.Name, &experiment.Description, &experiment.Status, &experiment.ResultType, &experiment.ResultVersion, &experiment.ScheduledFor, &experiment.CreatedAt, &experiment.UpdatedAt); err != nil {
+		if err := rows.Scan(&experiment.ID, &experiment.WorkspaceID, &experiment.ConfigurationID, &experiment.Name, &experiment.Description, &experiment.Status, &experiment.ResultType, &experiment.ResultVersion, &experiment.ScheduledFor, &experiment.CreatedAt, &experiment.UpdatedAt); err != nil {
 			rows.Close()
 			return nil, err
 		}

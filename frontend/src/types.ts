@@ -242,6 +242,7 @@ export interface ExperimentVariant {
 export interface Experiment {
   id: string
   workspaceId: string
+  configurationId?: string
   name: string
   description: string
   status: string
@@ -320,12 +321,16 @@ export interface PipelineRunStage {
   status: string
   operationId?: string
   error?: string
+  cleanupOperationId?: string
+  cleanupStatus?: string
+  cleanupError?: string
 }
 
 export interface PipelineRun {
   id: string
   pipelineId: string
   workspaceId: string
+  clusterResourceId?: string
   name: string
   status: string
   pipelineHash: string

@@ -153,3 +153,10 @@ databaseChangeLog:
         - sqlFile:
             path: changes/022-experiment-configurations.sql
             relativeToChangelogFile: true
+  - changeSet:
+      id: 023-sequential-experiment-runs
+      author: kubephos
+      changes:
+        - sqlFile:
+            path: changes/023-sequential-experiment-runs.sql
+            relativeToChangelogFile: true

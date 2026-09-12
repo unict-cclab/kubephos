@@ -92,7 +92,7 @@ export function Views(props: ViewProps) {
       <Kubernetes {...props} />
     </section>
     <section className={`view ${props.view === 'experiments' ? 'active' : ''}`}>
-      <ExperimentConfigurationsView items={props.experimentConfigurations} clusters={props.kubernetesClusters} workspaces={props.workspaces} applications={props.applications} plugins={props.plugins} session={props.session} isAdmin={props.isAdmin} changed={props.changed} />
+      <ExperimentConfigurationsView items={props.experimentConfigurations} experiments={props.experiments} clusters={props.kubernetesClusters} workspaces={props.workspaces} applications={props.applications} plugins={props.plugins} session={props.session} isAdmin={props.isAdmin} changed={props.changed} openOperation={props.openOperation} />
     </section>
     <section className={`view ${props.view === 'suites' ? 'active' : ''}`}>
       <ProductNext eyebrow="COMPARE" title="Experiment suites" copy="Run multiple configurations with controlled ordering and compare aggregate scientific results." />
