@@ -174,3 +174,10 @@ databaseChangeLog:
         - sqlFile:
             path: changes/025-deletable-experiment-configurations.sql
             relativeToChangelogFile: true
+  - changeSet:
+      id: 026-default-workspace
+      author: kubephos
+      changes:
+        - sqlFile:
+            path: changes/026-default-workspace.sql
+            relativeToChangelogFile: true

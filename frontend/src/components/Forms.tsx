@@ -270,6 +270,7 @@ export function MachineTemplateDialog({open, close, plugins, workspaces, ...comm
       <div className="form-section"><strong>Machine and operating system</strong><p>Base packages and guest cleanup use managed defaults.</p></div>
       <SchemaFields schema={schema} prefix="template" applications={common.applications} artifacts={common.artifacts} connections={common.connections} credentials={common.credentials} />
       <ValidationCallout text="Node, VMID, storages, token permissions and network are checked again immediately before every mutating step." />
+      {!workspaces.length && <p className="form-error">The default environment is unavailable. Run the database migration and refresh the page.</p>}
       <p className="form-error">{error}</p>
       <Actions close={close} pending={pending} disabled={!connections.length || !workspaces.length} label="Validate and create" />
     </form>}
