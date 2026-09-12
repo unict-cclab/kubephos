@@ -6,6 +6,8 @@ import (
 )
 
 const (
+	RuntimeExecutionIDToken = "${KUBEPHOS_EXECUTION_ID}"
+
 	OperationReady       = "ready"
 	OperationQueued      = "queued"
 	OperationPrechecking = "prechecking"
@@ -140,6 +142,7 @@ type Experiment struct {
 	ID              string              `json:"id"`
 	WorkspaceID     string              `json:"workspaceId"`
 	ConfigurationID string              `json:"configurationId,omitempty"`
+	Kind            string              `json:"kind"`
 	Name            string              `json:"name"`
 	Description     string              `json:"description"`
 	Status          string              `json:"status"`
@@ -152,14 +155,15 @@ type Experiment struct {
 }
 
 type ExperimentVariant struct {
-	ID            string            `json:"id"`
-	ExperimentID  string            `json:"experimentId"`
-	Position      int               `json:"position"`
-	Name          string            `json:"name"`
-	PipelineID    string            `json:"pipelineId,omitempty"`
-	PipelineHash  string            `json:"pipelineHash,omitempty"`
-	Configuration json.RawMessage   `json:"configuration"`
-	Trials        []ExperimentTrial `json:"trials"`
+	ID              string            `json:"id"`
+	ExperimentID    string            `json:"experimentId"`
+	Position        int               `json:"position"`
+	Name            string            `json:"name"`
+	PipelineID      string            `json:"pipelineId,omitempty"`
+	PipelineHash    string            `json:"pipelineHash,omitempty"`
+	ConfigurationID string            `json:"configurationId,omitempty"`
+	Configuration   json.RawMessage   `json:"configuration"`
+	Trials          []ExperimentTrial `json:"trials"`
 }
 
 type ExperimentTrial struct {

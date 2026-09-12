@@ -27,7 +27,7 @@ export interface AggregateSeries {
   points: MetricPoint[]
 }
 
-const colors = ['#177554', '#3169a8', '#a9660c', '#8b4fa3']
+const colors = ['#177554', '#3169a8', '#a9660c', '#8b4fa3', '#b43f5e', '#3f8994', '#7356a6', '#8a6f22']
 
 export function ResultsView({artifacts, experiments, operations, workspaces, session, changed, openOperation}: Props) {
   const available = useMemo(() => artifacts.filter(item => !item.sensitive && item.type === 'TimeSeriesDataset' && item.version === 'v1alpha1').sort((left, right) => right.verifiedAt.localeCompare(left.verifiedAt)), [artifacts])
@@ -71,7 +71,7 @@ export function ResultsView({artifacts, experiments, operations, workspaces, ses
   const toggle = (id: string) => {
     setActiveExperiment(null)
     setNotice('')
-    setSelected(current => current.includes(id) ? current.filter(item => item !== id) : current.length < 4 ? [...current, id] : current)
+    setSelected(current => current.includes(id) ? current.filter(item => item !== id) : current.length < 8 ? [...current, id] : current)
   }
   const experiment = experiments.find(item => item.id === activeExperiment)
   const experimentLabels = new Map<string, string>()
@@ -83,22 +83,22 @@ export function ResultsView({artifacts, experiments, operations, workspaces, ses
   const openExperiment = (item: Experiment) => {
     const artifactIDs = item.variants.flatMap(variant => variant.trials.map(trial => trial.resultArtifactId)).filter(id => available.some(artifact => artifact.id === id))
     setActiveExperiment(item.id)
-    setSelected(artifactIDs.slice(0, 4))
-    setNotice(artifactIDs.length > 4 ? 'This experiment has more than four datasets. Showing the first four.' : artifactIDs.length === 0 && item.status === 'succeeded' ? `${item.resultType}/${item.resultVersion} is stored, but has no chart renderer.` : '')
+    setSelected(artifactIDs.slice(0, 20))
+    setNotice(artifactIDs.length > 20 ? 'This experiment has more than twenty datasets. Showing the first twenty.' : artifactIDs.length === 0 && item.status === 'succeeded' ? `${item.resultType}/${item.resultVersion} is stored, but has no chart renderer.` : '')
   }
   return <>
-    <div className="results-heading"><div><p className="eyebrow">REPEATABLE EVIDENCE</p><h2>Compare collected results</h2><p>Select up to four verified datasets. Use the same variant name for multiple trials, then save the immutable comparison.</p></div><div className="results-heading-actions"><button className="button primary" disabled={selected.length < 2} onClick={() => setSaving(true)}>Save experiment</button><div className="results-count"><strong>{available.length}</strong><span>datasets</span></div></div></div>
+    <div className="results-heading"><div><p className="eyebrow">REPEATABLE EVIDENCE</p><h2>Compare collected results</h2><p>Explore verified runs, compare normalized timelines and export publication-ready evidence.</p></div><div className="results-heading-actions"><button className="button secondary" disabled={!displayed.length} onClick={() => window.print()}>Print / PDF</button><button className="button secondary" disabled={!displayed.length} onClick={() => exportStatisticsCSV(displayed, metrics)}>Export CSV</button><button className="button primary" disabled={selected.length < 2} onClick={() => setSaving(true)}>Save comparison</button><div className="results-count"><strong>{available.length}</strong><span>datasets</span></div></div></div>
     {experiments.length > 0 && <div className="experiment-history"><div className="experiment-history-title"><strong>Experiment history</strong><span>{experiments.length} repeatable comparisons</span></div><div className="experiment-cards">{experiments.map(item => <button key={item.id} className={activeExperiment === item.id ? 'active' : ''} onClick={() => openExperiment(item)}><span className={`status-dot ${item.status}`} /><span><strong>{item.name}</strong><small>{item.status === 'queued' && item.scheduledFor && new Date(item.scheduledFor).getTime() > Date.now() ? `scheduled ${formatDate(item.scheduledFor)}` : item.status} · {item.variants.length} variants · {item.variants.reduce((total, variant) => total + variant.trials.length, 0)} trials · {formatDate(item.createdAt)}</small></span></button>)}</div></div>}
     {experiment && <ExperimentDetail experiment={experiment} openOperation={openOperation} />}
     {!available.length ? <EmptyResults /> : <div className="results-layout">
       <aside className="dataset-picker" aria-label="Available datasets">
-        <div className="dataset-picker-title"><strong>Dataset history</strong><span>{selected.length}/4 selected</span></div>
+        <div className="dataset-picker-title"><strong>Dataset history</strong><span>{selected.length} selected</span></div>
         {available.map(artifact => {
           const operation = operations.find(item => item.id === artifact.operationId)
           const workspace = workspaces.find(item => item.id === artifact.workspaceId)
           const active = selected.includes(artifact.id)
           const incompatibleWorkspace = Boolean(selectedWorkspaceID && artifact.workspaceId !== selectedWorkspaceID)
-          return <button className={`dataset-option ${active ? 'active' : ''}`} key={artifact.id} onClick={() => toggle(artifact.id)} disabled={!active && (selected.length === 4 || incompatibleWorkspace)} aria-pressed={active}>
+          return <button className={`dataset-option ${active ? 'active' : ''}`} key={artifact.id} onClick={() => toggle(artifact.id)} disabled={!active && (selected.length >= 8 || incompatibleWorkspace)} aria-pressed={active}>
             <span className="dataset-check">{active ? '✓' : ''}</span><span><strong>{operation?.title ?? artifact.name}</strong><small>{workspace?.name ?? 'Workspace'} · {formatDate(artifact.verifiedAt)}</small><small>{formatBytes(artifact.sizeBytes)} · {artifact.digest.slice(0, 14)}…</small></span>
           </button>
         })}
@@ -119,6 +119,7 @@ export function ResultsView({artifacts, experiments, operations, workspaces, ses
             const series = aggregateMetric(displayed, metric)
             return <MetricChart key={metric} metric={metric} series={series} />
           })}</div>
+          <StatisticsTable datasets={displayed} metrics={metrics} experiment={experiment} />
           <div className="dataset-downloads">{displayed.map(item => <a key={item.artifact.id} href={`/api/v1/artifacts/${item.artifact.id}/download`}><span>↓</span><span><strong>{item.label}</strong><small>Download verified JSON</small></span></a>)}</div>
         </>}
       </div>
@@ -200,17 +201,19 @@ function MetricChart({metric, series}: {metric: string; series: AggregateSeries[
   const x = (value: number) => padding.left + ((value - minX) / Math.max(1, maxX - minX)) * (width - padding.left - padding.right)
   const y = (value: number) => height - padding.bottom - ((value - minY) / Math.max(Number.EPSILON, maxY - minY)) * (height - padding.top - padding.bottom)
   const unit = series[0]?.unit ?? ''
+  const chartID = `chart-${metric.replaceAll(/[^a-zA-Z0-9]/g, '-')}`
   return <article className="metric-card">
-    <div className="metric-card-header"><div><p className="eyebrow">{unit.toUpperCase()}</p><h3>{metricTitle(metric)}</h3></div><strong>{formatMetric(maxY, unit)} peak</strong></div>
-    <div className="chart-wrap"><svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label={`${metricTitle(metric)} comparison chart`}>
+    <div className="metric-card-header"><div><p className="eyebrow">{unit.toUpperCase()}</p><h3>{metricTitle(metric)}</h3></div><div className="chart-export-actions"><strong>{formatMetric(maxY, unit)} peak</strong><button type="button" onClick={() => exportChart(chartID, metric, 'svg')}>SVG</button><button type="button" onClick={() => exportChart(chartID, metric, 'png')}>PNG 600 DPI</button></div></div>
+    <div className="chart-wrap"><svg id={chartID} viewBox={`0 0 ${width} ${height}`} xmlns="http://www.w3.org/2000/svg" role="img" aria-label={`${metricTitle(metric)} comparison chart`}>
+      <style>{`.chart-grid-line{stroke:#dfe6e1;stroke-width:1}text{fill:#647168;font:10px Inter,Arial,sans-serif}`}</style>
       {[0, .25, .5, .75, 1].map(tick => {
         const value = minY + (maxY - minY) * tick
         const py = y(value)
         return <g key={tick}><line x1={padding.left} y1={py} x2={width - padding.right} y2={py} className="chart-grid-line" /><text x={padding.left - 8} y={py + 4} textAnchor="end">{formatMetric(value, unit)}</text></g>
       })}
       {series.map((item, index) => <path key={item.artifactID} d={chartPath(item.points, x, y)} fill="none" stroke={colors[index % colors.length]} strokeWidth="2.4" vectorEffect="non-scaling-stroke" />)}
-      <text x={padding.left} y={height - 8}>{new Date(minX).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'})}</text>
-      <text x={width - padding.right} y={height - 8} textAnchor="end">{new Date(maxX).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'})}</text>
+      <text x={padding.left} y={height - 8}>0m</text>
+      <text x={width - padding.right} y={height - 8} textAnchor="end">{formatDuration(maxX - minX)}</text>
     </svg></div>
     <div className="chart-legend">{series.map((item, index) => {
       const values = item.points.map(point => point.value)
@@ -234,9 +237,177 @@ export function aggregateMetric(datasets: LoadedDataset[], metric: string): Aggr
       artifactID: item.artifact.id,
       label: item.label,
       unit: matching[0]?.unit ?? '',
-      points: [...values.entries()].sort((left, right) => left[0] - right[0]).map(([timestamp, value]) => ({timestamp: new Date(timestamp).toISOString(), value}))
+      points: [...values.entries()].sort((left, right) => left[0] - right[0]).map(([, value], index) => ({timestamp: new Date(index * item.dataset.spec.stepSeconds * 1000).toISOString(), value}))
     }
   }).filter(item => item.points.length > 0)
+}
+
+export interface ScientificSummary {
+  count: number
+  mean: number
+  standardDeviation: number
+  min: number
+  max: number
+  median: number
+  p05: number
+  p25: number
+  p75: number
+  p95: number
+  p99: number
+  coefficientOfVariation: number
+  confidence95Low: number
+  confidence95High: number
+}
+
+export function summarize(values: number[]): ScientificSummary {
+  const sorted = values.filter(Number.isFinite).sort((left, right) => left - right)
+  const count = sorted.length
+  if (!count) return {count: 0, mean: 0, standardDeviation: 0, min: 0, max: 0, median: 0, p05: 0, p25: 0, p75: 0, p95: 0, p99: 0, coefficientOfVariation: 0, confidence95Low: 0, confidence95High: 0}
+  const mean = sorted.reduce((sum, value) => sum + value, 0) / count
+  const variance = count > 1 ? sorted.reduce((sum, value) => sum + (value - mean) ** 2, 0) / (count - 1) : 0
+  const standardDeviation = Math.sqrt(variance)
+  const margin = count > 1 ? 1.96 * standardDeviation / Math.sqrt(count) : 0
+  return {count, mean, standardDeviation, min: sorted[0], max: sorted[count - 1], median: percentile(sorted, .5), p05: percentile(sorted, .05), p25: percentile(sorted, .25), p75: percentile(sorted, .75), p95: percentile(sorted, .95), p99: percentile(sorted, .99), coefficientOfVariation: mean === 0 ? 0 : standardDeviation / Math.abs(mean), confidence95Low: mean - margin, confidence95High: mean + margin}
+}
+
+function percentile(sorted: number[], ratio: number): number {
+  if (sorted.length === 1) return sorted[0]
+  const position = (sorted.length - 1) * ratio
+  const lower = Math.floor(position)
+  const fraction = position - lower
+  return sorted[lower] + (sorted[Math.min(lower + 1, sorted.length - 1)] - sorted[lower]) * fraction
+}
+
+function StatisticsTable({datasets, metrics, experiment}: {datasets: LoadedDataset[]; metrics: string[]; experiment?: Experiment}) {
+  const rows = datasets.flatMap(dataset => metrics.map(metric => {
+    const series = aggregateMetric([dataset], metric)[0]
+    return series ? {dataset: dataset.label, metric, unit: series.unit, summary: summarize(series.points.map(point => point.value))} : null
+  }).filter((item): item is {dataset: string; metric: string; unit: string; summary: ScientificSummary} => Boolean(item)))
+  const aggregates = experiment ? variantStatistics(experiment, datasets, metrics) : []
+  const effects = experiment ? variantEffectSizes(experiment, datasets, metrics) : []
+  return <>
+    {!!effects.length && <section className="statistics-card"><div><p className="eyebrow">COMPARATIVE EFFECT</p><h3>Standardized difference between strategies</h3></div><div className="statistics-table-wrap"><table><thead><tr><th>Comparison</th><th>Metric</th><th>Cohen's d</th><th>Magnitude</th><th>Runs</th></tr></thead><tbody>{effects.map(row => <tr key={row.metric}><td>{row.left} vs {row.right}</td><td>{metricTitle(row.metric)}</td><td>{row.value.toFixed(3)}</td><td>{effectMagnitude(row.value)}</td><td>{row.leftCount} / {row.rightCount}</td></tr>)}</tbody></table></div></section>}
+    {!!aggregates.length && <section className="statistics-card"><div><p className="eyebrow">STRATEGY AGGREGATES</p><h3>Distribution across independent sequential runs</h3></div><div className="statistics-table-wrap"><table><thead><tr><th>Strategy</th><th>Metric</th><th>Runs</th><th>Missing</th><th>Mean</th><th>Std</th><th>Min</th><th>Median</th><th>Max</th><th>P95</th><th>CV</th><th>95% CI</th></tr></thead><tbody>{aggregates.map(row => <tr key={`${row.variant}-${row.metric}`}><td>{row.variant}</td><td>{metricTitle(row.metric)}</td><td>{row.summary.count}</td><td>{row.missing}</td><td>{formatMetric(row.summary.mean, row.unit)}</td><td>{formatMetric(row.summary.standardDeviation, row.unit)}</td><td>{formatMetric(row.summary.min, row.unit)}</td><td>{formatMetric(row.summary.median, row.unit)}</td><td>{formatMetric(row.summary.max, row.unit)}</td><td>{formatMetric(row.summary.p95, row.unit)}</td><td>{(row.summary.coefficientOfVariation * 100).toFixed(1)}%</td><td>{formatMetric(row.summary.confidence95Low, row.unit)}–{formatMetric(row.summary.confidence95High, row.unit)}</td></tr>)}</tbody></table></div></section>}
+    <section className="statistics-card"><div><p className="eyebrow">RUN STATISTICS</p><h3>Samples within each collected run</h3></div><div className="statistics-table-wrap"><table><thead><tr><th>Dataset</th><th>Metric</th><th>N</th><th>Mean</th><th>Std</th><th>Min</th><th>Median</th><th>Max</th><th>P95</th><th>P99</th><th>CV</th><th>95% CI</th></tr></thead><tbody>{rows.map((row, index) => <tr key={`${row.dataset}-${row.metric}-${index}`}><td>{row.dataset}</td><td>{metricTitle(row.metric)}</td><td>{row.summary.count}</td><td>{formatMetric(row.summary.mean, row.unit)}</td><td>{formatMetric(row.summary.standardDeviation, row.unit)}</td><td>{formatMetric(row.summary.min, row.unit)}</td><td>{formatMetric(row.summary.median, row.unit)}</td><td>{formatMetric(row.summary.max, row.unit)}</td><td>{formatMetric(row.summary.p95, row.unit)}</td><td>{formatMetric(row.summary.p99, row.unit)}</td><td>{(row.summary.coefficientOfVariation * 100).toFixed(1)}%</td><td>{formatMetric(row.summary.confidence95Low, row.unit)}–{formatMetric(row.summary.confidence95High, row.unit)}</td></tr>)}</tbody></table></div></section>
+  </>
+}
+
+export function variantStatistics(experiment: Experiment, datasets: LoadedDataset[], metrics: string[]) {
+  const byArtifact = new Map(datasets.map(item => [item.artifact.id, item]))
+  return experiment.variants.flatMap(variant => metrics.map(metric => {
+    const values: number[] = []
+    let unit = ''
+    for (const trial of variant.trials) {
+      const dataset = byArtifact.get(trial.resultArtifactId)
+      if (!dataset) continue
+      const series = aggregateMetric([dataset], metric)[0]
+      if (!series?.points.length) continue
+      unit ||= series.unit
+      values.push(series.points.reduce((sum, point) => sum + point.value, 0) / series.points.length)
+    }
+    return values.length ? {variant: variant.name, metric, unit, missing: variant.trials.length - values.length, summary: summarize(values)} : null
+  }).filter((item): item is {variant: string; metric: string; unit: string; missing: number; summary: ScientificSummary} => Boolean(item)))
+}
+
+export function variantEffectSizes(experiment: Experiment, datasets: LoadedDataset[], metrics: string[]) {
+  if (experiment.variants.length !== 2) return []
+  const byArtifact = new Map(datasets.map(item => [item.artifact.id, item]))
+  return metrics.map(metric => {
+    const left = variantRunMeans(experiment.variants[0], byArtifact, metric)
+    const right = variantRunMeans(experiment.variants[1], byArtifact, metric)
+    if (left.length < 2 || right.length < 2) return null
+    return {metric, left: experiment.variants[0].name, right: experiment.variants[1].name, value: cohenD(left, right), leftCount: left.length, rightCount: right.length}
+  }).filter((item): item is {metric: string; left: string; right: string; value: number; leftCount: number; rightCount: number} => Boolean(item))
+}
+
+function variantRunMeans(variant: Experiment['variants'][number], datasets: Map<string, LoadedDataset>, metric: string): number[] {
+  const values: number[] = []
+  for (const trial of variant.trials) {
+    const dataset = datasets.get(trial.resultArtifactId)
+    if (!dataset) continue
+    const series = aggregateMetric([dataset], metric)[0]
+    if (series?.points.length) values.push(series.points.reduce((sum, point) => sum + point.value, 0) / series.points.length)
+  }
+  return values
+}
+
+export function cohenD(left: number[], right: number[]): number {
+  const leftSummary = summarize(left)
+  const rightSummary = summarize(right)
+  const degrees = leftSummary.count + rightSummary.count - 2
+  if (degrees <= 0) return 0
+  const pooled = Math.sqrt(((leftSummary.count - 1) * leftSummary.standardDeviation ** 2 + (rightSummary.count - 1) * rightSummary.standardDeviation ** 2) / degrees)
+  return pooled === 0 ? 0 : (rightSummary.mean - leftSummary.mean) / pooled
+}
+
+function effectMagnitude(value: number): string {
+  const absolute = Math.abs(value)
+  if (absolute < .2) return 'Negligible'
+  if (absolute < .5) return 'Small'
+  if (absolute < .8) return 'Medium'
+  return 'Large'
+}
+
+function exportStatisticsCSV(datasets: LoadedDataset[], metrics: string[]) {
+  const header = ['dataset', 'metric', 'unit', 'count', 'mean', 'std', 'min', 'median', 'max', 'p05', 'p25', 'p75', 'p95', 'p99', 'cv', 'ci95_low', 'ci95_high']
+  const rows: Array<Array<string | number>> = [header]
+  for (const dataset of datasets) for (const metric of metrics) {
+    const series = aggregateMetric([dataset], metric)[0]
+    if (!series) continue
+    const value = summarize(series.points.map(point => point.value))
+    rows.push([dataset.label, metric, series.unit, value.count, value.mean, value.standardDeviation, value.min, value.median, value.max, value.p05, value.p25, value.p75, value.p95, value.p99, value.coefficientOfVariation, value.confidence95Low, value.confidence95High])
+  }
+  downloadBlob('kubephos-statistics.csv', new Blob([rows.map(row => row.map(csvValue).join(',')).join('\n')], {type: 'text/csv;charset=utf-8'}))
+}
+
+function csvValue(value: string | number): string {
+  const text = String(value)
+  return /[",\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text
+}
+
+async function exportChart(id: string, metric: string, format: 'svg' | 'png') {
+  const source = document.getElementById(id) as SVGSVGElement | null
+  if (!source) return
+  const serialized = new XMLSerializer().serializeToString(source)
+  const name = `kubephos-${metric.replaceAll(/[^a-zA-Z0-9]+/g, '-').toLowerCase()}`
+  if (format === 'svg') {
+    downloadBlob(`${name}.svg`, new Blob([serialized], {type: 'image/svg+xml;charset=utf-8'}))
+    return
+  }
+  const image = new Image()
+  const url = URL.createObjectURL(new Blob([serialized], {type: 'image/svg+xml'}))
+  try {
+    await new Promise<void>((resolve, reject) => { image.onload = () => resolve(); image.onerror = () => reject(new Error('Could not render chart')); image.src = url })
+    const scale = 4
+    const canvas = document.createElement('canvas')
+    canvas.width = 720 * scale
+    canvas.height = 230 * scale
+    const context = canvas.getContext('2d')
+    if (!context) return
+    context.fillStyle = '#ffffff'
+    context.fillRect(0, 0, canvas.width, canvas.height)
+    context.drawImage(image, 0, 0, canvas.width, canvas.height)
+    const blob = await new Promise<Blob | null>(resolve => canvas.toBlob(resolve, 'image/png', 1))
+    if (blob) downloadBlob(`${name}-600dpi.png`, blob)
+  } finally {
+    URL.revokeObjectURL(url)
+  }
+}
+
+function downloadBlob(name: string, blob: Blob) {
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = name
+  link.click()
+  setTimeout(() => URL.revokeObjectURL(url), 0)
+}
+
+function formatDuration(milliseconds: number): string {
+  const seconds = Math.max(0, Math.round(milliseconds / 1000))
+  if (seconds >= 3600) return `${(seconds / 3600).toFixed(1)}h`
+  if (seconds >= 60) return `${Math.round(seconds / 60)}m`
+  return `${seconds}s`
 }
 
 function chartPath(points: MetricPoint[], x: (value: number) => number, y: (value: number) => number): string {

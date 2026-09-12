@@ -3,7 +3,6 @@ package applicationdeployer
 import (
 	"bytes"
 	"context"
-	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
@@ -182,12 +181,8 @@ func (Plugin) Plan(ctx context.Context, raw json.RawMessage) (domain.Plan, error
 	if err := json.Unmarshal(raw, &spec); err != nil {
 		return domain.Plan{}, err
 	}
-	markerBytes := make([]byte, 16)
-	if _, err := rand.Read(markerBytes); err != nil {
-		return domain.Plan{}, err
-	}
-	marker := hex.EncodeToString(markerBytes)
-	input, err := json.Marshal(stepInput{Spec: spec, Marker: marker, Namespace: "kubephos-app-" + marker[:10]})
+	marker := domain.RuntimeExecutionIDToken
+	input, err := json.Marshal(stepInput{Spec: spec, Marker: marker, Namespace: "kubephos-app-" + marker})
 	if err != nil {
 		return domain.Plan{}, err
 	}

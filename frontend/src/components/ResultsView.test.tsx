@@ -1,6 +1,6 @@
 import {describe, expect, it} from 'vitest'
 import type {Artifact, Experiment, TimeSeriesDataset} from '../types'
-import {aggregateMetric, experimentProgress, type LoadedDataset} from './ResultsView'
+import {aggregateMetric, cohenD, experimentProgress, summarize, variantStatistics, type LoadedDataset} from './ResultsView'
 
 const artifact: Artifact = {id: 'art_dataset', operationId: 'op_collect', workspaceId: 'ws_dev', name: 'dataset', type: 'TimeSeriesDataset', version: 'v1alpha1', mediaType: 'application/json', digest: 'sha256:value', sizeBytes: 100, sensitive: false, verifiedAt: '2026-09-09T10:00:00Z'}
 
@@ -28,6 +28,41 @@ describe('experimentProgress', () => {
       {trials: [{status: 'failed'}, {status: 'canceled'}, {status: 'queued'}]}
     ]} as Experiment
     expect(experimentProgress(experiment)).toEqual({completed: 3, total: 5})
+  })
+})
+
+describe('summarize', () => {
+  it('calculates sample statistics and interpolated percentiles', () => {
+    const result = summarize([1, 2, 3, 4, 5])
+    expect(result.count).toBe(5)
+    expect(result.mean).toBe(3)
+    expect(result.standardDeviation).toBeCloseTo(Math.sqrt(2.5))
+    expect(result.min).toBe(1)
+    expect(result.max).toBe(5)
+    expect(result.median).toBe(3)
+    expect(result.p95).toBeCloseTo(4.8)
+    expect(result.confidence95Low).toBeLessThan(result.mean)
+    expect(result.confidence95High).toBeGreaterThan(result.mean)
+  })
+})
+
+describe('variantStatistics', () => {
+  it('aggregates run means per strategy and reports missing runs', () => {
+    const first = loaded('one', [[1, 3]])
+    const second = loaded('two', [[3, 5]])
+    const experiment = {variants: [{name: 'Strategy A', trials: [{resultArtifactId: first.artifact.id}, {resultArtifactId: second.artifact.id}, {resultArtifactId: ''}]}]} as Experiment
+    const result = variantStatistics(experiment, [first, second], ['cpu.cores'])
+    expect(result).toHaveLength(1)
+    expect(result[0].summary.mean).toBe(3)
+    expect(result[0].summary.count).toBe(2)
+    expect(result[0].missing).toBe(1)
+  })
+})
+
+describe('cohenD', () => {
+  it('reports a standardized difference using pooled sample variance', () => {
+    expect(cohenD([1, 2, 3], [3, 4, 5])).toBeCloseTo(2)
+    expect(cohenD([2, 2], [2, 2])).toBe(0)
   })
 })
 

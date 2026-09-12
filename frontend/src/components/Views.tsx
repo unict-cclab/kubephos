@@ -3,6 +3,7 @@ import type {Application, Artifact, AuditEvent, Connection, Credential, Experime
 import {ExperimentConfigurationsView} from './ExperimentConfigurationsView'
 import {PipelinesView} from './PipelinesView'
 import {ResultsView} from './ResultsView'
+import {SuitesView} from './SuitesView'
 
 interface ViewProps {
   view: View
@@ -95,7 +96,7 @@ export function Views(props: ViewProps) {
       <ExperimentConfigurationsView items={props.experimentConfigurations} experiments={props.experiments} clusters={props.kubernetesClusters} workspaces={props.workspaces} applications={props.applications} plugins={props.plugins} session={props.session} isAdmin={props.isAdmin} changed={props.changed} openOperation={props.openOperation} />
     </section>
     <section className={`view ${props.view === 'suites' ? 'active' : ''}`}>
-      <ProductNext eyebrow="COMPARE" title="Experiment suites" copy="Run multiple configurations with controlled ordering and compare aggregate scientific results." />
+      <SuitesView configurations={props.experimentConfigurations} experiments={props.experiments} clusters={props.kubernetesClusters} session={props.session} isAdmin={props.isAdmin} changed={props.changed} navigate={() => props.navigate('results')} />
     </section>
     <section className={`view ${props.view === 'advanced' ? 'active' : ''}`}>
       <Advanced props={props} />

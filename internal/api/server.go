@@ -111,6 +111,7 @@ func NewServer(store *storage.Store, registry *plugins.Registry, artifactStore *
 	router.HandleFunc("POST /api/v1/experiment-configurations/{id}/clone", server.cloneExperimentConfiguration)
 	router.HandleFunc("DELETE /api/v1/experiment-configurations/{id}", server.deleteExperimentConfiguration)
 	router.HandleFunc("POST /api/v1/experiment-instances", server.createExperimentInstance)
+	router.HandleFunc("POST /api/v1/experiment-suites", server.createExperimentSuite)
 	router.HandleFunc("GET /api/v1/infrastructure/resources", server.listInfrastructureResources)
 	router.HandleFunc("GET /api/v1/terminal-targets", server.listTerminalTargets)
 	router.HandleFunc("POST /api/v1/terminals", server.createTerminal)
@@ -1673,9 +1674,10 @@ func (s *Server) createExperimentInstance(response http.ResponseWriter, request 
 	variantID := id.New("variant")
 	experiment := domain.Experiment{
 		ID: instanceID, WorkspaceID: configuration.WorkspaceID, ConfigurationID: configuration.ID,
+		Kind: "instance",
 		Name: input.Name, Description: configuration.Description, Status: domain.OperationQueued,
 		ResultType: validated.Resolution.Result.Type, ResultVersion: validated.Resolution.Result.Version, ScheduledFor: input.ScheduledFor,
-		Variants: []domain.ExperimentVariant{{ID: variantID, ExperimentID: instanceID, Position: 1, Name: configuration.Name, PipelineID: pipeline.ID, PipelineHash: pipeline.Hash, Configuration: configuration.Definition}},
+		Variants: []domain.ExperimentVariant{{ID: variantID, ExperimentID: instanceID, Position: 1, Name: configuration.Name, PipelineID: pipeline.ID, PipelineHash: pipeline.Hash, ConfigurationID: configuration.ID, Configuration: configuration.Definition}},
 	}
 	runs := map[string]domain.PipelineRun{}
 	for position := 1; position <= input.Runs; position++ {
@@ -1694,6 +1696,146 @@ func (s *Server) createExperimentInstance(response http.ResponseWriter, request 
 	created, err := s.store.CreatePipelineExperiment(request.Context(), experiment, runs)
 	if err != nil {
 		writeError(response, http.StatusInternalServerError, "database_error", "Could not queue the experiment instance.")
+		return
+	}
+	writeJSON(response, http.StatusCreated, created)
+}
+
+type experimentSuiteInput struct {
+	Name             string     `json:"name"`
+	Description      string     `json:"description"`
+	ConfigurationIDs []string   `json:"configurationIds"`
+	Runs             int        `json:"runs"`
+	ScheduledFor     *time.Time `json:"scheduledFor"`
+}
+
+type validatedSuiteVariant struct {
+	Configuration domain.ExperimentConfiguration
+	Definition    experimentConfigurationDefinitionInput
+	Pipeline      workflows.Result
+}
+
+func (s *Server) createExperimentSuite(response http.ResponseWriter, request *http.Request) {
+	var input experimentSuiteInput
+	if err := decodeJSON(request, &input); err != nil {
+		writeError(response, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	input.Name = strings.TrimSpace(input.Name)
+	input.Description = strings.TrimSpace(input.Description)
+	if input.Name == "" || len([]rune(input.Name)) > 120 || len([]rune(input.Description)) > 1000 || input.Runs < 1 || input.Runs > 20 || len(input.ConfigurationIDs) < 2 || len(input.ConfigurationIDs) > 8 {
+		writeError(response, http.StatusUnprocessableEntity, "invalid_suite", "A suite requires a name, two to eight configurations and one to twenty runs per configuration.")
+		return
+	}
+	if input.ScheduledFor != nil {
+		value := input.ScheduledFor.UTC()
+		if value.Before(time.Now().UTC().Add(-time.Minute)) {
+			writeError(response, http.StatusUnprocessableEntity, "invalid_schedule", "Scheduled time cannot be in the past.")
+			return
+		}
+		input.ScheduledFor = &value
+	}
+	seen := map[string]bool{}
+	variants := make([]validatedSuiteVariant, 0, len(input.ConfigurationIDs))
+	for _, rawID := range input.ConfigurationIDs {
+		configurationID := strings.TrimSpace(rawID)
+		if configurationID == "" || seen[configurationID] {
+			writeError(response, http.StatusUnprocessableEntity, "invalid_suite", "Suite configurations must be unique.")
+			return
+		}
+		seen[configurationID] = true
+		configuration, err := s.store.GetExperimentConfiguration(request.Context(), configurationID)
+		if errors.Is(err, storage.ErrNotFound) {
+			writeError(response, http.StatusUnprocessableEntity, "invalid_configuration", "A selected experiment configuration is unavailable.")
+			return
+		}
+		if err != nil {
+			writeError(response, http.StatusInternalServerError, "database_error", "Could not read suite configurations.")
+			return
+		}
+		var definition experimentConfigurationDefinitionInput
+		if err := json.Unmarshal(configuration.Definition, &definition); err != nil {
+			writeError(response, http.StatusConflict, "invalid_snapshot", "A saved experiment configuration is invalid.")
+			return
+		}
+		for _, component := range definition.Components {
+			plugin, err := s.registry.Get(component.PluginID)
+			if err != nil || !plugin.Manifest().Matches(component.PluginVersion, component.PluginDigest) {
+				writeError(response, http.StatusConflict, "plugin_changed", "A configured plugin changed. Clone and validate the configuration again.")
+				return
+			}
+		}
+		revalidated, failure := s.validatedExperimentConfiguration(request.Context(), experimentConfigurationInput{
+			WorkspaceID: configuration.WorkspaceID, ClusterResourceID: configuration.ClusterResourceID,
+			Name: configuration.Name, Description: configuration.Description, ApplicationRef: configuration.ApplicationRef, Definition: definition,
+		})
+		if failure != nil {
+			failure.write(response)
+			return
+		}
+		if revalidated.ApplicationDigest != configuration.ApplicationDigest {
+			writeError(response, http.StatusConflict, "application_changed", "An application package changed. Clone and validate the configuration again.")
+			return
+		}
+		if len(variants) > 0 {
+			first := variants[0].Configuration
+			if configuration.WorkspaceID != first.WorkspaceID || configuration.ClusterResourceID != first.ClusterResourceID || configuration.ApplicationRef != first.ApplicationRef {
+				writeError(response, http.StatusUnprocessableEntity, "incompatible_suite", "Suite configurations must use the same environment, cluster and application version.")
+				return
+			}
+		}
+		pipelineDefinition, failure := s.experimentInstancePipeline(request.Context(), configuration, definition)
+		if failure != nil {
+			failure.write(response)
+			return
+		}
+		validated, failure := s.validatedManagedPipeline(request.Context(), configuration.WorkspaceID, pipelineDefinition)
+		if failure != nil {
+			failure.write(response)
+			return
+		}
+		if len(variants) > 0 && (validated.Resolution.Result.Type != variants[0].Pipeline.Resolution.Result.Type || validated.Resolution.Result.Version != variants[0].Pipeline.Resolution.Result.Version) {
+			writeError(response, http.StatusUnprocessableEntity, "incompatible_results", "Every suite configuration must produce the same result contract.")
+			return
+		}
+		variants = append(variants, validatedSuiteVariant{Configuration: configuration, Definition: definition, Pipeline: validated})
+	}
+	suiteID := id.New("exp")
+	experiment := domain.Experiment{
+		ID: suiteID, WorkspaceID: variants[0].Configuration.WorkspaceID, Kind: "suite", Name: input.Name, Description: input.Description,
+		Status: domain.OperationQueued, ResultType: variants[0].Pipeline.Resolution.Result.Type, ResultVersion: variants[0].Pipeline.Resolution.Result.Version, ScheduledFor: input.ScheduledFor,
+	}
+	runs := map[string]domain.PipelineRun{}
+	for variantPosition, item := range variants {
+		pipeline, err := s.store.CreatePipeline(request.Context(), domain.Pipeline{
+			ID: id.New("pipe"), WorkspaceID: experiment.WorkspaceID, Name: fmt.Sprintf("%s · Variant %d · %s", input.Name, variantPosition+1, suiteID),
+			Description: "Immutable suite pipeline for " + item.Configuration.Name,
+			Definition:  item.Pipeline.Definition, Resolution: item.Pipeline.Resolution, Validation: item.Pipeline.Validation, Hash: item.Pipeline.Hash,
+		})
+		if err != nil {
+			writeError(response, http.StatusInternalServerError, "database_error", "Could not save a validated suite pipeline.")
+			return
+		}
+		variantID := id.New("variant")
+		variant := domain.ExperimentVariant{ID: variantID, ExperimentID: suiteID, Position: variantPosition + 1, Name: item.Configuration.Name, PipelineID: pipeline.ID, PipelineHash: pipeline.Hash, ConfigurationID: item.Configuration.ID, Configuration: item.Configuration.Definition}
+		for trialPosition := 1; trialPosition <= input.Runs; trialPosition++ {
+			trialID := id.New("trial")
+			run := domain.PipelineRun{
+				ID: id.New("run"), PipelineID: pipeline.ID, WorkspaceID: experiment.WorkspaceID, ClusterResourceID: item.Configuration.ClusterResourceID,
+				Name: fmt.Sprintf("%s · %s · Run %d", input.Name, item.Configuration.Name, trialPosition), Status: domain.OperationQueued,
+				PipelineHash: pipeline.Hash, ResultType: experiment.ResultType, ResultVersion: experiment.ResultVersion, ScheduledFor: input.ScheduledFor,
+			}
+			for stagePosition, stage := range item.Pipeline.Definition.Stages {
+				run.Stages = append(run.Stages, domain.PipelineRunStage{ID: id.New("runstage"), RunID: run.ID, Position: stagePosition + 1, StageID: stage.ID, PluginID: stage.PluginID, Title: stage.Title, Status: domain.StepPending, CleanupStatus: domain.StepPending})
+			}
+			variant.Trials = append(variant.Trials, domain.ExperimentTrial{ID: trialID, VariantID: variantID, Position: trialPosition, Status: domain.OperationQueued, PipelineRunID: run.ID})
+			runs[trialID] = run
+		}
+		experiment.Variants = append(experiment.Variants, variant)
+	}
+	created, err := s.store.CreatePipelineExperiment(request.Context(), experiment, runs)
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, "database_error", "Could not queue the validated experiment suite.")
 		return
 	}
 	writeJSON(response, http.StatusCreated, created)

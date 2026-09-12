@@ -667,6 +667,22 @@ summary { color: var(--muted); font-size: 12px; font-weight: 750; cursor: pointe
 .instance-row strong, .instance-row small { display: block; }
 .instance-row strong { overflow: hidden; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .instance-row small { margin-top: 3px; color: var(--muted); font-size: 9px; }
+.suite-configuration-list { display: grid; max-height: 310px; overflow: auto; gap: 8px; margin: 10px 0 18px; }
+.suite-configuration-list > label { display: grid; grid-template-columns: 18px minmax(0, 1fr); align-items: center; gap: 10px; margin: 0; border: 1px solid var(--line); border-radius: 10px; padding: 11px 12px; cursor: pointer; }
+.suite-configuration-list > label.selected { border-color: var(--green); background: #f0f7f2; }
+.suite-configuration-list input { width: 15px; height: 15px; margin: 0; }
+.suite-configuration-list strong, .suite-configuration-list small { display: block; }
+.suite-configuration-list strong { color: var(--ink); font-size: 12px; }
+.suite-configuration-list small { margin-top: 3px; overflow: hidden; color: var(--muted); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+.chart-export-actions { display: flex; align-items: center; gap: 7px; }
+.chart-export-actions button { border: 1px solid var(--line); border-radius: 7px; padding: 5px 7px; background: white; color: var(--green); font-size: 8px; font-weight: 800; cursor: pointer; }
+.statistics-card { margin-top: 18px; border: 1px solid var(--line); border-radius: 13px; padding: 16px; background: white; }
+.statistics-card h3 { margin: 3px 0 14px; font-size: 15px; }
+.statistics-table-wrap { overflow-x: auto; }
+.statistics-card table { width: 100%; border-collapse: collapse; font-size: 9px; white-space: nowrap; }
+.statistics-card th, .statistics-card td { padding: 8px 9px; border-bottom: 1px solid #e8ece9; text-align: right; }
+.statistics-card th { color: var(--muted); font-size: 8px; letter-spacing: .04em; text-transform: uppercase; }
+.statistics-card th:first-child, .statistics-card th:nth-child(2), .statistics-card td:first-child, .statistics-card td:nth-child(2) { text-align: left; }
 
 .toast-region { position: fixed; z-index: 50; right: 22px; bottom: 22px; display: grid; gap: 8px; }
 .toast { min-width: 260px; max-width: 380px; border: 0; border-radius: 11px; padding: 13px 15px; background: var(--dark); color: #fff; box-shadow: var(--shadow); font-size: 12px; cursor: pointer; text-align: left; animation: toast-in .2s ease; }
@@ -739,4 +755,15 @@ summary { color: var(--muted); font-size: 12px; font-weight: 750; cursor: pointe
   .terminal-toolbar { grid-template-columns: 1fr; }
   .terminal-toolbar .button { justify-self: start; }
   .terminal-viewport { min-height: 280px; height: 52vh; }
+}
+
+@media print {
+  .sidebar, .topbar, .dataset-picker, .results-heading-actions, .dataset-downloads, .experiment-history, .experiment-detail, .chart-export-actions button { display: none !important; }
+  .main { margin: 0; padding: 0; }
+  .view { display: none !important; }
+  .view.active { display: block !important; }
+  .results-layout { display: block; }
+  .results-content { width: 100%; }
+  .metric-card, .statistics-card { break-inside: avoid; box-shadow: none; }
+  .chart-wrap svg { width: 100%; }
 }

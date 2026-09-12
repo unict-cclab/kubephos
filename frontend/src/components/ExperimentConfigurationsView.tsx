@@ -91,7 +91,11 @@ function ExperimentConfigurationDialog({open, close, clusters, workspaces, appli
     const plugin = compatiblePlugins[0]
     if (!plugin) return
     const capabilities = primaryCapabilities(plugin)
-    setComponents(items => [...items, {key: sequence, pluginId: plugin.id, capability: capabilities[0] ?? ''}])
+    setComponents(items => {
+      const next = {key: sequence, pluginId: plugin.id, capability: capabilities[0] ?? ''}
+      const metrics = items.findIndex(item => item.capability.startsWith('metrics.'))
+      return metrics < 0 ? [...items, next] : [...items.slice(0, metrics), next, ...items.slice(metrics)]
+    })
     setSequence(value => value + 1)
   }
   const submit = async (event: FormEvent<HTMLFormElement>) => {
@@ -140,7 +144,7 @@ function ExperimentConfigurationDialog({open, close, clusters, workspaces, appli
         const componentIds = application?.descriptor.spec?.interface?.components?.map(item => item.id).join(', ') ?? ''
         return <section className="experiment-component" key={component.key}>
           <div className="experiment-component-head"><strong>Capability {components.indexOf(component) + 1}</strong><button type="button" className="icon-button" aria-label="Remove capability" onClick={() => setComponents(items => items.filter(item => item.key !== component.key))}>×</button></div>
-          <div className="field-row"><label>Plugin<select value={plugin?.id ?? ''} onChange={event => {const selected = compatiblePlugins.find(item => item.id === event.target.value)!; setComponents(items => items.map(item => item.key === component.key ? {...item, pluginId: selected.id, capability: primaryCapabilities(selected)[0] ?? ''} : item))}}>{compatiblePlugins.map(item => <option key={item.id} value={item.id}>{item.name} · {item.version}</option>)}</select></label><label>Capability<select value={component.capability} onChange={event => setComponents(items => items.map(item => item.key === component.key ? {...item, capability: event.target.value} : item))}>{capabilities.map(capability => <option key={capability}>{capability}</option>)}</select></label></div>
+          <div className="field-row"><label>Implementation<select value={plugin?.id ?? ''} onChange={event => {const selected = compatiblePlugins.find(item => item.id === event.target.value)!; setComponents(items => items.map(item => item.key === component.key ? {...item, pluginId: selected.id, capability: primaryCapabilities(selected)[0] ?? ''} : item))}}>{compatiblePlugins.map(item => <option key={item.id} value={item.id}>{item.name} · {item.version}</option>)}</select></label><label>Function<select value={component.capability} onChange={event => setComponents(items => items.map(item => item.key === component.key ? {...item, capability: event.target.value} : item))}>{capabilities.map(capability => <option key={capability}>{capability}</option>)}</select></label></div>
           {plugin && <SchemaFields schema={configurableSchema(plugin.schema)} prefix={`component-${component.key}`} applications={applications} artifacts={[]} connections={[]} credentials={[]} />}
           <details className="advanced-fields"><summary>Workload targets</summary><p>Leave both fields empty to use every compatible component. Available: {componentIds || 'declared by the application at runtime'}.</p><div className="field-row"><label>Only these components<input name={`include-${component.key}`} placeholder="frontend, checkoutservice" /></label><label>Exclude components<input name={`exclude-${component.key}`} placeholder="emailservice" /></label></div></details>
         </section>

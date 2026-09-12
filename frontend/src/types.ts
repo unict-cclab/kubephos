@@ -235,6 +235,7 @@ export interface ExperimentVariant {
   name: string
   pipelineId?: string
   pipelineHash?: string
+  configurationId?: string
   configuration: Record<string, unknown>
   trials: ExperimentTrial[]
 }
@@ -243,6 +244,7 @@ export interface Experiment {
   id: string
   workspaceId: string
   configurationId?: string
+  kind: 'comparison' | 'instance' | 'suite'
   name: string
   description: string
   status: string

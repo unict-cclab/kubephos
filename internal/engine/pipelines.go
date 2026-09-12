@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"kubephos.dev/kubephos/internal/domain"
@@ -249,6 +250,10 @@ func (w *Worker) deferPipelineTermination(ctx context.Context, owner string, run
 
 func (w *Worker) startPipelineStage(ctx context.Context, owner string, run domain.PipelineRun, pipeline domain.Pipeline, position int, produced map[string]map[string]string) error {
 	resolved, err := workflows.ResolveStage(pipeline, position, produced)
+	if err != nil {
+		return err
+	}
+	resolved, err = workflows.ResolveRuntimeTokens(resolved, map[string]string{domain.RuntimeExecutionIDToken: strings.ReplaceAll(run.ID, "_", "-")})
 	if err != nil {
 		return err
 	}

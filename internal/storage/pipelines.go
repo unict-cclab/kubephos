@@ -66,10 +66,10 @@ func (s *Store) CreatePipelineExperiment(ctx context.Context, experiment domain.
 	}
 	defer tx.Rollback(ctx)
 	err = tx.QueryRow(ctx, `
-		INSERT INTO experiments (id, workspace_id, configuration_id, name, description, status, result_type, result_version, scheduled_for)
-		VALUES ($1, $2, NULLIF($3, ''), $4, $5, $6, $7, $8, $9)
+		INSERT INTO experiments (id, workspace_id, configuration_id, kind, name, description, status, result_type, result_version, scheduled_for)
+		VALUES ($1, $2, NULLIF($3, ''), COALESCE(NULLIF($4, ''), 'comparison'), $5, $6, $7, $8, $9, $10)
 		RETURNING created_at, updated_at
-	`, experiment.ID, experiment.WorkspaceID, experiment.ConfigurationID, experiment.Name, experiment.Description, domain.OperationQueued, experiment.ResultType, experiment.ResultVersion, experiment.ScheduledFor).Scan(&experiment.CreatedAt, &experiment.UpdatedAt)
+	`, experiment.ID, experiment.WorkspaceID, experiment.ConfigurationID, experiment.Kind, experiment.Name, experiment.Description, domain.OperationQueued, experiment.ResultType, experiment.ResultVersion, experiment.ScheduledFor).Scan(&experiment.CreatedAt, &experiment.UpdatedAt)
 	if err != nil {
 		return domain.Experiment{}, err
 	}
@@ -96,9 +96,9 @@ func (s *Store) CreatePipelineExperiment(ctx context.Context, experiment domain.
 			return domain.Experiment{}, ErrConflict
 		}
 		_, err = tx.Exec(ctx, `
-			INSERT INTO experiment_variants (id, experiment_id, position, name, pipeline_id, pipeline_hash, configuration)
-			VALUES ($1, $2, $3, $4, $5, $6, $7)
-		`, variant.ID, experiment.ID, variant.Position, variant.Name, variant.PipelineID, variant.PipelineHash, variant.Configuration)
+			INSERT INTO experiment_variants (id, experiment_id, position, name, pipeline_id, pipeline_hash, configuration_id, configuration)
+			VALUES ($1, $2, $3, $4, $5, $6, NULLIF($7, ''), $8)
+		`, variant.ID, experiment.ID, variant.Position, variant.Name, variant.PipelineID, variant.PipelineHash, variant.ConfigurationID, variant.Configuration)
 		if err != nil {
 			return domain.Experiment{}, err
 		}

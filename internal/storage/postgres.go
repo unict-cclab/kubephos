@@ -260,10 +260,10 @@ func (s *Store) CreateCompletedExperiment(ctx context.Context, experiment domain
 	}
 	defer tx.Rollback(ctx)
 	if err := tx.QueryRow(ctx, `
-		INSERT INTO experiments (id, workspace_id, configuration_id, name, description, status, result_type, result_version)
-		VALUES ($1, $2, NULLIF($3, ''), $4, $5, $6, $7, $8)
+		INSERT INTO experiments (id, workspace_id, configuration_id, kind, name, description, status, result_type, result_version)
+		VALUES ($1, $2, NULLIF($3, ''), COALESCE(NULLIF($4, ''), 'comparison'), $5, $6, $7, $8, $9)
 		RETURNING created_at, updated_at
-	`, experiment.ID, experiment.WorkspaceID, experiment.ConfigurationID, experiment.Name, experiment.Description, experiment.Status, experiment.ResultType, experiment.ResultVersion).Scan(&experiment.CreatedAt, &experiment.UpdatedAt); err != nil {
+	`, experiment.ID, experiment.WorkspaceID, experiment.ConfigurationID, experiment.Kind, experiment.Name, experiment.Description, experiment.Status, experiment.ResultType, experiment.ResultVersion).Scan(&experiment.CreatedAt, &experiment.UpdatedAt); err != nil {
 		return domain.Experiment{}, err
 	}
 	for variantIndex := range experiment.Variants {
@@ -272,9 +272,9 @@ func (s *Store) CreateCompletedExperiment(ctx context.Context, experiment domain
 			variant.Configuration = json.RawMessage(`{}`)
 		}
 		if _, err := tx.Exec(ctx, `
-			INSERT INTO experiment_variants (id, experiment_id, position, name, configuration)
-			VALUES ($1, $2, $3, $4, $5)
-		`, variant.ID, experiment.ID, variant.Position, variant.Name, variant.Configuration); err != nil {
+			INSERT INTO experiment_variants (id, experiment_id, position, name, configuration_id, configuration)
+			VALUES ($1, $2, $3, $4, NULLIF($5, ''), $6)
+		`, variant.ID, experiment.ID, variant.Position, variant.Name, variant.ConfigurationID, variant.Configuration); err != nil {
 			return domain.Experiment{}, err
 		}
 		for trialIndex := range variant.Trials {
@@ -319,7 +319,7 @@ func (s *Store) CreateCompletedExperiment(ctx context.Context, experiment domain
 
 func (s *Store) ListExperiments(ctx context.Context, limit int) ([]domain.Experiment, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT id, workspace_id, COALESCE(configuration_id, ''), name, description, status, result_type, result_version, scheduled_for, created_at, updated_at
+		SELECT id, workspace_id, COALESCE(configuration_id, ''), kind, name, description, status, result_type, result_version, scheduled_for, created_at, updated_at
 		FROM experiments
 		ORDER BY created_at DESC
 		LIMIT $1
@@ -330,7 +330,7 @@ func (s *Store) ListExperiments(ctx context.Context, limit int) ([]domain.Experi
 	result := []domain.Experiment{}
 	for rows.Next() {
 		var experiment domain.Experiment
-		if err := rows.Scan(&experiment.ID, &experiment.WorkspaceID, &experiment.ConfigurationID, &experiment.Name, &experiment.Description, &experiment.Status, &experiment.ResultType, &experiment.ResultVersion, &experiment.ScheduledFor, &experiment.CreatedAt, &experiment.UpdatedAt); err != nil {
+		if err := rows.Scan(&experiment.ID, &experiment.WorkspaceID, &experiment.ConfigurationID, &experiment.Kind, &experiment.Name, &experiment.Description, &experiment.Status, &experiment.ResultType, &experiment.ResultVersion, &experiment.ScheduledFor, &experiment.CreatedAt, &experiment.UpdatedAt); err != nil {
 			rows.Close()
 			return nil, err
 		}
@@ -353,7 +353,7 @@ func (s *Store) ListExperiments(ctx context.Context, limit int) ([]domain.Experi
 
 func (s *Store) listExperimentVariants(ctx context.Context, experimentID string) ([]domain.ExperimentVariant, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT id, experiment_id, position, name, COALESCE(pipeline_id, ''), COALESCE(pipeline_hash, ''), configuration
+		SELECT id, experiment_id, position, name, COALESCE(pipeline_id, ''), COALESCE(pipeline_hash, ''), COALESCE(configuration_id, ''), configuration
 		FROM experiment_variants
 		WHERE experiment_id = $1
 		ORDER BY position
@@ -364,7 +364,7 @@ func (s *Store) listExperimentVariants(ctx context.Context, experimentID string)
 	variants := []domain.ExperimentVariant{}
 	for rows.Next() {
 		var variant domain.ExperimentVariant
-		if err := rows.Scan(&variant.ID, &variant.ExperimentID, &variant.Position, &variant.Name, &variant.PipelineID, &variant.PipelineHash, &variant.Configuration); err != nil {
+		if err := rows.Scan(&variant.ID, &variant.ExperimentID, &variant.Position, &variant.Name, &variant.PipelineID, &variant.PipelineHash, &variant.ConfigurationID, &variant.Configuration); err != nil {
 			rows.Close()
 			return nil, err
 		}
