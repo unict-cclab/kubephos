@@ -52,7 +52,7 @@ func TestBootstrapValidatesInstallsVerifiesAndCleansCluster(t *testing.T) {
 	if err := json.Unmarshal(result, &decoded); err != nil {
 		t.Fatal(err)
 	}
-	if decoded.ClusterConnection.Spec.Server != "https://10.20.0.10:6443" || strings.Contains(decoded.ClusterConnection.Spec.Kubeconfig, "127.0.0.1") || len(decoded.ClusterInventory.Spec.Nodes) != 3 {
+	if decoded.ClusterConnection.Spec.Server != "https://10.20.0.10:6443" || strings.Contains(decoded.ClusterConnection.Spec.Kubeconfig, "127.0.0.1") || !strings.Contains(decoded.ClusterConnection.Spec.Kubeconfig, "current-context: dev") || !strings.Contains(decoded.ClusterConnection.Spec.Kubeconfig, "name: dev-admin") || len(decoded.ClusterInventory.Spec.Nodes) != 3 {
 		t.Fatalf("unexpected cluster result %#v", decoded)
 	}
 	step.Cleanup = true
@@ -155,7 +155,7 @@ func (r *fakeRunner) Run(_ context.Context, target machine, _ machineAccess, com
 		value, _ := json.Marshal(map[string]any{"items": items})
 		return string(value), nil
 	case command == "sudo cat /etc/rancher/k3s/k3s.yaml":
-		return "apiVersion: v1\nkind: Config\nclusters:\n  - cluster:\n      server: https://127.0.0.1:6443\nusers:\n  - name: default\n    user:\n      token: test\ncontexts:\n  - name: default\n    context:\n      cluster: default\n      user: default\ncurrent-context: default\n", nil
+		return "apiVersion: v1\nkind: Config\nclusters:\n  - name: default\n    cluster:\n      server: https://127.0.0.1:6443\nusers:\n  - name: default\n    user:\n      token: test\ncontexts:\n  - name: default\n    context:\n      cluster: default\n      user: default\ncurrent-context: default\n", nil
 	case strings.HasPrefix(command, "if [ -x /usr/local/bin/k3s-agent-uninstall.sh ]"):
 		delete(r.installed, target.Name)
 		return "", nil

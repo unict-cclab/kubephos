@@ -26,6 +26,7 @@ import (
 	"kubephos.dev/kubephos/internal/catalog"
 	"kubephos.dev/kubephos/internal/domain"
 	"kubephos.dev/kubephos/internal/id"
+	kubeconfigutil "kubephos.dev/kubephos/internal/kubeconfig"
 	"kubephos.dev/kubephos/internal/plugins"
 	"kubephos.dev/kubephos/internal/pluginssh"
 	"kubephos.dev/kubephos/internal/schema"
@@ -2449,11 +2450,16 @@ func (s *Server) downloadKubeconfig(response http.ResponseWriter, request *http.
 		writeError(response, http.StatusConflict, "kubeconfig_invalid", "The stored cluster connection is invalid.")
 		return
 	}
+	exportedKubeconfig, err := kubeconfigutil.WithIdentity(connection.Spec.Kubeconfig, resource.Name)
+	if err != nil {
+		writeError(response, http.StatusConflict, "kubeconfig_invalid", "The stored cluster connection has an invalid identity.")
+		return
+	}
 	response.Header().Set("Content-Type", "application/yaml")
 	response.Header().Set("Content-Disposition", `attachment; filename="`+resource.Name+`-kubeconfig.yaml"`)
 	response.Header().Set("Cache-Control", "no-store")
 	response.WriteHeader(http.StatusOK)
-	_, _ = io.WriteString(response, connection.Spec.Kubeconfig)
+	_, _ = io.WriteString(response, exportedKubeconfig)
 }
 
 type managedOperationFailure struct {

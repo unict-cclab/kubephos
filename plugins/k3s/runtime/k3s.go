@@ -20,6 +20,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"kubephos.dev/kubephos/internal/domain"
+	kubeconfigutil "kubephos.dev/kubephos/internal/kubeconfig"
 	"kubephos.dev/kubephos/internal/plugins"
 	"kubephos.dev/kubephos/internal/pluginssh"
 )
@@ -365,6 +366,10 @@ func (p Plugin) Execute(ctx context.Context, step domain.PlanStep, log plugins.L
 	}
 	kubeconfig = strings.ReplaceAll(kubeconfig, "https://127.0.0.1:6443", server)
 	kubeconfig = strings.ReplaceAll(kubeconfig, "https://localhost:6443", server)
+	kubeconfig, err = kubeconfigutil.WithIdentity(kubeconfig, spec.ClusterName)
+	if err != nil {
+		return nil, fmt.Errorf("name kubeconfig identity: %w", err)
+	}
 	if err := validateKubeconfig(kubeconfig, server); err != nil {
 		return nil, err
 	}
