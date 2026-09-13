@@ -3,7 +3,7 @@ kind: Plugin
 metadata:
   id: io.kubephos.observability.managed
   name: Managed observability
-  version: 0.1.0
+  version: 0.2.0
   description: Installs the release-managed metrics and dashboard profile on a Kubernetes cluster.
 spec:
   protocol: v1alpha1

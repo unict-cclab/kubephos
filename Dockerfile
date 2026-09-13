@@ -35,6 +35,7 @@ RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/nfs-csi-plugin ./c
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/managed-observability-plugin ./cmd/managed-observability-plugin
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/managed-platform-plugin ./cmd/managed-platform-plugin
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/network-injection-plugin ./cmd/network-injection-plugin
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/mon-agent-profile-plugin ./cmd/mon-agent-profile-plugin
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/oci-build-plugin ./cmd/oci-build-plugin
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/oci-executor-plugin ./cmd/oci-executor-plugin
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/ssh-command-plugin ./cmd/ssh-command-plugin
@@ -83,6 +84,8 @@ COPY --from=build /out/managed-platform-plugin /opt/kubephos/plugins/managed-pla
 COPY plugins/managed-platform/plugin.yaml /opt/kubephos/plugins/managed-platform/plugin.yaml
 COPY --from=build /out/network-injection-plugin /opt/kubephos/plugins/network-injection/network-injection-plugin
 COPY plugins/network-injection/plugin.yaml /opt/kubephos/plugins/network-injection/plugin.yaml
+COPY --from=build /out/mon-agent-profile-plugin /opt/kubephos/plugins/mon-agent-profile/mon-agent-profile-plugin
+COPY plugins/mon-agent-profile/plugin.yaml /opt/kubephos/plugins/mon-agent-profile/plugin.yaml
 COPY --from=build /out/oci-build-plugin /opt/kubephos/plugins/oci-build/oci-build-plugin
 COPY plugins/oci-build/plugin.yaml /opt/kubephos/plugins/oci-build/plugin.yaml
 COPY --from=build /out/oci-executor-plugin /opt/kubephos/plugins/oci-executor/oci-executor-plugin

@@ -50,7 +50,7 @@ func TestManagedObservabilityLifecycle(t *testing.T) {
 	if err := json.Unmarshal(value, &decoded); err != nil {
 		t.Fatal(err)
 	}
-	if decoded.ObservabilityCapability.Metadata.Version != chartVersion || len(decoded.ObservabilityCapability.Spec.Endpoints) != 2 || decoded.GrafanaCredential.Spec.Password == "" || decoded.GrafanaCredential.Spec.Service != "kubephos-observability-grafana" {
+	if decoded.ObservabilityCapability.Metadata.Version != chartVersion+"+mon-agent."+monAgentVersion || decoded.ObservabilityCapability.Spec.MonAgent.Status != "ready" || len(decoded.ObservabilityCapability.Spec.Endpoints) != 2 || decoded.GrafanaCredential.Spec.Password == "" || decoded.GrafanaCredential.Spec.Service != "kubephos-observability-grafana" {
 		t.Fatalf("unexpected result %#v", decoded)
 	}
 	step.Cleanup = true
@@ -254,6 +254,12 @@ func (runner *fakeRunner) Kubectl(_ context.Context, _ string, stdin []byte, arg
 		runner.marker = object.Metadata.Annotations[ownershipKey]
 		return "applied", nil
 	}
+	if command == "apply -f -" && strings.Contains(string(stdin), monAgentName) {
+		return "applied", nil
+	}
+	if command == "rollout status deployment/"+monAgentName+" -n "+namespace+" --timeout=5m" {
+		return "ready", nil
+	}
 	if strings.HasPrefix(command, "annotate --overwrite crd/") {
 		return "annotated", nil
 	}
@@ -276,6 +282,9 @@ func (runner *fakeRunner) Kubectl(_ context.Context, _ string, stdin []byte, arg
 		return runner.marker, nil
 	}
 	if strings.HasPrefix(command, "delete crd ") {
+		return "deleted", nil
+	}
+	if strings.HasPrefix(command, "delete clusterrole/") {
 		return "deleted", nil
 	}
 	if strings.HasPrefix(command, "delete namespace ") {

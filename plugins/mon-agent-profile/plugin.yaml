@@ -1,0 +1,32 @@
+apiVersion: plugins.kubephos.io/v1alpha1
+kind: Plugin
+metadata:
+  id: io.kubephos.monitoring.mon-agent.profile
+  name: Mon-agent experiment profile
+  version: 0.1.0
+  description: Applies and restores the two experiment-sensitive mon-agent sampling parameters.
+spec:
+  protocol: v1alpha1
+  commands: [describe, validate, plan, precheck, execute, verify, status, cancel, cleanup]
+  configurationSchema:
+    type: object
+    additionalProperties: false
+    required: [clusterConnectionRef, applicationDeploymentRef, observabilityRef, scrapePeriodSeconds, promQLRange]
+    properties:
+      clusterConnectionRef: {type: string, title: Kubernetes cluster, format: kubephos-artifact-ref, x-kubephos-artifact-type: ClusterConnection, x-kubephos-artifact-version: v1alpha1}
+      applicationDeploymentRef: {type: string, title: Application deployment, format: kubephos-artifact-ref, x-kubephos-artifact-type: ApplicationDeployment, x-kubephos-artifact-version: v1alpha1}
+      observabilityRef: {type: string, title: Managed observability, format: kubephos-artifact-ref, x-kubephos-artifact-type: ObservabilityCapability, x-kubephos-artifact-version: v1alpha1}
+      scrapePeriodSeconds: {type: integer, title: Mon-agent sampling period in seconds, minimum: 5, maximum: 300, default: 30}
+      promQLRange: {type: string, title: Mon-agent PromQL range, enum: [1m, 5m, 10m, 15m, 30m, 1h], default: 5m}
+  runtime:
+    executable: mon-agent-profile-plugin
+    timeout: 10m
+  artifacts:
+    inputs:
+      - {type: ClusterConnection, version: v1alpha1}
+      - {type: ApplicationDeployment, version: v1alpha1}
+      - {type: ObservabilityCapability, version: v1alpha1}
+    outputs:
+      - {type: MonAgentProfile, version: v1alpha1}
+  capabilities: [monitoring.mon-agent.configure, monitoring.mon-agent.preflight, monitoring.mon-agent.cleanup, lifecycle.cleanup]
+  permissions: [cluster.admin]

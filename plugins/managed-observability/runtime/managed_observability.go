@@ -24,17 +24,20 @@ import (
 )
 
 const (
-	pluginID       = "io.kubephos.observability.managed"
-	artifactAPI    = "artifacts.kubephos.dev/v1alpha1"
-	chartVersion   = "86.0.0"
-	chartURL       = "https://github.com/prometheus-community/helm-charts/releases/download/kube-prometheus-stack-86.0.0/kube-prometheus-stack-86.0.0.tgz"
-	chartDigest    = "aee1f7e4d82c484d9d9742c2f629a9e523bb9f23e6f5c4ac5f78128487fab41a"
-	releaseName    = "kubephos-observability"
-	namespace      = "kubephos-observability"
-	ownershipKey   = "kubephos.dev/ownership-marker"
-	grafanaUser    = "admin"
-	grafanaPort    = 32000
-	prometheusPort = 32090
+	pluginID        = "io.kubephos.observability.managed"
+	artifactAPI     = "artifacts.kubephos.dev/v1alpha1"
+	chartVersion    = "86.0.0"
+	chartURL        = "https://github.com/prometheus-community/helm-charts/releases/download/kube-prometheus-stack-86.0.0/kube-prometheus-stack-86.0.0.tgz"
+	chartDigest     = "aee1f7e4d82c484d9d9742c2f629a9e523bb9f23e6f5c4ac5f78128487fab41a"
+	releaseName     = "kubephos-observability"
+	namespace       = "kubephos-observability"
+	ownershipKey    = "kubephos.dev/ownership-marker"
+	grafanaUser     = "admin"
+	grafanaPort     = 32000
+	prometheusPort  = 32090
+	monAgentVersion = "v0.0.7"
+	monAgentImage   = "ghcr.io/unict-cclab/mon-agent:" + monAgentVersion
+	monAgentName    = "kubephos-mon-agent"
 )
 
 var managedCRDs = []string{
@@ -119,6 +122,16 @@ type observabilityCapabilitySpec struct {
 	Retention      string            `json:"retention"`
 	Endpoints      []serviceEndpoint `json:"endpoints"`
 	MetricsAPI     string            `json:"metricsAPI"`
+	MonAgent       managedAgent      `json:"monAgent"`
+}
+
+type managedAgent struct {
+	Name                string `json:"name"`
+	Version             string `json:"version"`
+	Namespace           string `json:"namespace"`
+	ScrapePeriodSeconds int    `json:"scrapePeriodSeconds"`
+	PromQLRange         string `json:"promQLRange"`
+	Status              string `json:"status"`
 }
 
 type serviceEndpoint struct {
@@ -196,7 +209,7 @@ type chartFetcher interface {
 
 func (Plugin) Manifest() plugins.Manifest {
 	return plugins.Manifest{
-		ID: pluginID, Name: "Managed observability", Version: "0.1.0",
+		ID: pluginID, Name: "Managed observability", Version: "0.2.0",
 		Description:     "Installs the release-managed metrics and dashboard profile on a Kubernetes cluster.",
 		Schema:          json.RawMessage(`{"type":"object","additionalProperties":false,"required":["clusterConnectionRef","storageClassCapabilityRef","scrapeInterval","retention"],"properties":{"clusterConnectionRef":{"type":"string","title":"Kubernetes cluster","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ClusterConnection","x-kubephos-artifact-version":"v1alpha1"},"storageClassCapabilityRef":{"type":"string","title":"Persistent storage","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"StorageClassCapability","x-kubephos-artifact-version":"v1alpha1"},"scrapeInterval":{"type":"string","title":"Metrics interval","enum":["5s","10s","15s","30s"],"default":"15s"},"retention":{"type":"string","title":"Metrics retention","enum":["1d","7d","15d"],"default":"7d"}}}`),
 		ArtifactInputs:  []domain.ArtifactContract{{Type: "ClusterConnection", Version: "v1alpha1"}, {Type: "StorageClassCapability", Version: "v1alpha1"}},
@@ -340,9 +353,23 @@ func (plugin Plugin) Execute(ctx context.Context, step domain.PlanStep, log plug
 	if err != nil {
 		return nil, err
 	}
+	prometheus := endpointByName(endpoints, "prometheus")
+	manifest, err := monAgentManifest(input.Marker, prometheus)
+	if err != nil {
+		return nil, err
+	}
+	if err := log("info", "Installing the managed mon-agent with release defaults"); err != nil {
+		return nil, err
+	}
+	if _, err := runner.Kubectl(ctx, cluster.Spec.Kubeconfig, manifest, "apply", "-f", "-"); err != nil {
+		return nil, fmt.Errorf("install managed mon-agent: %w", err)
+	}
+	if _, err := runner.Kubectl(ctx, cluster.Spec.Kubeconfig, nil, "rollout", "status", "deployment/"+monAgentName, "-n", namespace, "--timeout=5m"); err != nil {
+		return nil, fmt.Errorf("managed mon-agent is not ready: %w", err)
+	}
 	grafana := endpointByName(endpoints, "grafana")
 	value := result{
-		ObservabilityCapability: observabilityCapability{APIVersion: artifactAPI, Kind: "ObservabilityCapability", Metadata: observabilityCapabilityMetadata{Name: "managed-observability", Version: chartVersion}, Spec: observabilityCapabilitySpec{ClusterServer: cluster.Spec.Server, Namespace: namespace, ScrapeInterval: input.ScrapeInterval, Retention: input.Retention, Endpoints: endpoints, MetricsAPI: "prometheus-v1"}},
+		ObservabilityCapability: observabilityCapability{APIVersion: artifactAPI, Kind: "ObservabilityCapability", Metadata: observabilityCapabilityMetadata{Name: "managed-observability", Version: chartVersion + "+mon-agent." + monAgentVersion}, Spec: observabilityCapabilitySpec{ClusterServer: cluster.Spec.Server, Namespace: namespace, ScrapeInterval: input.ScrapeInterval, Retention: input.Retention, Endpoints: endpoints, MetricsAPI: "prometheus-v1", MonAgent: managedAgent{Name: monAgentName, Version: monAgentVersion, Namespace: namespace, ScrapePeriodSeconds: 30, PromQLRange: "5m", Status: "ready"}}},
 		GrafanaCredential:       serviceCredential{APIVersion: artifactAPI, Kind: "ServiceCredential", Metadata: serviceCredentialMetadata{Name: "grafana-admin", Role: "management"}, Spec: serviceCredentialSpec{Namespace: namespace, Service: grafana.ServiceName, Username: grafanaUser, Password: password}},
 	}
 	return json.Marshal(value)
@@ -373,6 +400,9 @@ func (plugin Plugin) Verify(ctx context.Context, step domain.PlanStep, raw json.
 	if err := verifyPods(ctx, runner, cluster.Spec.Kubeconfig); err != nil {
 		return unhealthy(err.Error(), "pods", "unhealthy"), nil
 	}
+	if _, err := runner.Kubectl(ctx, cluster.Spec.Kubeconfig, nil, "rollout", "status", "deployment/"+monAgentName, "-n", namespace, "--timeout=5m"); err != nil {
+		return unhealthy("Managed mon-agent is not ready: "+err.Error(), "monAgent", "unhealthy"), nil
+	}
 	if err := verifyPVCs(ctx, runner, cluster.Spec.Kubeconfig); err != nil {
 		return unhealthy(err.Error(), "persistence", "unhealthy"), nil
 	}
@@ -385,10 +415,10 @@ func (plugin Plugin) Verify(ctx context.Context, step domain.PlanStep, raw json.
 	if err := verifyCRDOwnership(ctx, runner, cluster.Spec.Kubeconfig, input.Marker); err != nil {
 		return unhealthy(err.Error(), "ownership", "invalid"), nil
 	}
-	if err := log("info", "Prometheus API, Grafana API, exporters, dashboards and persistent volumes are verified"); err != nil {
+	if err := log("info", "Prometheus API, Grafana API, mon-agent, exporters, dashboards and persistent volumes are verified"); err != nil {
 		return domain.HealthReport{}, err
 	}
-	return domain.HealthReport{Status: domain.HealthHealthy, Summary: "Managed observability is ready", Checks: map[string]string{"chart": chartVersion, "prometheus": "ready", "grafana": "ready", "pods": "ready", "persistence": "bound", "scrapeInterval": input.ScrapeInterval, "retention": input.Retention}}, nil
+	return domain.HealthReport{Status: domain.HealthHealthy, Summary: "Managed observability is ready", Checks: map[string]string{"chart": chartVersion, "prometheus": "ready", "grafana": "ready", "monAgent": monAgentVersion, "pods": "ready", "persistence": "bound", "scrapeInterval": input.ScrapeInterval, "retention": input.Retention}}, nil
 }
 
 func (plugin Plugin) Cleanup(ctx context.Context, step domain.PlanStep, _ json.RawMessage, log plugins.Logger) error {
@@ -408,6 +438,9 @@ func (plugin Plugin) Cleanup(ctx context.Context, step domain.PlanStep, _ json.R
 		return err
 	}
 	if _, err := runner.Helm(ctx, cluster.Spec.Kubeconfig, nil, nil, "uninstall", releaseName, "--namespace", namespace, "--wait", "--timeout", "10m", "--ignore-not-found"); err != nil {
+		return err
+	}
+	if _, err := runner.Kubectl(ctx, cluster.Spec.Kubeconfig, nil, "delete", "clusterrole/"+monAgentName, "clusterrolebinding/"+monAgentName, "--ignore-not-found", "--wait=true", "--timeout=2m"); err != nil {
 		return err
 	}
 	for _, crd := range managedCRDs {
@@ -542,6 +575,35 @@ func managedValues(input stepInput, storageClass, password string) ([]byte, erro
 	return yaml.Marshal(values)
 }
 
+func monAgentManifest(marker string, prometheus serviceEndpoint) ([]byte, error) {
+	annotations := map[string]string{ownershipKey: marker}
+	labels := map[string]string{"app.kubernetes.io/name": monAgentName, "app.kubernetes.io/managed-by": "kubephos"}
+	resources := []any{
+		map[string]any{"apiVersion": "v1", "kind": "ServiceAccount", "metadata": map[string]any{"name": monAgentName, "namespace": namespace, "annotations": annotations, "labels": labels}},
+		map[string]any{"apiVersion": "rbac.authorization.k8s.io/v1", "kind": "ClusterRole", "metadata": map[string]any{"name": monAgentName, "annotations": annotations, "labels": labels}, "rules": []any{
+			map[string]any{"apiGroups": []string{""}, "resources": []string{"namespaces", "nodes"}, "verbs": []string{"get", "list", "watch"}},
+			map[string]any{"apiGroups": []string{""}, "resources": []string{"nodes"}, "verbs": []string{"patch"}},
+			map[string]any{"apiGroups": []string{"apps"}, "resources": []string{"deployments"}, "verbs": []string{"get", "list", "watch", "patch"}},
+		}},
+		map[string]any{"apiVersion": "rbac.authorization.k8s.io/v1", "kind": "ClusterRoleBinding", "metadata": map[string]any{"name": monAgentName, "annotations": annotations, "labels": labels}, "roleRef": map[string]string{"apiGroup": "rbac.authorization.k8s.io", "kind": "ClusterRole", "name": monAgentName}, "subjects": []any{map[string]string{"kind": "ServiceAccount", "name": monAgentName, "namespace": namespace}}},
+		map[string]any{"apiVersion": "apps/v1", "kind": "Deployment", "metadata": map[string]any{"name": monAgentName, "namespace": namespace, "annotations": annotations, "labels": labels}, "spec": map[string]any{
+			"replicas": 1, "selector": map[string]any{"matchLabels": labels}, "template": map[string]any{"metadata": map[string]any{"labels": labels}, "spec": map[string]any{
+				"serviceAccountName": monAgentName, "nodeSelector": map[string]string{"kubephos.dev/role": "management"}, "containers": []any{map[string]any{
+					"name": monAgentName, "image": monAgentImage, "imagePullPolicy": "IfNotPresent",
+					"env": []any{
+						map[string]any{"name": "PROMETHEUS_URL", "value": fmt.Sprintf("http://%s.%s.svc:%d", prometheus.ServiceName, namespace, prometheus.Port)},
+						map[string]any{"name": "SCRAPE_PERIOD_SECONDS", "value": "30"},
+						map[string]any{"name": "PROMQL_RANGE", "value": "5m"},
+						map[string]any{"name": "NAMESPACE_LABEL_SELECTOR", "value": "kubephos.dev/monitored=true"},
+					},
+					"resources": map[string]any{"requests": map[string]string{"cpu": "100m", "memory": "128Mi"}, "limits": map[string]string{"cpu": "500m", "memory": "512Mi"}},
+				}},
+			}},
+		}},
+	}
+	return json.Marshal(map[string]any{"apiVersion": "v1", "kind": "List", "items": resources})
+}
+
 type helmResult struct {
 	value string
 	err   error
@@ -642,7 +704,7 @@ func healthProxyPath(endpoint serviceEndpoint) string {
 func validateResult(value result, input stepInput, cluster clusterConnection) error {
 	capability := value.ObservabilityCapability
 	credential := value.GrafanaCredential
-	if capability.APIVersion != artifactAPI || capability.Kind != "ObservabilityCapability" || capability.Metadata.Name != "managed-observability" || capability.Metadata.Version != chartVersion || capability.Spec.ClusterServer != cluster.Spec.Server || capability.Spec.Namespace != namespace || capability.Spec.ScrapeInterval != input.ScrapeInterval || capability.Spec.Retention != input.Retention || capability.Spec.MetricsAPI != "prometheus-v1" || len(capability.Spec.Endpoints) != 2 {
+	if capability.APIVersion != artifactAPI || capability.Kind != "ObservabilityCapability" || capability.Metadata.Name != "managed-observability" || capability.Metadata.Version != chartVersion+"+mon-agent."+monAgentVersion || capability.Spec.ClusterServer != cluster.Spec.Server || capability.Spec.Namespace != namespace || capability.Spec.ScrapeInterval != input.ScrapeInterval || capability.Spec.Retention != input.Retention || capability.Spec.MetricsAPI != "prometheus-v1" || len(capability.Spec.Endpoints) != 2 || capability.Spec.MonAgent.Name != monAgentName || capability.Spec.MonAgent.Version != monAgentVersion || capability.Spec.MonAgent.Status != "ready" {
 		return errors.New("observability capability does not match the validated plan")
 	}
 	if endpointByName(capability.Spec.Endpoints, "grafana").NodePort != grafanaPort || endpointByName(capability.Spec.Endpoints, "prometheus").NodePort != prometheusPort {
@@ -711,6 +773,11 @@ func installConflicts(ctx context.Context, runner clusterRunner, kubeconfig stri
 			return fmt.Errorf("required CRD %s already exists", crd)
 		}
 	}
+	for _, resource := range []string{"clusterrole/" + monAgentName, "clusterrolebinding/" + monAgentName} {
+		if _, err := runner.Kubectl(ctx, kubeconfig, nil, "get", resource); err == nil {
+			return fmt.Errorf("managed resource %s already exists", resource)
+		}
+	}
 	return nil
 }
 
@@ -739,6 +806,16 @@ func cleanupOwnership(ctx context.Context, runner clusterRunner, kubeconfig, mar
 	if found && !namespaceOwned {
 		return false, errors.New("managed observability CRDs exist without the owned namespace")
 	}
+	for _, resource := range []string{"clusterrole/" + monAgentName, "clusterrolebinding/" + monAgentName} {
+		value, err := runner.Kubectl(ctx, kubeconfig, nil, "get", resource, "-o", "jsonpath={.metadata.annotations.kubephos\\.dev/ownership-marker}")
+		if err != nil {
+			continue
+		}
+		found = true
+		if strings.TrimSpace(value) != marker {
+			return false, fmt.Errorf("managed resource %s is not owned by this operation", resource)
+		}
+	}
 	return found, nil
 }
 
@@ -747,6 +824,11 @@ func verifyCRDOwnership(ctx context.Context, runner clusterRunner, kubeconfig, m
 		value, err := runner.Kubectl(ctx, kubeconfig, nil, "get", "crd", crd, "-o", "jsonpath={.metadata.annotations.kubephos\\.dev/ownership-marker}")
 		if err != nil || strings.TrimSpace(value) != marker {
 			return fmt.Errorf("managed CRD %s failed ownership verification", crd)
+		}
+	}
+	for _, resource := range []string{"clusterrole/" + monAgentName, "clusterrolebinding/" + monAgentName} {
+		if _, err := runner.Kubectl(ctx, kubeconfig, nil, "get", resource); err == nil {
+			return fmt.Errorf("managed resource %s remains after cleanup", resource)
 		}
 	}
 	return nil

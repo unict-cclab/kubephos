@@ -72,7 +72,7 @@ export function ExperimentConfigurationsView(props: Props) {
 
 export function ExperimentConfigurationDialog({open, close, clusters, workspaces, applications, plugins, session, changed}: Props & {open: boolean; close: () => void}) {
   const compatiblePlugins = useMemo(() => experimentPlugins(plugins), [plugins])
-  const advancedPlugins = compatiblePlugins.filter(item => primaryCapabilities(item).some(capability => !['load.', 'metrics.', 'chaos.'].some(prefix => capability.startsWith(prefix))))
+  const advancedPlugins = compatiblePlugins.filter(item => primaryCapabilities(item).some(capability => !['load.', 'metrics.', 'monitoring.', 'chaos.'].some(prefix => capability.startsWith(prefix))))
   const [workspaceId, setWorkspaceId] = useState(workspaces[0]?.id ?? '')
   const availableClusters = clusters.filter(item => item.status === 'ready' && item.workspaceId === workspaceId)
   const [clusterResourceId, setClusterResourceId] = useState('')
@@ -88,8 +88,10 @@ export function ExperimentConfigurationDialog({open, close, clusters, workspaces
   const metricsComponent = components.find(item => item.capability.startsWith('metrics.'))
   const networkComponent = components.find(item => item.capability.startsWith('chaos.'))
   const networkPlugin = compatiblePlugins.find(item => primaryCapabilities(item).some(capability => capability.startsWith('chaos.')))
+  const monAgentComponent = components.find(item => item.capability.startsWith('monitoring.'))
+  const monAgentPlugin = compatiblePlugins.find(item => primaryCapabilities(item).some(capability => capability.startsWith('monitoring.')))
   const managedNetworkAvailable = typeof selectedCluster?.spec?.managedProfile === 'string' && selectedCluster.spec.managedProfile.length > 0
-  const advancedComponents = components.filter(item => !['load.', 'metrics.', 'chaos.'].some(prefix => item.capability.startsWith(prefix)))
+  const advancedComponents = components.filter(item => !['load.', 'metrics.', 'monitoring.', 'chaos.'].some(prefix => item.capability.startsWith(prefix)))
   useEffect(() => {
 	if (!open) return
 	setWorkspaceId(current => workspaces.some(item => item.id === current) ? current : workspaces[0]?.id ?? '')
@@ -100,8 +102,8 @@ export function ExperimentConfigurationDialog({open, close, clusters, workspaces
 	setClusterResourceId(current => availableClusters.some(item => item.id === current) ? current : availableClusters[0]?.id ?? '')
   }, [open, workspaceId, clusters])
   useEffect(() => {
-	if (!open || zones.length >= 2 && managedNetworkAvailable) return
-	setComponents(items => items.some(item => item.capability.startsWith('chaos.')) ? items.filter(item => !item.capability.startsWith('chaos.')) : items)
+	if (!open) return
+	setComponents(items => items.filter(item => !(item.capability.startsWith('chaos.') && (zones.length < 2 || !managedNetworkAvailable)) && !(item.capability.startsWith('monitoring.') && !managedNetworkAvailable)))
   }, [open, clusterResourceId, zones.length, managedNetworkAvailable])
   useEffect(() => {
 	if (!open || components.length) return
@@ -133,6 +135,20 @@ export function ExperimentConfigurationDialog({open, close, clusters, workspaces
     const capability = primaryCapabilities(networkPlugin).find(item => item.startsWith('chaos.')) ?? ''
     setComponents(items => {
       const next = {key: sequence, pluginId: networkPlugin.id, capability}
+      const load = items.findIndex(item => item.capability.startsWith('load.'))
+      return load < 0 ? [...items, next] : [...items.slice(0, load), next, ...items.slice(load)]
+    })
+    setSequence(value => value + 1)
+  }
+  const setMonAgentEnabled = (enabled: boolean) => {
+    if (!enabled) {
+      setComponents(items => items.filter(item => !item.capability.startsWith('monitoring.')))
+      return
+    }
+    if (!monAgentPlugin || monAgentComponent) return
+    const capability = primaryCapabilities(monAgentPlugin).find(item => item.startsWith('monitoring.')) ?? ''
+    setComponents(items => {
+      const next = {key: sequence, pluginId: monAgentPlugin.id, capability}
       const load = items.findIndex(item => item.capability.startsWith('load.'))
       return load < 0 ? [...items, next] : [...items.slice(0, load), next, ...items.slice(load)]
     })
@@ -185,6 +201,8 @@ export function ExperimentConfigurationDialog({open, close, clusters, workspaces
       {networkComponent && networkPlugin && <section className="experiment-component"><SchemaFields schema={experimentSchema(networkPlugin.schema, networkComponent.capability)} prefix={`component-${networkComponent.key}`} applications={applications} artifacts={[]} connections={[]} credentials={[]} /></section>}
       <div className="form-section"><strong>4. Monitoring</strong><p>Choose the query window and resolution used to collect the run results.</p></div>
       {metricsComponent && (() => {const plugin = compatiblePlugins.find(item => item.id === metricsComponent.pluginId)!; return <section className="experiment-component"><SchemaFields schema={experimentSchema(plugin.schema, metricsComponent.capability)} prefix={`component-${metricsComponent.key}`} applications={applications} artifacts={[]} connections={[]} credentials={[]} /></section>})()}
+      <label className="checkbox-field"><input type="checkbox" checked={Boolean(monAgentComponent)} disabled={!monAgentPlugin || !managedNetworkAvailable} onChange={event => setMonAgentEnabled(event.target.checked)} /><span>Customize mon-agent for this experiment</span></label>
+      {monAgentComponent && monAgentPlugin && <section className="experiment-component"><SchemaFields schema={experimentSchema(monAgentPlugin.schema, monAgentComponent.capability)} prefix={`component-${monAgentComponent.key}`} applications={applications} artifacts={[]} connections={[]} credentials={[]} /></section>}
       <div className="form-section"><strong>5. Load profile</strong><p>Define the traffic intensity, temporal pattern and distribution across application zones.</p></div>
       {loadComponent && (() => {const plugin = compatiblePlugins.find(item => item.id === loadComponent.pluginId)!; return <section className="experiment-component"><SchemaFields schema={experimentSchema(plugin.schema, loadComponent.capability)} prefix={`component-${loadComponent.key}`} applications={applications} artifacts={[]} connections={[]} credentials={[]} />{zones.length > 0 && <fieldset className="zone-weights"><legend>Geographic distribution</legend><p>Relative traffic weight for each application zone.</p><div className="capacity-grid">{zones.map(zone => <label key={zone}>{zone}<input name={`zoneWeight-${loadComponent.key}-${zone}`} type="number" min={0} max={1000} defaultValue={1} required /></label>)}</div></fieldset>}</section>})()}
       <details className="advanced-fields"><summary>Advanced scheduling and scaling</summary>
@@ -263,6 +281,7 @@ export function applicationZones(cluster?: ManagedResource): string[] {
 function componentTitle(capability: string): string {
   if (capability.startsWith('load.')) return 'Load profile'
   if (capability.startsWith('metrics.')) return 'Monitoring'
+  if (capability.startsWith('monitoring.')) return 'Mon-agent profile'
   if (capability.startsWith('chaos.')) return 'Network injection between zones'
   if (capability.startsWith('scheduler.')) return 'Scheduler'
   if (capability.startsWith('descheduler.')) return 'Descheduler'
@@ -275,7 +294,7 @@ export function primaryCapabilities(plugin: Plugin): string[] {
 }
 
 export function experimentPlugins(plugins: Plugin[]): Plugin[] {
-  const prefixes = ['scheduler.', 'descheduler.', 'autoscaler.', 'chaos.', 'load.', 'metrics.']
+  const prefixes = ['scheduler.', 'descheduler.', 'autoscaler.', 'chaos.', 'load.', 'metrics.', 'monitoring.']
   return plugins.filter(plugin => {
     const capabilities = primaryCapabilities(plugin)
 	return capabilities.some(capability => prefixes.some(prefix => capability.startsWith(prefix)))

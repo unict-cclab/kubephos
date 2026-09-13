@@ -30,8 +30,8 @@ describe('experiment configuration helpers', () => {
   })
 
   it('keeps orchestration plugins out of the simple experiment form', () => {
-    const values = [plugin('scheduler', ['scheduler.install']), plugin('custom', ['research.strategy'], ['TargetBinding']), plugin('infra', ['infrastructure.provision'])]
-	  expect(experimentPlugins(values).map(item => item.id)).toEqual(['scheduler'])
+    const values = [plugin('scheduler', ['scheduler.install']), plugin('monitoring', ['monitoring.mon-agent.configure']), plugin('custom', ['research.strategy'], ['TargetBinding']), plugin('infra', ['infrastructure.provision'])]
+    expect(experimentPlugins(values).map(item => item.id)).toEqual(['scheduler', 'monitoring'])
   })
 
   it('selects a ready cluster when asynchronously loaded data becomes available', async () => {
