@@ -14,10 +14,12 @@ import (
 	"kubephos.dev/kubephos/internal/domain"
 )
 
+const testSchedulerImage = "harbor.example.test/kubephos/scheduler@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
 func TestSecondarySchedulerLifecycle(t *testing.T) {
 	runner := &fakeRunner{}
 	plugin := Plugin{Runner: runner, StabilityChecks: 2, StabilityInterval: 1}
-	spec := json.RawMessage(`{"clusterConnectionRef":"art_cluster","applicationDeploymentRef":"art_application","targetBindingRef":"art_binding"}`)
+	spec := testSpec()
 	report := plugin.Validate(context.Background(), Invocation{Input: spec})
 	if !report.Valid {
 		t.Fatalf("unexpected validation failure %#v", report.Issues)
@@ -50,7 +52,7 @@ func TestSecondarySchedulerLifecycle(t *testing.T) {
 	if err := json.Unmarshal(value, &decoded); err != nil {
 		t.Fatal(err)
 	}
-	if decoded.SchedulerDeployment.Spec.Image != schedulerImage || decoded.SchedulerDeployment.Spec.Targets[0].ID != "frontend" {
+	if decoded.SchedulerDeployment.Spec.Image != testSchedulerImage || decoded.SchedulerDeployment.Spec.Targets[0].ID != "frontend" {
 		t.Fatalf("unexpected result %#v", decoded)
 	}
 	step.Cleanup = true
@@ -137,7 +139,7 @@ func TestCleanupRejectsForeignOwnership(t *testing.T) {
 func TestValidationRejectsInvalidReferences(t *testing.T) {
 	values := []json.RawMessage{
 		json.RawMessage(`{}`),
-		json.RawMessage(`{"clusterConnectionRef":"art_same","applicationDeploymentRef":"art_same","targetBindingRef":"art_binding"}`),
+		mustJSON(Spec{ClusterConnectionRef: "art_same", ApplicationDeploymentRef: "art_same", TargetBindingRef: "art_binding", Image: testSchedulerImage, ConfigFile: defaultSchedulerConfig}),
 	}
 	for _, value := range values {
 		if (Plugin{}).Validate(context.Background(), Invocation{Input: value}).Valid {
@@ -147,13 +149,16 @@ func TestValidationRejectsInvalidReferences(t *testing.T) {
 }
 
 func TestSchedulerManifestUsesManagedTaggedImage(t *testing.T) {
-	value, err := schedulerManifest(stepInput{Marker: "marker", Namespace: "kubephos-test", SchedulerName: "kubephos-test"})
+	value, err := schedulerManifest(stepInput{Spec: Spec{Image: testSchedulerImage, ConfigFile: defaultSchedulerConfig}, Marker: "marker", Namespace: "kubephos-test", SchedulerName: "kubephos-test"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	text := string(value)
-	if !strings.Contains(text, schedulerImage) || strings.Contains(text, ":latest") || !strings.Contains(text, "system:kube-scheduler") || !strings.Contains(text, "system:volume-scheduler") || !strings.Contains(text, "/usr/local/bin/kube-scheduler") {
+	if !strings.Contains(text, testSchedulerImage) || strings.Contains(text, ":latest") || !strings.Contains(text, "system:kube-scheduler") || !strings.Contains(text, "system:volume-scheduler") || !strings.Contains(text, "--config=/etc/kubephos/scheduler.yaml") {
 		t.Fatalf("unexpected scheduler manifest %s", text)
+	}
+	if !strings.Contains(text, "schedulerName: kubephos-test") || strings.Contains(text, "schedulerName: kubephos-managed") {
+		t.Fatalf("scheduler name was not isolated in generated configuration %s", text)
 	}
 	foundation, components, err := partitionSchedulerManifest(value)
 	if err != nil {
@@ -167,13 +172,25 @@ func TestSchedulerManifestUsesManagedTaggedImage(t *testing.T) {
 func plannedStep(t *testing.T) domain.PlanStep {
 	t.Helper()
 	plugin := Plugin{}
-	plan, err := plugin.Plan(context.Background(), json.RawMessage(`{"clusterConnectionRef":"art_cluster","applicationDeploymentRef":"art_application","targetBindingRef":"art_binding"}`))
+	plan, err := plugin.Plan(context.Background(), testSpec())
 	if err != nil {
 		t.Fatal(err)
 	}
 	step := plan.Steps[0]
 	step.ResolvedInputs = testArtifacts()
 	return step
+}
+
+func testSpec() json.RawMessage {
+	return mustJSON(Spec{ClusterConnectionRef: "art_cluster", ApplicationDeploymentRef: "art_application", TargetBindingRef: "art_binding", Image: testSchedulerImage, ConfigFile: defaultSchedulerConfig})
+}
+
+func mustJSON(value any) json.RawMessage {
+	raw, err := json.Marshal(value)
+	if err != nil {
+		panic(err)
+	}
+	return raw
 }
 
 func testArtifacts() map[string]domain.ResolvedArtifact {

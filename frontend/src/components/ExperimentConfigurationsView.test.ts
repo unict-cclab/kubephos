@@ -2,6 +2,7 @@ import {render, screen, waitFor} from '@testing-library/react'
 import {createElement} from 'react'
 import {beforeAll, describe, expect, it} from 'vitest'
 import type {Application, ManagedResource, Plugin, Workspace} from '../types'
+import {isTerminalExperiment} from '../lib'
 import {applicationZones, configurableSchema, ExperimentConfigurationDialog, experimentPlugins, primaryCapabilities} from './ExperimentConfigurationsView'
 
 beforeAll(() => {
@@ -35,7 +36,7 @@ describe('experiment configuration helpers', () => {
   })
 
   it('selects a ready cluster when asynchronously loaded data becomes available', async () => {
-    const base = {open: true, close: () => {}, items: [], experiments: [], clusters: [], workspaces: [], applications: [], plugins: [], session: {authenticated: true}, isAdmin: true, changed: async () => {}, openOperation: () => {}}
+    const base = {open: true, close: () => {}, items: [], experiments: [], clusters: [], workspaces: [], applications: [], plugins: [], strategies: [], session: {authenticated: true}, isAdmin: true, changed: async () => {}, openOperation: () => {}}
     const view = render(createElement(ExperimentConfigurationDialog, base))
     view.rerender(createElement(ExperimentConfigurationDialog, {...base, clusters: [cluster], workspaces: [workspace], applications: [application], plugins: [loadPlugin, metricsPlugin]}))
 
@@ -45,6 +46,14 @@ describe('experiment configuration helpers', () => {
 
   it('derives unique application zones from the selected cluster', () => {
     expect(applicationZones(cluster)).toEqual(['zone-a', 'zone-b'])
+  })
+
+  it('allows deletion only after an experiment reaches a terminal state', () => {
+    expect(isTerminalExperiment('succeeded')).toBe(true)
+    expect(isTerminalExperiment(' FAILED ')).toBe(true)
+    expect(isTerminalExperiment('canceled')).toBe(true)
+    expect(isTerminalExperiment('running')).toBe(false)
+    expect(isTerminalExperiment('queued')).toBe(false)
   })
 })
 

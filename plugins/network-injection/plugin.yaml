@@ -3,8 +3,8 @@ kind: Plugin
 metadata:
   id: io.kubephos.chaos.network.zones
   name: Inter-zone network injection
-  version: 0.1.0
-  description: Applies and verifies a symmetric latency profile between every application zone.
+  version: 0.3.0
+  description: Applies latency, jitter, bandwidth and packet loss to directed links between application zones.
 spec:
   protocol: v1alpha1
   commands:
@@ -26,6 +26,15 @@ spec:
       - managedPlatformRef
       - latencyMilliseconds
       - jitterMilliseconds
+      - nodeGroupLabel
+      - networkInterface
+      - hostNetwork
+      - enableLatency
+      - correlationPercent
+      - enableBandwidth
+      - bandwidthBytesPerSecond
+      - enablePacketLoss
+      - packetLossPercent
     properties:
       clusterConnectionRef:
         type: string
@@ -45,18 +54,70 @@ spec:
         format: kubephos-artifact-ref
         x-kubephos-artifact-type: ManagedPlatformCapability
         x-kubephos-artifact-version: v1alpha1
+      nodeGroupLabel:
+        type: string
+        title: Node group label
+        default: topology.kubernetes.io/zone
+      nodeSelector:
+        type: string
+        title: Affected node selector
+        default: kubephos.dev/role=application
+      networkInterface:
+        type: string
+        title: Network interface
+        default: flannel.1
+      hostNetwork:
+        type: boolean
+        title: Shape host-network traffic
+        default: false
+      enableLatency:
+        type: boolean
+        title: Inject latency
+        default: true
       latencyMilliseconds:
         type: integer
         title: Cross-zone latency in ms
         minimum: 1
-        maximum: 5000
+        maximum: 60000
         default: 50
       jitterMilliseconds:
         type: integer
         title: Jitter in ms
         minimum: 0
-        maximum: 5000
+        maximum: 60000
         default: 0
+      correlationPercent:
+        type: number
+        title: Correlation %
+        minimum: 0
+        maximum: 100
+        default: 0
+      enableBandwidth:
+        type: boolean
+        title: Limit bandwidth
+        default: false
+      bandwidthBytesPerSecond:
+        type: integer
+        title: Bandwidth bytes / second
+        minimum: 1
+        maximum: 1000000000000
+        default: 12500000
+      enablePacketLoss:
+        type: boolean
+        title: Inject packet loss
+        default: false
+      packetLossPercent:
+        type: number
+        title: Packet loss %
+        minimum: 0
+        maximum: 100
+        default: 0
+      linkOverrides:
+        type: array
+        title: Directed zone overrides
+        maxItems: 225
+        items:
+          type: object
   runtime:
     executable: network-injection-plugin
     timeout: 10m

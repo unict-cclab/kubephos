@@ -29,9 +29,17 @@ function ArrayValue({value, depth}: {value: unknown[]; depth: number}) {
   if (tabular(value)) {
     const rows = value.slice(0, 200) as Array<Record<string, unknown>>
     const columns = Array.from(new Set(rows.flatMap(row => Object.keys(row)))).slice(0, 12)
-    return <div className="json-table-wrap"><table className="json-table"><thead><tr>{columns.map(column => <th key={column}>{humanize(column)}</th>)}</tr></thead><tbody>{rows.map((row, index) => <tr key={index}>{columns.map(column => <td key={column}>{displayValue(row[column])}</td>)}</tr>)}</tbody></table>{value.length > rows.length && <p className="json-empty">Showing {rows.length} of {value.length} items</p>}</div>
+    const alignment = new Map(columns.map(column => [column, columnAlignment(rows.map(row => row[column]))]))
+    return <div className="json-table-wrap"><table className="json-table"><thead><tr>{columns.map(column => <th className={alignment.get(column)} key={column}>{humanize(column)}</th>)}</tr></thead><tbody>{rows.map((row, index) => <tr key={index}>{columns.map(column => <td className={alignment.get(column)} key={column}>{displayValue(row[column])}</td>)}</tr>)}</tbody></table>{value.length > rows.length && <p className="json-empty">Showing {rows.length} of {value.length} items</p>}</div>
   }
   return <div className="json-list">{value.slice(0, 200).map((current, index) => <div key={index}><StructuredValue value={current} depth={depth + 1} /></div>)}</div>
+}
+
+function columnAlignment(values: unknown[]): string {
+  const populated = values.filter(value => value !== null && value !== undefined && value !== '')
+  if (populated.length && populated.every(value => typeof value === 'number')) return 'numeric-column'
+  if (populated.length && populated.every(value => typeof value === 'boolean')) return 'boolean-column'
+  return 'text-column'
 }
 
 function tabular(value: unknown[]): boolean {

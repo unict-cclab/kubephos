@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Cluster Lens · KubePhos</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <header class="topbar">
+        <div class="brand-block">
+          <span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="5" r="2" /><circle cx="5" cy="18" r="2" /><circle cx="19" cy="18" r="2" /><path d="M11 7 6 16M13 7l5 9M7 18h10" /></svg></span>
+          <div>
+            <p class="breadcrumb">KubePhos <span>/</span> Cluster Lens</p>
+            <h1>Cluster Lens</h1>
+          </div>
+        </div>
+        <div class="header-status">
+          <span id="connectionStatus" class="connection-status" role="status">Connecting</span>
+          <span id="context" class="context">Waiting for cluster</span>
+          <label class="live-toggle"><input id="autoRefresh" type="checkbox" checked /> Auto-refresh</label>
+        </div>
+      </header>
+
+      <section class="toolbar" aria-label="Topology controls">
+        <div class="filters">
+          <label>Namespace <select id="namespaceFilter"></select></label>
+          <label>Group <select id="groupFilter"></select></label>
+        </div>
+        <div class="toolbar-actions">
+          <details class="layer-menu">
+            <summary>Layers</summary>
+            <div class="layer-options">
+              <label><input id="showGateway" type="checkbox" /> Gateway traffic</label>
+              <label><input id="showPodLines" type="checkbox" /> Pod connections</label>
+            </div>
+          </details>
+          <div class="zoom-controls" aria-label="Zoom controls">
+            <button id="zoomOut" type="button" aria-label="Zoom out">−</button>
+            <button id="zoomReset" type="button">Fit</button>
+            <button id="zoomIn" type="button" aria-label="Zoom in">+</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="workspace">
+        <div class="graph-wrap">
+          <div class="graph-info"><div id="stats" class="stats"></div><p id="warnings" class="warnings" hidden></p></div>
+          <svg id="graph" role="img" aria-label="Cluster topology"></svg>
+          <div id="graphEmpty" class="graph-empty" hidden>No nodes match this view.</div>
+          <div class="graph-hint">Drag to pan · Scroll to zoom · Select a node or pod</div>
+        </div>
+        <aside class="inspector" id="inspector">
+          <div class="inspector-tabs" role="tablist" aria-label="Topology details">
+            <button id="selectionTab" type="button" role="tab" aria-selected="true" aria-controls="selectionPanel">Details</button>
+            <button id="legendTab" type="button" role="tab" aria-selected="false" aria-controls="legendPanel">Legend</button>
+          </div>
+          <section id="selectionPanel" role="tabpanel" aria-labelledby="selectionTab">
+            <div id="selection" class="selection-empty"><span class="selection-empty-icon" aria-hidden="true"><svg viewBox="0 0 32 32" fill="none"><circle cx="16" cy="6" r="3" /><circle cx="6" cy="25" r="3" /><circle cx="26" cy="25" r="3" /><path d="m15 9-7 13m9-13 7 13M9 25h14" /></svg></span><strong>Explore the topology</strong><p class="muted">Select a node, pod, or link to inspect its metrics.</p></div>
+          </section>
+          <section id="legendPanel" role="tabpanel" aria-labelledby="legendTab" hidden>
+            <div id="legend" class="legend"></div>
+          </section>
+        </aside>
+      </section>
+    </main>
+    <script src="/app.js"></script>
+  </body>
+</html>

@@ -1,5 +1,7 @@
 name: kubephos
 
+x-kubephos-image: &kubephos-image ${KUBEPHOS_IMAGE:-ghcr.io/unict-cclab/kubephos}:${KUBEPHOS_VERSION:-latest}
+
 x-platform-environment: &platform-environment
   KUBEPHOS_DATABASE_URL: postgres://kubephos:${POSTGRES_PASSWORD:-kubephos-dev}@postgres:5432/kubephos?sslmode=disable
   KUBEPHOS_ARTIFACT_ENDPOINT: http://seaweedfs:8888
@@ -30,6 +32,15 @@ services:
       - postgres-data:/var/lib/postgresql
     restart: unless-stopped
 
+  migration-files:
+    image: *kubephos-image
+    user: "0:0"
+    entrypoint: ["/bin/sh", "-ec"]
+    command: ["cp -R /opt/kubephos/migrations/. /liquibase/changelog/"]
+    volumes:
+      - migration-data:/liquibase/changelog
+    restart: "no"
+
   migrate:
     image: liquibase/liquibase:4.32.0
     environment:
@@ -42,8 +53,10 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      migration-files:
+        condition: service_completed_successfully
     volumes:
-      - ./migrations:/liquibase/changelog:ro
+      - migration-data:/liquibase/changelog:ro
     restart: "no"
 
   seaweedfs:
@@ -59,12 +72,8 @@ services:
     restart: unless-stopped
 
   app:
-    image: kubephos:${KUBEPHOS_VERSION:-dev}
+    image: *kubephos-image
     init: true
-    build:
-      context: .
-      args:
-        VERSION: ${KUBEPHOS_VERSION:-dev}
     environment:
       <<: *platform-environment
       KUBEPHOS_HTTP_ADDRESS: :8080
@@ -85,7 +94,7 @@ services:
     restart: unless-stopped
 
   worker:
-    image: kubephos:${KUBEPHOS_VERSION:-dev}
+    image: *kubephos-image
     init: true
     command: worker
     environment:
@@ -106,3 +115,4 @@ volumes:
   postgres-data:
   seaweed-data:
   platform-data:
+  migration-data:

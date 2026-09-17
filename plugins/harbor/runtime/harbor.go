@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"net"
 	"regexp"
 	"strings"
@@ -32,11 +33,32 @@ const (
 	logPath         = "/var/log/harbor"
 	tlsPath         = "/opt/harbor/tls"
 	markerFile      = "/var/lib/kubephos/harbor.marker"
+	serviceFile     = "/etc/systemd/system/kubephos-harbor.service"
+	serviceName     = "kubephos-harbor.service"
 	development     = "kubephos-dev"
 	releases        = "kubephos-releases"
 	robotMarker     = "KUBEPHOS_ROBOT="
 	caMarker        = "KUBEPHOS_CA="
 )
+
+type proxyTarget struct {
+	Project    string
+	Upstream   string
+	Type       string
+	Source     string
+	Repository string
+	Reference  string
+}
+
+var proxyTargets = []proxyTarget{
+	{Project: "dockerhub-proxy", Upstream: "https://registry-1.docker.io", Type: "docker-hub", Source: "docker.io", Repository: "library/alpine", Reference: "3.23"},
+	{Project: "k8s-proxy", Upstream: "https://registry.k8s.io", Type: "docker-registry", Source: "registry.k8s.io", Repository: "pause", Reference: "3.10.1"},
+	{Project: "ghcr-proxy", Upstream: "https://ghcr.io", Type: "github-ghcr", Source: "ghcr.io", Repository: "unict-cclab/mon-agent", Reference: monAgentProbeVersion},
+	{Project: "gcr-proxy", Upstream: "https://gcr.io", Type: "docker-registry", Source: "gcr.io", Repository: "google-containers/pause", Reference: "3.2"},
+	{Project: "quay-proxy", Upstream: "https://quay.io", Type: "docker-registry", Source: "quay.io", Repository: "prometheus/busybox", Reference: "latest"},
+}
+
+const monAgentProbeVersion = "v0.0.7"
 
 type Plugin struct {
 	Runner commandRunner
@@ -101,13 +123,21 @@ type registryEndpointMetadata struct {
 }
 
 type registryEndpointSpec struct {
-	Protocol string   `json:"protocol"`
-	Host     string   `json:"host"`
-	URL      string   `json:"url"`
-	APIURL   string   `json:"apiURL"`
-	CABundle string   `json:"caBundle"`
-	Insecure bool     `json:"insecure"`
-	Projects []string `json:"projects"`
+	Protocol string           `json:"protocol"`
+	Host     string           `json:"host"`
+	URL      string           `json:"url"`
+	APIURL   string           `json:"apiURL"`
+	CABundle string           `json:"caBundle"`
+	Insecure bool             `json:"insecure"`
+	Projects []string         `json:"projects"`
+	Mirrors  []registryMirror `json:"mirrors"`
+}
+
+type registryMirror struct {
+	Source        string `json:"source"`
+	Endpoint      string `json:"endpoint"`
+	RewritePrefix string `json:"rewritePrefix"`
+	Probe         string `json:"probe"`
 }
 
 type registryCredential struct {
@@ -148,12 +178,12 @@ type commandRunner interface {
 
 func (Plugin) Manifest() plugins.Manifest {
 	return plugins.Manifest{
-		ID: pluginID, Name: "Managed OCI registry", Version: "0.2.0",
+		ID: pluginID, Name: "Managed OCI registry", Version: "0.3.0",
 		Description:     "Installs and validates a managed OCI registry on one dedicated machine.",
 		Schema:          json.RawMessage(`{"type":"object","additionalProperties":false,"required":["machineSetRef","machineAccessRef","registryName"],"properties":{"machineSetRef":{"type":"string","title":"Registry machine","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"MachineSet","x-kubephos-artifact-version":"v1alpha1"},"machineAccessRef":{"type":"string","title":"Machine access","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"MachineAccess","x-kubephos-artifact-version":"v1alpha1"},"registryName":{"type":"string","title":"Registry name","pattern":"^[a-z0-9][a-z0-9-]{0,31}$","default":"managed-registry"}}}`),
 		ArtifactInputs:  []domain.ArtifactContract{{Type: "MachineSet", Version: "v1alpha1"}, {Type: "MachineAccess", Version: "v1alpha1"}},
 		ArtifactOutputs: []domain.ArtifactContract{{Type: "RegistryEndpoint", Version: "v1alpha1"}, {Type: "RegistryCredential", Version: "v1alpha1"}},
-		Capabilities:    []string{"registry.oci.provision", "registry.oci.preflight", "registry.oci.cleanup", "lifecycle.cleanup"},
+		Capabilities:    []string{"registry.oci.provision", "registry.oci.preflight", "registry.oci.cleanup", "lifecycle.cleanup", "lifecycle.cleanup.compatible"},
 		Permissions:     []string{"network.ssh", "registry.manage"},
 	}
 }
@@ -273,11 +303,17 @@ func (plugin Plugin) Execute(ctx context.Context, step domain.PlanStep, log plug
 		return nil, errors.New("managed registry did not return a valid certificate authority")
 	}
 	baseURL := "https://" + target.Address
+	projects := []string{development, releases}
+	mirrors := make([]registryMirror, 0, len(proxyTargets))
+	for _, proxy := range proxyTargets {
+		projects = append(projects, proxy.Project)
+		mirrors = append(mirrors, registryMirror{Source: proxy.Source, Endpoint: baseURL, RewritePrefix: proxy.Project + "/", Probe: proxy.Repository + ":" + proxy.Reference})
+	}
 	value := result{
 		RegistryEndpoint: registryEndpoint{
 			APIVersion: artifactAPI, Kind: "RegistryEndpoint",
 			Metadata: registryEndpointMetadata{Name: input.RegistryName, Version: harborVersion},
-			Spec:     registryEndpointSpec{Protocol: "oci", Host: target.Address, URL: baseURL, APIURL: baseURL + "/api/v2.0", CABundle: string(caBytes), Insecure: false, Projects: []string{development, releases}},
+			Spec:     registryEndpointSpec{Protocol: "oci", Host: target.Address, URL: baseURL, APIURL: baseURL + "/api/v2.0", CABundle: string(caBytes), Insecure: false, Projects: projects, Mirrors: mirrors},
 		},
 		RegistryPushCredential: registryCredential{
 			APIVersion: artifactAPI, Kind: "RegistryCredential",
@@ -318,7 +354,7 @@ func (plugin Plugin) Verify(ctx context.Context, step domain.PlanStep, raw json.
 	if err := log("info", "Registry health, installed version, managed projects, management access and robot token are verified"); err != nil {
 		return domain.HealthReport{}, err
 	}
-	return domain.HealthReport{Status: domain.HealthHealthy, Summary: "Managed OCI registry is ready", Checks: map[string]string{"health": "healthy", "tls": "verified", "version": harborVersion, "projects": "2", "robot": "verified", "server": target.Address}}, nil
+	return domain.HealthReport{Status: domain.HealthHealthy, Summary: "Managed OCI registry and pull-through caches are ready", Checks: map[string]string{"health": "healthy", "tls": "verified", "version": harborVersion, "projects": fmt.Sprintf("%d", 2+len(proxyTargets)), "proxyCaches": fmt.Sprintf("%d", len(proxyTargets)), "robot": "verified", "server": target.Address}}, nil
 }
 
 func (plugin Plugin) Cleanup(ctx context.Context, step domain.PlanStep, _ json.RawMessage, log plugins.Logger) error {
@@ -392,8 +428,14 @@ func validateArtifacts(machines machineSet, access machineAccess) error {
 
 func validateResult(input stepInput, target machine, value result) error {
 	endpoint := value.RegistryEndpoint
-	if endpoint.APIVersion != artifactAPI || endpoint.Kind != "RegistryEndpoint" || endpoint.Metadata.Name != input.RegistryName || endpoint.Metadata.Version != harborVersion || endpoint.Spec.Protocol != "oci" || endpoint.Spec.Host != target.Address || endpoint.Spec.URL != "https://"+target.Address || endpoint.Spec.APIURL != "https://"+target.Address+"/api/v2.0" || endpoint.Spec.Insecure || len(endpoint.Spec.Projects) != 2 || endpoint.Spec.Projects[0] != development || endpoint.Spec.Projects[1] != releases {
+	if endpoint.APIVersion != artifactAPI || endpoint.Kind != "RegistryEndpoint" || endpoint.Metadata.Name != input.RegistryName || endpoint.Metadata.Version != harborVersion || endpoint.Spec.Protocol != "oci" || endpoint.Spec.Host != target.Address || endpoint.Spec.URL != "https://"+target.Address || endpoint.Spec.APIURL != "https://"+target.Address+"/api/v2.0" || endpoint.Spec.Insecure || len(endpoint.Spec.Projects) != 2+len(proxyTargets) || endpoint.Spec.Projects[0] != development || endpoint.Spec.Projects[1] != releases || len(endpoint.Spec.Mirrors) != len(proxyTargets) {
 		return errors.New("registry endpoint does not match the validated plan")
+	}
+	for index, proxy := range proxyTargets {
+		mirror := endpoint.Spec.Mirrors[index]
+		if endpoint.Spec.Projects[index+2] != proxy.Project || mirror.Source != proxy.Source || mirror.Endpoint != endpoint.Spec.URL || mirror.RewritePrefix != proxy.Project+"/" || mirror.Probe != proxy.Repository+":"+proxy.Reference {
+			return errors.New("registry proxy cache profile does not match the managed plan")
+		}
 	}
 	if err := validateCABundle(endpoint.Spec.CABundle); err != nil {
 		return errors.New("registry certificate authority is invalid")
@@ -456,7 +498,7 @@ func installCommand(marker, address, adminPassword, databasePassword, robotSecre
 	}
 	parts := []string{
 		"sudo apt-get update -q",
-		"sudo DEBIAN_FRONTEND=noninteractive apt-get install -y ca-certificates curl docker.io docker-compose-v2 openssl",
+		"sudo DEBIAN_FRONTEND=noninteractive apt-get install -y ca-certificates curl docker.io docker-compose-v2 jq openssl",
 		"sudo systemctl enable --now docker",
 		"sudo docker compose version >/dev/null",
 		"sudo install -d -m 0755 /var/lib/kubephos",
@@ -481,16 +523,38 @@ func installCommand(marker, address, adminPassword, databasePassword, robotSecre
 	}
 	parts = append(parts,
 		"cd "+installPath+" && sudo ./install.sh",
+		"printf '%s\\n' '[Unit]' 'Description=KubePhos managed Harbor registry' 'Wants=network-online.target' 'After=network-online.target docker.service' '' '[Service]' 'Type=oneshot' 'RemainAfterExit=yes' 'WorkingDirectory="+installPath+"' 'ExecStart=/usr/bin/docker compose -f "+installPath+"/docker-compose.yml up -d' 'ExecStop=/usr/bin/docker compose -f "+installPath+"/docker-compose.yml stop' '' '[Install]' 'WantedBy=multi-user.target' | sudo tee "+serviceFile+" >/dev/null",
+		"sudo systemctl daemon-reload",
+		"sudo systemctl enable --now "+serviceName,
 		"rm -f /tmp/kubephos-harbor.tgz",
 		"{ attempt=0; until curl --connect-timeout 3 --max-time 10 --cacert "+tlsPath+"/ca.crt -fsS https://"+address+"/api/v2.0/health | grep -q '\"status\":\"healthy\"'; do attempt=$((attempt + 1)); test \"$attempt\" -lt 61 || exit 1; sleep 5; done; }",
 		"test \"$(curl --cacert "+tlsPath+"/ca.crt -sS -o /tmp/kubephos-project.json -w '%{http_code}' -u "+shellQuote("admin:"+adminPassword)+" -H 'Content-Type: application/json' -d "+shellQuote(projectRequest)+" https://"+address+"/api/v2.0/projects)\" = 201",
 		"test \"$(curl --cacert "+tlsPath+"/ca.crt -sS -o /tmp/kubephos-releases.json -w '%{http_code}' -u "+shellQuote("admin:"+adminPassword)+" -H 'Content-Type: application/json' -d "+shellQuote(releasesRequest)+" https://"+address+"/api/v2.0/projects)\" = 201",
+	)
+	parts = append(parts, proxyInstallCommands(address, adminPassword)...)
+	parts = append(parts,
 		"printf '\\n"+robotMarker+"'",
 		"curl --cacert "+tlsPath+"/ca.crt -fsS -u "+shellQuote("admin:"+adminPassword)+" -H 'Content-Type: application/json' -d "+shellQuote(string(robotRequest))+" https://"+address+"/api/v2.0/robots",
 		"printf '\n"+caMarker+"'",
 		"sudo base64 -w0 "+tlsPath+"/ca.crt",
 	)
 	return strings.Join(parts, " && ")
+}
+
+func proxyInstallCommands(address, adminPassword string) []string {
+	baseURL := "https://" + address + "/api/v2.0"
+	commands := make([]string, 0, len(proxyTargets)*4)
+	for _, proxy := range proxyTargets {
+		registryName := proxy.Source + "-upstream"
+		registryRequest, _ := json.Marshal(map[string]string{"name": registryName, "url": proxy.Upstream, "type": proxy.Type})
+		commands = append(commands,
+			"proxy_status=$(curl --cacert "+tlsPath+"/ca.crt -sS -o /tmp/kubephos-proxy-registry.json -w '%{http_code}' -u "+shellQuote("admin:"+adminPassword)+" -H 'Content-Type: application/json' -d "+shellQuote(string(registryRequest))+" "+shellQuote(baseURL+"/registries")+"); { test \"$proxy_status\" = 201 || test \"$proxy_status\" = 409; }",
+			"proxy_registry_id=$(curl --cacert "+tlsPath+"/ca.crt -fsS -u "+shellQuote("admin:"+adminPassword)+" "+shellQuote(baseURL+"/registries?name="+registryName)+" | jq -er "+shellQuote("map(select(.name == \""+registryName+"\" and .url == \""+proxy.Upstream+"\")) | .[0].id")+")",
+			"proxy_project_payload=$(jq -cn --arg name "+shellQuote(proxy.Project)+" --argjson registry \"$proxy_registry_id\" '{project_name:$name,registry_id:$registry,public:true,metadata:{public:\"true\"}}')",
+			"proxy_status=$(curl --cacert "+tlsPath+"/ca.crt -sS -o /tmp/kubephos-proxy-project.json -w '%{http_code}' -u "+shellQuote("admin:"+adminPassword)+" -H 'Content-Type: application/json' -d \"$proxy_project_payload\" "+shellQuote(baseURL+"/projects")+"); { test \"$proxy_status\" = 201 || test \"$proxy_status\" = 409; }",
+		)
+	}
+	return commands
 }
 
 func readinessCommand(marker, address, adminPassword, robotName, robotSecret string) string {
@@ -502,6 +566,8 @@ func readinessCommand(marker, address, adminPassword, robotName, robotSecret str
 	}{
 		{"the registry ownership marker does not match", "sudo test \"$(sudo cat " + markerFile + ")\" = " + shellQuote(marker)},
 		{"the registry compose definition is missing", "test -f " + installPath + "/docker-compose.yml"},
+		{"the registry boot service is not enabled", "sudo systemctl is-enabled --quiet " + serviceName},
+		{"the registry boot service is not active", "sudo systemctl is-active --quiet " + serviceName},
 		{"one or more registry containers are not running", "test \"$(sudo docker ps -q --filter label=com.docker.compose.project=harbor | wc -l)\" -ge 8"},
 		{"the registry certificate does not match its IP address", "sudo openssl x509 -checkip " + address + " -noout -in " + tlsPath + "/server.crt"},
 		{"the registry health endpoint is not healthy", curl + " " + baseURL + "/api/v2.0/health | grep -q '\"status\":\"healthy\"'"},
@@ -509,6 +575,23 @@ func readinessCommand(marker, address, adminPassword, robotName, robotSecret str
 		{"the development project is unavailable to the management identity", curl + " -u " + shellQuote("admin:"+adminPassword) + " '" + baseURL + "/api/v2.0/projects?name=" + development + "' | grep -Fq '\"name\":\"" + development + "\"'"},
 		{"the releases project is unavailable to the management identity", curl + " -u " + shellQuote("admin:"+adminPassword) + " '" + baseURL + "/api/v2.0/projects?name=" + releases + "' | grep -Fq '\"name\":\"" + releases + "\"'"},
 		{"the registry robot cannot obtain a scoped token", curl + " -u " + shellQuote(robotName+":"+robotSecret) + " '" + baseURL + "/service/token?service=harbor-registry&scope=repository%3A" + development + "%2Fkubephos-probe%3Apull%2Cpush' | grep -Fq '\"token\"'"},
+	}
+	for _, proxy := range proxyTargets {
+		registryName := proxy.Source + "-upstream"
+		checks = append(checks,
+			struct {
+				name    string
+				command string
+			}{"the " + proxy.Source + " upstream endpoint is unavailable", curl + " -u " + shellQuote("admin:"+adminPassword) + " " + shellQuote(baseURL+"/api/v2.0/registries?name="+registryName) + " | jq -e " + shellQuote("any(.[]; .name == \""+registryName+"\" and .url == \""+proxy.Upstream+"\")") + " >/dev/null"},
+			struct {
+				name    string
+				command string
+			}{"the " + proxy.Source + " proxy project is unavailable", curl + " -u " + shellQuote("admin:"+adminPassword) + " " + shellQuote(baseURL+"/api/v2.0/projects?name="+proxy.Project) + " | jq -e " + shellQuote("any(.[]; .name == \""+proxy.Project+"\" and (.registry_id // 0) > 0)") + " >/dev/null"},
+			struct {
+				name    string
+				command string
+			}{"the " + proxy.Source + " proxy pull failed", curl + " -u " + shellQuote("admin:"+adminPassword) + " -H 'Accept: application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json' " + shellQuote(baseURL+"/v2/"+proxy.Project+"/"+proxy.Repository+"/manifests/"+proxy.Reference) + " >/dev/null"},
+		)
 	}
 	return guardedCommands(checks)
 }
@@ -529,11 +612,11 @@ func cleanupPrecheckCommand(marker string) string {
 }
 
 func cleanupCommand(marker string) string {
-	return "if test ! -e " + markerFile + " && test ! -e " + installPath + " && test ! -e " + dataPath + " && test ! -e " + logPath + "; then exit 0; fi && sudo test \"$(sudo cat " + markerFile + ")\" = " + shellQuote(marker) + " && if test -f " + installPath + "/docker-compose.yml; then cd " + installPath + " && sudo docker compose down -v --remove-orphans; fi && sudo rm -rf -- " + installPath + " " + dataPath + " " + logPath + " && sudo rm -f " + markerFile
+	return "if test ! -e " + markerFile + " && test ! -e " + installPath + " && test ! -e " + dataPath + " && test ! -e " + logPath + " && test ! -e " + serviceFile + "; then exit 0; fi && sudo test \"$(sudo cat " + markerFile + ")\" = " + shellQuote(marker) + " && { sudo systemctl disable --now " + serviceName + " >/dev/null 2>&1 || true; } && if test -f " + installPath + "/docker-compose.yml; then cd " + installPath + " && sudo docker compose down -v --remove-orphans; fi && sudo rm -f " + serviceFile + " && sudo systemctl daemon-reload && sudo rm -rf -- " + installPath + " " + dataPath + " " + logPath + " && sudo rm -f " + markerFile
 }
 
 func cleanupVerifyCommand() string {
-	return "test ! -e " + markerFile + " && test ! -e " + installPath + " && test ! -e " + dataPath + " && test ! -e " + logPath + " && if command -v docker >/dev/null; then test -z \"$(sudo docker ps -aq --filter label=com.docker.compose.project=harbor)\"; fi"
+	return "test ! -e " + markerFile + " && test ! -e " + installPath + " && test ! -e " + dataPath + " && test ! -e " + logPath + " && test ! -e " + serviceFile + " && if command -v docker >/dev/null; then test -z \"$(sudo docker ps -aq --filter label=com.docker.compose.project=harbor)\"; fi"
 }
 
 func randomHex(size int) (string, error) {

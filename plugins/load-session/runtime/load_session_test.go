@@ -74,25 +74,28 @@ func TestLoadSessionRejectsInvalidTransition(t *testing.T) {
 
 func TestLoadManifestBuildsGenericLocustRuntime(t *testing.T) {
 	profile := loadProfile{ID: "journey", Engine: "locust", RuntimeImage: "example.test/locust:1.0.0", Script: "from locust import HttpUser\n", Workload: scenarioWorkload("journey")}
-	manifest, err := loadManifest(profile, "owner", Spec{Users: 25, SpawnRate: 5, Pattern: "constant"}, []loadTarget{{URL: "http://node-proxy:80/", Weight: 1}})
+	manifest, err := loadManifest(profile, "owner", Spec{MaxUsers: 25, SpawnRate: 5, Steps: []LoadStep{{Type: "constant", DurationSeconds: 60, RPS: 20}}}, []loadTarget{{URL: "http://node-proxy:80/", Weight: 1}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	value := string(manifest)
-	for _, expected := range []string{"kind: ConfigMap", "kind: Deployment", "from locust import HttpUser", "http://node-proxy:80/", "kubephos.dev/role: management", "example.test/locust:1.0.0"} {
+	for _, expected := range []string{"kind: ConfigMap", "kind: Deployment", "from locust import HttpUser", "--host", "http://node-proxy:80/", "kubephos.dev/role: management", "example.test/locust:1.0.0", "return 0, spawn_rate", "del name, value"} {
 		if !strings.Contains(value, expected) {
 			t.Fatalf("generated runtime is missing %q:\n%s", expected, value)
 		}
+	}
+	if strings.Contains(locustWrapper, "\t") {
+		t.Fatal("Locust wrapper must use consistent Python indentation")
 	}
 }
 
 func TestResolveLoadTargetsUsesNodeProxyAndZoneWeights(t *testing.T) {
 	runner := geographicRunner{}
-	targets, err := resolveLoadTargets(context.Background(), runner, "config", "experiment", serviceEndpoint{Service: "node-proxy", Port: 80, Protocol: "http", Path: "/"}, Spec{ZoneWeights: map[string]int{"zone-a": 3, "zone-b": 1}})
+	targets, err := resolveLoadTargets(context.Background(), runner, "config", "experiment", serviceEndpoint{Service: "node-proxy", Port: 80, Protocol: "http", Path: "/"}, Spec{GeographicSteps: []GeographicStep{{Type: "constant", DurationSeconds: 60, Weights: map[string]float64{"zone-a": 3, "zone-b": 1}}}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(targets) != 3 || targets[0].Zone != "zone-a" || targets[0].Weight != 3 || targets[2].Zone != "zone-b" || targets[2].Weight != 1 {
+	if len(targets) != 3 || targets[0].Zone != "zone-a" || targets[0].Weight != 1 || targets[2].Zone != "zone-b" || targets[2].Weight != 1 {
 		t.Fatalf("unexpected geographic targets: %#v", targets)
 	}
 	for _, target := range targets {
@@ -141,7 +144,7 @@ func TestLoadSessionCleanupRestoresState(t *testing.T) {
 
 func testStep(t *testing.T, action string, replicas int) domain.PlanStep {
 	t.Helper()
-	spec := Spec{ClusterConnectionRef: "art_cluster", ApplicationDeploymentRef: "art_deployment", LoadScenarioSetRef: "art_scenarios", ScenarioID: "default-load", Action: action, Replicas: replicas, Users: 20, SpawnRate: 2}
+	spec := Spec{ClusterConnectionRef: "art_cluster", ApplicationDeploymentRef: "art_deployment", LoadScenarioSetRef: "art_scenarios", ScenarioID: "default-load", Action: action, Interactive: true, Replicas: replicas, MaxUsers: 20, SpawnRate: 2}
 	raw, _ := json.Marshal(spec)
 	plan, err := (Plugin{}).Plan(context.Background(), raw)
 	if err != nil {

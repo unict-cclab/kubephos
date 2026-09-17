@@ -10,20 +10,28 @@ import (
 )
 
 func TestInspectManifestMatchesDeclaredInterface(t *testing.T) {
+	index := 2
 	manifest := []byte(`apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: api
+  labels:
+    group: test-app
+    index: "2"
 spec:
   template:
     metadata:
       labels:
         app: api
+        group: test-app
+        index: "2"
 ---
 apiVersion: v1
 kind: Service
 metadata:
   name: api
+  labels:
+    group: test-app
 spec:
   selector:
     app: api
@@ -31,7 +39,8 @@ spec:
     - port: 8080
 `)
 	descriptor := catalog.Descriptor{}
-	descriptor.Spec.Interface.Components = []catalog.Component{{ID: "api", Workload: catalog.Workload{APIVersion: "apps/v1", Kind: "Deployment", Name: "api"}, Selector: map[string]string{"app": "api"}, Traits: []string{"scalable"}}}
+	descriptor.Spec.Interface.Group = "test-app"
+	descriptor.Spec.Interface.Components = []catalog.Component{{ID: "api", Workload: catalog.Workload{APIVersion: "apps/v1", Kind: "Deployment", Name: "api"}, Selector: map[string]string{"app": "api"}, Traits: []string{"scalable"}, Index: &index}}
 	descriptor.Spec.Interface.Endpoints = []catalog.Endpoint{{ID: "http", Component: "api", Service: "api", Port: 8080, Protocol: "http"}}
 	workloads, endpoints, err := inspectManifest(manifest, descriptor)
 	if err != nil {
@@ -39,6 +48,9 @@ spec:
 	}
 	if len(workloads) != 1 || len(endpoints) != 1 {
 		t.Fatalf("unexpected interface: %#v %#v", workloads, endpoints)
+	}
+	if workloads[0].Index == nil || *workloads[0].Index != 2 {
+		t.Fatalf("topology index was not propagated: %#v", workloads[0])
 	}
 }
 
@@ -51,6 +63,7 @@ func TestValidateRequiresResolvedCatalogEntry(t *testing.T) {
 }
 
 func TestMaterializeManifestExcludesAndAddsDeclaredResources(t *testing.T) {
+	apiIndex, proxyIndex := 1, 0
 	manifest := []byte(`apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -73,14 +86,22 @@ spec:
 # package footer
 `)
 	descriptor := catalog.Descriptor{}
+	descriptor.Spec.Interface.Group = "test-app"
+	descriptor.Spec.Interface.Components = []catalog.Component{
+		{ID: "api", Workload: catalog.Workload{APIVersion: "apps/v1", Kind: "Deployment", Name: "api"}, Index: &apiIndex},
+		{ID: "node-proxy", Workload: catalog.Workload{APIVersion: "apps/v1", Kind: "DaemonSet", Name: "node-proxy"}, Index: &proxyIndex},
+	}
 	descriptor.Spec.ExcludeResources = []catalog.Workload{{APIVersion: "apps/v1", Kind: "Deployment", Name: "loadgenerator"}}
 	descriptor.Spec.AdditionalManifests = []catalog.AdditionalManifest{{ID: "gateway", Content: "apiVersion: apps/v1\nkind: DaemonSet\nmetadata:\n  name: node-proxy\nspec:\n  template:\n    metadata:\n      labels:\n        app: node-proxy\n"}}
 	application, err := materializeManifest(manifest, descriptor)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(application), "loadgenerator") || !strings.Contains(string(application), "name: api") || !strings.Contains(string(application), "name: node-proxy") {
+	if strings.Contains(string(application), "loadgenerator") || !strings.Contains(string(application), "name: api") || !strings.Contains(string(application), "name: node-proxy") || strings.Count(string(application), "group: test-app") != 4 {
 		t.Fatalf("unexpected application manifest: %s", application)
+	}
+	if strings.Count(string(application), `index: "1"`) != 2 || strings.Count(string(application), `index: "0"`) != 2 {
+		t.Fatalf("topology indexes were not attached to workloads: %s", application)
 	}
 	if _, err := materializeManifest([]byte("apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: api\n"), descriptor); err == nil {
 		t.Fatal("expected a missing exclusion to fail")

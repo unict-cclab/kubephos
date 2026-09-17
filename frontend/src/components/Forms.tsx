@@ -4,6 +4,7 @@ import {readSchemaValues} from '../lib'
 import type {Application, Artifact, Connection, Credential, CredentialDefinition, JsonSchema, ManagedResource, Plugin, PluginRuntimeProfile, PluginRuntimeStatus, Session, Workspace} from '../types'
 import {Dialog} from './Dialog'
 import {SchemaFields} from './SchemaFields'
+import {NumericInput} from './NumericInput'
 
 interface CommonProps {
   session: Session
@@ -34,10 +35,10 @@ export function AuthDialog({setupRequired, onAuthenticated}: {setupRequired: boo
       setPending(false)
     }
   }
-  return <Dialog open title={setupRequired ? 'Create administrator' : 'Sign in'} eyebrow={setupRequired ? 'FIRST RUN' : 'WELCOME BACK'} className="auth-modal">
+  return <Dialog open title={setupRequired ? 'Create administrator' : 'Sign in'} className="auth-modal">
     <form onSubmit={submit}>
-      <div className="auth-brand"><span className="brand-mark">K</span><div><strong>KubePhos</strong><small>Secure control plane</small></div></div>
-      <p className="auth-copy">{setupRequired ? 'Create the only account needed to start. You can add roles later.' : 'Use your KubePhos account to continue.'}</p>
+      <div className="auth-brand"><span className="brand-mark">K</span><strong>KubePhos</strong></div>
+      {setupRequired && <p className="auth-copy">Set up your administrator account.</p>}
       <label>Username<input name="username" minLength={3} maxLength={40} autoComplete="username" required autoFocus /></label>
       <label>Password<input name="password" type="password" minLength={12} maxLength={128} autoComplete={setupRequired ? 'new-password' : 'current-password'} required /></label>
       <p className="form-error">{error}</p>
@@ -277,7 +278,7 @@ export function MachineTemplateDialog({open, close, plugins, workspaces, ...comm
   </Dialog>
 }
 
-export function InfrastructureServiceDialog({open, close, workspaces, templates, ...common}: CommonProps & {open: boolean; close: () => void; workspaces: Workspace[]; templates: ManagedResource[]}) {
+export function InfrastructureServiceDialog({open, close, workspaces, templates, initialKind = 'harbor', ...common}: CommonProps & {open: boolean; close: () => void; workspaces: Workspace[]; templates: ManagedResource[]; initialKind?: 'harbor' | 'nfs'}) {
   const defaultWorkspaceID = workspaces[0]?.id ?? ''
   const defaultConnectionID = common.connections[0]?.id ?? ''
   const [workspaceID, setWorkspaceID] = useState(defaultWorkspaceID)
@@ -289,9 +290,9 @@ export function InfrastructureServiceDialog({open, close, workspaces, templates,
     if (!open) return
     setWorkspaceID(defaultWorkspaceID)
     setConnectionID(defaultConnectionID)
-    setKind('harbor')
+    setKind(initialKind)
     setError('')
-  }, [open, defaultWorkspaceID, defaultConnectionID])
+  }, [open, defaultWorkspaceID, defaultConnectionID, initialKind])
   const availableTemplates = templates.filter(item => item.status === 'ready' && item.workspaceId === workspaceID && item.connectionId === connectionID)
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
@@ -421,7 +422,7 @@ export function KubernetesClusterDialog({open, close, workspaces, templates, ser
       <div className="field-row"><label>Nodes<input name="managementCount" type="number" min={1} max={12} defaultValue={1} required /></label><label>Zones<input name="managementZones" defaultValue="zone-a" pattern="[a-z0-9,-]+" required /></label></div>
       <MachineCapacityFields prefix="management" defaults={{cores: 4, memoryMiB: 8192, diskGiB: 80}} />
       <div className="form-section pool-section"><div><strong>Application pools</strong><p>Each workload pool has independent placement and machine capacity.</p></div><button className="button secondary compact" type="button" disabled={applicationPools.length >= 8} onClick={() => setApplicationPools(items => [...items, {...applicationPoolDefaults(), name: `applications-${items.length + 1}`, count: 1}])}>Add pool</button></div>
-      <div className="pool-editor">{applicationPools.map((pool, index) => <div className="pool-card" key={index}><div className="pool-row"><label>Pool name<input value={pool.name} pattern="[a-z0-9][a-z0-9-]{0,31}" onChange={event => updateApplicationPool(setApplicationPools, index, {name: event.target.value})} required /></label><label>Nodes<input type="number" value={pool.count} min={1} max={12} onChange={event => updateApplicationPool(setApplicationPools, index, {count: Number(event.target.value)})} required /></label><label>Zones<input value={pool.zones} pattern="[a-z0-9,-]+" onChange={event => updateApplicationPool(setApplicationPools, index, {zones: event.target.value})} required /></label>{applicationPools.length > 1 && <button type="button" className="icon-button pool-remove" aria-label={`Remove ${pool.name}`} onClick={() => setApplicationPools(items => items.filter((_, position) => position !== index))}>×</button>}</div><div className="capacity-grid"><label>CPU cores<input type="number" value={pool.capacity.cores} min={1} max={32} onChange={event => updateApplicationPoolCapacity(setApplicationPools, index, {cores: Number(event.target.value)})} required /></label><label>Memory MiB<input type="number" value={pool.capacity.memoryMiB} min={1024} max={131072} onChange={event => updateApplicationPoolCapacity(setApplicationPools, index, {memoryMiB: Number(event.target.value)})} required /></label><label>Disk GiB<input type="number" value={pool.capacity.diskGiB} min={8} max={2048} onChange={event => updateApplicationPoolCapacity(setApplicationPools, index, {diskGiB: Number(event.target.value)})} required /></label></div></div>)}</div>
+      <div className="pool-editor">{applicationPools.map((pool, index) => <div className="pool-card" key={index}><div className="pool-row"><label>Pool name<input value={pool.name} pattern="[a-z0-9][a-z0-9-]{0,31}" onChange={event => updateApplicationPool(setApplicationPools, index, {name: event.target.value})} required /></label><label>Nodes<NumericInput value={pool.count} min={1} max={12} onValueChange={count => updateApplicationPool(setApplicationPools, index, {count})} required /></label><label>Zones<input value={pool.zones} pattern="[a-z0-9,-]+" onChange={event => updateApplicationPool(setApplicationPools, index, {zones: event.target.value})} required /></label>{applicationPools.length > 1 && <button type="button" className="icon-button pool-remove" aria-label={`Remove ${pool.name}`} onClick={() => setApplicationPools(items => items.filter((_, position) => position !== index))}>×</button>}</div><div className="capacity-grid"><label>CPU cores<NumericInput value={pool.capacity.cores} min={1} max={32} onValueChange={cores => updateApplicationPoolCapacity(setApplicationPools, index, {cores})} required /></label><label>Memory MiB<NumericInput value={pool.capacity.memoryMiB} min={1024} max={131072} onValueChange={memoryMiB => updateApplicationPoolCapacity(setApplicationPools, index, {memoryMiB})} required /></label><label>Disk GiB<NumericInput value={pool.capacity.diskGiB} min={8} max={2048} onValueChange={diskGiB => updateApplicationPoolCapacity(setApplicationPools, index, {diskGiB})} required /></label></div></div>)}</div>
       <ValidationCallout text="VM IDs, addresses, template, registry trust, NFS, SSH, Kubernetes API, nodes, zones, storage class and observability are gated in order." />
       {!ready && <p className="form-hint">A ready VM template, Harbor service and NFS service are required on the same connection.</p>}
       <p className="form-error">{error}</p>
@@ -450,36 +451,59 @@ function parseZones(value: string): string[] {
   return [...new Set(value.split(',').map(item => item.trim()).filter(Boolean))]
 }
 
-export function ApplicationDialog({open, close, ...common}: CommonProps & {open: boolean; close: () => void}) {
+export function ApplicationDialog({open, close, plugins, ...common}: CommonProps & {open: boolean; close: () => void; plugins: Plugin[]}) {
   const [file, setFile] = useState<File | null>(null)
+  const [mode, setMode] = useState<'generate' | 'import'>('generate')
+  const factories = plugins.filter(item => item.capabilities?.includes('catalog.application.generate'))
+  const [factoryID, setFactoryID] = useState('')
   const [error, setError] = useState('')
   const [pending, setPending] = useState(false)
+  const factory = factories.find(item => item.id === factoryID) ?? factories[0]
+  useEffect(() => {
+    if (open) {
+      setMode(factories.length ? 'generate' : 'import')
+      setError('')
+    }
+  }, [open, factories.length])
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
-    if (!file) return
-    if (file.size > 512 * 1024) {
+    if (mode === 'import' && !file) return
+    if (mode === 'import' && file && file.size > 512 * 1024) {
       setError('The descriptor cannot exceed 512 KB.')
       return
     }
     setPending(true)
     setError('')
     try {
-      await request('/catalog/applications', {method: 'POST', body: JSON.stringify({descriptor: await file.text()})}, common.session.csrfToken)
+      if (mode === 'generate' && factory) {
+        const configuration = readSchemaValues(event.currentTarget, factory.schema, 'factory')
+        await request(`/catalog/application-factories/${encodeURIComponent(factory.id)}`, {method: 'POST', body: JSON.stringify(configuration)}, common.session.csrfToken)
+      } else if (file) {
+        await request('/catalog/applications', {method: 'POST', body: JSON.stringify({descriptor: await file.text()})}, common.session.csrfToken)
+      }
       close()
-      await common.onDone('Application validated and imported.')
+      await common.onDone(mode === 'generate' ? 'Application generated and added to the catalog.' : 'Application validated and imported.')
     } catch (cause) {
       setError(errorMessage(cause))
     } finally {
       setPending(false)
     }
   }
-  return <Dialog open={open} onClose={close} title="Import application" eyebrow="VALIDATED CATALOG">
-    <form onSubmit={submit}>
-      <label>Application descriptor<input type="file" accept=".yaml,.yml,.json,application/yaml,application/json" required onChange={event => setFile(event.target.files?.[0] ?? null)} /></label>
-      <p className="field-description">{file ? `${file.name} · ${Math.ceil(file.size / 1024)} KB` : 'Select a descriptor that implements catalog.kubephos.dev/v1alpha1.'}</p>
-      <ValidationCallout text="Versions are immutable and remote packages must use a Git commit or OCI digest." />
+  return <Dialog open={open} onClose={close} title="Add application" eyebrow="APPLICATION CATALOG" className="template-modal">
+    <form onSubmit={submit} key={`${mode}-${factory?.id ?? 'import'}`}>
+      {factories.length > 0 && <nav className="form-mode-tabs" aria-label="Application source"><button type="button" className={mode === 'generate' ? 'active' : ''} onClick={() => setMode('generate')}>Generate</button><button type="button" className={mode === 'import' ? 'active' : ''} onClick={() => setMode('import')}>Import</button></nav>}
+      {mode === 'generate' && factory ? <>
+        {factories.length > 1 && <label>Generator<select value={factory.id} onChange={event => setFactoryID(event.target.value)}>{factories.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>}
+        <p className="field-description">Choose the shape of the application. Everything else is generated and validated automatically.</p>
+        <SchemaFields schema={factory.schema} prefix="factory" applications={common.applications} artifacts={common.artifacts} connections={common.connections} credentials={common.credentials} />
+        <ValidationCallout text="Defaults are ready to use. The generated version, manifests and load scenario are immutable and repeatable." />
+      </> : <>
+        <label>Application descriptor<input type="file" accept=".yaml,.yml,.json,application/yaml,application/json" required onChange={event => setFile(event.target.files?.[0] ?? null)} /></label>
+        <p className="field-description">{file ? `${file.name} · ${Math.ceil(file.size / 1024)} KB` : 'Select a KubePhos application descriptor.'}</p>
+        <ValidationCallout text="Versions are immutable and remote packages must use a Git commit or OCI digest." />
+      </>}
       <p className="form-error">{error}</p>
-      <Actions close={close} pending={pending} label="Validate and import" />
+      <Actions close={close} pending={pending} label={mode === 'generate' ? 'Generate application' : 'Validate and import'} />
     </form>
   </Dialog>
 }

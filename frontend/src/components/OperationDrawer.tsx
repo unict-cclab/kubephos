@@ -1,8 +1,10 @@
-import {useCallback, useEffect, useState} from 'react'
+import {useCallback, useEffect, useRef, useState} from 'react'
 import {request} from '../api'
 import {formatBytes, formatDate, shortID} from '../lib'
 import type {Artifact, LogEntry, Operation, Plugin, Session} from '../types'
 import {JsonPreview} from './JsonPreview'
+import {ExecutionProgressGraph} from './ExecutionProgressGraph'
+import {DetailBreadcrumb} from './DetailBreadcrumb'
 import {Status} from './Views'
 
 interface Props {
@@ -15,11 +17,12 @@ interface Props {
   notify: (message: string, error?: boolean) => void
 }
 
-export function OperationDrawer({operationID, session, plugins, close, open, changed, notify}: Props) {
+export function OperationDetailsPage({operationID, session, plugins, close, open, changed, notify}: Props) {
   const [operation, setOperation] = useState<Operation | null>(null)
   const [logs, setLogs] = useState<LogEntry[]>([])
   const [pending, setPending] = useState(false)
   const [preview, setPreview] = useState<{artifact: Artifact; value: unknown} | null>(null)
+  const logsRef = useRef<HTMLDivElement>(null)
 
   const load = useCallback(async () => {
     if (!operationID) return
@@ -118,29 +121,30 @@ export function OperationDrawer({operationID, session, plugins, close, open, cha
   const canQueue = operation?.status === 'ready'
   const canCancel = operation && ['ready', 'queued', 'prechecking', 'running', 'verifying'].includes(operation.status)
   const canCleanup = operation && terminal(operation.status) && !operation.plan.steps.some(step => step.cleanup) && plugins.find(plugin => plugin.id === operation.pluginId)?.capabilities?.includes('lifecycle.cleanup')
-  return <aside className={`drawer ${operationID ? 'open' : ''}`} aria-hidden={!operationID}>
-    <button className="drawer-backdrop" onClick={close} aria-label="Close operation details" />
-    <div className="drawer-panel" role="dialog" aria-modal="true" aria-label="Operation details">
-      <div className="drawer-header"><div><p className="eyebrow">OPERATION</p><h2>{operation?.title ?? 'Loading…'}</h2></div><button className="icon-button" onClick={close} aria-label="Close">×</button></div>
-      {operation && <>
-        <div className="detail-summary"><div><Status value={operation.status} /><p>{shortID(operation.id)} · {formatDate(operation.createdAt)}</p></div></div>
-        <div className="detail-actions">{canQueue && <button className="button primary" disabled={pending} onClick={queue}>Confirm plan and start</button>}{canCleanup && <button className="button danger" disabled={pending} onClick={prepareCleanup}>Prepare cleanup</button>}{canCancel && <button className="button danger" disabled={pending} onClick={cancel}>Cancel</button>}</div>
-        {operation.error && <div className="validation-item error">{operation.error}</div>}
-        <p className="eyebrow">VALIDATED PLAN</p>
-        <div className="plan-hash" title={operation.planHash}>SHA-256 {operation.planHash}</div>
-        <div className="validation-list">{operation.validation.issues.map((issue, index) => <div className={`validation-item ${issue.level}`} key={`${issue.path ?? ''}-${index}`}><strong>{issue.level.toUpperCase()}</strong> {issue.message}</div>)}</div>
-        <p className="eyebrow">HEALTH-GATED STEPS</p>
-        <div className="step-list">{operation.steps.map((step, index) => <div className="step-row" key={step.id}><span className="step-index">{step.position}</span><div><h4>{step.name}</h4><p>{step.error || step.health?.summary || effectSummary(operation, index)}</p></div><Status value={step.status} /></div>)}</div>
-        {!!operation.artifacts?.length && <><p className="eyebrow">VERIFIED ARTIFACTS</p><div className="artifact-list">{operation.artifacts.map(artifact => artifact.sensitive
+  const progressNodes = operation?.plan.steps.map((planStep, index) => {
+    const step = operation.steps.find(item => item.id === planStep.id)
+    const dependencies = [...new Set(planStep.artifactInputs?.map(input => operation.plan.steps.find(item => item.id === input.fromStep)?.name ?? input.fromStep).filter((name): name is string => Boolean(name)) ?? (index ? [operation.plan.steps[index - 1].name] : []))]
+    return {id: planStep.id, title: planStep.name, status: step?.status ?? 'queued', detail: step?.error ?? step?.health?.summary ?? effectSummary(operation, index), dependencies}
+  }) ?? []
+  if (!operationID) return null
+  return <div className="detail-page operation-detail-page">
+    <DetailBreadcrumb parent="Back" current="Activity" back={close} />
+    <div className="detail-page-heading"><div><p className="eyebrow">ACTIVITY</p><h2>{operation?.title ?? 'Loading…'}</h2>{operation && <p>{shortID(operation.id)} · started {formatDate(operation.createdAt)}</p>}</div>{operation && <div className="detail-page-actions operation-heading-actions"><Status value={operation.status} />{canQueue && <button className="button primary" disabled={pending} onClick={queue}>Confirm plan and start</button>}{canCleanup && <button className="button danger" disabled={pending} onClick={prepareCleanup}>Prepare cleanup</button>}{canCancel && <button className="button danger" disabled={pending} onClick={cancel}>Cancel</button>}</div>}</div>
+    {operation && <>
+      {operation.error && <div className="validation-item error">{operation.error}</div>}
+      <div className="operation-live-layout">
+        <section className="operation-page-section"><div className="operation-section-heading"><div><p className="eyebrow">PROGRESS</p><h3>Execution steps</h3></div><span>{operation.steps.filter(step => step.status === 'succeeded').length}/{operation.plan.steps.length}</span></div><ExecutionProgressGraph nodes={progressNodes} label={`${operation.title} execution progress`} showLogs={() => logsRef.current?.scrollIntoView({behavior: 'smooth', block: 'start'})} /></section>
+        <section className="operation-page-section operation-log-panel" ref={logsRef}><div className="operation-section-heading"><div><p className="eyebrow">LIVE LOGS</p><h3>Activity output</h3></div><span>{logs.length} entries</span></div><div className="log-console">{logs.length ? logs.map(log => <div className={`log-line ${log.level}`} key={log.sequence}><span className="time">{new Date(log.createdAt).toLocaleTimeString()}</span><span className="source">{log.source}</span><span className="message">{log.message}</span></div>) : <div className="log-empty">Waiting for logs…</div>}</div></section>
+      </div>
+      <section className="operation-page-section"><div className="operation-section-heading"><div><p className="eyebrow">VALIDATION</p><h3>Validated plan</h3></div></div><div className="plan-hash" title={operation.planHash}>SHA-256 {operation.planHash}</div><div className="validation-list">{operation.validation.issues.map((issue, index) => <div className={`validation-item ${issue.level}`} key={`${issue.path ?? ''}-${index}`}><strong>{issue.level.toUpperCase()}</strong> {issue.message}</div>)}</div></section>
+      {!!operation.artifacts?.length && <section className="operation-page-section"><div className="operation-section-heading"><div><p className="eyebrow">OUTPUT</p><h3>Verified artifacts</h3></div></div><div className="artifact-list">{operation.artifacts.map(artifact => artifact.sensitive
           ? <div className="artifact-row" key={artifact.id}><span>⌁</span><div><strong>{artifact.name}</strong><small>{artifact.type}/{artifact.version} · protected</small></div></div>
-          : <div className="artifact-row" key={artifact.id}><span>◇</span><div><strong>{artifact.name}</strong><small>{artifact.type}/{artifact.version} · {formatBytes(artifact.sizeBytes)} · {artifact.digest.slice(0, 20)}…</small></div><div className="artifact-actions">{artifact.mediaType === 'application/json' && <button className="text-button" disabled={pending} onClick={() => previewArtifact(artifact)}>Preview</button>}<a className="text-button" href={`/api/v1/artifacts/${artifact.id}/download`}>Download</a></div></div>)}</div></>}
-        {preview && <section className="artifact-preview"><div className="artifact-preview-header"><p className="eyebrow">ARTIFACT PREVIEW</p><button className="icon-button" onClick={() => setPreview(null)} aria-label="Close artifact preview">×</button></div><h3>{preview.artifact.name}</h3><JsonPreview value={preview.value} /></section>}
-        <p className="eyebrow">LIVE LOGS</p>
-        <div className="log-console">{logs.length ? logs.map(log => <div className={`log-line ${log.level}`} key={log.sequence}><span className="time">{new Date(log.createdAt).toLocaleTimeString()}</span><span className="source">{log.source}</span><span className="message">{log.message}</span></div>) : <div className="log-empty">Waiting for logs…</div>}</div>
-      </>}
-    </div>
-  </aside>
+          : <div className="artifact-row" key={artifact.id}><span>▤</span><div><strong>{artifact.name}</strong><small>{artifact.type}/{artifact.version} · {formatBytes(artifact.sizeBytes)} · {artifact.digest.slice(0, 20)}…</small></div><div className="artifact-actions">{artifact.mediaType === 'application/json' && <button className="text-button" disabled={pending} onClick={() => previewArtifact(artifact)}>Preview</button>}<a className="text-button" href={`/api/v1/artifacts/${artifact.id}/download`}>Download</a></div></div>)}</div>{preview && <section className="artifact-preview"><div className="artifact-preview-header"><p className="eyebrow">ARTIFACT PREVIEW</p><button className="icon-button" onClick={() => setPreview(null)} aria-label="Close artifact preview">×</button></div><h3>{preview.artifact.name}</h3><JsonPreview value={preview.value} /></section>}</section>}
+    </>}
+  </div>
 }
+
+export const OperationDrawer = OperationDetailsPage
 
 function terminal(status: string): boolean {
   return ['succeeded', 'failed', 'canceled'].includes(status)

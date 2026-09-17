@@ -54,6 +54,8 @@ func run() error {
 		return catalogMaintenance(configValue)
 	case "plugin":
 		return pluginMaintenance(configValue)
+	case "release":
+		return releaseMaintenance(configValue)
 	case "version":
 		fmt.Println(version)
 		return nil

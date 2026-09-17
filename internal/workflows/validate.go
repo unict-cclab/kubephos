@@ -124,6 +124,14 @@ func replaceValue(current *any, token, value string) bool {
 }
 
 func Validate(ctx context.Context, registry *plugins.Registry, definition domain.PipelineDefinition) (Result, error) {
+	return validate(ctx, registry, definition, false)
+}
+
+func ValidateDeferred(ctx context.Context, registry *plugins.Registry, definition domain.PipelineDefinition) (Result, error) {
+	return validate(ctx, registry, definition, true)
+}
+
+func validate(ctx context.Context, registry *plugins.Registry, definition domain.PipelineDefinition, deferRuntimeValidation bool) (Result, error) {
 	normalized, err := normalize(definition)
 	if err != nil {
 		return Result{}, err
@@ -151,13 +159,17 @@ func Validate(ctx context.Context, registry *plugins.Registry, definition domain
 		if len(schemaIssues) > 0 {
 			continue
 		}
-		pluginValidation := plugin.Validate(ctx, resolvedSpec)
-		for _, issue := range pluginValidation.Issues {
-			issue.Path = "stages." + stage.ID + "." + strings.TrimPrefix(issue.Path, ".")
-			issues = append(issues, issue)
-		}
-		if !pluginValidation.Valid {
-			continue
+		if deferRuntimeValidation {
+			issues = append(issues, domain.ValidationIssue{Level: "info", Path: "stages." + stage.ID, Message: "Runtime validation will run immediately before this stage starts."})
+		} else {
+			pluginValidation := plugin.Validate(ctx, resolvedSpec)
+			for _, issue := range pluginValidation.Issues {
+				issue.Path = "stages." + stage.ID + "." + strings.TrimPrefix(issue.Path, ".")
+				issues = append(issues, issue)
+			}
+			if !pluginValidation.Valid {
+				continue
+			}
 		}
 		plan, err := plugin.Plan(ctx, resolvedSpec)
 		if err != nil {

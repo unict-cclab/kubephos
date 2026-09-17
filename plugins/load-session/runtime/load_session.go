@@ -35,6 +35,7 @@ const (
 
 type Plugin struct {
 	Runner commandRunner
+	Clock  func() time.Time
 }
 
 type Invocation struct {
@@ -42,17 +43,38 @@ type Invocation struct {
 }
 
 type Spec struct {
-	ClusterConnectionRef     string         `json:"clusterConnectionRef"`
-	ApplicationDeploymentRef string         `json:"applicationDeploymentRef"`
-	LoadScenarioSetRef       string         `json:"loadScenarioSetRef"`
-	ScenarioID               string         `json:"scenarioId"`
-	Action                   string         `json:"action"`
-	Replicas                 int            `json:"replicas"`
-	Users                    int            `json:"users,omitempty"`
-	SpawnRate                int            `json:"spawnRate,omitempty"`
-	Pattern                  string         `json:"pattern,omitempty"`
-	DurationSeconds          int            `json:"durationSeconds,omitempty"`
-	ZoneWeights              map[string]int `json:"zoneWeights,omitempty"`
+	ClusterConnectionRef     string           `json:"clusterConnectionRef"`
+	ApplicationDeploymentRef string           `json:"applicationDeploymentRef"`
+	LoadScenarioSetRef       string           `json:"loadScenarioSetRef"`
+	ScenarioID               string           `json:"scenarioId"`
+	Action                   string           `json:"action"`
+	Interactive              bool             `json:"interactive,omitempty"`
+	Replicas                 int              `json:"replicas"`
+	MaxUsers                 int              `json:"maxUsers,omitempty"`
+	SpawnRate                float64          `json:"spawnRate,omitempty"`
+	Steps                    []LoadStep       `json:"steps,omitempty"`
+	GeographicSteps          []GeographicStep `json:"geographicSteps,omitempty"`
+}
+
+type LoadStep struct {
+	Type            string  `json:"type"`
+	DurationSeconds int     `json:"durationSeconds"`
+	RPS             float64 `json:"rps,omitempty"`
+	BaselineRPS     float64 `json:"baselineRps,omitempty"`
+	AmplitudeRPS    float64 `json:"amplitudeRps,omitempty"`
+	PeriodSeconds   int     `json:"periodSeconds,omitempty"`
+	PhaseSeconds    int     `json:"phaseSeconds,omitempty"`
+	StartRPS        float64 `json:"startRps,omitempty"`
+	EndRPS          float64 `json:"endRps,omitempty"`
+	Curve           float64 `json:"curve,omitempty"`
+}
+
+type GeographicStep struct {
+	Type            string             `json:"type"`
+	DurationSeconds int                `json:"durationSeconds"`
+	Weights         map[string]float64 `json:"weights,omitempty"`
+	StartWeights    map[string]float64 `json:"startWeights,omitempty"`
+	EndWeights      map[string]float64 `json:"endWeights,omitempty"`
 }
 
 type clusterConnection struct {
@@ -139,24 +161,26 @@ type loadSessionMetadata struct {
 }
 
 type loadSessionSpec struct {
-	ApplicationRef   string         `json:"applicationRef"`
-	ClusterServer    string         `json:"clusterServer"`
-	Namespace        string         `json:"namespace"`
-	ScenarioID       string         `json:"scenarioId"`
-	Action           string         `json:"action"`
-	State            string         `json:"state"`
-	Replicas         int            `json:"replicas"`
-	PreviousReplicas int            `json:"previousReplicas"`
-	Pattern          string         `json:"pattern"`
-	DurationSeconds  int            `json:"durationSeconds"`
-	ZoneWeights      map[string]int `json:"zoneWeights,omitempty"`
-	Workload         workloadTarget `json:"workload"`
+	ApplicationRef   string           `json:"applicationRef"`
+	ClusterServer    string           `json:"clusterServer"`
+	Namespace        string           `json:"namespace"`
+	ScenarioID       string           `json:"scenarioId"`
+	Action           string           `json:"action"`
+	State            string           `json:"state"`
+	Replicas         int              `json:"replicas"`
+	PreviousReplicas int              `json:"previousReplicas"`
+	Steps            []LoadStep       `json:"steps"`
+	GeographicSteps  []GeographicStep `json:"geographicSteps,omitempty"`
+	DurationSeconds  int              `json:"durationSeconds"`
+	StartedAt        *time.Time       `json:"startedAt,omitempty"`
+	CompletedAt      *time.Time       `json:"completedAt,omitempty"`
+	Workload         workloadTarget   `json:"workload"`
 }
 
 type loadTarget struct {
-	URL    string `json:"url"`
-	Zone   string `json:"zone,omitempty"`
-	Weight int    `json:"weight"`
+	URL    string  `json:"url"`
+	Zone   string  `json:"zone,omitempty"`
+	Weight float64 `json:"weight"`
 }
 
 type serviceState struct {
@@ -198,15 +222,35 @@ type workloadState struct {
 	} `json:"status"`
 }
 
+type podListState struct {
+	Items []struct {
+		Metadata struct {
+			Name string `json:"name"`
+		} `json:"metadata"`
+		Status struct {
+			ContainerStatuses []struct {
+				Name         string `json:"name"`
+				Ready        bool   `json:"ready"`
+				RestartCount int    `json:"restartCount"`
+				State        struct {
+					Running    json.RawMessage `json:"running"`
+					Waiting    json.RawMessage `json:"waiting"`
+					Terminated json.RawMessage `json:"terminated"`
+				} `json:"state"`
+			} `json:"containerStatuses"`
+		} `json:"status"`
+	} `json:"items"`
+}
+
 type commandRunner interface {
 	Run(context.Context, string, []byte, ...string) (string, error)
 }
 
 func (Plugin) Manifest() plugins.Manifest {
 	return plugins.Manifest{
-		ID: pluginID, Name: "Interactive Kubernetes load session", Version: "0.3.0",
-		Description:     "Starts, stops or resumes a generic Locust runtime using the immutable scenario declared by an application.",
-		Schema:          json.RawMessage(`{"type":"object","additionalProperties":false,"required":["clusterConnectionRef","applicationDeploymentRef","loadScenarioSetRef","scenarioId","action","replicas","users","spawnRate","pattern","durationSeconds"],"properties":{"clusterConnectionRef":{"type":"string","title":"Kubernetes cluster","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ClusterConnection","x-kubephos-artifact-version":"v1alpha1"},"applicationDeploymentRef":{"type":"string","title":"Application deployment","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ApplicationDeployment","x-kubephos-artifact-version":"v1alpha1"},"loadScenarioSetRef":{"type":"string","title":"Load scenarios","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"LoadScenarioSet","x-kubephos-artifact-version":"v1alpha1"},"scenarioId":{"type":"string","title":"Application journey","description":"Immutable Locust scenario supplied by the selected application.","minLength":1,"maxLength":63,"default":"storefront-journey"},"action":{"type":"string","title":"Action","x-kubephos-primary-action":true,"enum":["start","stop","resume"],"default":"start"},"replicas":{"type":"integer","title":"Load workers","minimum":1,"maximum":100,"default":1},"users":{"type":"integer","title":"Concurrent users per worker","minimum":1,"maximum":100000,"default":10},"spawnRate":{"type":"integer","title":"Users started per second","minimum":1,"maximum":100000,"default":1},"pattern":{"type":"string","title":"Temporal profile","enum":["constant","ramp","steps"],"default":"constant"},"durationSeconds":{"type":"integer","title":"Duration in seconds","description":"Use zero for an interactive session that runs until stopped.","minimum":0,"maximum":7200,"default":900},"zoneWeights":{"type":"object","title":"Geographic distribution","additionalProperties":true}}}`),
+		ID: pluginID, Name: "Interactive Kubernetes load session", Version: "0.6.1",
+		Description:     "Runs an ordered RPS and geographic timeline using the immutable Locust journey declared by an application.",
+		Schema:          json.RawMessage(`{"type":"object","additionalProperties":false,"required":["clusterConnectionRef","applicationDeploymentRef","loadScenarioSetRef","scenarioId","action","replicas","maxUsers","spawnRate"],"properties":{"clusterConnectionRef":{"type":"string","title":"Kubernetes cluster","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ClusterConnection","x-kubephos-artifact-version":"v1alpha1"},"applicationDeploymentRef":{"type":"string","title":"Application deployment","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ApplicationDeployment","x-kubephos-artifact-version":"v1alpha1"},"loadScenarioSetRef":{"type":"string","title":"Load scenarios","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"LoadScenarioSet","x-kubephos-artifact-version":"v1alpha1"},"scenarioId":{"type":"string","title":"Load scenario","description":"User behavior implemented by the Locust file supplied by the selected application.","minLength":1,"maxLength":63,"default":"storefront-journey"},"action":{"type":"string","title":"Action","x-kubephos-primary-action":true,"enum":["start","stop","resume"],"default":"start"},"interactive":{"type":"boolean","title":"Interactive session","default":false},"replicas":{"type":"integer","title":"Load workers","minimum":1,"maximum":100,"default":1},"maxUsers":{"type":"integer","title":"Maximum concurrent users per worker","minimum":1,"maximum":100000,"default":1000},"spawnRate":{"type":"number","title":"Users started per second","minimum":0.1,"maximum":100000,"default":10},"steps":{"type":"array","title":"Temporal workload timeline","maxItems":100,"items":{"type":"object"}},"geographicSteps":{"type":"array","title":"Geographic traffic timeline","maxItems":100,"items":{"type":"object"}}}}`),
 		ArtifactInputs:  []domain.ArtifactContract{{Type: "ClusterConnection", Version: "v1alpha1"}, {Type: "ApplicationDeployment", Version: "v1alpha1"}, {Type: "LoadScenarioSet", Version: "v1alpha1"}},
 		ArtifactOutputs: []domain.ArtifactContract{{Type: "LoadSession", Version: "v1alpha1"}},
 		Capabilities:    []string{"load.session.control", "load.session.preflight", "load.session.cleanup", "lifecycle.cleanup"},
@@ -243,24 +287,21 @@ func (Plugin) Validate(ctx context.Context, invocation Invocation) domain.Valida
 	if spec.Replicas < 1 || spec.Replicas > 100 {
 		return invalid(report, "replicas", "Load workers must be between 1 and 100.")
 	}
-	if spec.Users != 0 && (spec.Users < 1 || spec.Users > 100000) {
-		return invalid(report, "users", "Concurrent users must be between 1 and 100000.")
+	if spec.MaxUsers != 0 && (spec.MaxUsers < 1 || spec.MaxUsers > 100000) {
+		return invalid(report, "maxUsers", "Maximum concurrent users must be between 1 and 100000.")
 	}
-	if spec.SpawnRate != 0 && (spec.SpawnRate < 1 || spec.SpawnRate > 100000) {
-		return invalid(report, "spawnRate", "Spawn rate must be between 1 and 100000.")
+	if spec.SpawnRate != 0 && (spec.SpawnRate < 0.1 || spec.SpawnRate > 100000) {
+		return invalid(report, "spawnRate", "Spawn rate must be between 0.1 and 100000.")
 	}
-	if spec.Pattern != "" && spec.Pattern != "constant" && spec.Pattern != "ramp" && spec.Pattern != "steps" {
-		return invalid(report, "pattern", "Temporal profile must be constant, ramp or steps.")
+	duration, err := validateSpecTimeline(spec)
+	if err != nil {
+		return invalid(report, "steps", err.Error())
 	}
-	if spec.DurationSeconds < 0 || spec.DurationSeconds > 7200 {
-		return invalid(report, "durationSeconds", "Duration must be between 0 and 7200 seconds.")
+	if err := validateGeographicTimeline(spec.GeographicSteps, duration); err != nil {
+		return invalid(report, "geographicSteps", err.Error())
 	}
-	for zone, weight := range spec.ZoneWeights {
-		if strings.TrimSpace(zone) == "" || weight < 0 || weight > 1000 {
-			return invalid(report, "zoneWeights", "Zone weights must contain valid zone names and values between 0 and 1000.")
-		}
-	}
-	report.Issues = append(report.Issues, domain.ValidationIssue{Level: "info", Message: "KubePhos will revalidate the cluster, application ownership, load profile, current session state and target endpoint before changing load."})
+	report.Issues = append(report.Issues, domain.ValidationIssue{Level: "info", Message: fmt.Sprintf("The experiment duration is %s, calculated from %d ordered workload steps.", (time.Duration(duration) * time.Second).String(), len(spec.Steps))})
+	report.Issues = append(report.Issues, domain.ValidationIssue{Level: "info", Message: "KubePhos will revalidate the cluster, application ownership, load profile, geographic coverage, current session state and target endpoint before changing load."})
 	return report
 }
 
@@ -295,6 +336,13 @@ func (plugin Plugin) Precheck(ctx context.Context, step domain.PlanStep, log plu
 	spec, cluster, deployment, profiles, profile, endpoint, err := resolve(step)
 	if err != nil {
 		return unhealthy(err.Error(), "artifacts", "invalid"), nil
+	}
+	duration, err := validateSpecTimeline(spec)
+	if err != nil {
+		return unhealthy(err.Error(), "loadTimeline", "invalid"), nil
+	}
+	if err := validateGeographicTimeline(spec.GeographicSteps, duration); err != nil {
+		return unhealthy(err.Error(), "geographicTimeline", "invalid"), nil
 	}
 	if err := validateArtifacts(cluster, deployment, profiles, profile, endpoint); err != nil {
 		return unhealthy(err.Error(), "artifacts", "invalid"), nil
@@ -377,6 +425,8 @@ func (plugin Plugin) Execute(ctx context.Context, step domain.PlanStep, log plug
 		return nil, err
 	}
 	previous := 0
+	durationSeconds, _ := validateSpecTimeline(spec)
+	var startedAt, completedAt *time.Time
 	if exists {
 		previous = state.Spec.Replicas
 	}
@@ -403,16 +453,20 @@ func (plugin Plugin) Execute(ctx context.Context, step domain.PlanStep, log plug
 		if _, err := runner.Run(ctx, cluster.Spec.Kubeconfig, nil, "scale", resource, "-n", deployment.Spec.Namespace, "--replicas", fmt.Sprint(spec.Replicas)); err != nil {
 			return nil, err
 		}
-		if spec.DurationSeconds > 0 {
+		if durationSeconds > 0 {
 			if err := waitForReady(ctx, runner, cluster.Spec.Kubeconfig, deployment.Spec.Namespace, profile, spec.Replicas, log); err != nil {
 				return nil, err
 			}
-			if err := waitForLoadDuration(ctx, time.Duration(spec.DurationSeconds)*time.Second, log); err != nil {
+			started := plugin.now().UTC()
+			startedAt = &started
+			if err := waitForLoadDuration(ctx, runner, cluster.Spec.Kubeconfig, deployment.Spec.Namespace, profile, spec.Replicas, time.Duration(durationSeconds)*time.Second, log); err != nil {
 				return nil, err
 			}
 			if _, err := runner.Run(ctx, cluster.Spec.Kubeconfig, nil, "scale", resource, "-n", deployment.Spec.Namespace, "--replicas", "0"); err != nil {
 				return nil, err
 			}
+			completed := plugin.now().UTC()
+			completedAt = &completed
 		}
 	case "stop", "resume":
 		if !ownedBy(state, deployment, profile) {
@@ -431,7 +485,7 @@ func (plugin Plugin) Execute(ctx context.Context, step domain.PlanStep, log plug
 	}
 	replicas := spec.Replicas
 	stateValue := "running"
-	if spec.Action == "start" && spec.DurationSeconds > 0 {
+	if spec.Action == "start" && durationSeconds > 0 {
 		replicas = 0
 		stateValue = "completed"
 	}
@@ -441,7 +495,7 @@ func (plugin Plugin) Execute(ctx context.Context, step domain.PlanStep, log plug
 	}
 	value := result{LoadSession: loadSession{
 		APIVersion: artifactAPI, Kind: "LoadSession", Metadata: loadSessionMetadata{Name: deployment.Spec.Namespace + "/" + profile.ID, Version: "v1alpha1"},
-		Spec: loadSessionSpec{ApplicationRef: deployment.Spec.ApplicationRef, ClusterServer: cluster.Spec.Server, Namespace: deployment.Spec.Namespace, ScenarioID: profile.ID, Action: spec.Action, State: stateValue, Replicas: replicas, PreviousReplicas: previous, Pattern: spec.Pattern, DurationSeconds: spec.DurationSeconds, ZoneWeights: spec.ZoneWeights, Workload: profile.Workload},
+		Spec: loadSessionSpec{ApplicationRef: deployment.Spec.ApplicationRef, ClusterServer: cluster.Spec.Server, Namespace: deployment.Spec.Namespace, ScenarioID: profile.ID, Action: spec.Action, State: stateValue, Replicas: replicas, PreviousReplicas: previous, Steps: spec.Steps, GeographicSteps: spec.GeographicSteps, DurationSeconds: durationSeconds, StartedAt: startedAt, CompletedAt: completedAt, Workload: profile.Workload},
 	}}
 	return json.Marshal(value)
 }
@@ -486,7 +540,8 @@ func (plugin Plugin) Verify(ctx context.Context, step domain.PlanStep, raw json.
 	}
 	expectedReplicas := spec.Replicas
 	expectedState := "running"
-	if spec.Action == "start" && spec.DurationSeconds > 0 {
+	durationSeconds, _ := validateSpecTimeline(spec)
+	if spec.Action == "start" && durationSeconds > 0 {
 		expectedReplicas = 0
 		expectedState = "completed"
 	}
@@ -725,8 +780,10 @@ func waitForReady(ctx context.Context, runner commandRunner, kubeconfig, namespa
 		_, err := runner.Run(ctx, kubeconfig, nil, "rollout", "status", resourceName(profile.Workload), "-n", namespace, "--timeout=10m")
 		result <- err
 	}()
-	ticker := time.NewTicker(30 * time.Second)
-	defer ticker.Stop()
+	health := time.NewTicker(2 * time.Second)
+	defer health.Stop()
+	diagnostics := time.NewTicker(30 * time.Second)
+	defer diagnostics.Stop()
 	for {
 		select {
 		case err := <-result:
@@ -738,7 +795,11 @@ func waitForReady(ctx context.Context, runner commandRunner, kubeconfig, namespa
 				return errors.New("load driver ready replicas do not match the requested intensity")
 			}
 			return nil
-		case <-ticker.C:
+		case <-health.C:
+			if err := inspectLoadPods(ctx, runner, kubeconfig, namespace, profile, replicas, false); err != nil {
+				return err
+			}
+		case <-diagnostics.C:
 			pods, err := runner.Run(ctx, kubeconfig, nil, "get", "pods", "-n", namespace, "-l", selectorValue(profile.Workload.Selector), "-o", "wide")
 			if err != nil {
 				if logErr := log("warning", "Load readiness diagnostics failed: "+err.Error()); logErr != nil {
@@ -751,6 +812,43 @@ func waitForReady(ctx context.Context, runner commandRunner, kubeconfig, namespa
 			return ctx.Err()
 		}
 	}
+}
+
+func inspectLoadPods(ctx context.Context, runner commandRunner, kubeconfig, namespace string, profile loadProfile, replicas int, requireReady bool) error {
+	raw, err := runner.Run(ctx, kubeconfig, nil, "get", "pods", "-n", namespace, "-l", selectorValue(profile.Workload.Selector), "-o", "json")
+	if err != nil {
+		return fmt.Errorf("inspect load driver pods: %w", err)
+	}
+	var pods podListState
+	if err := json.Unmarshal([]byte(raw), &pods); err != nil {
+		return errors.New("load driver pod status is invalid")
+	}
+	if requireReady && len(pods.Items) != replicas {
+		return errors.New("load driver pod set is incomplete")
+	}
+	for _, pod := range pods.Items {
+		locustFound := false
+		for _, container := range pod.Status.ContainerStatuses {
+			if container.Name != "locust" {
+				continue
+			}
+			locustFound = true
+			if container.RestartCount != 0 || len(container.State.Terminated) != 0 {
+				logs, _ := runner.Run(ctx, kubeconfig, nil, "logs", pod.Metadata.Name, "-n", namespace, "-c", "locust", "--tail=80", "--prefix=true")
+				if logs != "" {
+					return fmt.Errorf("load driver %s became unhealthy:\n%s", pod.Metadata.Name, strings.TrimSpace(logs))
+				}
+				return fmt.Errorf("load driver %s became unhealthy", pod.Metadata.Name)
+			}
+			if requireReady && (!container.Ready || len(container.State.Running) == 0) {
+				return fmt.Errorf("load driver %s is not ready", pod.Metadata.Name)
+			}
+		}
+		if requireReady && !locustFound {
+			return fmt.Errorf("load driver %s has no Locust container status", pod.Metadata.Name)
+		}
+	}
+	return nil
 }
 
 func waitForStopped(ctx context.Context, runner commandRunner, kubeconfig, namespace string, profile loadProfile, log plugins.Logger) error {
@@ -783,8 +881,16 @@ func waitForStopped(ctx context.Context, runner commandRunner, kubeconfig, names
 }
 
 func validateResult(session loadSession, spec Spec, cluster clusterConnection, deployment applicationDeployment, profile loadProfile, state string, replicas int) error {
-	if session.APIVersion != artifactAPI || session.Kind != "LoadSession" || session.Metadata.Name != deployment.Spec.Namespace+"/"+profile.ID || session.Metadata.Version != "v1alpha1" || session.Spec.ApplicationRef != deployment.Spec.ApplicationRef || session.Spec.ClusterServer != cluster.Spec.Server || session.Spec.Namespace != deployment.Spec.Namespace || session.Spec.ScenarioID != profile.ID || session.Spec.Action != spec.Action || session.Spec.State != state || session.Spec.Replicas != replicas || session.Spec.Pattern != spec.Pattern || session.Spec.DurationSeconds != spec.DurationSeconds || session.Spec.Workload.Name != profile.Workload.Name {
+	durationSeconds, _ := validateSpecTimeline(spec)
+	expectedSteps, _ := json.Marshal(spec.Steps)
+	actualSteps, _ := json.Marshal(session.Spec.Steps)
+	expectedGeography, _ := json.Marshal(spec.GeographicSteps)
+	actualGeography, _ := json.Marshal(session.Spec.GeographicSteps)
+	if session.APIVersion != artifactAPI || session.Kind != "LoadSession" || session.Metadata.Name != deployment.Spec.Namespace+"/"+profile.ID || session.Metadata.Version != "v1alpha1" || session.Spec.ApplicationRef != deployment.Spec.ApplicationRef || session.Spec.ClusterServer != cluster.Spec.Server || session.Spec.Namespace != deployment.Spec.Namespace || session.Spec.ScenarioID != profile.ID || session.Spec.Action != spec.Action || session.Spec.State != state || session.Spec.Replicas != replicas || session.Spec.DurationSeconds != durationSeconds || string(actualSteps) != string(expectedSteps) || string(actualGeography) != string(expectedGeography) || session.Spec.Workload.Name != profile.Workload.Name {
 		return errors.New("load session artifact does not match the validated transition")
+	}
+	if state == "completed" && (session.Spec.StartedAt == nil || session.Spec.CompletedAt == nil || session.Spec.CompletedAt.Before(*session.Spec.StartedAt) || session.Spec.CompletedAt.Sub(*session.Spec.StartedAt) < time.Duration(durationSeconds)*time.Second) {
+		return errors.New("load session artifact does not contain a complete measurement interval")
 	}
 	return nil
 }
@@ -815,15 +921,126 @@ func digestJSON(value any) (string, error) {
 	return "sha256:" + hex.EncodeToString(digest[:]), nil
 }
 
+func validateLoadTimeline(steps []LoadStep) (int, error) {
+	if len(steps) == 0 || len(steps) > 100 {
+		return 0, errors.New("add between one and 100 workload steps")
+	}
+	total := 0
+	for index, step := range steps {
+		if step.DurationSeconds < 1 || step.DurationSeconds > 86400 {
+			return 0, fmt.Errorf("step %d duration must be between one second and 24 hours", index+1)
+		}
+		total += step.DurationSeconds
+		if total > 86400 {
+			return 0, errors.New("the complete workload timeline cannot exceed 24 hours")
+		}
+		switch step.Type {
+		case "constant":
+			if step.RPS < 0 || step.RPS > 100000 {
+				return 0, fmt.Errorf("step %d RPS must be between zero and 100000", index+1)
+			}
+		case "sinusoidal":
+			if step.BaselineRPS < 0 || step.BaselineRPS > 100000 || step.AmplitudeRPS < 0 || step.AmplitudeRPS > 100000 || step.PeriodSeconds < 1 || step.PeriodSeconds > 86400 || step.PhaseSeconds < 0 || step.PhaseSeconds > 86400 {
+				return 0, fmt.Errorf("step %d has invalid sinusoidal parameters", index+1)
+			}
+		case "exponential":
+			if step.StartRPS < 0 || step.StartRPS > 100000 || step.EndRPS < 0 || step.EndRPS > 100000 || step.Curve < -20 || step.Curve > 20 {
+				return 0, fmt.Errorf("step %d has invalid exponential parameters", index+1)
+			}
+		default:
+			return 0, fmt.Errorf("step %d type must be constant, sinusoidal or exponential", index+1)
+		}
+	}
+	return total, nil
+}
+
+func validateSpecTimeline(spec Spec) (int, error) {
+	if spec.Interactive {
+		if len(spec.Steps) > 0 || len(spec.GeographicSteps) > 0 {
+			return 0, errors.New("an interactive session cannot also define a finite timeline")
+		}
+		return 0, nil
+	}
+	return validateLoadTimeline(spec.Steps)
+}
+
+func validateGeographicTimeline(steps []GeographicStep, workloadDuration int) error {
+	if len(steps) == 0 {
+		return nil
+	}
+	if len(steps) > 100 {
+		return errors.New("add at most 100 geographic steps")
+	}
+	total := 0
+	for index, step := range steps {
+		if step.DurationSeconds < 1 || step.DurationSeconds > 86400 {
+			return fmt.Errorf("geographic step %d has an invalid duration", index+1)
+		}
+		total += step.DurationSeconds
+		switch step.Type {
+		case "constant":
+			if err := validateWeights(step.Weights); err != nil {
+				return fmt.Errorf("geographic step %d: %w", index+1, err)
+			}
+		case "linear":
+			if err := validateWeights(step.StartWeights); err != nil {
+				return fmt.Errorf("geographic step %d start: %w", index+1, err)
+			}
+			if err := validateWeights(step.EndWeights); err != nil {
+				return fmt.Errorf("geographic step %d end: %w", index+1, err)
+			}
+		default:
+			return fmt.Errorf("geographic step %d type must be constant or linear", index+1)
+		}
+	}
+	if total != workloadDuration {
+		return fmt.Errorf("geographic timeline duration (%s) must equal workload duration (%s)", (time.Duration(total) * time.Second).String(), (time.Duration(workloadDuration) * time.Second).String())
+	}
+	return nil
+}
+
+func validateWeights(weights map[string]float64) error {
+	if len(weights) == 0 {
+		return errors.New("zone weights are required")
+	}
+	total := 0.0
+	for zone, weight := range weights {
+		if strings.TrimSpace(zone) == "" || weight < 0 || weight > 1000 {
+			return errors.New("zone names and weights must be valid")
+		}
+		total += weight
+	}
+	if total <= 0 {
+		return errors.New("at least one zone needs a positive weight")
+	}
+	return nil
+}
+
+func geographicZones(steps []GeographicStep) map[string]bool {
+	zones := map[string]bool{}
+	for _, step := range steps {
+		for zone := range step.Weights {
+			zones[zone] = true
+		}
+		for zone := range step.StartWeights {
+			zones[zone] = true
+		}
+		for zone := range step.EndWeights {
+			zones[zone] = true
+		}
+	}
+	return zones
+}
+
 func withDefaults(spec Spec) Spec {
-	if spec.Users == 0 {
-		spec.Users = 10
+	if spec.MaxUsers == 0 {
+		spec.MaxUsers = 1000
 	}
 	if spec.SpawnRate == 0 {
-		spec.SpawnRate = 1
+		spec.SpawnRate = 10
 	}
-	if spec.Pattern == "" {
-		spec.Pattern = "constant"
+	if len(spec.Steps) == 0 && !spec.Interactive {
+		spec.Steps = []LoadStep{{Type: "constant", DurationSeconds: 900, RPS: 30}}
 	}
 	return spec
 }
@@ -844,15 +1061,9 @@ func resolveLoadTargets(ctx context.Context, runner commandRunner, kubeconfig, n
 		path = "/"
 	}
 	fallback := []loadTarget{{URL: fmt.Sprintf("%s://%s:%d%s", strings.ToLower(endpoint.Protocol), endpoint.Service, endpoint.Port, path), Weight: 1}}
-	if len(spec.ZoneWeights) == 0 {
+	zones := geographicZones(spec.GeographicSteps)
+	if len(zones) == 0 {
 		return fallback, nil
-	}
-	total := 0
-	for _, weight := range spec.ZoneWeights {
-		total += weight
-	}
-	if total == 0 {
-		return nil, errors.New("at least one application zone must have a positive traffic weight")
 	}
 	serviceRaw, err := runner.Run(ctx, kubeconfig, nil, "get", "service", endpoint.Service, "-n", namespace, "-o", "json")
 	if err != nil {
@@ -872,7 +1083,7 @@ func resolveLoadTargets(ctx context.Context, runner commandRunner, kubeconfig, n
 	}
 	zoneCounts := map[string]int{}
 	for _, node := range nodes.Items {
-		if zone := node.Metadata.Labels["topology.kubernetes.io/zone"]; spec.ZoneWeights[zone] > 0 {
+		if zone := node.Metadata.Labels["topology.kubernetes.io/zone"]; zones[zone] {
 			zoneCounts[zone]++
 		}
 	}
@@ -880,8 +1091,7 @@ func resolveLoadTargets(ctx context.Context, runner commandRunner, kubeconfig, n
 	seenZones := map[string]bool{}
 	for _, node := range nodes.Items {
 		zone := node.Metadata.Labels["topology.kubernetes.io/zone"]
-		weight := spec.ZoneWeights[zone]
-		if weight <= 0 || zoneCounts[zone] == 0 {
+		if !zones[zone] || zoneCounts[zone] == 0 {
 			continue
 		}
 		address := ""
@@ -895,10 +1105,10 @@ func resolveLoadTargets(ctx context.Context, runner commandRunner, kubeconfig, n
 			continue
 		}
 		seenZones[zone] = true
-		targets = append(targets, loadTarget{URL: strings.ToLower(endpoint.Protocol) + "://" + net.JoinHostPort(address, fmt.Sprint(service.Spec.Ports[0].NodePort)) + path, Zone: zone, Weight: weight})
+		targets = append(targets, loadTarget{URL: strings.ToLower(endpoint.Protocol) + "://" + net.JoinHostPort(address, fmt.Sprint(service.Spec.Ports[0].NodePort)) + path, Zone: zone, Weight: 1})
 	}
-	for zone, weight := range spec.ZoneWeights {
-		if weight > 0 && !seenZones[zone] {
+	for zone := range zones {
+		if !seenZones[zone] {
 			return nil, fmt.Errorf("application zone %s has no reachable node proxy", zone)
 		}
 	}
@@ -914,17 +1124,33 @@ func resolveLoadTargets(ctx context.Context, runner commandRunner, kubeconfig, n
 	return targets, nil
 }
 
-func waitForLoadDuration(ctx context.Context, duration time.Duration, log plugins.Logger) error {
+func waitForLoadDuration(ctx context.Context, runner commandRunner, kubeconfig, namespace string, profile loadProfile, replicas int, duration time.Duration, log plugins.Logger) error {
 	deadline := time.NewTimer(duration)
 	defer deadline.Stop()
-	ticker := time.NewTicker(30 * time.Second)
+	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
+	diagnostics := time.NewTicker(30 * time.Second)
+	defer diagnostics.Stop()
 	started := time.Now()
+	check := func() error {
+		state, exists, err := readWorkload(ctx, runner, kubeconfig, namespace, profile.Workload)
+		if err != nil || !exists || state.Spec.Replicas != replicas || state.Status.ReadyReplicas != replicas {
+			return errors.New("load driver lost the requested ready replicas")
+		}
+		return inspectLoadPods(ctx, runner, kubeconfig, namespace, profile, replicas, true)
+	}
+	if err := check(); err != nil {
+		return err
+	}
 	for {
 		select {
 		case <-deadline.C:
-			return nil
+			return check()
 		case <-ticker.C:
+			if err := check(); err != nil {
+				return err
+			}
+		case <-diagnostics.C:
 			remaining := duration - time.Since(started)
 			if remaining < 0 {
 				remaining = 0
@@ -942,6 +1168,14 @@ func loadManifest(profile loadProfile, marker string, spec Spec, targets []loadT
 	annotations := map[string]any{applicationOwnershipKey: marker, loadProfileKey: profile.ID}
 	labels := map[string]any{"app.kubernetes.io/name": "kubephos-load", "kubephos.dev/load-scenario": profile.ID}
 	targetValue, err := json.Marshal(targets)
+	if err != nil {
+		return nil, err
+	}
+	stepsValue, err := json.Marshal(spec.Steps)
+	if err != nil {
+		return nil, err
+	}
+	geographicValue, err := json.Marshal(spec.GeographicSteps)
 	if err != nil {
 		return nil, err
 	}
@@ -965,13 +1199,13 @@ func loadManifest(profile loadProfile, marker string, spec Spec, targets []loadT
 					"containers": []any{map[string]any{
 						"name": "locust", "image": profile.RuntimeImage, "imagePullPolicy": "IfNotPresent",
 						"command": []any{"locust"},
-						"args":    []any{"-f", "/scenario/locustfile.py", "--headless", "--users", fmt.Sprint(spec.Users), "--spawn-rate", fmt.Sprint(spec.SpawnRate)},
+						"args":    []any{"-f", "/scenario/locustfile.py", "--headless", "--host", targets[0].URL, "--users", fmt.Sprint(spec.MaxUsers), "--spawn-rate", fmt.Sprint(spec.SpawnRate)},
 						"env": []any{
 							map[string]any{"name": "KUBEPHOS_TARGETS", "value": string(targetValue)},
-							map[string]any{"name": "KUBEPHOS_USERS", "value": fmt.Sprint(spec.Users)},
+							map[string]any{"name": "KUBEPHOS_MAX_USERS", "value": fmt.Sprint(spec.MaxUsers)},
 							map[string]any{"name": "KUBEPHOS_SPAWN_RATE", "value": fmt.Sprint(spec.SpawnRate)},
-							map[string]any{"name": "KUBEPHOS_PATTERN", "value": spec.Pattern},
-							map[string]any{"name": "KUBEPHOS_DURATION", "value": fmt.Sprint(spec.DurationSeconds)},
+							map[string]any{"name": "KUBEPHOS_STEPS", "value": string(stepsValue)},
+							map[string]any{"name": "KUBEPHOS_GEOGRAPHIC_STEPS", "value": string(geographicValue)},
 						},
 						"volumeMounts": []any{map[string]any{"name": "scenario", "mountPath": "/scenario", "readOnly": true}},
 						"resources":    map[string]any{"requests": map[string]any{"cpu": "100m", "memory": "128Mi"}, "limits": map[string]any{"cpu": "1", "memory": "512Mi"}},
@@ -997,47 +1231,146 @@ import json
 import math
 import os
 import random
-from locust import HttpUser, LoadTestShape
+import time
+from urllib.parse import urljoin, urlsplit
+import gevent
+from gevent.lock import Semaphore
+from locust import LoadTestShape
+from locust.clients import HttpSession
+from locust.contrib.fasthttp import FastHttpSession
+from locust.user import User
 
 module_spec = importlib.util.spec_from_file_location("kubephos_application", "/scenario/application.py")
 module = importlib.util.module_from_spec(module_spec)
 module_spec.loader.exec_module(module)
 targets = json.loads(os.environ["KUBEPHOS_TARGETS"])
-users = int(os.environ["KUBEPHOS_USERS"])
-spawn_rate = int(os.environ["KUBEPHOS_SPAWN_RATE"])
-pattern = os.environ["KUBEPHOS_PATTERN"]
-duration = int(os.environ["KUBEPHOS_DURATION"])
+steps = json.loads(os.environ["KUBEPHOS_STEPS"])
+geographic_steps = json.loads(os.environ["KUBEPHOS_GEOGRAPHIC_STEPS"])
+max_users = int(os.environ["KUBEPHOS_MAX_USERS"])
+spawn_rate = float(os.environ["KUBEPHOS_SPAWN_RATE"])
+started_at = time.monotonic()
+request_lock = Semaphore()
+next_request_at = time.monotonic()
 
-def choose_target():
-    zones = {}
-    for target in targets:
-        zones.setdefault(target.get("zone", "default"), []).append(target)
-    weighted_zones = [(zone, values[0].get("weight", 1)) for zone, values in zones.items()]
-    zone = random.choices([item[0] for item in weighted_zones], weights=[item[1] for item in weighted_zones], k=1)[0]
-    return random.choice(zones[zone])["url"]
-
-def wrap_initializer(initializer):
-    def initialize(instance, environment):
-        instance.host = choose_target()
-        initializer(instance, environment)
-    return initialize
+def no_wait(_self):
+    return 0.0
 
 for name, value in vars(module).items():
-    if isinstance(value, type) and issubclass(value, HttpUser) and value is not HttpUser:
-        value.__init__ = wrap_initializer(value.__init__)
+    if not name.startswith("_") and isinstance(value, type) and issubclass(value, User) and value.abstract is False:
+        value.wait_time = no_wait
         globals()[name] = value
+del name, value
+
+def duration(items):
+    return sum(float(item["durationSeconds"]) for item in items)
+
+def active_step(items, elapsed):
+    cursor = 0.0
+    for item in items:
+        item_duration = float(item["durationSeconds"])
+        if elapsed < cursor + item_duration:
+            return item, elapsed - cursor
+        cursor += item_duration
+    return (items[-1], float(items[-1]["durationSeconds"])) if items else (None, 0.0)
+
+def rps_at(elapsed):
+    step, local_time = active_step(steps, elapsed)
+    if step is None:
+        return 0.0
+    kind = step["type"]
+    if kind == "constant":
+        return max(0.0, float(step["rps"]))
+    if kind == "sinusoidal":
+        period = float(step["periodSeconds"])
+        phase = float(step.get("phaseSeconds", 0))
+        return max(0.0, float(step["baselineRps"]) + float(step["amplitudeRps"]) * math.sin((2.0 * math.pi * (local_time + phase)) / period))
+    start = float(step["startRps"])
+    end = float(step["endRps"])
+    progress = min(max(local_time / max(float(step["durationSeconds"]), 1.0), 0.0), 1.0)
+    curve = float(step.get("curve", 3.0))
+    shaped = progress if abs(curve) < 1e-9 else (math.exp(curve * progress) - 1.0) / (math.exp(curve) - 1.0)
+    return max(0.0, start + (end - start) * shaped)
+
+def choose_weighted(items):
+    return random.choices(items, weights=[float(item.get("weight", 1.0)) for item in items], k=1)[0]
+
+def zone_weights_at(elapsed, zones):
+    step, local_time = active_step(geographic_steps, elapsed)
+    if step is None:
+        return {zone: 1.0 for zone in zones}
+    if step["type"] == "constant":
+        return {zone: float(step.get("weights", {}).get(zone, 0.0)) for zone in zones}
+    progress = min(max(local_time / max(float(step["durationSeconds"]), 1.0), 0.0), 1.0)
+    start = step.get("startWeights", {})
+    end = step.get("endWeights", {})
+    return {zone: float(start.get(zone, 0.0)) + (float(end.get(zone, 0.0)) - float(start.get(zone, 0.0))) * progress for zone in zones}
+
+def choose_target():
+    by_zone = {}
+    for target in targets:
+        by_zone.setdefault(target.get("zone", "default"), []).append(target)
+    if not geographic_steps:
+        return choose_weighted(targets)["url"]
+    elapsed = time.monotonic() - started_at
+    zones = sorted(zone for zone in by_zone if zone != "default")
+    weights = zone_weights_at(elapsed, zones)
+    candidates = [{"zone": zone, "weight": weights[zone]} for zone in zones if weights[zone] > 0]
+    selected_zone = choose_weighted(candidates)["zone"]
+    return random.choice(by_zone[selected_zone])["url"]
+
+def request_url(url):
+    if urlsplit(str(url)).scheme:
+        return url
+    return urljoin(choose_target().rstrip("/") + "/", str(url).lstrip("/"))
+
+def wait_for_request_slot():
+    global next_request_at
+    while True:
+        target_rps = rps_at(time.monotonic() - started_at)
+        if target_rps <= 0:
+            with request_lock:
+                next_request_at = time.monotonic()
+            gevent.sleep(0.1)
+            continue
+        now = time.monotonic()
+        with request_lock:
+            if next_request_at > now + max(1.0, 2.0 / target_rps):
+                next_request_at = now
+            slot_at = max(now, next_request_at)
+            next_request_at = slot_at + (1.0 / target_rps)
+        if slot_at > now:
+            gevent.sleep(slot_at - now)
+        return
+
+original_http_request = HttpSession.request
+original_fast_http_request = FastHttpSession.request
+
+def paced_http_request(self, *args, **kwargs):
+    wait_for_request_slot()
+    if "url" in kwargs:
+        kwargs["url"] = request_url(kwargs["url"])
+    elif len(args) >= 2:
+        args = (args[0], request_url(args[1]), *args[2:])
+    return original_http_request(self, *args, **kwargs)
+
+def paced_fast_http_request(self, *args, **kwargs):
+    wait_for_request_slot()
+    if "url" in kwargs:
+        kwargs["url"] = request_url(kwargs["url"])
+    elif len(args) >= 2:
+        args = (args[0], request_url(args[1]), *args[2:])
+    return original_fast_http_request(self, *args, **kwargs)
+
+HttpSession.request = paced_http_request
+FastHttpSession.request = paced_fast_http_request
 
 class KubePhosLoadShape(LoadTestShape):
     def tick(self):
         elapsed = self.get_run_time()
-        progress = min(elapsed / duration, 1.0) if duration > 0 else 1.0
-        if pattern == "ramp":
-            target = max(1, math.ceil(users * progress))
-        elif pattern == "steps":
-            target = max(1, math.ceil(users * min(math.floor(progress * 4) + 1, 4) / 4))
-        else:
-            target = users
-        return target, spawn_rate
+        if elapsed > duration(steps):
+            return 0, spawn_rate
+        requested = math.ceil(rps_at(elapsed))
+        return min(max_users, max(1, requested)) if requested > 0 else 0, spawn_rate
 `
 
 func invalid(report domain.ValidationReport, path, message string) domain.ValidationReport {
@@ -1055,6 +1388,13 @@ func (plugin Plugin) runner() commandRunner {
 		return plugin.Runner
 	}
 	return localRunner{}
+}
+
+func (plugin Plugin) now() time.Time {
+	if plugin.Clock != nil {
+		return plugin.Clock()
+	}
+	return time.Now()
 }
 
 type localRunner struct{}

@@ -23,6 +23,7 @@ spec:
     path: deploy
     entrypoint: application.yaml
   interface:
+    group: test-app
     components:
       - id: api
         workload:
@@ -58,6 +59,53 @@ func TestParseValidDescriptor(t *testing.T) {
 	}
 	if application.ID != "dev.kubephos.test-app" || !strings.HasPrefix(application.Digest, "sha256:") {
 		t.Fatalf("unexpected application: %#v", application)
+	}
+}
+
+func TestParseValidatesApplicationTopology(t *testing.T) {
+	components := func(value string) string {
+		start := strings.Index(validDescriptor, "    components:\n")
+		end := strings.Index(validDescriptor[start:], "    endpoints:\n") + start
+		return validDescriptor[:start] + "    components:\n" + value + validDescriptor[end:]
+	}
+	valid := components(`      - id: api
+        workload: {apiVersion: apps/v1, kind: Deployment, name: api}
+        selector: {app: api}
+        traits: [scalable, schedulable]
+        index: 0
+        dependencies: [worker]
+      - id: worker
+        workload: {apiVersion: apps/v1, kind: Deployment, name: worker}
+        selector: {app: worker}
+        traits: [scalable, schedulable]
+        index: 1
+`)
+	if _, err := Parse([]byte(valid), "imported"); err != nil {
+		t.Fatal(err)
+	}
+	cases := map[string]string{
+		"missing index":      strings.Replace(valid, "        index: 1\n", "", 1),
+		"unknown dependency": strings.Replace(valid, "dependencies: [worker]", "dependencies: [missing]", 1),
+		"backward edge":      strings.Replace(strings.Replace(valid, "index: 0", "index: 2", 1), "index: 1", "index: 0", 1),
+		"cycle":              strings.Replace(strings.Replace(valid, "index: 1", "index: 0", 1), "        index: 0\n    endpoints:", "        index: 0\n        dependencies: [api]\n    endpoints:", 1),
+	}
+	for name, raw := range cases {
+		t.Run(name, func(t *testing.T) {
+			if _, err := Parse([]byte(raw), "imported"); err == nil {
+				t.Fatalf("expected %s to be rejected", name)
+			}
+		})
+	}
+}
+
+func TestParseRequiresValidApplicationGroup(t *testing.T) {
+	missing := strings.Replace(validDescriptor, "    group: test-app\n", "", 1)
+	if _, err := Parse([]byte(missing), "imported"); err == nil {
+		t.Fatal("expected a missing application group to be rejected")
+	}
+	invalid := strings.Replace(validDescriptor, "group: test-app", "group: invalid/group", 1)
+	if _, err := Parse([]byte(invalid), "imported"); err == nil {
+		t.Fatal("expected an invalid application group to be rejected")
 	}
 }
 
@@ -108,6 +156,17 @@ func TestParseAcceptsRepositoryRoot(t *testing.T) {
 	}
 }
 
+func TestParseAcceptsGenericApplicationMaterializer(t *testing.T) {
+	raw := strings.Replace(validDescriptor, "  interface:", "  materializer: io.example.application.materializer\n  materializerConfig:\n    generator: example\n  interface:", 1)
+	application, err := Parse([]byte(raw), "imported")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(application.Descriptor), `"materializer":"io.example.application.materializer"`) {
+		t.Fatal("materializer was not retained")
+	}
+}
+
 func TestParseValidatesLoadScenarioEndpoint(t *testing.T) {
 	raw := strings.Replace(validDescriptor, "  valuesSchema:", "    loadScenarios:\n      - id: default-load\n        engine: locust\n        script: load/locustfile.py\n        runtimeImage: example.test/load:1.0.0\n        targetEndpoint: missing\n  valuesSchema:", 1)
 	if _, err := Parse([]byte(raw), "imported"); err == nil {
@@ -154,7 +213,14 @@ func TestBuiltInCatalog(t *testing.T) {
 	if err := json.Unmarshal(applications[0].Descriptor, &descriptor); err != nil {
 		t.Fatal(err)
 	}
-	if len(descriptor.Spec.Interface.LoadScenarios) != 1 || descriptor.Spec.Interface.LoadScenarios[0].TargetEndpoint != "node-proxy-http" || len(descriptor.Spec.AdditionalManifests) != 1 || len(descriptor.Spec.ExcludeResources) != 2 {
+	if descriptor.Spec.Interface.Group != "onlineboutique" || len(descriptor.Spec.Interface.LoadScenarios) != 1 || descriptor.Spec.Interface.LoadScenarios[0].TargetEndpoint != "node-proxy-http" || len(descriptor.Spec.AdditionalManifests) != 1 || len(descriptor.Spec.ExcludeResources) != 2 {
 		t.Fatalf("online boutique traffic contract is incomplete: %#v", descriptor.Spec)
+	}
+	components := map[string]Component{}
+	for _, component := range descriptor.Spec.Interface.Components {
+		components[component.ID] = component
+	}
+	if components["node-proxy"].Index == nil || *components["node-proxy"].Index != 0 || len(components["node-proxy"].Dependencies) != 1 || components["node-proxy"].Dependencies[0] != "frontend" || components["redis-cart"].Index == nil || *components["redis-cart"].Index != 3 {
+		t.Fatalf("online boutique topology contract is incomplete: %#v", descriptor.Spec.Interface.Components)
 	}
 }

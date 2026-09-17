@@ -214,6 +214,9 @@ func (runner *fakeRunner) Run(_ context.Context, _ string, stdin []byte, args ..
 		}
 		return "applied", nil
 	}
+	if strings.HasPrefix(command, "patch csidriver ") {
+		return "patched", nil
+	}
 	if strings.HasPrefix(command, "annotate --overwrite") {
 		for _, arg := range args {
 			if strings.HasPrefix(arg, "kubephos.dev/ownership-marker=") {
@@ -231,6 +234,9 @@ func (runner *fakeRunner) Run(_ context.Context, _ string, stdin []byte, args ..
 	}
 	if strings.HasPrefix(command, "exec pod/storage-probe") {
 		return "kubephos-storage-ready\n", nil
+	}
+	if strings.HasPrefix(command, "delete pod/storage-probe") {
+		return "deleted", nil
 	}
 	if strings.HasPrefix(command, "delete namespace") {
 		return "deleted", nil
@@ -250,6 +256,9 @@ func (runner *fakeRunner) Run(_ context.Context, _ string, stdin []byte, args ..
 	}
 	if strings.Contains(command, "jsonpath={.provisioner}") {
 		return provisioner, nil
+	}
+	if strings.Contains(command, "jsonpath={.spec.fsGroupPolicy}") {
+		return "None", nil
 	}
 	if strings.Contains(command, "jsonpath={.parameters.server}") {
 		return "10.10.0.12", nil

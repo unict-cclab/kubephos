@@ -1,0 +1,31 @@
+apiVersion: plugins.kubephos.io/v1alpha1
+kind: Plugin
+metadata:
+  id: io.kubephos.applications.mubench
+  name: muBench application materializer
+  version: 0.1.2
+  description: Materializes a generated muBench catalog application into standard application artifacts.
+spec:
+  protocol: v1alpha1
+  commands: [describe, validate, plan, precheck, execute, verify, status, cancel, cleanup]
+  configurationSchema:
+    type: object
+    required: [applicationRef]
+    additionalProperties: false
+    properties:
+      applicationRef: {type: string, title: Application, format: kubephos-application-ref}
+      values:
+        type: object
+        title: Application settings
+        x-kubephos-schema-from-application: applicationRef
+  runtime:
+    executable: mubench-application-plugin
+    timeout: 2m
+  artifacts:
+    outputs:
+      - {type: ManifestSet, version: v1alpha1}
+      - {type: WorkloadTargets, version: v1alpha1}
+      - {type: ServiceEndpoints, version: v1alpha1}
+      - {type: LoadScenarioSet, version: v1alpha1}
+  capabilities: [applications.materialize]
+  permissions: [catalog.read:applications]

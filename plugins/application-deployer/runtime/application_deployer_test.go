@@ -136,6 +136,40 @@ func TestVerificationRejectsReadinessLostDuringStabilityWindow(t *testing.T) {
 	}
 }
 
+func TestTrafficEntrypointIsRecreatedAsOneDeploymentPerApplicationNode(t *testing.T) {
+	runner := &fakeRunner{applicationNodes: true}
+	plugin := Plugin{Runner: runner, StabilityChecks: 1}
+	spec := json.RawMessage(`{"clusterConnectionRef":"art_cluster","manifestSetRef":"art_manifests","workloadTargetsRef":"art_workloads","serviceEndpointsRef":"art_endpoints"}`)
+	plan, err := plugin.Plan(context.Background(), spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	step := plan.Steps[0]
+	step.ResolvedInputs = trafficEntrypointArtifacts()
+	health, err := plugin.Precheck(context.Background(), step, discardLog)
+	if err != nil || health.Status != domain.HealthHealthy || health.Checks["trafficProxies"] != "2 application nodes" {
+		t.Fatalf("traffic entrypoint precheck failed %#v %v", health, err)
+	}
+	value, err := plugin.Execute(context.Background(), step, discardLog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(runner.appliedManifest, "kind: DaemonSet") || !strings.Contains(runner.appliedManifest, "name: gateway-node-a") || !strings.Contains(runner.appliedManifest, "name: gateway-node-b") || !strings.Contains(runner.appliedManifest, "app: gateway-node-a") || !strings.Contains(runner.appliedManifest, "component: node-proxy") || !strings.Contains(runner.appliedManifest, "kubephos.dev/traffic-entrypoint: node-proxy") || !strings.Contains(runner.appliedManifest, "topology.kubernetes.io/zone: zone-a") || !strings.Contains(runner.appliedManifest, "externalTrafficPolicy: Local") {
+		t.Fatalf("unexpected runtime manifest:\n%s", runner.appliedManifest)
+	}
+	health, err = plugin.Verify(context.Background(), step, value, discardLog)
+	if err != nil || health.Status != domain.HealthHealthy || health.Checks["trafficProxies"] != "2 nodes covered" {
+		t.Fatalf("traffic entrypoint verification failed %#v %v", health, err)
+	}
+	var decoded result
+	if err := json.Unmarshal(value, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if len(decoded.ApplicationDeployment.Spec.Workloads) != 2 || decoded.ApplicationDeployment.Spec.Workloads[0].Name != "gateway-node-a" || decoded.ApplicationDeployment.Spec.Workloads[0].NodeName != "node-a" || decoded.ApplicationDeployment.Spec.Workloads[0].NodeZone != "zone-a" || decoded.ApplicationDeployment.Spec.Workloads[1].Name != "gateway-node-b" || decoded.ApplicationDeployment.Spec.Workloads[1].NodeName != "node-b" || decoded.ApplicationDeployment.Spec.Workloads[1].NodeZone != "zone-b" {
+		t.Fatalf("unexpected runtime workload contract %#v", decoded.ApplicationDeployment.Spec.Workloads)
+	}
+}
+
 func testArtifacts() map[string]domain.ResolvedArtifact {
 	certificate := base64.StdEncoding.EncodeToString([]byte("certificate"))
 	key := base64.StdEncoding.EncodeToString([]byte("private-key"))
@@ -149,13 +183,57 @@ func testArtifacts() map[string]domain.ResolvedArtifact {
 	return map[string]domain.ResolvedArtifact{"cluster-connection": {Value: cluster}, "manifest-set": {Value: manifests}, "workload-targets": {Value: workloads}, "service-endpoints": {Value: endpoints}}
 }
 
+func trafficEntrypointArtifacts() map[string]domain.ResolvedArtifact {
+	artifacts := testArtifacts()
+	manifest := `apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: node-proxy
+data:
+  default.conf: proxy
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: node-proxy
+  labels: {group: example, component: node-proxy, app: node-proxy}
+spec:
+  selector: {matchLabels: {app: node-proxy}}
+  template:
+    metadata:
+      labels: {group: example, component: node-proxy, app: node-proxy}
+    spec:
+      nodeSelector: {kubephos.dev/role: application}
+      containers:
+        - {name: nginx, image: "nginx:1.27-alpine"}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: node-proxy
+spec:
+  type: NodePort
+  externalTrafficPolicy: Local
+  selector: {app: node-proxy}
+  ports: [{port: 80, targetPort: 8080}]
+`
+	digest := sha256.Sum256([]byte(manifest))
+	manifests, _ := json.Marshal(map[string]any{"apiVersion": artifactAPI, "kind": "ManifestSet", "metadata": map[string]string{"applicationRef": "app:example.proxy@1.0.0", "digest": "sha256:" + hex.EncodeToString(digest[:])}, "spec": map[string]any{"renderer": "plain-yaml", "content": manifest, "source": map[string]string{"type": "generated", "repository": "https://example.invalid/app.git", "revision": strings.Repeat("a", 40), "path": ".", "entrypoint": "generated.yaml"}}})
+	artifacts["manifest-set"] = domain.ResolvedArtifact{Value: manifests}
+	artifacts["workload-targets"] = domain.ResolvedArtifact{Value: json.RawMessage(`[{"id":"node-proxy","apiVersion":"apps/v1","kind":"DaemonSet","name":"node-proxy","selector":{"app":"node-proxy"},"traits":["traffic-entrypoint"]}]`)}
+	artifacts["service-endpoints"] = domain.ResolvedArtifact{Value: json.RawMessage(`[{"id":"node-proxy-http","component":"node-proxy","service":"node-proxy","port":80,"protocol":"http","path":"/"}]`)}
+	return artifacts
+}
+
 func discardLog(string, string) error { return nil }
 
 type fakeRunner struct {
-	installed   bool
-	marker      string
-	readyWaits  int
-	failReadyAt int
+	installed        bool
+	marker           string
+	readyWaits       int
+	failReadyAt      int
+	applicationNodes bool
+	appliedManifest  string
 }
 
 func (runner *fakeRunner) Run(_ context.Context, _ string, stdin []byte, args ...string) (string, error) {
@@ -190,10 +268,25 @@ func (runner *fakeRunner) Run(_ context.Context, _ string, stdin []byte, args ..
 		return "created", nil
 	}
 	if strings.HasPrefix(command, "apply --namespace ") {
+		runner.appliedManifest = string(stdin)
 		return "created", nil
+	}
+	if command == "get nodes -l kubephos.dev/role=application -o json" && runner.applicationNodes {
+		return `{"items":[{"metadata":{"name":"node-b","labels":{"kubernetes.io/hostname":"node-b","topology.kubernetes.io/zone":"zone-b"}},"spec":{},"status":{"conditions":[{"type":"Ready","status":"True"}]}},{"metadata":{"name":"node-a","labels":{"kubernetes.io/hostname":"node-a","topology.kubernetes.io/zone":"zone-a"}},"spec":{},"status":{"conditions":[{"type":"Ready","status":"True"}]}}]}`, nil
 	}
 	if strings.HasPrefix(command, "get deployment/frontend ") {
 		return "deployment.apps/frontend", nil
+	}
+	if strings.HasPrefix(command, "get deployment/gateway-node-") {
+		return "deployment.apps/proxy", nil
+	}
+	if strings.HasPrefix(command, "get pods ") && strings.Contains(command, "jsonpath=") {
+		if strings.Contains(command, "gateway-node-a") {
+			return "node-a\n", nil
+		}
+		if strings.Contains(command, "gateway-node-b") {
+			return "node-b\n", nil
+		}
 	}
 	if strings.HasPrefix(command, "get pods ") {
 		return "pod/frontend-123", nil
@@ -207,6 +300,9 @@ func (runner *fakeRunner) Run(_ context.Context, _ string, stdin []byte, args ..
 	}
 	if strings.HasPrefix(command, "get endpoints frontend ") {
 		return "10.42.0.12", nil
+	}
+	if strings.HasPrefix(command, "get endpoints node-proxy ") {
+		return "10.42.0.21 10.42.1.22", nil
 	}
 	if strings.HasPrefix(command, "get --raw=/api/v1/namespaces/") {
 		return "healthy", nil

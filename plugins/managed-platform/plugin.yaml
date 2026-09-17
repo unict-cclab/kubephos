@@ -3,8 +3,8 @@ kind: Plugin
 metadata:
   id: io.kubephos.platform.managed
   name: Managed Kubernetes platform
-  version: 0.1.0
-  description: Installs and verifies the release-managed Istio and chaos runtime baseline.
+  version: 0.2.3
+  description: Installs and verifies Istio, the chaos runtime and the Custom Pod Autoscaler operator.
 spec:
   protocol: v1alpha1
   commands:
@@ -44,6 +44,7 @@ spec:
     - platform.managed.preflight
     - platform.managed.cleanup
     - lifecycle.cleanup
+    - lifecycle.cleanup.compatible
   permissions:
     - cluster.admin
     - network.http

@@ -116,6 +116,7 @@ function SchemaField({name, prefix, property, value, required, onValue, formValu
     defaultValue={value === undefined && property.default === undefined ? '' : String(value ?? property.default)}
     min={property.minimum}
     max={property.maximum}
+    step={numeric ? property.multipleOf ?? (property.type === 'integer' ? 1 : 'any') : undefined}
     minLength={property.minLength}
     maxLength={property.maxLength}
     onChange={event => onValue(schemaValue(event.target.value, property))}

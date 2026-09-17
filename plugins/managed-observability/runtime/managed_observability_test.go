@@ -143,6 +143,13 @@ func TestCleanupAcceptsUnmarkedCRDsUnderOwnedNamespace(t *testing.T) {
 	}
 }
 
+func TestCleanupVerificationRejectsRemainingRBAC(t *testing.T) {
+	runner := &fakeRunner{rbacInstalled: true}
+	if err := verifyCleanup(context.Background(), runner, "kubeconfig"); err == nil || !strings.Contains(err.Error(), "clusterrole/"+monAgentName) {
+		t.Fatalf("expected remaining RBAC rejection, received %v", err)
+	}
+}
+
 func TestPlanDoesNotContainServiceCredential(t *testing.T) {
 	plan, err := (Plugin{}).Plan(context.Background(), json.RawMessage(`{"clusterConnectionRef":"art_cluster","storageClassCapabilityRef":"art_storage","scrapeInterval":"15s","retention":"7d"}`))
 	if err != nil {
@@ -160,7 +167,7 @@ func TestManagedValuesContainOnlySupportedControls(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(values)
-	for _, expected := range []string{"scrapeInterval: 10s", "evaluationInterval: 10s", "retention: 15d", "storageClassName: shared-storage", "adminPassword: secret", "initChownData:", "enabled: false"} {
+	for _, expected := range []string{"scrapeInterval: 10s", "evaluationInterval: 10s", "retention: 15d", "storageClassName: shared-storage", "adminPassword: secret", "initChownData:", "enabled: false", "job_name: istio-mesh", "/stats/prometheus", "name: Loki", "name: Jaeger", "fsGroupChangePolicy: OnRootMismatch", "kubephos.dev/role: management", "type: Recreate"} {
 		if !strings.Contains(text, expected) {
 			t.Fatalf("managed value %q is missing from %s", expected, text)
 		}
@@ -221,9 +228,10 @@ func (function roundTripFunc) RoundTrip(request *http.Request) (*http.Response, 
 }
 
 type fakeRunner struct {
-	installed bool
-	marker    string
-	crdMarker *string
+	installed     bool
+	rbacInstalled bool
+	marker        string
+	crdMarker     *string
 }
 
 func (runner *fakeRunner) Kubectl(_ context.Context, _ string, stdin []byte, args ...string) (string, error) {
@@ -255,6 +263,7 @@ func (runner *fakeRunner) Kubectl(_ context.Context, _ string, stdin []byte, arg
 		return "applied", nil
 	}
 	if command == "apply -f -" && strings.Contains(string(stdin), monAgentName) {
+		runner.rbacInstalled = true
 		return "applied", nil
 	}
 	if command == "rollout status deployment/"+monAgentName+" -n "+namespace+" --timeout=5m" {
@@ -273,6 +282,12 @@ func (runner *fakeRunner) Kubectl(_ context.Context, _ string, stdin []byte, arg
 		return "Bound\nBound\n", nil
 	}
 	if strings.Contains(command, "jsonpath={.metadata.annotations.kubephos\\.dev/ownership-marker}") {
+		if strings.HasPrefix(command, "get clusterrole/") || strings.HasPrefix(command, "get clusterrolebinding/") {
+			if !runner.rbacInstalled {
+				return "", errors.New("not found")
+			}
+			return runner.marker, nil
+		}
 		if !runner.installed {
 			return "", errors.New("not found")
 		}
@@ -285,6 +300,7 @@ func (runner *fakeRunner) Kubectl(_ context.Context, _ string, stdin []byte, arg
 		return "deleted", nil
 	}
 	if strings.HasPrefix(command, "delete clusterrole/") {
+		runner.rbacInstalled = false
 		return "deleted", nil
 	}
 	if strings.HasPrefix(command, "delete namespace ") {
@@ -293,6 +309,12 @@ func (runner *fakeRunner) Kubectl(_ context.Context, _ string, stdin []byte, arg
 	}
 	if strings.HasPrefix(command, "get namespace ") || strings.HasPrefix(command, "get crd ") {
 		if runner.installed {
+			return "present", nil
+		}
+		return "", errors.New("not found")
+	}
+	if strings.HasPrefix(command, "get clusterrole/") || strings.HasPrefix(command, "get clusterrolebinding/") {
+		if runner.rbacInstalled {
 			return "present", nil
 		}
 		return "", errors.New("not found")

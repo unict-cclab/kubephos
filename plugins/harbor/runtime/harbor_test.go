@@ -59,8 +59,14 @@ func TestManagedRegistryLifecycle(t *testing.T) {
 	if err := json.Unmarshal(value, &decoded); err != nil {
 		t.Fatal(err)
 	}
-	if decoded.RegistryEndpoint.Metadata.Version != harborVersion || decoded.RegistryEndpoint.Spec.Host != "10.10.0.12" || decoded.RegistryEndpoint.Spec.URL != "https://10.10.0.12" || decoded.RegistryEndpoint.Spec.Insecure || validateCABundle(decoded.RegistryEndpoint.Spec.CABundle) != nil || decoded.RegistryPushCredential.Metadata.Role != "push" || decoded.RegistryPushCredential.Spec.Project != development || decoded.RegistryManagementCredential.Metadata.Role != "management" {
+	if decoded.RegistryEndpoint.Metadata.Version != harborVersion || decoded.RegistryEndpoint.Spec.Host != "10.10.0.12" || decoded.RegistryEndpoint.Spec.URL != "https://10.10.0.12" || decoded.RegistryEndpoint.Spec.Insecure || validateCABundle(decoded.RegistryEndpoint.Spec.CABundle) != nil || decoded.RegistryPushCredential.Metadata.Role != "push" || decoded.RegistryPushCredential.Spec.Project != development || decoded.RegistryManagementCredential.Metadata.Role != "management" || len(decoded.RegistryEndpoint.Spec.Mirrors) != len(proxyTargets) || len(decoded.RegistryEndpoint.Spec.Projects) != len(proxyTargets)+2 {
 		t.Fatalf("unexpected registry result %#v", decoded)
+	}
+	for index, proxy := range proxyTargets {
+		mirror := decoded.RegistryEndpoint.Spec.Mirrors[index]
+		if mirror.Source != proxy.Source || mirror.Endpoint != decoded.RegistryEndpoint.Spec.URL || mirror.RewritePrefix != proxy.Project+"/" || mirror.Probe != proxy.Repository+":"+proxy.Reference {
+			t.Fatalf("unexpected proxy mirror %#v", mirror)
+		}
 	}
 	if decoded.RegistryPushCredential.Spec.Password == "" || decoded.RegistryManagementCredential.Spec.Password == "" || decoded.RegistryPushCredential.Spec.Password == decoded.RegistryManagementCredential.Spec.Password {
 		t.Fatal("registry credentials are missing or reused")
@@ -165,6 +171,17 @@ func TestInstallerIsVersionedAndDigestVerified(t *testing.T) {
 	}
 	if !strings.Contains(command, "docker-compose-v2") || !strings.Contains(command, "docker compose version") {
 		t.Fatal("installer command does not validate the compose runtime")
+	}
+	for _, proxy := range proxyTargets {
+		if !strings.Contains(command, proxy.Project) || !strings.Contains(command, proxy.Upstream) || !strings.Contains(command, proxy.Source+"-upstream") {
+			t.Fatalf("installer command does not configure %s", proxy.Source)
+		}
+	}
+	if !strings.Contains(command, "apt-get install -y ca-certificates curl docker.io docker-compose-v2 jq openssl") {
+		t.Fatal("installer command does not install the proxy profile JSON dependency")
+	}
+	if !strings.Contains(command, serviceFile) || !strings.Contains(command, "systemctl enable --now "+serviceName) || !strings.Contains(command, "After=network-online.target docker.service") {
+		t.Fatal("installer command does not configure Harbor to start after a machine reboot")
 	}
 	if strings.Contains(command, "http://") || strings.Contains(command, "curl -k") || strings.Contains(command, "curl --insecure") || !strings.Contains(command, "subjectAltName=IP:10.10.0.12") || !strings.Contains(command, "--cacert "+tlsPath+"/ca.crt") || !strings.Contains(command, caMarker) {
 		t.Fatal("installer command does not enforce verifiable registry TLS")

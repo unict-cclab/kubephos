@@ -1,0 +1,38 @@
+apiVersion: plugins.kubephos.io/v1alpha1
+kind: Plugin
+metadata:
+  id: io.kubephos.descheduler.kubernetes.managed
+  name: Managed descheduler
+  version: 0.1.0
+  description: Runs a catalogued descheduler image with a validated policy against selected application workloads.
+spec:
+  protocol: v1alpha1
+  commands: [describe, validate, plan, precheck, execute, verify, status, cancel, cleanup]
+  configurationSchema:
+    type: object
+    additionalProperties: false
+    required: [clusterConnectionRef, applicationDeploymentRef, targetBindingRef, image, configFile, intervalSeconds]
+    properties:
+      clusterConnectionRef: {type: string, format: kubephos-artifact-ref, x-kubephos-artifact-type: ClusterConnection, x-kubephos-artifact-version: v1alpha1}
+      applicationDeploymentRef: {type: string, format: kubephos-artifact-ref, x-kubephos-artifact-type: ApplicationDeployment, x-kubephos-artifact-version: v1alpha1}
+      targetBindingRef: {type: string, format: kubephos-artifact-ref, x-kubephos-artifact-type: TargetBinding, x-kubephos-artifact-version: v1alpha1}
+      image: {type: string, format: kubephos-strategy-image}
+      configFile:
+        type: string
+        title: Descheduler policy
+        description: Complete DeschedulerPolicy YAML.
+        x-kubephos-multiline: true
+        minLength: 1
+        maxLength: 131072
+      intervalSeconds: {type: integer, title: Descheduling interval in seconds, minimum: 10, maximum: 86400, default: 60}
+  runtime: {executable: descheduler-plugin, timeout: 20m}
+  artifacts:
+    inputs:
+      - {type: ClusterConnection, version: v1alpha1}
+      - {type: ApplicationDeployment, version: v1alpha1}
+      - {type: TargetBinding, version: v1alpha1}
+    outputs:
+      - {type: StrategyDeployment, version: v1alpha1}
+  targeting: {requiredTrait: schedulable}
+  capabilities: [descheduler.kubernetes.install, descheduler.kubernetes.preflight, descheduler.kubernetes.cleanup, lifecycle.cleanup]
+  permissions: [cluster.admin]

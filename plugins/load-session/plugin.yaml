@@ -3,8 +3,8 @@ kind: Plugin
 metadata:
   id: io.kubephos.load.kubernetes.session
   name: Interactive Kubernetes load session
-  version: 0.3.0
-  description: Starts, stops or resumes a generic Locust runtime using the immutable scenario declared by an application.
+  version: 0.6.1
+  description: Runs an ordered RPS and geographic timeline using the immutable Locust journey declared by an application.
 spec:
   protocol: v1alpha1
   commands:
@@ -27,10 +27,8 @@ spec:
       - scenarioId
       - action
       - replicas
-      - users
+      - maxUsers
       - spawnRate
-      - pattern
-      - durationSeconds
     properties:
       clusterConnectionRef:
         type: string
@@ -52,8 +50,8 @@ spec:
         x-kubephos-artifact-version: v1alpha1
       scenarioId:
         type: string
-        title: Application journey
-        description: Immutable Locust scenario supplied by the selected application.
+        title: Load scenario
+        description: User behavior implemented by the Locust file supplied by the selected application.
         minLength: 1
         maxLength: 63
         default: storefront-journey
@@ -66,43 +64,40 @@ spec:
           - stop
           - resume
         default: start
+      interactive:
+        type: boolean
+        title: Interactive session
+        default: false
       replicas:
         type: integer
         title: Load workers
         minimum: 1
         maximum: 100
         default: 1
-      users:
+      maxUsers:
         type: integer
-        title: Concurrent users per worker
+        title: Maximum concurrent users per worker
         minimum: 1
+        maximum: 100000
+        default: 1000
+      spawnRate:
+        type: number
+        title: Users started per second
+        minimum: 0.1
         maximum: 100000
         default: 10
-      spawnRate:
-        type: integer
-        title: Users started per second
-        minimum: 1
-        maximum: 100000
-        default: 1
-      pattern:
-        type: string
-        title: Temporal profile
-        enum:
-          - constant
-          - ramp
-          - steps
-        default: constant
-      durationSeconds:
-        type: integer
-        title: Duration in seconds
-        description: Use zero for an interactive session that runs until stopped.
-        minimum: 0
-        maximum: 7200
-        default: 900
-      zoneWeights:
-        type: object
-        title: Geographic distribution
-        additionalProperties: true
+      steps:
+        type: array
+        title: Temporal workload timeline
+        maxItems: 100
+        items:
+          type: object
+      geographicSteps:
+        type: array
+        title: Geographic traffic timeline
+        maxItems: 100
+        items:
+          type: object
   runtime:
     executable: load-session-plugin
     timeout: 3h

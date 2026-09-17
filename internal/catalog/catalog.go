@@ -28,6 +28,7 @@ var (
 	idPattern       = regexp.MustCompile(`^[a-z0-9][a-z0-9.-]{2,127}$`)
 	versionPattern  = regexp.MustCompile(`^[0-9A-Za-z][0-9A-Za-z.+_-]{0,63}$`)
 	namePattern     = regexp.MustCompile(`^[a-z0-9][a-z0-9.-]{0,62}$`)
+	groupPattern    = regexp.MustCompile(`^[A-Za-z0-9](?:[-_.A-Za-z0-9]{0,61}[A-Za-z0-9])?$`)
 	commitPattern   = regexp.MustCompile(`^[0-9a-fA-F]{40}$`)
 	digestReference = regexp.MustCompile(`^.+@sha256:[0-9a-fA-F]{64}$`)
 )
@@ -48,6 +49,8 @@ type Metadata struct {
 
 type Spec struct {
 	Package             Package              `json:"package" yaml:"package"`
+	Materializer        string               `json:"materializer,omitempty" yaml:"materializer,omitempty"`
+	MaterializerConfig  map[string]any       `json:"materializerConfig,omitempty" yaml:"materializerConfig,omitempty"`
 	Interface           Interface            `json:"interface" yaml:"interface"`
 	ValuesSchema        map[string]any       `json:"valuesSchema" yaml:"valuesSchema"`
 	Defaults            map[string]any       `json:"defaults" yaml:"defaults"`
@@ -67,16 +70,19 @@ type Package struct {
 }
 
 type Interface struct {
+	Group         string         `json:"group" yaml:"group"`
 	Components    []Component    `json:"components" yaml:"components"`
 	Endpoints     []Endpoint     `json:"endpoints,omitempty" yaml:"endpoints,omitempty"`
 	LoadScenarios []LoadScenario `json:"loadScenarios,omitempty" yaml:"loadScenarios,omitempty"`
 }
 
 type Component struct {
-	ID       string            `json:"id" yaml:"id"`
-	Workload Workload          `json:"workload" yaml:"workload"`
-	Selector map[string]string `json:"selector" yaml:"selector"`
-	Traits   []string          `json:"traits" yaml:"traits"`
+	ID           string            `json:"id" yaml:"id"`
+	Workload     Workload          `json:"workload" yaml:"workload"`
+	Selector     map[string]string `json:"selector" yaml:"selector"`
+	Traits       []string          `json:"traits" yaml:"traits"`
+	Index        *int              `json:"index,omitempty" yaml:"index,omitempty"`
+	Dependencies []string          `json:"dependencies,omitempty" yaml:"dependencies,omitempty"`
 }
 
 type Workload struct {
@@ -245,8 +251,17 @@ func validate(descriptor Descriptor, origin string) error {
 	if err := validatePackage(descriptor.Spec.Package, origin); err != nil {
 		return err
 	}
+	if descriptor.Spec.Materializer != "" && !idPattern.MatchString(descriptor.Spec.Materializer) {
+		return errors.New("spec.materializer must be a valid plugin ID")
+	}
+	if descriptor.Spec.Materializer == "" && len(descriptor.Spec.MaterializerConfig) != 0 {
+		return errors.New("spec.materializerConfig requires spec.materializer")
+	}
 	if len(descriptor.Spec.Interface.Components) == 0 {
 		return errors.New("spec.interface.components must contain at least one component")
+	}
+	if !groupPattern.MatchString(descriptor.Spec.Interface.Group) {
+		return errors.New("spec.interface.group must be a valid Kubernetes label value")
 	}
 	componentIDs := map[string]bool{}
 	for position, component := range descriptor.Spec.Interface.Components {
@@ -268,6 +283,9 @@ func validate(descriptor Descriptor, origin string) error {
 			}
 			traits[trait] = true
 		}
+	}
+	if err := validateComponentTopology(descriptor.Spec.Interface.Components, componentIDs); err != nil {
+		return err
 	}
 	endpointIDs := map[string]bool{}
 	for position, endpoint := range descriptor.Spec.Interface.Endpoints {
@@ -348,6 +366,62 @@ func validate(descriptor Descriptor, origin string) error {
 	}
 	if err := validateOverlays(descriptor); err != nil {
 		return err
+	}
+	return nil
+}
+
+func validateComponentTopology(components []Component, componentIDs map[string]bool) error {
+	declared := false
+	for _, component := range components {
+		declared = declared || component.Index != nil || len(component.Dependencies) != 0
+	}
+	if !declared {
+		return nil
+	}
+	byID := make(map[string]Component, len(components))
+	for position, component := range components {
+		path := fmt.Sprintf("spec.interface.components[%d]", position)
+		if component.Index == nil || *component.Index < 0 || *component.Index > 1000 {
+			return fmt.Errorf("%s.index must be between 0 and 1000 when application topology is declared", path)
+		}
+		seen := map[string]bool{}
+		for _, dependency := range component.Dependencies {
+			if !componentIDs[dependency] || dependency == component.ID || seen[dependency] {
+				return fmt.Errorf("%s.dependencies contains an invalid or duplicated component", path)
+			}
+			seen[dependency] = true
+		}
+		byID[component.ID] = component
+	}
+	for _, component := range components {
+		for _, dependency := range component.Dependencies {
+			if *byID[dependency].Index < *component.Index {
+				return fmt.Errorf("component %s cannot depend on earlier topology index %d", component.ID, *byID[dependency].Index)
+			}
+		}
+	}
+	state := map[string]uint8{}
+	var visit func(string) error
+	visit = func(componentID string) error {
+		if state[componentID] == 1 {
+			return fmt.Errorf("application topology contains a cycle at component %s", componentID)
+		}
+		if state[componentID] == 2 {
+			return nil
+		}
+		state[componentID] = 1
+		for _, dependency := range byID[componentID].Dependencies {
+			if err := visit(dependency); err != nil {
+				return err
+			}
+		}
+		state[componentID] = 2
+		return nil
+	}
+	for _, component := range components {
+		if err := visit(component.ID); err != nil {
+			return err
+		}
 	}
 	return nil
 }

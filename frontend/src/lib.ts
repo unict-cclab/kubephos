@@ -13,6 +13,10 @@ export function shortID(value: string): string {
   return value.length > 18 ? `${value.slice(0, 18)}…` : value
 }
 
+export function isTerminalExperiment(status: string): boolean {
+  return ['succeeded', 'failed', 'canceled'].includes(status.trim().toLowerCase())
+}
+
 export function humanize(value: string): string {
   return value.replace(/([a-z])([A-Z])/g, '$1 $2').replace(/^./, letter => letter.toUpperCase())
 }

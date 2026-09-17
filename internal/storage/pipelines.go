@@ -76,6 +76,9 @@ func (s *Store) CreatePipelineExperiment(ctx context.Context, experiment domain.
 	experiment.Status = domain.OperationQueued
 	for variantIndex := range experiment.Variants {
 		variant := &experiment.Variants[variantIndex]
+		if variant.Alias == "" {
+			variant.Alias = variant.Name
+		}
 		if len(variant.Configuration) == 0 {
 			variant.Configuration = json.RawMessage(`{}`)
 		}
@@ -96,9 +99,9 @@ func (s *Store) CreatePipelineExperiment(ctx context.Context, experiment domain.
 			return domain.Experiment{}, ErrConflict
 		}
 		_, err = tx.Exec(ctx, `
-			INSERT INTO experiment_variants (id, experiment_id, position, name, pipeline_id, pipeline_hash, configuration_id, configuration)
-			VALUES ($1, $2, $3, $4, $5, $6, NULLIF($7, ''), $8)
-		`, variant.ID, experiment.ID, variant.Position, variant.Name, variant.PipelineID, variant.PipelineHash, variant.ConfigurationID, variant.Configuration)
+			INSERT INTO experiment_variants (id, experiment_id, position, name, display_alias, plot_color, pipeline_id, pipeline_hash, configuration_id, configuration)
+			VALUES ($1, $2, $3, $4, COALESCE(NULLIF($5, ''), $4), NULLIF($6, ''), $7, $8, NULLIF($9, ''), $10)
+		`, variant.ID, experiment.ID, variant.Position, variant.Name, variant.Alias, variant.Color, variant.PipelineID, variant.PipelineHash, variant.ConfigurationID, variant.Configuration)
 		if err != nil {
 			return domain.Experiment{}, err
 		}
@@ -526,6 +529,17 @@ func (s *Store) CompletePipelineRun(ctx context.Context, runID, owner, artifactI
 	`, runID); err != nil {
 		return err
 	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE managed_resources
+		SET pipeline_id = recreation_pipeline_id,
+		    pipeline_run_id = recreation_pipeline_run_id,
+		    recreation_pipeline_id = NULL,
+		    recreation_pipeline_run_id = NULL,
+		    updated_at = now()
+		WHERE recreation_pipeline_run_id = $1 AND deleted_at IS NULL
+	`, runID); err != nil {
+		return err
+	}
 	return tx.Commit(ctx)
 }
 
@@ -607,6 +621,78 @@ func (s *Store) RequestPipelineRunCancel(ctx context.Context, runID string) erro
 		return ErrConflict
 	}
 	return nil
+}
+
+func (s *Store) RequestExperimentCancel(ctx context.Context, experimentID string) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	var status string
+	if err := tx.QueryRow(ctx, `SELECT status FROM experiments WHERE id = $1 FOR UPDATE`, experimentID).Scan(&status); errors.Is(err, pgx.ErrNoRows) {
+		return ErrNotFound
+	} else if err != nil {
+		return err
+	}
+	if !cancelableExperimentStatus(status) {
+		return ErrConflict
+	}
+	const message = "Canceled by user before start."
+	queued, err := tx.Exec(ctx, `
+		UPDATE pipeline_runs run
+		SET status = $2, cancel_requested = true, error = $3, completed_at = now(), lease_owner = NULL, lease_until = NULL
+		FROM experiment_trials trial
+		JOIN experiment_variants variant ON variant.id = trial.variant_id
+		WHERE variant.experiment_id = $1 AND run.id = trial.pipeline_run_id AND run.status = $4
+	`, experimentID, domain.OperationCanceled, message, domain.OperationQueued)
+	if err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE pipeline_run_stages stage
+		SET status = $2, error = $3, completed_at = now()
+		FROM pipeline_runs run
+		JOIN experiment_trials trial ON trial.pipeline_run_id = run.id
+		JOIN experiment_variants variant ON variant.id = trial.variant_id
+		WHERE variant.experiment_id = $1 AND stage.run_id = run.id AND run.status = $4 AND stage.status = $5
+	`, experimentID, domain.StepCanceled, message, domain.OperationCanceled, domain.StepPending); err != nil {
+		return err
+	}
+	running, err := tx.Exec(ctx, `
+		UPDATE pipeline_runs run
+		SET cancel_requested = true
+		FROM experiment_trials trial
+		JOIN experiment_variants variant ON variant.id = trial.variant_id
+		WHERE variant.experiment_id = $1 AND run.id = trial.pipeline_run_id AND run.status = $2
+	`, experimentID, domain.OperationRunning)
+	if err != nil {
+		return err
+	}
+	if queued.RowsAffected()+running.RowsAffected() == 0 {
+		return ErrConflict
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE experiment_trials trial
+		SET status = $2, error = $3, completed_at = now(), updated_at = now()
+		FROM pipeline_runs run, experiment_variants variant
+		WHERE variant.experiment_id = $1 AND trial.variant_id = variant.id AND trial.pipeline_run_id = run.id
+		  AND run.status = $2 AND trial.status = $4
+	`, experimentID, domain.OperationCanceled, message, domain.OperationQueued); err != nil {
+		return err
+	}
+	nextStatus := domain.OperationCanceled
+	if running.RowsAffected() > 0 {
+		nextStatus = domain.OperationRunning
+	}
+	if _, err := tx.Exec(ctx, `UPDATE experiments SET status = $2, updated_at = now() WHERE id = $1`, experimentID, nextStatus); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func cancelableExperimentStatus(status string) bool {
+	return status == domain.OperationQueued || status == domain.OperationRunning
 }
 
 func (s *Store) PipelineRunCount(ctx context.Context, pipelineID string) (int, error) {

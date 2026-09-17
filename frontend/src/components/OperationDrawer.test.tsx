@@ -24,7 +24,9 @@ describe('OperationDrawer', () => {
     vi.stubGlobal('fetch', fetch)
     render(<OperationDrawer operationID="op_test" session={{authenticated: true}} plugins={[]} close={() => undefined} open={() => undefined} changed={async () => undefined} notify={() => undefined} />)
 
-    fireEvent.click(await screen.findByRole('button', {name: 'Preview'}))
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(await screen.findByRole('heading', {name: 'Activity output'})).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', {name: 'Preview'}))
 
     expect(await screen.findByRole('columnheader', {name: 'Name'})).toBeInTheDocument()
     expect(screen.getByRole('cell', {name: 'one'})).toBeInTheDocument()

@@ -61,6 +61,22 @@ describe('SchemaFields', () => {
     expect(screen.getByRole('spinbutton', {name: 'Replicas'})).toHaveValue(4)
   })
 
+  it('accepts whole and decimal values for number fields with a decimal minimum', () => {
+    render(<form><SchemaFields
+      schema={{type: 'object', required: ['spawnRate'], properties: {spawnRate: {type: 'number', title: 'Users started per second', minimum: 0.1, maximum: 100000, default: 10}}}}
+      applications={[]}
+      artifacts={[]}
+      connections={[]}
+      credentials={[]}
+    /></form>)
+    const field = screen.getByRole('spinbutton', {name: 'Users started per second'})
+    expect(field).toHaveAttribute('step', 'any')
+    expect(field).toHaveValue(10)
+    expect(field).toBeValid()
+    fireEvent.change(field, {target: {value: '0.5'}})
+    expect(field).toBeValid()
+  })
+
   it('renders multiline strings declared by a plugin', () => {
     render(<form><SchemaFields
       schema={{type: 'object', properties: {command: {type: 'string', title: 'Command', 'x-kubephos-multiline': true}}}}

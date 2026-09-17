@@ -1,6 +1,7 @@
 import {StrictMode, Component, type ErrorInfo, type ReactNode} from 'react'
 import {createRoot} from 'react-dom/client'
 import App from './App'
+import '@fontsource-variable/manrope/wght.css'
 import '../../internal/webui/static/styles.css'
 
 class ErrorBoundary extends Component<{children: ReactNode}, {failed: boolean}> {

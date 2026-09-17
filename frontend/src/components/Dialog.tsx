@@ -3,7 +3,7 @@ import {useEffect, useRef, type PropsWithChildren, type ReactNode} from 'react'
 interface DialogProps extends PropsWithChildren {
   open: boolean
   title: string
-  eyebrow: string
+  eyebrow?: string
   onClose?: () => void
   footer?: ReactNode
   className?: string
@@ -25,7 +25,7 @@ export function Dialog({open, title, eyebrow, onClose, footer, className = '', c
   }}>
     <div className="modal-content">
       <div className="modal-header">
-        <div><p className="eyebrow">{eyebrow}</p><h2>{title}</h2></div>
+        <div>{eyebrow && <p className="eyebrow">{eyebrow}</p>}<h2>{title}</h2></div>
         {onClose && <button className="icon-button" type="button" onClick={onClose} aria-label="Close">×</button>}
       </div>
       {children}

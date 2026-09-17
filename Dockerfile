@@ -24,6 +24,8 @@ RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/proxmox-topology-p
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/proxmox-template-plugin ./cmd/proxmox-template-plugin
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/application-inspector-plugin ./cmd/application-inspector-plugin
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/application-deployer-plugin ./cmd/application-deployer-plugin
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/mubench-factory-plugin ./cmd/mubench-factory-plugin
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/mubench-application-plugin ./cmd/mubench-application-plugin
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/load-session-plugin ./cmd/load-session-plugin
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/metrics-collector-plugin ./cmd/metrics-collector-plugin
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/target-binding-plugin ./cmd/target-binding-plugin
@@ -41,6 +43,9 @@ RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/oci-executor-plugi
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/ssh-command-plugin ./cmd/ssh-command-plugin
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/harbor-browser-plugin ./cmd/harbor-browser-plugin
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/nfs-browser-plugin ./cmd/nfs-browser-plugin
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/strategy-image-plugin ./cmd/strategy-image-plugin
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/descheduler-plugin ./cmd/descheduler-plugin
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/autoscaler-plugin ./cmd/autoscaler-plugin
 
 FROM alpine:3.23
 
@@ -62,6 +67,10 @@ COPY --from=build /out/application-inspector-plugin /opt/kubephos/plugins/applic
 COPY plugins/application-inspector/plugin.yaml /opt/kubephos/plugins/application-inspector/plugin.yaml
 COPY --from=build /out/application-deployer-plugin /opt/kubephos/plugins/application-deployer/application-deployer-plugin
 COPY plugins/application-deployer/plugin.yaml /opt/kubephos/plugins/application-deployer/plugin.yaml
+COPY --from=build /out/mubench-factory-plugin /opt/kubephos/plugins/mubench-factory/mubench-factory-plugin
+COPY plugins/mubench-factory/plugin.yaml /opt/kubephos/plugins/mubench-factory/plugin.yaml
+COPY --from=build /out/mubench-application-plugin /opt/kubephos/plugins/mubench-application/mubench-application-plugin
+COPY plugins/mubench-application/plugin.yaml /opt/kubephos/plugins/mubench-application/plugin.yaml
 COPY --from=build /out/load-session-plugin /opt/kubephos/plugins/load-session/load-session-plugin
 COPY plugins/load-session/plugin.yaml /opt/kubephos/plugins/load-session/plugin.yaml
 COPY --from=build /out/metrics-collector-plugin /opt/kubephos/plugins/metrics-collector/metrics-collector-plugin
@@ -96,7 +105,14 @@ COPY --from=build /out/harbor-browser-plugin /opt/kubephos/plugins/harbor-browse
 COPY plugins/harbor-browser/plugin.yaml /opt/kubephos/plugins/harbor-browser/plugin.yaml
 COPY --from=build /out/nfs-browser-plugin /opt/kubephos/plugins/nfs-browser/nfs-browser-plugin
 COPY plugins/nfs-browser/plugin.yaml /opt/kubephos/plugins/nfs-browser/plugin.yaml
+COPY --from=build /out/strategy-image-plugin /opt/kubephos/plugins/strategy-image/strategy-image-plugin
+COPY plugins/strategy-image/plugin.yaml /opt/kubephos/plugins/strategy-image/plugin.yaml
+COPY --from=build /out/descheduler-plugin /opt/kubephos/plugins/descheduler/descheduler-plugin
+COPY plugins/descheduler/plugin.yaml /opt/kubephos/plugins/descheduler/plugin.yaml
+COPY --from=build /out/autoscaler-plugin /opt/kubephos/plugins/autoscaler/autoscaler-plugin
+COPY plugins/autoscaler/plugin.yaml /opt/kubephos/plugins/autoscaler/plugin.yaml
 COPY catalog/applications /opt/kubephos/catalog/applications
+COPY migrations /opt/kubephos/migrations
 COPY --from=web /src/frontend/dist /opt/kubephos/web
 USER 10001:10001
 EXPOSE 8080

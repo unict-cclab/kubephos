@@ -3,7 +3,7 @@ kind: Plugin
 metadata:
   id: io.kubephos.metrics.prometheus.collect
   name: Kubernetes metrics collector
-  version: 0.1.0
+  version: 0.3.2
   description: Collects a normalized workload dataset through a compatible metrics capability.
 spec:
   protocol: v1alpha1
@@ -24,6 +24,7 @@ spec:
       - clusterConnectionRef
       - applicationDeploymentRef
       - observabilityCapabilityRef
+      - loadSessionRef
       - window
       - resolution
     properties:
@@ -45,9 +46,15 @@ spec:
         format: kubephos-artifact-ref
         x-kubephos-artifact-type: ObservabilityCapability
         x-kubephos-artifact-version: v1alpha1
+      loadSessionRef:
+        type: string
+        title: Completed load session
+        format: kubephos-artifact-ref
+        x-kubephos-artifact-type: LoadSession
+        x-kubephos-artifact-version: v1alpha1
       window:
         type: string
-        title: Collection window
+        title: Maximum fallback lookback
         enum:
           - 5m
           - 15m
@@ -63,6 +70,13 @@ spec:
           - 30s
           - 1m
         default: 15s
+      sloMilliseconds:
+        type: integer
+        title: Response time SLO (ms)
+        description: A time window violates the SLO when its P95 response time exceeds this value.
+        minimum: 1
+        maximum: 600000
+        default: 250
   runtime:
     executable: metrics-collector-plugin
     timeout: 10m
@@ -73,6 +87,8 @@ spec:
       - type: ApplicationDeployment
         version: v1alpha1
       - type: ObservabilityCapability
+        version: v1alpha1
+      - type: LoadSession
         version: v1alpha1
     outputs:
       - type: TimeSeriesDataset

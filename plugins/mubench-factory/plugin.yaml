@@ -1,0 +1,33 @@
+apiVersion: plugins.kubephos.io/v1alpha1
+kind: Plugin
+metadata:
+  id: io.kubephos.applications.mubench.generate
+  name: muBench application generator
+  version: 0.1.3
+  description: Creates reproducible muBench applications with source-aware traffic ingress.
+spec:
+  protocol: v1alpha1
+  commands: [describe, validate, plan, precheck, execute, verify, status, cancel, cleanup]
+  configurationSchema:
+    type: object
+    required: [name, serviceCount, topology, replicas, workers, threads, workloadProfile, responseSizeKB, cpuRequest, memoryRequest]
+    additionalProperties: false
+    properties:
+      name: {type: string, title: Application name, default: muBench application, minLength: 1, maxLength: 80}
+      serviceCount: {type: integer, title: Services, default: 6, minimum: 2, maximum: 100}
+      topology: {type: string, title: Request topology, default: chain, enum: [chain, fan-out, tree]}
+      replicas: {type: integer, title: Initial replicas, default: 1, minimum: 1, maximum: 20}
+      workers: {type: integer, title: Workers per service, default: 2, minimum: 1, maximum: 32}
+      threads: {type: integer, title: Threads per worker, default: 4, minimum: 1, maximum: 64}
+      workloadProfile: {type: string, title: Work per request, default: balanced, enum: [light, balanced, heavy]}
+      responseSizeKB: {type: integer, title: Average response size (KB), default: 10, minimum: 1, maximum: 10240}
+      cpuRequest: {type: string, title: CPU request, default: 250m, minLength: 1, maxLength: 16}
+      memoryRequest: {type: string, title: Memory request, default: 256Mi, minLength: 1, maxLength: 16}
+  runtime:
+    executable: mubench-factory-plugin
+    timeout: 1m
+  artifacts:
+    outputs:
+      - {type: CatalogApplicationDescriptor, version: v1alpha1}
+  capabilities: [catalog.application.generate]
+  permissions: []

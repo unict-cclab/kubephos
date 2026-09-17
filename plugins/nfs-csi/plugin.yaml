@@ -3,7 +3,7 @@ kind: Plugin
 metadata:
   id: io.kubephos.storage.kubernetes.nfs-csi
   name: Kubernetes shared storage
-  version: 0.1.0
+  version: 0.2.0
   description: Attaches validated shared storage to a Kubernetes cluster.
 spec:
   protocol: v1alpha1
@@ -60,6 +60,7 @@ spec:
     - storage.kubernetes.preflight
     - storage.kubernetes.cleanup
     - lifecycle.cleanup
+    - lifecycle.cleanup.compatible
   permissions:
     - cluster.admin
     - network.http

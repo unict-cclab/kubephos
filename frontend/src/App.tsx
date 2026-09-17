@@ -1,39 +1,55 @@
 import {lazy, Suspense, useCallback, useEffect, useMemo, useState} from 'react'
 import {ApiError, request} from './api'
 import {ApplicationDialog, AuthDialog, ConnectionDialog, CredentialDialog, InfrastructureServiceDialog, KubernetesClusterDialog, MachineTemplateDialog, OperationDialog, PluginDialog, RuntimeDialog, WorkspaceDialog} from './components/Forms'
-import {OperationDrawer} from './components/OperationDrawer'
+import {OperationDetailsPage} from './components/OperationDrawer'
 import {PipelineDialog} from './components/PipelineDialog'
 import {ToastRegion, type ToastMessage} from './components/ToastRegion'
 import {Views} from './components/Views'
 import {WorkspaceFlowDialog} from './components/WorkspaceFlowDialog'
-import type {PlatformData, PluginPackage, Session, View, Workspace} from './types'
+import type {Application, PlatformData, PluginPackage, Session, View, Workspace} from './types'
+import {hashView} from './detailRoute'
 
 const TerminalDialog = lazy(() => import('./components/TerminalDialog').then(module => ({default: module.TerminalDialog})))
 
-const emptyData: PlatformData = {system: null, pluginRuntime: null, workspaces: [], pipelines: [], pipelineRuns: [], experiments: [], experimentConfigurations: [], operations: [], artifacts: [], plugins: [], pluginPackages: [], pluginImports: [], applications: [], credentials: [], connections: [], machineTemplates: [], infrastructureServices: [], kubernetesClusters: [], resources: [], audit: []}
-const viewMetadata: Record<View, [string, string]> = {
-  overview: ['CONTROL PLANE', 'Overview'],
-  workspaces: ['ENVIRONMENTS', 'Workspaces'],
-  pipelines: ['REUSABLE FLOWS', 'Pipelines'],
-  operations: ['BACKGROUND WORK', 'Operations'],
-  results: ['OBSERVATIONS', 'Results'],
-  catalog: ['APPLICATIONS', 'Catalog'],
-  plugins: ['CAPABILITIES', 'Plugins'],
-  infrastructure: ['MANAGED INFRASTRUCTURE', 'Infrastructure'],
-  kubernetes: ['CLUSTERS', 'Kubernetes'],
-  experiments: ['REPEATABLE TESTS', 'Experiments'],
-  suites: ['COMPARISONS', 'Suites'],
-  advanced: ['PLATFORM TOOLS', 'Advanced']
+const emptyData: PlatformData = {system: null, pluginRuntime: null, workspaces: [], pipelines: [], pipelineRuns: [], experiments: [], experimentConfigurations: [], operations: [], artifacts: [], plugins: [], pluginPackages: [], pluginImports: [], applications: [], strategies: [], credentials: [], connections: [], machineTemplates: [], infrastructureServices: [], kubernetesClusters: [], resources: [], audit: []}
+const viewMetadata: Record<View, string> = {
+  overview: 'Overview',
+  workspaces: 'Workspaces',
+  pipelines: 'Pipelines',
+  operations: 'Operations',
+  results: 'Experiments',
+  catalog: 'Catalog',
+  plugins: 'Plugins',
+  infrastructure: 'Infrastructure',
+  kubernetes: 'Kubernetes',
+  experiments: 'Configurations',
+  suites: 'Suites',
+  advanced: 'Advanced'
 }
-const navigation: Array<[View, string, string]> = [
-  ['overview', '⌂', 'Overview'],
-  ['infrastructure', '▦', 'Infrastructure'],
-  ['kubernetes', '⬡', 'Kubernetes'],
-  ['experiments', '▶', 'Experiments'],
-  ['suites', '⇄', 'Suites'],
-  ['results', '⌁', 'Results'],
-  ['advanced', '•••', 'Advanced']
+const navigation: Array<[View, string]> = [
+  ['overview', 'Overview'],
+  ['infrastructure', 'Infrastructure'],
+  ['kubernetes', 'Kubernetes'],
+  ['catalog', 'Catalog'],
+  ['experiments', 'Configurations'],
+  ['results', 'Experiments'],
+  ['suites', 'Suites']
 ]
+const navigationGroups = [navigation.slice(0, 4), navigation.slice(4)]
+
+function NavigationIcon({view}: {view: View}) {
+  const common = {fill: 'none', stroke: 'currentColor', strokeWidth: 1.8, strokeLinecap: 'round' as const, strokeLinejoin: 'round' as const}
+  const shape = {
+    overview: <><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></>,
+    infrastructure: <><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 8h10M7 12h10M7 16h4"/></>,
+    kubernetes: <><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3"/><path d="M12 3v6m0 6v6M3 12h6m6 0h6"/></>,
+    catalog: <><path d="M4 5h16v14H4zM4 12h16M9 5v7m6 0v7"/></>,
+    experiments: <><path d="M6 4h12v16H6zM9 8h6M9 12h6M9 16h4"/></>,
+    results: <><circle cx="12" cy="12" r="9"/><path d="m10 8 6 4-6 4z"/></>,
+    suites: <><path d="M4 7h14m-3-3 3 3-3 3M20 17H6m3-3-3 3 3 3"/></>
+  } as Partial<Record<View, React.ReactNode>>
+  return <svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true" {...common}>{shape[view]}</svg>
+}
 
 type Modal = 'workspace' | 'workspaceFlow' | 'operation' | 'pipeline' | 'credential' | 'connection' | 'machineTemplate' | 'infrastructureService' | 'kubernetesCluster' | 'application' | 'plugin' | 'runtime' | 'terminal' | null
 
@@ -50,6 +66,9 @@ export default function App() {
   const [operationPreset, setOperationPreset] = useState<Record<string, unknown>>({})
   const [operationID, setOperationID] = useState<string | null>(null)
   const [toasts, setToasts] = useState<ToastMessage[]>([])
+  const [clusterActions, setClusterActions] = useState<Record<string, {pending: boolean; message: string; error: boolean}>>({})
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+  const [serviceKind, setServiceKind] = useState<'harbor' | 'nfs'>('harbor')
 
   const notify = useCallback((message: string, error = false) => {
     setToasts(items => [...items, {id: Date.now() + Math.random(), message, error}])
@@ -60,7 +79,7 @@ export default function App() {
     if (!session?.authenticated) return
     setRefreshing(true)
     try {
-		const [system, pluginRuntime, workspaces, pipelines, pipelineRuns, experiments, experimentConfigurations, operations, artifacts, plugins, pluginPackages, pluginImports, applications, credentials, connections, machineTemplates, infrastructureServices, kubernetesClusters, resources, audit] = await Promise.all([
+		const [system, pluginRuntime, workspaces, pipelines, pipelineRuns, experiments, experimentConfigurations, operations, artifacts, plugins, pluginPackages, pluginImports, applications, strategies, credentials, connections, machineTemplates, infrastructureServices, kubernetesClusters, resources, audit] = await Promise.all([
         request<PlatformData['system']>('/system'),
         request<PlatformData['pluginRuntime']>('/plugin-runtime'),
         request<{items: PlatformData['workspaces']}>('/workspaces'),
@@ -74,6 +93,7 @@ export default function App() {
         request<{items: PlatformData['pluginPackages']}>('/plugin-packages'),
         request<{items: PlatformData['pluginImports']}>('/plugin-imports'),
         request<{items: PlatformData['applications']}>('/catalog/applications'),
+        request<{items: PlatformData['strategies']}>('/catalog/strategies'),
         request<{items: PlatformData['credentials']}>('/credentials'),
 		request<{items: PlatformData['connections']}>('/connections'),
 		request<{items: PlatformData['machineTemplates']}>('/machine-templates'),
@@ -82,7 +102,7 @@ export default function App() {
 		request<{items: PlatformData['resources']}>('/infrastructure/resources'),
         request<{items: PlatformData['audit']}>('/audit?limit=20')
       ])
-		setData({system, pluginRuntime, workspaces: workspaces.items, pipelines: pipelines.items, pipelineRuns: pipelineRuns.items, experiments: experiments.items, experimentConfigurations: experimentConfigurations.items, operations: operations.items, artifacts: artifacts.items, plugins: plugins.items, pluginPackages: pluginPackages.items, pluginImports: pluginImports.items, applications: applications.items, credentials: credentials.items, connections: connections.items, machineTemplates: machineTemplates.items, infrastructureServices: infrastructureServices.items, kubernetesClusters: kubernetesClusters.items, resources: resources.items, audit: audit.items})
+		setData({system, pluginRuntime, workspaces: workspaces.items, pipelines: pipelines.items, pipelineRuns: pipelineRuns.items, experiments: experiments.items, experimentConfigurations: experimentConfigurations.items, operations: operations.items, artifacts: artifacts.items, plugins: plugins.items, pluginPackages: pluginPackages.items, pluginImports: pluginImports.items, applications: applications.items, strategies: strategies.items, credentials: credentials.items, connections: connections.items, machineTemplates: machineTemplates.items, infrastructureServices: infrastructureServices.items, kubernetesClusters: kubernetesClusters.items, resources: resources.items, audit: audit.items})
       setConnected(true)
       if (!silent) notify('Everything is up to date.')
     } catch (cause) {
@@ -151,6 +171,18 @@ export default function App() {
     }
   }
 
+  const deleteApplication = async (application: Application) => {
+    if (!window.confirm(`Delete ${application.name} ${application.version} from the catalog? Existing experiment configurations must be removed first.`)) return false
+    try {
+      await request(`/catalog/applications/${encodeURIComponent(application.id)}/${encodeURIComponent(application.version)}`, {method: 'DELETE'}, session?.csrfToken)
+      await afterMutation('Application removed from the catalog. Its audit history was preserved.')
+      return true
+    } catch (cause) {
+      notify(cause instanceof Error ? cause.message : 'Could not remove the application from the catalog.', true)
+      return false
+    }
+  }
+
   const deleteConnection = async (connectionID: string, name: string) => {
     if (!window.confirm(`Delete connection ${name}?`)) return
     try {
@@ -164,9 +196,8 @@ export default function App() {
   const deleteMachineTemplate = async (templateID: string, name: string) => {
     if (!window.confirm(`Delete Proxmox template ${name}? The task will run in the background.`)) return
     try {
-      const result = await request<{deletionOperationId?: string}>(`/machine-templates/${templateID}`, {method: 'DELETE'}, session?.csrfToken)
+      await request(`/machine-templates/${templateID}`, {method: 'DELETE'}, session?.csrfToken)
       await afterMutation('Template deletion queued.')
-      if (result.deletionOperationId) setOperationID(result.deletionOperationId)
     } catch (cause) {
       notify(cause instanceof Error ? cause.message : 'Could not delete the template.', true)
     }
@@ -184,11 +215,31 @@ export default function App() {
 
   const deleteKubernetesCluster = async (clusterID: string, name: string) => {
     if (!window.confirm(`Delete cluster ${name}, its Kubernetes components and all dedicated VMs?`)) return
+    setClusterActions(items => ({...items, [clusterID]: {pending: true, message: 'Validating cluster health and cleanup targets…', error: false}}))
+    notify('Validating cluster deletion. This can take up to a minute.')
     try {
       await request(`/kubernetes-clusters/${clusterID}`, {method: 'DELETE'}, session?.csrfToken)
       await afterMutation('Cluster deletion validated and queued.')
+      setClusterActions(items => ({...items, [clusterID]: {pending: false, message: 'Deletion queued. Progress is available in View activity.', error: false}}))
     } catch (cause) {
-      notify(cause instanceof Error ? cause.message : 'Could not delete the cluster.', true)
+      const message = cause instanceof Error ? cause.message : 'Could not delete the cluster.'
+      setClusterActions(items => ({...items, [clusterID]: {pending: false, message, error: true}}))
+      notify(message, true)
+    }
+  }
+
+  const recreateKubernetesCluster = async (clusterID: string, name: string) => {
+    if (!window.confirm(`Recreate cluster ${name} with its saved topology and managed components? Existing cluster VMs will be replaced.`)) return
+    setClusterActions(items => ({...items, [clusterID]: {pending: true, message: 'Validating cluster health, ownership and cleanup targets…', error: false}}))
+    notify('Validating cluster recreation. This can take up to a minute.')
+    try {
+      await request(`/kubernetes-clusters/${clusterID}/recreate`, {method: 'POST', body: '{}'}, session?.csrfToken)
+      await afterMutation('Cluster recreation validated and queued.')
+      setClusterActions(items => ({...items, [clusterID]: {pending: false, message: 'Recreation queued. Progress is available in View activity.', error: false}}))
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : 'Could not recreate the cluster.'
+      setClusterActions(items => ({...items, [clusterID]: {pending: false, message, error: true}}))
+      notify(message, true)
     }
   }
 
@@ -221,25 +272,26 @@ export default function App() {
     setModal('operation')
   }
 
-  if (checkingSession) return <div className="startup-screen"><span className="brand-mark">K</span><strong>Starting KubePhos…</strong></div>
+  if (checkingSession) return <div className="startup-screen"><span className="brand-mark">K</span><strong>Loading…</strong></div>
   if (!session?.authenticated) return <><AuthDialog setupRequired={Boolean(session?.setupRequired)} onAuthenticated={result => {setSession(result); notify(session?.setupRequired ? 'Administrator created.' : 'Signed in.')}} /><ToastRegion items={toasts} dismiss={dismiss} /></>
 
-  const [eyebrow, title] = viewMetadata[view]
+  const title = viewMetadata[view]
   const healthy = connected && data.system?.status === 'healthy'
   return <>
-    <div className="app-shell">
+    <div className={`app-shell ${sidebarCollapsed ? 'sidebar-collapsed' : ''}`}>
       <aside className="sidebar">
-        <button className="brand" onClick={() => navigate('overview')} aria-label="KubePhos home"><span className="brand-mark">K</span><span><strong>KubePhos</strong><small>Kubernetes workspace</small></span></button>
-        <nav className="navigation" aria-label="Main navigation">{navigation.map(([target, icon, label]) => <button className={`nav-item ${view === target ? 'active' : ''}`} key={target} onClick={() => navigate(target)}><span>{icon}</span>{label}</button>)}</nav>
-        <div className="sidebar-footer"><div className={`health-dot ${healthy ? 'healthy' : 'unhealthy'}`} /><span><strong>{healthy ? 'All systems healthy' : connected ? 'Platform degraded' : 'Connection unavailable'}</strong><small>Version {data.system?.version ?? 'dev'}</small></span></div>
+        <button className="brand" onClick={() => navigate('overview')} aria-label="KubePhos home"><span className="brand-mark">K</span><strong>KubePhos</strong></button>
+        <button className="sidebar-toggle" type="button" aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'} onClick={() => setSidebarCollapsed(value => !value)}>{sidebarCollapsed ? '›' : '‹'}</button>
+        <nav className="navigation" aria-label="Main navigation">{navigationGroups.map((group, index) => <div className="navigation-group" key={index}>{group.map(([target, label]) => <button className={`nav-item ${view === target ? 'active' : ''}`} title={sidebarCollapsed ? label : undefined} aria-label={label} key={target} onClick={() => navigate(target)} aria-current={view === target ? 'page' : undefined}><NavigationIcon view={target} /><span className="nav-label">{label}</span></button>)}</div>)}</nav>
+        <div className="sidebar-footer"><div className={`health-dot ${healthy ? 'healthy' : 'unhealthy'}`} /><span><strong>{healthy ? 'Healthy' : connected ? 'Needs attention' : 'Offline'}</strong><small>{data.system?.version ?? 'dev'}</small></span></div>
       </aside>
       <main className="main">
-		<header className="topbar"><div><p className="eyebrow">{eyebrow}</p><h1>{title}</h1></div><div className="topbar-actions"><span className="signed-user">{session.user?.username} · {session.user?.role}</span><button className="button secondary" onClick={logout}>Sign out</button><button className="button secondary" disabled={refreshing} onClick={() => load(false)}>{refreshing ? 'Refreshing…' : 'Refresh'}</button></div></header>
-        <Views
+		<header className="topbar"><nav className="app-breadcrumbs" aria-label="Breadcrumb"><button onClick={() => navigate('overview')}>KubePhos</button><span aria-hidden="true">/</span><strong aria-current="page">{title}</strong></nav><div className="topbar-actions"><span className="signed-user">{session.user?.username}</span><button className="button secondary compact" disabled={refreshing} onClick={() => load(false)}>{refreshing ? 'Refreshing…' : 'Refresh'}</button><button className="button secondary compact" onClick={logout}>Sign out</button></div></header>
+        <div className="page-content">{operationID ? <OperationDetailsPage operationID={operationID} session={session} plugins={data.plugins} close={() => setOperationID(null)} open={setOperationID} changed={() => load(true)} notify={notify} /> : <Views
           view={view}
           {...data}
           session={session}
-          changed={() => afterMutation('Experiment saved.')}
+          changed={() => afterMutation('Changes applied.')}
           isAdmin={session.user?.role === 'admin'}
           navigate={navigate}
           createWorkspace={() => setModal('workspace')}
@@ -248,6 +300,7 @@ export default function App() {
           openWorkspace={openWorkspace}
           openOperation={setOperationID}
           importApplication={() => setModal('application')}
+          deleteApplication={deleteApplication}
           importPlugin={() => setModal('plugin')}
           configureRuntime={() => setModal('runtime')}
           activatePlugin={activatePlugin}
@@ -255,15 +308,17 @@ export default function App() {
           addCredential={() => setModal('credential')}
 		  addConnection={() => setModal('connection')}
 		  addMachineTemplate={() => setModal('machineTemplate')}
-		  addInfrastructureService={() => setModal('infrastructureService')}
+		  addInfrastructureService={kind => {setServiceKind(kind); setModal('infrastructureService')}}
 		  deleteConnection={deleteConnection}
 		  deleteMachineTemplate={deleteMachineTemplate}
 		  deleteInfrastructureService={deleteInfrastructureService}
 		  addKubernetesCluster={() => setModal('kubernetesCluster')}
 		  deleteKubernetesCluster={deleteKubernetesCluster}
+		  recreateKubernetesCluster={recreateKubernetesCluster}
+		  clusterActions={clusterActions}
           openInfrastructureCapability={openInfrastructureCapability}
           openTerminal={selected => {setWorkspace(selected); setModal('terminal')}}
-        />
+        />}</div>
       </main>
     </div>
     <WorkspaceDialog {...common} open={modal === 'workspace'} close={() => setModal(null)} />
@@ -273,18 +328,17 @@ export default function App() {
     <CredentialDialog {...common} open={modal === 'credential'} close={() => setModal(null)} plugins={data.plugins} />
 	<ConnectionDialog {...common} open={modal === 'connection'} close={() => setModal(null)} plugins={data.plugins} />
 	<MachineTemplateDialog {...common} open={modal === 'machineTemplate'} close={() => setModal(null)} plugins={data.plugins} workspaces={data.workspaces} />
-	<InfrastructureServiceDialog {...common} open={modal === 'infrastructureService'} close={() => setModal(null)} workspaces={data.workspaces} templates={data.machineTemplates} />
+	<InfrastructureServiceDialog {...common} open={modal === 'infrastructureService'} close={() => setModal(null)} workspaces={data.workspaces} templates={data.machineTemplates} initialKind={serviceKind} />
 	<KubernetesClusterDialog {...common} open={modal === 'kubernetesCluster'} close={() => setModal(null)} workspaces={data.workspaces} templates={data.machineTemplates} services={data.infrastructureServices} />
-    <ApplicationDialog {...common} open={modal === 'application'} close={() => setModal(null)} />
+    <ApplicationDialog {...common} plugins={data.plugins} open={modal === 'application'} close={() => setModal(null)} />
     <PluginDialog {...common} open={modal === 'plugin'} close={() => setModal(null)} />
     <RuntimeDialog {...common} open={modal === 'runtime'} close={() => setModal(null)} runtime={data.pluginRuntime} />
     {modal === 'terminal' && <Suspense fallback={null}><TerminalDialog open close={() => setModal(null)} session={session} workspaces={data.workspaces} initialWorkspace={workspace} /></Suspense>}
-    <OperationDrawer operationID={operationID} session={session} plugins={data.plugins} close={() => setOperationID(null)} open={setOperationID} changed={() => load(true)} notify={notify} />
     <ToastRegion items={toasts} dismiss={dismiss} />
   </>
 }
 
 function initialView(): View {
-  const value = window.location.hash.slice(1) as View
-  return value in viewMetadata ? value : 'overview'
+  const next = hashView(window.location.hash)
+  return navigation.some(([view]) => view === next) ? next : 'overview'
 }

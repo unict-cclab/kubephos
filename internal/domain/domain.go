@@ -154,11 +154,25 @@ type Experiment struct {
 	UpdatedAt       time.Time           `json:"updatedAt"`
 }
 
+type ExperimentFigure struct {
+	ID                string    `json:"id"`
+	ExperimentID      string    `json:"experimentId"`
+	Metric            string    `json:"metric"`
+	Format            string    `json:"format"`
+	SourceArtifactIDs []string  `json:"sourceArtifactIds"`
+	StorageKey        string    `json:"-"`
+	Digest            string    `json:"digest"`
+	SizeBytes         int64     `json:"sizeBytes"`
+	CreatedAt         time.Time `json:"createdAt"`
+}
+
 type ExperimentVariant struct {
 	ID              string            `json:"id"`
 	ExperimentID    string            `json:"experimentId"`
 	Position        int               `json:"position"`
 	Name            string            `json:"name"`
+	Alias           string            `json:"alias"`
+	Color           string            `json:"color,omitempty"`
 	PipelineID      string            `json:"pipelineId,omitempty"`
 	PipelineHash    string            `json:"pipelineHash,omitempty"`
 	ConfigurationID string            `json:"configurationId,omitempty"`
@@ -176,6 +190,7 @@ type ExperimentTrial struct {
 	ResultArtifactID string     `json:"resultArtifactId"`
 	Error            string     `json:"error,omitempty"`
 	CreatedAt        time.Time  `json:"createdAt"`
+	StartedAt        *time.Time `json:"startedAt,omitempty"`
 	CompletedAt      *time.Time `json:"completedAt,omitempty"`
 }
 
@@ -213,28 +228,30 @@ type ProviderConnection struct {
 }
 
 type ManagedResource struct {
-	ID                    string           `json:"id"`
-	WorkspaceID           string           `json:"workspaceId"`
-	Name                  string           `json:"name"`
-	Kind                  string           `json:"kind"`
-	Provider              string           `json:"provider"`
-	ConnectionID          string           `json:"connectionId,omitempty"`
-	PluginID              string           `json:"pluginId"`
-	PluginVersion         string           `json:"pluginVersion"`
-	PluginDigest          string           `json:"pluginDigest,omitempty"`
-	Spec                  json.RawMessage  `json:"spec"`
-	OperationID           string           `json:"operationId,omitempty"`
-	PipelineID            string           `json:"pipelineId,omitempty"`
-	PipelineRunID         string           `json:"pipelineRunId,omitempty"`
-	ArtifactID            string           `json:"artifactId,omitempty"`
-	DeletionOperationID   string           `json:"deletionOperationId,omitempty"`
-	DeletionPipelineID    string           `json:"deletionPipelineId,omitempty"`
-	DeletionPipelineRunID string           `json:"deletionPipelineRunId,omitempty"`
-	Status                string           `json:"status"`
-	Error                 string           `json:"error,omitempty"`
-	Validation            ValidationReport `json:"validation"`
-	CreatedAt             time.Time        `json:"createdAt"`
-	UpdatedAt             time.Time        `json:"updatedAt"`
+	ID                      string           `json:"id"`
+	WorkspaceID             string           `json:"workspaceId"`
+	Name                    string           `json:"name"`
+	Kind                    string           `json:"kind"`
+	Provider                string           `json:"provider"`
+	ConnectionID            string           `json:"connectionId,omitempty"`
+	PluginID                string           `json:"pluginId"`
+	PluginVersion           string           `json:"pluginVersion"`
+	PluginDigest            string           `json:"pluginDigest,omitempty"`
+	Spec                    json.RawMessage  `json:"spec"`
+	OperationID             string           `json:"operationId,omitempty"`
+	PipelineID              string           `json:"pipelineId,omitempty"`
+	PipelineRunID           string           `json:"pipelineRunId,omitempty"`
+	ArtifactID              string           `json:"artifactId,omitempty"`
+	DeletionOperationID     string           `json:"deletionOperationId,omitempty"`
+	DeletionPipelineID      string           `json:"deletionPipelineId,omitempty"`
+	DeletionPipelineRunID   string           `json:"deletionPipelineRunId,omitempty"`
+	RecreationPipelineID    string           `json:"recreationPipelineId,omitempty"`
+	RecreationPipelineRunID string           `json:"recreationPipelineRunId,omitempty"`
+	Status                  string           `json:"status"`
+	Error                   string           `json:"error,omitempty"`
+	Validation              ValidationReport `json:"validation"`
+	CreatedAt               time.Time        `json:"createdAt"`
+	UpdatedAt               time.Time        `json:"updatedAt"`
 }
 
 type ManagedResourceDependency struct {
@@ -255,6 +272,25 @@ type CatalogApplication struct {
 	Enabled     bool            `json:"enabled"`
 	CreatedAt   time.Time       `json:"createdAt"`
 	UpdatedAt   time.Time       `json:"updatedAt"`
+}
+
+type CatalogStrategy struct {
+	ID                   string          `json:"id"`
+	WorkspaceID          string          `json:"workspaceId"`
+	HarborResourceID     string          `json:"harborResourceId"`
+	Name                 string          `json:"name"`
+	Kind                 string          `json:"kind"`
+	SourceImage          string          `json:"sourceImage"`
+	SourceDigest         string          `json:"sourceDigest,omitempty"`
+	MirroredImage        string          `json:"mirroredImage,omitempty"`
+	MirroredDigest       string          `json:"mirroredDigest,omitempty"`
+	DefaultConfiguration json.RawMessage `json:"defaultConfiguration"`
+	OperationID          string          `json:"operationId"`
+	ArtifactID           string          `json:"artifactId,omitempty"`
+	Status               string          `json:"status"`
+	Error                string          `json:"error,omitempty"`
+	CreatedAt            time.Time       `json:"createdAt"`
+	UpdatedAt            time.Time       `json:"updatedAt"`
 }
 
 type EncryptedCredential struct {

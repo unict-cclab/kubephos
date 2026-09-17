@@ -85,12 +85,14 @@ type ManifestSource struct {
 }
 
 type WorkloadTarget struct {
-	ID         string            `json:"id"`
-	APIVersion string            `json:"apiVersion"`
-	Kind       string            `json:"kind"`
-	Name       string            `json:"name"`
-	Selector   map[string]string `json:"selector"`
-	Traits     []string          `json:"traits"`
+	ID           string            `json:"id"`
+	APIVersion   string            `json:"apiVersion"`
+	Kind         string            `json:"kind"`
+	Name         string            `json:"name"`
+	Selector     map[string]string `json:"selector"`
+	Traits       []string          `json:"traits"`
+	Index        *int              `json:"index,omitempty"`
+	Dependencies []string          `json:"dependencies,omitempty"`
 }
 
 type ServiceEndpoint struct {
@@ -131,7 +133,8 @@ type manifestResource struct {
 	APIVersion string `yaml:"apiVersion"`
 	Kind       string `yaml:"kind"`
 	Metadata   struct {
-		Name string `yaml:"name"`
+		Name   string            `yaml:"name"`
+		Labels map[string]string `yaml:"labels"`
 	} `yaml:"metadata"`
 	Spec struct {
 		Template struct {
@@ -150,7 +153,7 @@ func (Plugin) Manifest() plugins.Manifest {
 	return plugins.Manifest{
 		ID:          "io.kubephos.applications.inspect",
 		Name:        "Application package materializer",
-		Version:     "0.3.0",
+		Version:     "0.4.1",
 		Description: "Resolves, materializes and verifies a pinned application package and its declared interface.",
 		Schema:      json.RawMessage(`{"type":"object","required":["applicationRef"],"additionalProperties":false,"properties":{"applicationRef":{"type":"string","title":"Application","description":"Immutable application version from the catalog.","format":"kubephos-application-ref"},"values":{"type":"object","title":"Application settings","description":"Validated settings declared by the selected application.","x-kubephos-schema-from-application":"applicationRef"}}}`),
 		ArtifactOutputs: []domain.ArtifactContract{
@@ -677,6 +680,10 @@ func materializeManifest(manifest []byte, descriptor catalog.Descriptor) ([]byte
 	}
 	result := []byte{}
 	resources := map[string]bool{}
+	topologyIndexes := map[string]*int{}
+	for _, component := range descriptor.Spec.Interface.Components {
+		topologyIndexes[component.Workload.APIVersion+"|"+component.Workload.Kind+"|"+component.Workload.Name] = component.Index
+	}
 	decoder := yaml.NewDecoder(bytes.NewReader(manifest))
 	for {
 		var document yaml.Node
@@ -694,10 +701,6 @@ func materializeManifest(manifest []byte, descriptor catalog.Descriptor) ([]byte
 		if err := document.Decode(&resource); err != nil {
 			return nil, fmt.Errorf("decode Kubernetes resource: %w", err)
 		}
-		encoded, err := yaml.Marshal(&document)
-		if err != nil {
-			return nil, fmt.Errorf("encode Kubernetes resource: %w", err)
-		}
 		key := resource.APIVersion + "|" + resource.Kind + "|" + resource.Metadata.Name
 		if _, exists := excluded[key]; exists {
 			excluded[key] = true
@@ -705,6 +708,10 @@ func materializeManifest(manifest []byte, descriptor catalog.Descriptor) ([]byte
 		}
 		if resource.APIVersion == "" || resource.Kind == "" || resource.Metadata.Name == "" || resources[key] {
 			return nil, fmt.Errorf("application package contains an invalid or duplicate resource %s", key)
+		}
+		encoded, err := encodeApplicationResource(&document, descriptor.Spec.Interface.Group, topologyIndexes[key])
+		if err != nil {
+			return nil, fmt.Errorf("encode Kubernetes resource: %w", err)
 		}
 		resources[key] = true
 		result = appendManifestDocument(result, encoded)
@@ -736,7 +743,7 @@ func materializeManifest(manifest []byte, descriptor catalog.Descriptor) ([]byte
 			if resource.APIVersion == "" || resource.Kind == "" || resource.Metadata.Name == "" || resources[key] {
 				return nil, fmt.Errorf("additional manifest %s contains an invalid or duplicate resource %s", additional.ID, key)
 			}
-			encoded, err := yaml.Marshal(&document)
+			encoded, err := encodeApplicationResource(&document, descriptor.Spec.Interface.Group, topologyIndexes[key])
 			if err != nil {
 				return nil, fmt.Errorf("encode additional resource %s: %w", additional.ID, err)
 			}
@@ -748,6 +755,64 @@ func materializeManifest(manifest []byte, descriptor catalog.Descriptor) ([]byte
 		}
 	}
 	return result, nil
+}
+
+func encodeApplicationResource(document *yaml.Node, group string, topologyIndex *int) ([]byte, error) {
+	var resource map[string]any
+	if err := document.Decode(&resource); err != nil {
+		return nil, err
+	}
+	if group == "" {
+		return yaml.Marshal(resource)
+	}
+	if err := setApplicationLabels(resource, group, topologyIndex); err != nil {
+		return nil, err
+	}
+	if spec, ok := resource["spec"].(map[string]any); ok {
+		if template, ok := spec["template"].(map[string]any); ok {
+			if err := setApplicationLabels(template, group, topologyIndex); err != nil {
+				return nil, err
+			}
+		}
+		if jobTemplate, ok := spec["jobTemplate"].(map[string]any); ok {
+			if jobSpec, ok := jobTemplate["spec"].(map[string]any); ok {
+				if template, ok := jobSpec["template"].(map[string]any); ok {
+					if err := setApplicationLabels(template, group, topologyIndex); err != nil {
+						return nil, err
+					}
+				}
+			}
+		}
+	}
+	return yaml.Marshal(resource)
+}
+
+func setApplicationLabels(resource map[string]any, group string, topologyIndex *int) error {
+	metadata, ok := resource["metadata"].(map[string]any)
+	if !ok {
+		metadata = map[string]any{}
+		resource["metadata"] = metadata
+	}
+	labels, ok := metadata["labels"].(map[string]any)
+	if !ok {
+		if metadata["labels"] != nil {
+			return errors.New("resource metadata labels must be an object")
+		}
+		labels = map[string]any{}
+		metadata["labels"] = labels
+	}
+	if existing, exists := labels["group"]; exists && fmt.Sprint(existing) != group {
+		return fmt.Errorf("resource group label %q conflicts with application group %q", existing, group)
+	}
+	labels["group"] = group
+	if topologyIndex != nil {
+		value := strconv.Itoa(*topologyIndex)
+		if existing, exists := labels["index"]; exists && fmt.Sprint(existing) != value {
+			return fmt.Errorf("resource index label %q conflicts with application topology index %q", existing, value)
+		}
+		labels["index"] = value
+	}
+	return nil
 }
 
 func appendManifestDocument(manifest, document []byte) []byte {
@@ -840,19 +905,31 @@ func inspectManifest(manifest []byte, descriptor catalog.Descriptor) ([]Workload
 		if !exists {
 			return nil, nil, fmt.Errorf("declared workload %s is missing from the manifest", component.ID)
 		}
+		if resource.Metadata.Labels["group"] != descriptor.Spec.Interface.Group || resource.Spec.Template.Metadata.Labels["group"] != descriptor.Spec.Interface.Group {
+			return nil, nil, fmt.Errorf("declared workload %s does not carry application group %s", component.ID, descriptor.Spec.Interface.Group)
+		}
+		if component.Index != nil {
+			expected := strconv.Itoa(*component.Index)
+			if resource.Metadata.Labels["index"] != expected || resource.Spec.Template.Metadata.Labels["index"] != expected {
+				return nil, nil, fmt.Errorf("declared workload %s does not carry topology index %s", component.ID, expected)
+			}
+		}
 		for label, expected := range component.Selector {
 			if resource.Spec.Template.Metadata.Labels[label] != expected {
 				return nil, nil, fmt.Errorf("declared selector for workload %s does not match its Pod template", component.ID)
 			}
 		}
 		components[component.ID] = component
-		workloads = append(workloads, WorkloadTarget{ID: component.ID, APIVersion: component.Workload.APIVersion, Kind: component.Workload.Kind, Name: component.Workload.Name, Selector: component.Selector, Traits: component.Traits})
+		workloads = append(workloads, WorkloadTarget{ID: component.ID, APIVersion: component.Workload.APIVersion, Kind: component.Workload.Kind, Name: component.Workload.Name, Selector: component.Selector, Traits: component.Traits, Index: component.Index, Dependencies: component.Dependencies})
 	}
 	endpoints := make([]ServiceEndpoint, 0, len(descriptor.Spec.Interface.Endpoints))
 	for _, endpoint := range descriptor.Spec.Interface.Endpoints {
 		resource, exists := resources["v1|Service|"+endpoint.Service]
 		if !exists {
 			return nil, nil, fmt.Errorf("declared endpoint %s references a missing Service", endpoint.ID)
+		}
+		if resource.Metadata.Labels["group"] != descriptor.Spec.Interface.Group {
+			return nil, nil, fmt.Errorf("Service for endpoint %s does not carry application group %s", endpoint.ID, descriptor.Spec.Interface.Group)
 		}
 		portFound := false
 		for _, port := range resource.Spec.Ports {

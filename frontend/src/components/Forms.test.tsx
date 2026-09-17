@@ -1,7 +1,7 @@
 import {fireEvent, render, screen, waitFor} from '@testing-library/react'
 import {afterEach, beforeAll, describe, expect, it, vi} from 'vitest'
 import type {Artifact, Connection, ManagedResource, Plugin, Workspace} from '../types'
-import {ConnectionDialog, InfrastructureServiceDialog, KubernetesClusterDialog, RuntimeDialog} from './Forms'
+import {ApplicationDialog, ConnectionDialog, InfrastructureServiceDialog, KubernetesClusterDialog, RuntimeDialog} from './Forms'
 
 const artifacts: Artifact[] = [
   artifact('art_executor_endpoint', 'op_executor', 'executor-endpoint', 'OCIExecutorEndpoint', false),
@@ -139,6 +139,28 @@ describe('KubernetesClusterDialog', () => {
   })
 })
 
+describe('ApplicationDialog', () => {
+  it('generates an application from safe defaults without requiring a descriptor', async () => {
+    const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({ref: 'app:dev.kubephos.mubench.generated@v1'}), {status: 201, headers: {'Content-Type': 'application/json'}}))
+    vi.stubGlobal('fetch', fetch)
+    const close = vi.fn()
+    const onDone = vi.fn().mockResolvedValue(undefined)
+
+    render(<ApplicationDialog open close={close} plugins={[applicationFactoryPlugin]} session={{authenticated: true, csrfToken: 'csrf'}} applications={[]} artifacts={[]} connections={[]} credentials={[]} onDone={onDone} />)
+
+    expect(screen.getByRole('button', {name: 'Generate'})).toHaveClass('active')
+    expect(screen.getByRole('spinbutton', {name: 'Services'})).toHaveValue(6)
+    expect(screen.queryByText(/custom function/i)).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', {name: 'Generate application'}))
+
+    await waitFor(() => expect(fetch).toHaveBeenCalledOnce())
+    expect(fetch.mock.calls[0][0]).toBe('/api/v1/catalog/application-factories/io.kubephos.applications.mubench.generate')
+    expect(JSON.parse(fetch.mock.calls[0][1].body)).toEqual({name: 'muBench application', serviceCount: 6, topology: 'chain'})
+    expect(close).toHaveBeenCalledOnce()
+    expect(onDone).toHaveBeenCalledWith('Application generated and added to the catalog.')
+  })
+})
+
 function artifact(id: string, operationId: string, name: string, type: string, sensitive: boolean): Artifact {
   return {id, operationId, name, type, version: 'v1alpha1', mediaType: 'application/json', digest: 'sha256:test', sizeBytes: 1, sensitive, verifiedAt: '2026-09-10T00:00:00Z'}
 }
@@ -173,6 +195,24 @@ const proxmoxPlugin: Plugin = {
       }
     }
   }]
+}
+
+const applicationFactoryPlugin: Plugin = {
+  id: 'io.kubephos.applications.mubench.generate',
+  name: 'muBench application generator',
+  version: '0.1.3',
+  description: 'Generate muBench applications.',
+  capabilities: ['catalog.application.generate'],
+  runtime: {kind: 'process'},
+  schema: {
+    type: 'object',
+    required: ['name', 'serviceCount', 'topology'],
+    properties: {
+      name: {type: 'string', title: 'Application name', default: 'muBench application'},
+      serviceCount: {type: 'integer', title: 'Services', default: 6, minimum: 2, maximum: 100},
+      topology: {type: 'string', title: 'Request topology', default: 'chain', enum: ['chain', 'fan-out', 'tree']}
+    }
+  }
 }
 
 const workspace: Workspace = {id: 'ws_default', name: 'Default', description: '', status: 'ready', createdAt: '2026-09-12T00:00:00Z'}

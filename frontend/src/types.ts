@@ -23,6 +23,7 @@ export interface SchemaProperty {
   format?: string
   minimum?: number
   maximum?: number
+  multipleOf?: number
   minLength?: number
   maxLength?: number
   writeOnly?: boolean
@@ -87,6 +88,25 @@ export interface PluginImportJob {
   createdAt: string
   startedAt?: string
   completedAt?: string
+  updatedAt: string
+}
+
+export interface CatalogStrategy {
+  id: string
+  workspaceId: string
+  harborResourceId: string
+  name: string
+  kind: 'scheduler' | 'descheduler' | 'autoscaler'
+  sourceImage: string
+  sourceDigest?: string
+  mirroredImage?: string
+  mirroredDigest?: string
+  defaultConfiguration: Record<string, unknown>
+  operationId: string
+  artifactId?: string
+  status: string
+  error?: string
+  createdAt: string
   updatedAt: string
 }
 
@@ -194,6 +214,7 @@ export interface MetricPoint {
 export interface MetricSeries {
   metric: string
   unit: string
+  aggregation?: 'sum' | 'mean'
   labels: Record<string, string>
   points: MetricPoint[]
 }
@@ -209,6 +230,7 @@ export interface TimeSeriesDataset {
     start: string
     end: string
     stepSeconds: number
+    sloMilliseconds?: number
     source: {kind: string; version: string; profile: string}
     series: MetricSeries[]
     summary: {metrics: number; series: number; samples: number}
@@ -225,6 +247,7 @@ export interface ExperimentTrial {
   resultArtifactId: string
   error?: string
   createdAt: string
+  startedAt?: string
   completedAt?: string
 }
 
@@ -233,6 +256,8 @@ export interface ExperimentVariant {
   experimentId: string
   position: number
   name: string
+  alias?: string
+  color?: string
   pipelineId?: string
   pipelineHash?: string
   configurationId?: string
@@ -256,8 +281,20 @@ export interface Experiment {
   updatedAt: string
 }
 
+export interface ExperimentFigure {
+  id: string
+  experimentId: string
+  metric: string
+  format: 'png' | 'pdf'
+  sourceArtifactIds: string[]
+  digest: string
+  sizeBytes: number
+  createdAt: string
+}
+
 export interface ExperimentConfigurationComponent {
   id: string
+  strategyId?: string
   pluginId: string
   pluginVersion?: string
   pluginDigest?: string
@@ -369,6 +406,26 @@ export interface Operation {
 export interface ApplicationComponent {
   id: string
   traits?: string[]
+  workload?: {apiVersion?: string; kind?: string; name?: string}
+  index?: number
+  dependencies?: string[]
+}
+
+export interface ApplicationEndpoint {
+  id?: string
+  component?: string
+  service?: string
+  port?: number
+  protocol?: string
+  path?: string
+}
+
+export interface ApplicationLoadScenario {
+  id?: string
+  engine?: string
+  script?: string
+  runtimeImage?: string
+  targetEndpoint?: string
 }
 
 export interface Application {
@@ -381,12 +438,16 @@ export interface Application {
   digest: string
   descriptor: {
     spec?: {
-      package?: {type?: string; format?: string}
-      interface?: {components?: ApplicationComponent[]; endpoints?: unknown[]; loadScenarios?: unknown[]}
+      package?: {type?: string; format?: string; repository?: string; revision?: string; path?: string; entrypoint?: string}
+      materializer?: string
+      materializerConfig?: Record<string, unknown>
+      interface?: {group?: string; components?: ApplicationComponent[]; endpoints?: ApplicationEndpoint[]; loadScenarios?: ApplicationLoadScenario[]}
       valuesSchema?: JsonSchema
       defaults?: Record<string, unknown>
     }
   }
+  createdAt?: string
+  updatedAt?: string
 }
 
 export interface Credential {
@@ -419,6 +480,8 @@ export interface ManagedResource {
   deletionOperationId?: string
   deletionPipelineId?: string
   deletionPipelineRunId?: string
+  recreationPipelineId?: string
+  recreationPipelineRunId?: string
   status: string
   error?: string
   validation: ValidationReport
@@ -478,6 +541,7 @@ export interface PlatformData {
   pluginPackages: PluginPackage[]
   pluginImports: PluginImportJob[]
   applications: Application[]
+  strategies: CatalogStrategy[]
   credentials: Credential[]
   connections: Connection[]
   machineTemplates: ManagedResource[]

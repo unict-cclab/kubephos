@@ -1,0 +1,53 @@
+apiVersion: plugins.kubephos.io/v1alpha1
+kind: Plugin
+metadata:
+  id: io.kubephos.catalog.strategy-image
+  name: Strategy image mirror
+  version: 0.1.0
+  description: Validates an OCI scheduler, descheduler or autoscaler image and mirrors it into managed Harbor.
+spec:
+  protocol: v1alpha1
+  commands: [describe, validate, plan, precheck, execute, verify, status, cancel, cleanup]
+  configurationSchema:
+    type: object
+    additionalProperties: false
+    required: [registryEndpointRef, registryCredentialRef, name, kind, sourceImage, defaultConfiguration]
+    properties:
+      registryEndpointRef:
+        type: string
+        title: Harbor endpoint
+        format: kubephos-artifact-ref
+        x-kubephos-artifact-type: RegistryEndpoint
+        x-kubephos-artifact-version: v1alpha1
+      registryCredentialRef:
+        type: string
+        title: Harbor push identity
+        format: kubephos-artifact-ref
+        x-kubephos-artifact-type: RegistryCredential
+        x-kubephos-artifact-version: v1alpha1
+      name:
+        type: string
+        title: Name
+        pattern: ^[a-z0-9][a-z0-9-]{0,62}$
+      kind:
+        type: string
+        title: Type
+        enum: [scheduler, descheduler, autoscaler]
+      sourceImage:
+        type: string
+        title: Docker image
+      defaultConfiguration:
+        type: object
+        title: Default configuration
+        additionalProperties: true
+  runtime:
+    executable: strategy-image-plugin
+    timeout: 30m
+  artifacts:
+    inputs:
+      - {type: RegistryEndpoint, version: v1alpha1}
+      - {type: RegistryCredential, version: v1alpha1}
+    outputs:
+      - {type: StrategyImage, version: v1alpha1}
+  capabilities: [catalog.strategy.mirror, catalog.strategy.preflight, catalog.strategy.cleanup, lifecycle.cleanup]
+  permissions: [network.http, registry.manage]

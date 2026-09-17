@@ -116,6 +116,39 @@ func TestPlanIncludesOptionalManagedRegistryContracts(t *testing.T) {
 	}
 }
 
+func TestRegistryConfigurationRoutesManagedUpstreamsThroughDeclaredMirrors(t *testing.T) {
+	profile := registryProfile{Endpoint: registryEndpoint{}, Credential: registryCredential{}}
+	profile.Endpoint.Spec.Host = "registry.internal"
+	profile.Endpoint.Spec.URL = "https://registry.internal"
+	profile.Endpoint.Spec.Mirrors = []registryMirror{{Source: "docker.io", Endpoint: profile.Endpoint.Spec.URL, RewritePrefix: "dockerhub-proxy/", Probe: "library/alpine:3.23"}, {Source: "ghcr.io", Endpoint: profile.Endpoint.Spec.URL, RewritePrefix: "ghcr-proxy/", Probe: "unict-cclab/mon-agent:v0.0.7"}}
+	profile.Credential.Spec.Username = "robot"
+	profile.Credential.Spec.Password = "secret"
+	raw, err := registryConfiguration(profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	value := string(raw)
+	for _, expected := range []string{"docker.io:", "ghcr.io:", "https://registry.internal", "dockerhub-proxy/$1", "ghcr-proxy/$1", "registry.internal:", "kubephos-registry-ca.crt"} {
+		if !strings.Contains(value, expected) {
+			t.Fatalf("registry configuration is missing %q from %s", expected, value)
+		}
+	}
+}
+
+func TestLegacyManagedRegistryReceivesProxyProfile(t *testing.T) {
+	mirrors := legacyManagedMirrors("https://registry.internal")
+	if len(mirrors) != 5 || mirrors[0].Source != "docker.io" || mirrors[0].RewritePrefix != "dockerhub-proxy/" || mirrors[0].Probe != "library/alpine:3.23" || mirrors[4].Source != "quay.io" {
+		t.Fatalf("unexpected legacy mirror profile %#v", mirrors)
+	}
+}
+
+func TestInstallDisablesDirectRegistryFallback(t *testing.T) {
+	command := installCommand("server", "node-1", "https://192.0.2.1:6443", "token", true)
+	if !strings.Contains(command, "--disable-default-registry-endpoint") {
+		t.Fatalf("registry fallback remains enabled: %s", command)
+	}
+}
+
 type fakeRunner struct {
 	lock      sync.Mutex
 	installed map[string]string

@@ -159,6 +159,7 @@ spec:
     - infrastructure.deprovision
     - infrastructure.preflight
     - lifecycle.cleanup
+    - lifecycle.cleanup.compatible
   permissions:
     - network.proxmox.read
     - network.proxmox.write

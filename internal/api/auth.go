@@ -47,7 +47,7 @@ func (s *Server) authenticate(next http.Handler) http.Handler {
 			writeError(response, http.StatusForbidden, "permission_denied", "Your role cannot modify this resource.")
 			return
 		}
-		if mutating(request.Method) && (strings.HasPrefix(request.URL.Path, "/api/v1/credentials") || strings.HasPrefix(request.URL.Path, "/api/v1/connections") || strings.HasPrefix(request.URL.Path, "/api/v1/catalog") || strings.HasPrefix(request.URL.Path, "/api/v1/plugins") || strings.HasPrefix(request.URL.Path, "/api/v1/plugin-packages") || strings.HasPrefix(request.URL.Path, "/api/v1/plugin-runtime")) && session.User.Role != "admin" {
+		if mutating(request.Method) && (strings.HasPrefix(request.URL.Path, "/api/v1/credentials") || strings.HasPrefix(request.URL.Path, "/api/v1/connections") || strings.HasPrefix(request.URL.Path, "/api/v1/catalog") || strings.HasPrefix(request.URL.Path, "/api/v1/plugins") || strings.HasPrefix(request.URL.Path, "/api/v1/plugin-packages") || strings.HasPrefix(request.URL.Path, "/api/v1/plugin-runtime") || strings.HasSuffix(request.URL.Path, "/access")) && session.User.Role != "admin" {
 			s.auditAuthenticationRejection(request, http.StatusForbidden)
 			writeError(response, http.StatusForbidden, "permission_denied", "Administrator access is required.")
 			return

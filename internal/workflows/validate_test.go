@@ -15,6 +15,14 @@ type workflowPlugin struct {
 	plan     domain.Plan
 }
 
+type runtimeInvalidWorkflowPlugin struct {
+	workflowPlugin
+}
+
+func (p runtimeInvalidWorkflowPlugin) Validate(context.Context, json.RawMessage) domain.ValidationReport {
+	return domain.ValidationReport{Valid: false, Issues: []domain.ValidationIssue{{Level: "error", Message: "target already exists"}}}
+}
+
 func (p workflowPlugin) Manifest() plugins.Manifest {
 	return p.manifest
 }
@@ -120,6 +128,32 @@ func TestValidateRejectsForwardReference(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected forward reference rejection")
+	}
+}
+
+func TestValidateDeferredBuildsBindingsBeforeRuntimeReplacementChecks(t *testing.T) {
+	producer := runtimeInvalidWorkflowPlugin{workflowPlugin{
+		manifest: plugins.Manifest{ID: "producer", Name: "Producer", Version: "1", Schema: json.RawMessage(`{"type":"object"}`), ArtifactOutputs: []domain.ArtifactContract{{Type: "Cluster", Version: "v1"}}},
+		plan: domain.Plan{PluginID: "producer", Steps: []domain.PlanStep{{
+			ID: "produce", Name: "Produce", Mutating: true,
+			Outputs: []domain.ArtifactOutput{{Name: "cluster", Type: "Cluster", Version: "v1", MediaType: "application/json", Source: "/result"}},
+		}}},
+	}}
+	consumer := workflowPlugin{
+		manifest: plugins.Manifest{ID: "consumer", Name: "Consumer", Version: "1", Schema: json.RawMessage(`{"type":"object","required":["cluster"],"properties":{"cluster":{"type":"string"}}}`), ArtifactInputs: []domain.ArtifactContract{{Type: "Cluster", Version: "v1"}}, ArtifactOutputs: []domain.ArtifactContract{{Type: "Dataset", Version: "v1"}}},
+		plan: domain.Plan{PluginID: "consumer", Steps: []domain.PlanStep{{
+			ID: "consume", Name: "Consume",
+			ArtifactInputs: []domain.ArtifactInput{{Name: "cluster", Type: "Cluster", Version: "v1"}},
+			Outputs:        []domain.ArtifactOutput{{Name: "dataset", Type: "Dataset", Version: "v1", MediaType: "application/json", Source: "/result"}},
+		}}},
+	}
+	definition := domain.PipelineDefinition{Stages: []domain.PipelineStage{
+		{ID: "produce", PluginID: "producer", Title: "Replace existing target", Spec: json.RawMessage(`{}`)},
+		{ID: "consume", PluginID: "consumer", Title: "Use replacement", Spec: json.RawMessage(`{"cluster":""}`), Bindings: []domain.PipelineBinding{{Path: "/cluster", FromStage: "produce", FromOutput: "cluster"}}},
+	}, Result: domain.PipelineOutput{Stage: "consume", Output: "dataset"}}
+	result, err := ValidateDeferred(context.Background(), plugins.NewRegistry(producer, consumer), definition)
+	if err != nil || !result.Validation.Valid || len(result.Resolution.Stages) != 2 {
+		t.Fatalf("expected deferred runtime validation to preserve the typed graph, got %#v %v", result, err)
 	}
 }
 

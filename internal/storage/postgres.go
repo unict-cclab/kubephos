@@ -268,13 +268,16 @@ func (s *Store) CreateCompletedExperiment(ctx context.Context, experiment domain
 	}
 	for variantIndex := range experiment.Variants {
 		variant := &experiment.Variants[variantIndex]
+		if variant.Alias == "" {
+			variant.Alias = variant.Name
+		}
 		if len(variant.Configuration) == 0 {
 			variant.Configuration = json.RawMessage(`{}`)
 		}
 		if _, err := tx.Exec(ctx, `
-			INSERT INTO experiment_variants (id, experiment_id, position, name, configuration_id, configuration)
-			VALUES ($1, $2, $3, $4, NULLIF($5, ''), $6)
-		`, variant.ID, experiment.ID, variant.Position, variant.Name, variant.ConfigurationID, variant.Configuration); err != nil {
+			INSERT INTO experiment_variants (id, experiment_id, position, name, display_alias, plot_color, configuration_id, configuration)
+			VALUES ($1, $2, $3, $4, COALESCE(NULLIF($5, ''), $4), NULLIF($6, ''), NULLIF($7, ''), $8)
+		`, variant.ID, experiment.ID, variant.Position, variant.Name, variant.Alias, variant.Color, variant.ConfigurationID, variant.Configuration); err != nil {
 			return domain.Experiment{}, err
 		}
 		for trialIndex := range variant.Trials {
@@ -351,9 +354,34 @@ func (s *Store) ListExperiments(ctx context.Context, limit int) ([]domain.Experi
 	return result, nil
 }
 
+func (s *Store) DeleteExperiment(ctx context.Context, experimentID string) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	var status string
+	if err := tx.QueryRow(ctx, `SELECT status FROM experiments WHERE id = $1 FOR UPDATE`, experimentID).Scan(&status); errors.Is(err, pgx.ErrNoRows) {
+		return ErrNotFound
+	} else if err != nil {
+		return err
+	}
+	if !deletableExperimentStatus(status) {
+		return ErrConflict
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM experiments WHERE id = $1`, experimentID); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func deletableExperimentStatus(status string) bool {
+	return status == domain.OperationSucceeded || status == domain.OperationFailed || status == domain.OperationCanceled
+}
+
 func (s *Store) listExperimentVariants(ctx context.Context, experimentID string) ([]domain.ExperimentVariant, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT id, experiment_id, position, name, COALESCE(pipeline_id, ''), COALESCE(pipeline_hash, ''), COALESCE(configuration_id, ''), configuration
+		SELECT id, experiment_id, position, name, display_alias, COALESCE(plot_color, ''), COALESCE(pipeline_id, ''), COALESCE(pipeline_hash, ''), COALESCE(configuration_id, ''), configuration
 		FROM experiment_variants
 		WHERE experiment_id = $1
 		ORDER BY position
@@ -364,7 +392,7 @@ func (s *Store) listExperimentVariants(ctx context.Context, experimentID string)
 	variants := []domain.ExperimentVariant{}
 	for rows.Next() {
 		var variant domain.ExperimentVariant
-		if err := rows.Scan(&variant.ID, &variant.ExperimentID, &variant.Position, &variant.Name, &variant.PipelineID, &variant.PipelineHash, &variant.ConfigurationID, &variant.Configuration); err != nil {
+		if err := rows.Scan(&variant.ID, &variant.ExperimentID, &variant.Position, &variant.Name, &variant.Alias, &variant.Color, &variant.PipelineID, &variant.PipelineHash, &variant.ConfigurationID, &variant.Configuration); err != nil {
 			rows.Close()
 			return nil, err
 		}
@@ -387,10 +415,11 @@ func (s *Store) listExperimentVariants(ctx context.Context, experimentID string)
 
 func (s *Store) listExperimentTrials(ctx context.Context, variantID string) ([]domain.ExperimentTrial, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT id, variant_id, position, status, COALESCE(operation_id, ''), COALESCE(pipeline_run_id, ''), COALESCE(result_artifact_id, ''), error, created_at, completed_at
-		FROM experiment_trials
-		WHERE variant_id = $1
-		ORDER BY position
+		SELECT trial.id, trial.variant_id, trial.position, trial.status, COALESCE(trial.operation_id, ''), COALESCE(trial.pipeline_run_id, ''), COALESCE(trial.result_artifact_id, ''), trial.error, trial.created_at, run.started_at, trial.completed_at
+		FROM experiment_trials trial
+		LEFT JOIN pipeline_runs run ON run.id = trial.pipeline_run_id
+		WHERE trial.variant_id = $1
+		ORDER BY trial.position
 	`, variantID)
 	if err != nil {
 		return nil, err
@@ -399,7 +428,7 @@ func (s *Store) listExperimentTrials(ctx context.Context, variantID string) ([]d
 	trials := []domain.ExperimentTrial{}
 	for rows.Next() {
 		var trial domain.ExperimentTrial
-		if err := rows.Scan(&trial.ID, &trial.VariantID, &trial.Position, &trial.Status, &trial.OperationID, &trial.PipelineRunID, &trial.ResultArtifactID, &trial.Error, &trial.CreatedAt, &trial.CompletedAt); err != nil {
+		if err := rows.Scan(&trial.ID, &trial.VariantID, &trial.Position, &trial.Status, &trial.OperationID, &trial.PipelineRunID, &trial.ResultArtifactID, &trial.Error, &trial.CreatedAt, &trial.StartedAt, &trial.CompletedAt); err != nil {
 			return nil, err
 		}
 		trials = append(trials, trial)
@@ -567,8 +596,14 @@ func (s *Store) CreateCatalogApplication(ctx context.Context, application domain
 	err := s.pool.QueryRow(ctx, `
 		INSERT INTO catalog_applications (id, version, name, description, origin, descriptor, digest, enabled)
 		VALUES ($1, $2, $3, $4, 'imported', $5, $6, true)
+		ON CONFLICT (id, version) DO UPDATE
+		SET enabled = true, updated_at = now()
+		WHERE catalog_applications.digest = EXCLUDED.digest AND catalog_applications.enabled = false
 		RETURNING created_at, updated_at
 	`, application.ID, application.Version, application.Name, application.Description, application.Descriptor, application.Digest).Scan(&application.CreatedAt, &application.UpdatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.CatalogApplication{}, ErrConflict
+	}
 	if err != nil {
 		var databaseError *pgconn.PgError
 		if errors.As(err, &databaseError) && databaseError.Code == "23505" {
@@ -576,6 +611,40 @@ func (s *Store) CreateCatalogApplication(ctx context.Context, application domain
 		}
 	}
 	return application, err
+}
+
+func (s *Store) DeleteCatalogApplication(ctx context.Context, applicationID, version string) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	var reference string
+	if err := tx.QueryRow(ctx, `
+		SELECT 'app:' || id || '@' || version
+		FROM catalog_applications
+		WHERE id = $1 AND version = $2 AND enabled = true
+		FOR UPDATE
+	`, applicationID, version).Scan(&reference); errors.Is(err, pgx.ErrNoRows) {
+		return ErrNotFound
+	} else if err != nil {
+		return err
+	}
+	var used bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM experiment_configurations WHERE application_ref = $1)`, reference).Scan(&used); err != nil {
+		return err
+	}
+	if used {
+		return ErrConflict
+	}
+	command, err := tx.Exec(ctx, `UPDATE catalog_applications SET enabled = false, updated_at = now() WHERE id = $1 AND version = $2 AND enabled = true`, applicationID, version)
+	if err != nil {
+		return err
+	}
+	if command.RowsAffected() != 1 {
+		return ErrNotFound
+	}
+	return tx.Commit(ctx)
 }
 
 func (s *Store) GetCatalogApplicationDescriptor(ctx context.Context, applicationID, version string) (json.RawMessage, error) {
@@ -620,6 +689,34 @@ func (s *Store) CreateExperimentConfiguration(ctx context.Context, configuration
 		RETURNING created_at, updated_at
 	`, configuration.ID, configuration.WorkspaceID, configuration.ClusterResourceID, configuration.Name, configuration.Description, configuration.ApplicationRef, configuration.ApplicationDigest, configuration.Definition, validation).Scan(&configuration.CreatedAt, &configuration.UpdatedAt)
 	if duplicate(err) {
+		return domain.ExperimentConfiguration{}, ErrConflict
+	}
+	return configuration, err
+}
+
+func (s *Store) UpdateExperimentConfiguration(ctx context.Context, configuration domain.ExperimentConfiguration, expectedUpdatedAt time.Time) (domain.ExperimentConfiguration, error) {
+	validation, err := json.Marshal(configuration.Validation)
+	if err != nil {
+		return domain.ExperimentConfiguration{}, err
+	}
+	err = s.pool.QueryRow(ctx, `
+		UPDATE experiment_configurations
+		SET workspace_id = $2, cluster_resource_id = $3, name = $4, description = $5,
+		    application_ref = $6, application_digest = $7, definition = $8, validation = $9, updated_at = now()
+		WHERE id = $1 AND updated_at = $10
+		RETURNING created_at, updated_at
+	`, configuration.ID, configuration.WorkspaceID, configuration.ClusterResourceID, configuration.Name, configuration.Description, configuration.ApplicationRef, configuration.ApplicationDigest, configuration.Definition, validation, expectedUpdatedAt).Scan(&configuration.CreatedAt, &configuration.UpdatedAt)
+	if duplicate(err) {
+		return domain.ExperimentConfiguration{}, ErrConflict
+	}
+	if errors.Is(err, pgx.ErrNoRows) {
+		var exists bool
+		if existsErr := s.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM experiment_configurations WHERE id = $1)`, configuration.ID).Scan(&exists); existsErr != nil {
+			return domain.ExperimentConfiguration{}, existsErr
+		}
+		if !exists {
+			return domain.ExperimentConfiguration{}, ErrNotFound
+		}
 		return domain.ExperimentConfiguration{}, ErrConflict
 	}
 	return configuration, err
@@ -1150,13 +1247,16 @@ func (s *Store) ListManagedResources(ctx context.Context, kind string) ([]domain
 		       COALESCE((SELECT artifact.id FROM artifacts artifact WHERE artifact.operation_id = resource.operation_id AND artifact.artifact_type <> 'RunResult' ORDER BY artifact.created_at LIMIT 1), creation_run.result_artifact_id, ''),
 		       COALESCE(resource.deletion_operation_id, ''), COALESCE(resource.deletion_pipeline_id, ''), COALESCE(resource.deletion_pipeline_run_id, ''),
 		       COALESCE(creation.status, creation_run.status), COALESCE(creation.error, creation_run.error, ''), COALESCE(creation.validation, creation_pipeline.validation),
-		       COALESCE(deletion.status, deletion_run.status, ''), COALESCE(deletion.error, deletion_run.error, ''), resource.created_at, resource.updated_at
+		       COALESCE(deletion.status, deletion_run.status, ''), COALESCE(deletion.error, deletion_run.error, ''),
+		       COALESCE(resource.recreation_pipeline_id, ''), COALESCE(resource.recreation_pipeline_run_id, ''), COALESCE(recreation_run.status, ''), COALESCE(recreation_run.error, ''),
+		       resource.created_at, resource.updated_at
 		FROM managed_resources resource
 		LEFT JOIN operations creation ON creation.id = resource.operation_id
 		LEFT JOIN pipelines creation_pipeline ON creation_pipeline.id = resource.pipeline_id
 		LEFT JOIN pipeline_runs creation_run ON creation_run.id = resource.pipeline_run_id
 		LEFT JOIN operations deletion ON deletion.id = resource.deletion_operation_id
 		LEFT JOIN pipeline_runs deletion_run ON deletion_run.id = resource.deletion_pipeline_run_id
+		LEFT JOIN pipeline_runs recreation_run ON recreation_run.id = resource.recreation_pipeline_run_id
 		WHERE resource.kind = $1
 		  AND COALESCE(deletion.status, deletion_run.status, '') <> $2
 		ORDER BY resource.created_at DESC
@@ -1184,13 +1284,16 @@ func (s *Store) GetManagedResource(ctx context.Context, resourceID string) (doma
 		       COALESCE((SELECT artifact.id FROM artifacts artifact WHERE artifact.operation_id = resource.operation_id AND artifact.artifact_type <> 'RunResult' ORDER BY artifact.created_at LIMIT 1), creation_run.result_artifact_id, ''),
 		       COALESCE(resource.deletion_operation_id, ''), COALESCE(resource.deletion_pipeline_id, ''), COALESCE(resource.deletion_pipeline_run_id, ''),
 		       COALESCE(creation.status, creation_run.status), COALESCE(creation.error, creation_run.error, ''), COALESCE(creation.validation, creation_pipeline.validation),
-		       COALESCE(deletion.status, deletion_run.status, ''), COALESCE(deletion.error, deletion_run.error, ''), resource.created_at, resource.updated_at
+		       COALESCE(deletion.status, deletion_run.status, ''), COALESCE(deletion.error, deletion_run.error, ''),
+		       COALESCE(resource.recreation_pipeline_id, ''), COALESCE(resource.recreation_pipeline_run_id, ''), COALESCE(recreation_run.status, ''), COALESCE(recreation_run.error, ''),
+		       resource.created_at, resource.updated_at
 		FROM managed_resources resource
 		LEFT JOIN operations creation ON creation.id = resource.operation_id
 		LEFT JOIN pipelines creation_pipeline ON creation_pipeline.id = resource.pipeline_id
 		LEFT JOIN pipeline_runs creation_run ON creation_run.id = resource.pipeline_run_id
 		LEFT JOIN operations deletion ON deletion.id = resource.deletion_operation_id
 		LEFT JOIN pipeline_runs deletion_run ON deletion_run.id = resource.deletion_pipeline_run_id
+		LEFT JOIN pipeline_runs recreation_run ON recreation_run.id = resource.recreation_pipeline_run_id
 		WHERE resource.id = $1
 	`, resourceID)
 	resource, err := scanManagedResource(row)
@@ -1202,22 +1305,23 @@ func (s *Store) GetManagedResource(ctx context.Context, resourceID string) (doma
 
 func scanManagedResource(row pgx.Row) (domain.ManagedResource, error) {
 	var resource domain.ManagedResource
-	var creationStatus, creationError, deletionStatus, deletionError string
+	var creationStatus, creationError, deletionStatus, deletionError, recreationStatus, recreationError string
 	var validation []byte
 	err := row.Scan(&resource.ID, &resource.WorkspaceID, &resource.Name, &resource.Kind, &resource.Provider, &resource.ConnectionID,
 		&resource.PluginID, &resource.PluginVersion, &resource.PluginDigest, &resource.Spec, &resource.OperationID, &resource.PipelineID, &resource.PipelineRunID, &resource.ArtifactID,
-		&resource.DeletionOperationID, &resource.DeletionPipelineID, &resource.DeletionPipelineRunID, &creationStatus, &creationError, &validation, &deletionStatus, &deletionError, &resource.CreatedAt, &resource.UpdatedAt)
+		&resource.DeletionOperationID, &resource.DeletionPipelineID, &resource.DeletionPipelineRunID, &creationStatus, &creationError, &validation, &deletionStatus, &deletionError,
+		&resource.RecreationPipelineID, &resource.RecreationPipelineRunID, &recreationStatus, &recreationError, &resource.CreatedAt, &resource.UpdatedAt)
 	if err != nil {
 		return domain.ManagedResource{}, err
 	}
 	if err := json.Unmarshal(validation, &resource.Validation); err != nil {
 		return domain.ManagedResource{}, err
 	}
-	resource.Status, resource.Error = managedResourceState(creationStatus, creationError, deletionStatus, deletionError)
+	resource.Status, resource.Error = managedResourceState(creationStatus, creationError, deletionStatus, deletionError, recreationStatus, recreationError)
 	return resource, nil
 }
 
-func managedResourceState(creationStatus, creationError, deletionStatus, deletionError string) (string, string) {
+func managedResourceState(creationStatus, creationError, deletionStatus, deletionError, recreationStatus, recreationError string) (string, string) {
 	if deletionStatus != "" {
 		switch deletionStatus {
 		case domain.OperationSucceeded:
@@ -1226,6 +1330,14 @@ func managedResourceState(creationStatus, creationError, deletionStatus, deletio
 			return "deletion-failed", deletionError
 		default:
 			return "deleting", ""
+		}
+	}
+	if recreationStatus != "" {
+		switch recreationStatus {
+		case domain.OperationFailed, domain.OperationCanceled:
+			return "recreation-failed", recreationError
+		default:
+			return "recreating", ""
 		}
 	}
 	switch creationStatus {
@@ -1367,6 +1479,82 @@ func (s *Store) ResetFailedManagedResourceDeletion(ctx context.Context, resource
 		          SELECT 1 FROM pipeline_runs deletion_run
 		          WHERE deletion_run.id = resource.deletion_pipeline_run_id AND deletion_run.status IN ($2, $3)
 		      )
+		  )
+	`, resourceID, domain.OperationFailed, domain.OperationCanceled)
+	if err != nil {
+		return err
+	}
+	if command.RowsAffected() != 1 {
+		return ErrConflict
+	}
+	return nil
+}
+
+func (s *Store) CreateManagedResourceRecreation(ctx context.Context, resourceID string, desiredSpec json.RawMessage, pipeline domain.Pipeline, run domain.PipelineRun) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	var kind, creationStatus, recreationRunID string
+	err = tx.QueryRow(ctx, `
+		SELECT resource.kind, COALESCE(creation.status, creation_run.status), COALESCE(resource.recreation_pipeline_run_id, '')
+		FROM managed_resources resource
+		LEFT JOIN operations creation ON creation.id = resource.operation_id
+		LEFT JOIN pipeline_runs creation_run ON creation_run.id = resource.pipeline_run_id
+		WHERE resource.id = $1
+		  AND resource.deleted_at IS NULL
+		  AND resource.deletion_operation_id IS NULL
+		  AND resource.deletion_pipeline_run_id IS NULL
+		FOR UPDATE OF resource
+	`, resourceID).Scan(&kind, &creationStatus, &recreationRunID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrNotFound
+	}
+	if err != nil {
+		return err
+	}
+	if kind != "kubernetes-cluster" || creationStatus != domain.OperationSucceeded || recreationRunID != "" {
+		return ErrConflict
+	}
+	var active bool
+	if err := tx.QueryRow(ctx, `
+		SELECT EXISTS(
+			SELECT 1 FROM pipeline_runs
+			WHERE cluster_resource_id = $1 AND status IN ($2, $3)
+		)
+	`, resourceID, domain.OperationQueued, domain.OperationRunning).Scan(&active); err != nil {
+		return err
+	}
+	if active {
+		return ErrConflict
+	}
+	if err := insertPipelineLifecycle(ctx, tx, &pipeline, &run); err != nil {
+		return err
+	}
+	command, err := tx.Exec(ctx, `
+		UPDATE managed_resources
+		SET spec = $2, recreation_pipeline_id = $3, recreation_pipeline_run_id = $4, updated_at = now()
+		WHERE id = $1
+	`, resourceID, desiredSpec, pipeline.ID, run.ID)
+	if err != nil {
+		return err
+	}
+	if command.RowsAffected() != 1 {
+		return ErrNotFound
+	}
+	return tx.Commit(ctx)
+}
+
+func (s *Store) ResetFailedManagedResourceRecreation(ctx context.Context, resourceID string) error {
+	command, err := s.pool.Exec(ctx, `
+		UPDATE managed_resources resource
+		SET recreation_pipeline_id = NULL, recreation_pipeline_run_id = NULL, updated_at = now()
+		WHERE resource.id = $1
+		  AND EXISTS (
+		      SELECT 1 FROM pipeline_runs recreation
+		      WHERE recreation.id = resource.recreation_pipeline_run_id
+		        AND recreation.status IN ($2, $3)
 		  )
 	`, resourceID, domain.OperationFailed, domain.OperationCanceled)
 	if err != nil {

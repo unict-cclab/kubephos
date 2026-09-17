@@ -3,7 +3,7 @@ kind: Plugin
 metadata:
   id: io.kubephos.scheduler.kubernetes.secondary
   name: Managed secondary scheduler
-  version: 0.1.1
+  version: 0.2.0
   description: Installs an isolated Kubernetes scheduler and assigns only workloads selected by a validated target binding.
 spec:
   protocol: v1alpha1
@@ -24,6 +24,8 @@ spec:
       - clusterConnectionRef
       - applicationDeploymentRef
       - targetBindingRef
+      - image
+      - configFile
     properties:
       clusterConnectionRef:
         type: string
@@ -43,6 +45,26 @@ spec:
         format: kubephos-artifact-ref
         x-kubephos-artifact-type: TargetBinding
         x-kubephos-artifact-version: v1alpha1
+      image:
+        type: string
+        title: Mirrored strategy image
+        format: kubephos-strategy-image
+        minLength: 1
+      configFile:
+        type: string
+        title: Scheduler configuration
+        description: KubeSchedulerConfiguration YAML. KubePhos assigns an isolated scheduler name and disables leader election.
+        format: multiline
+        x-kubephos-multiline: true
+        minLength: 1
+        maxLength: 131072
+        default: |
+          apiVersion: kubescheduler.config.k8s.io/v1
+          kind: KubeSchedulerConfiguration
+          profiles:
+            - schedulerName: kubephos-managed
+          leaderElection:
+            leaderElect: false
   runtime:
     executable: secondary-scheduler-plugin
     timeout: 25m

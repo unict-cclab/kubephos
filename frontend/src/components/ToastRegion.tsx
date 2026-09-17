@@ -14,8 +14,8 @@ export function ToastRegion({items, dismiss}: {items: ToastMessage[]; dismiss: (
 
 function Toast({item, dismiss}: {item: ToastMessage; dismiss: (id: number) => void}) {
   useEffect(() => {
-    const timer = window.setTimeout(() => dismiss(item.id), 3600)
+    const timer = window.setTimeout(() => dismiss(item.id), item.error ? 12000 : 5000)
     return () => window.clearTimeout(timer)
-  }, [dismiss, item.id])
-  return <button className={`toast ${item.error ? 'error' : ''}`} onClick={() => dismiss(item.id)}>{item.message}</button>
+  }, [dismiss, item.error, item.id])
+  return <button className={`toast ${item.error ? 'error' : ''}`} role={item.error ? 'alert' : 'status'} onClick={() => dismiss(item.id)}>{item.message}</button>
 }

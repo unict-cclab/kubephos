@@ -18,6 +18,15 @@ import (
 
 type unavailableRunner struct{}
 
+func TestSecurityHeadersAllowLocalChartRasterization(t *testing.T) {
+	request := httptest.NewRequest(http.MethodGet, "/", nil)
+	response := httptest.NewRecorder()
+	securityHeaders(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) { writer.WriteHeader(http.StatusNoContent) })).ServeHTTP(response, request)
+	if policy := response.Header().Get("Content-Security-Policy"); !strings.Contains(policy, "img-src 'self' data: blob:") {
+		t.Fatalf("chart rasterization is blocked by CSP %q", policy)
+	}
+}
+
 func TestManagedMachineCapacityProfiles(t *testing.T) {
 	defaults := managedMachineCapacity{Cores: 4, MemoryMiB: 8192, DiskGiB: 80}
 	capacity := managedCapacityDefaults(managedMachineCapacity{Cores: 6}, defaults)
@@ -30,6 +39,46 @@ func TestManagedMachineCapacityProfiles(t *testing.T) {
 	}
 	if validManagedCapacity(capacity, 100) {
 		t.Fatal("capacity smaller than the template disk was accepted")
+	}
+}
+
+func TestResourceAccessPairsEndpointsAndProtectedCredentials(t *testing.T) {
+	documents := []json.RawMessage{
+		json.RawMessage(`{"kind":"RegistryEndpoint","metadata":{"name":"managed-registry"},"spec":{"host":"192.168.1.10","url":"https://192.168.1.10"}}`),
+		json.RawMessage(`{"kind":"RegistryCredential","metadata":{"name":"harbor-admin","role":"management"},"spec":{"server":"192.168.1.10","username":"admin","password":"harbor-secret"}}`),
+		json.RawMessage(`{"kind":"ObservabilityCapability","spec":{"endpoints":[{"name":"grafana","serviceName":"grafana-service","scheme":"http","nodePort":32000},{"name":"prometheus","serviceName":"prometheus-service","scheme":"http","nodePort":32090}]}}`),
+		json.RawMessage(`{"kind":"ServiceCredential","metadata":{"name":"grafana-admin","role":"management"},"spec":{"service":"grafana-service","username":"admin","password":"grafana-secret"}}`),
+		json.RawMessage(`{"kind":"ManagedPlatformCapability","spec":{"endpoints":[{"name":"kiali","service":"kiali","scheme":"http","nodePort":30001}]}}`),
+	}
+	items := resourceAccessFromDocuments(documents, "192.168.1.20")
+	if len(items) != 4 {
+		t.Fatalf("expected four access endpoints, got %#v", items)
+	}
+	byName := map[string]resourceAccessEndpoint{}
+	for _, item := range items {
+		byName[item.Name] = item
+	}
+	if byName["Managed Registry"].Credentials[0].Password != "harbor-secret" || byName["Grafana"].Credentials[0].Password != "grafana-secret" {
+		t.Fatalf("credentials were not paired with endpoints: %#v", items)
+	}
+	if byName["Prometheus"].URL != "http://192.168.1.20:32090" || len(byName["Prometheus"].Credentials) != 0 || byName["Kiali"].URL != "http://192.168.1.20:30001/kiali" {
+		t.Fatalf("dashboard access is incorrect: %#v", items)
+	}
+}
+
+func TestManagedAccessRevealIsAudited(t *testing.T) {
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/managed-resources/cluster_one/access", strings.NewReader(`{}`))
+	action, targetType, targetID, audited := auditTarget(request)
+	if !audited || action != "managed-resource.access.reveal" || targetType != "managed-resource" || targetID != "cluster_one" {
+		t.Fatalf("unexpected audit target %q %q %q %v", action, targetType, targetID, audited)
+	}
+}
+
+func TestExperimentDeletionIsAudited(t *testing.T) {
+	request := httptest.NewRequest(http.MethodDelete, "/api/v1/experiments/exp_one", nil)
+	action, targetType, targetID, audited := auditTarget(request)
+	if !audited || action != "experiment.delete" || targetType != "experiment" || targetID != "exp_one" {
+		t.Fatalf("unexpected audit target %q %q %q %v", action, targetType, targetID, audited)
 	}
 }
 
@@ -550,6 +599,34 @@ func TestCleanupPlanRejectsIncompleteHistory(t *testing.T) {
 	_, err := cleanupPlan(domain.Operation{Plan: domain.Plan{Steps: []domain.PlanStep{{ID: "one"}}}})
 	if err == nil {
 		t.Fatal("expected incomplete source history rejection")
+	}
+}
+
+func TestManagedCleanupAcceptsDeclaredBackwardCompatibility(t *testing.T) {
+	source := domain.Operation{PluginVersion: "1.0.0", Status: domain.OperationSucceeded}
+	manifest := plugins.Manifest{Version: "2.0.0", Capabilities: []string{"lifecycle.cleanup"}}
+	if managedCleanupCompatible(manifest, source) {
+		t.Fatal("expected a changed plugin without compatibility declaration to be rejected")
+	}
+	manifest.Capabilities = append(manifest.Capabilities, "lifecycle.cleanup.compatible")
+	if !managedCleanupCompatible(manifest, source) {
+		t.Fatal("expected a changed plugin with compatibility declaration to be accepted")
+	}
+	source.Status = domain.OperationRunning
+	if managedCleanupCompatible(manifest, source) {
+		t.Fatal("expected an incomplete source lifecycle to be rejected")
+	}
+}
+
+func TestWithManagedPlatformStageUpgradesLegacyClusterDefinition(t *testing.T) {
+	definition := domain.PipelineDefinition{Stages: []domain.PipelineStage{{ID: "kubernetes"}}}
+	upgraded := withManagedPlatformStage(definition, "managed-platform")
+	if len(upgraded.Stages) != 2 || upgraded.Stages[1].ID != "platform" || upgraded.Stages[1].PluginID != "managed-platform" || upgraded.Stages[1].Bindings[0].FromStage != "kubernetes" {
+		t.Fatalf("unexpected managed platform stage %#v", upgraded.Stages)
+	}
+	unchanged := withManagedPlatformStage(upgraded, "other")
+	if len(unchanged.Stages) != 2 || unchanged.Stages[1].PluginID != "managed-platform" {
+		t.Fatalf("managed platform stage must not be duplicated %#v", unchanged.Stages)
 	}
 }
 

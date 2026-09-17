@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -36,8 +37,11 @@ func TestCollectorPrecheckExecuteAndVerify(t *testing.T) {
 	if err := json.Unmarshal(raw, &value); err != nil {
 		t.Fatal(err)
 	}
-	if value.Dataset.Spec.Summary.Metrics != 4 || value.Dataset.Spec.Summary.Series != 4 || value.Dataset.Spec.Summary.Samples != 8 {
+	if value.Dataset.Spec.Summary.Metrics != 14 || value.Dataset.Spec.Summary.Series != 14 || value.Dataset.Spec.Summary.Samples != 31 {
 		t.Fatalf("unexpected dataset summary %#v", value.Dataset.Spec.Summary)
+	}
+	if value.Dataset.Spec.SLOMilliseconds != 250 {
+		t.Fatalf("unexpected response time objective %d", value.Dataset.Spec.SLOMilliseconds)
 	}
 	if runner.maximumConcurrency() < 2 {
 		t.Fatal("expected concurrent metrics queries")
@@ -71,7 +75,7 @@ func TestDecodeMatrixRejectsUnorderedSamples(t *testing.T) {
 
 func testStep(t *testing.T) domain.PlanStep {
 	t.Helper()
-	spec := Spec{ClusterConnectionRef: "art_cluster", ApplicationDeploymentRef: "art_deployment", ObservabilityCapabilityRef: "art_observability", Window: "5m", Resolution: "15s"}
+	spec := Spec{ClusterConnectionRef: "art_cluster", ApplicationDeploymentRef: "art_deployment", ObservabilityCapabilityRef: "art_observability", LoadSessionRef: "art_load", Window: "5m", Resolution: "15s"}
 	raw, _ := json.Marshal(spec)
 	plan, err := (Plugin{}).Plan(context.Background(), raw)
 	if err != nil {
@@ -87,9 +91,88 @@ func testArtifacts() map[string]domain.ResolvedArtifact {
 	key := base64.StdEncoding.EncodeToString([]byte("private-key"))
 	kubeconfig := "apiVersion: v1\nkind: Config\ncurrent-context: managed\nclusters:\n- name: managed\n  cluster:\n    server: https://10.10.0.10:6443\ncontexts:\n- name: managed\n  context:\n    cluster: managed\n    user: admin\nusers:\n- name: admin\n  user:\n    client-certificate-data: " + certificate + "\n    client-key-data: " + key + "\n"
 	cluster, _ := json.Marshal(map[string]any{"apiVersion": artifactAPI, "kind": "ClusterConnection", "metadata": map[string]string{"name": "development", "version": "v1.36.0+k3s1"}, "spec": map[string]string{"distribution": "k3s", "server": "https://10.10.0.10:6443", "kubeconfig": kubeconfig}})
-	deployment, _ := json.Marshal(map[string]any{"apiVersion": artifactAPI, "kind": "ApplicationDeployment", "metadata": map[string]string{"name": "kubephos-app-one", "version": "v1alpha1", "ownershipMarker": "application-marker"}, "spec": map[string]string{"applicationRef": "app:dev.example.app@1.0.0", "clusterServer": "https://10.10.0.10:6443", "namespace": "kubephos-app-one"}})
+	deployment, _ := json.Marshal(map[string]any{"apiVersion": artifactAPI, "kind": "ApplicationDeployment", "metadata": map[string]string{"name": "kubephos-app-one", "version": "v1alpha1", "ownershipMarker": "application-marker"}, "spec": map[string]any{"applicationRef": "app:dev.example.app@1.0.0", "clusterServer": "https://10.10.0.10:6443", "namespace": "kubephos-app-one", "workloads": []map[string]any{{"name": "gateway", "traits": []string{"traffic-entrypoint"}}}}})
 	capability, _ := json.Marshal(map[string]any{"apiVersion": artifactAPI, "kind": "ObservabilityCapability", "metadata": map[string]string{"name": "managed-observability", "version": "86.0.0"}, "spec": map[string]any{"clusterServer": "https://10.10.0.10:6443", "namespace": "kubephos-observability", "scrapeInterval": "15s", "retention": "7d", "metricsAPI": "prometheus-v1", "endpoints": []map[string]any{{"name": "prometheus", "serviceName": "kubephos-prometheus", "port": 9090, "scheme": "http"}}}})
-	return map[string]domain.ResolvedArtifact{"cluster-connection": {Value: cluster}, "application-deployment": {Value: deployment}, "observability-capability": {Value: capability}}
+	started := time.Date(2026, 9, 10, 9, 59, 0, 0, time.UTC)
+	completed := time.Date(2026, 9, 10, 10, 0, 0, 0, time.UTC)
+	load, _ := json.Marshal(map[string]any{"apiVersion": artifactAPI, "kind": "LoadSession", "metadata": map[string]string{"name": "kubephos-app-one/journey", "version": "v1alpha1"}, "spec": map[string]any{"applicationRef": "app:dev.example.app@1.0.0", "clusterServer": "https://10.10.0.10:6443", "namespace": "kubephos-app-one", "scenarioId": "journey", "state": "completed", "durationSeconds": 60, "startedAt": started, "completedAt": completed, "steps": []map[string]any{{"type": "constant", "durationSeconds": 60, "rps": 20}}}})
+	return map[string]domain.ResolvedArtifact{"cluster-connection": {Value: cluster}, "application-deployment": {Value: deployment}, "observability-capability": {Value: capability}, "load-session": {Value: load}}
+}
+
+func TestConfiguredLoadSeriesPreservesTimeline(t *testing.T) {
+	start := time.Date(2026, 9, 10, 10, 0, 0, 0, time.UTC)
+	end := start.Add(30 * time.Second)
+	var value loadSession
+	value.Spec.ScenarioID = "journey"
+	value.Spec.Steps = append(value.Spec.Steps,
+		loadStep{Type: "constant", DurationSeconds: 15, RPS: 10},
+		loadStep{Type: "constant", DurationSeconds: 15, RPS: 30},
+	)
+	series := configuredLoadSeries(value, start, end, 15*time.Second)
+	if len(series.Points) != 3 || series.Points[0].Value != 10 || series.Points[1].Value != 30 || series.Points[2].Value != 0 {
+		t.Fatalf("unexpected configured load series %#v", series.Points)
+	}
+}
+
+func TestConfiguredLoadSeriesDoesNotAliasSinusoidalProfile(t *testing.T) {
+	start := time.Date(2026, 9, 10, 10, 0, 0, 0, time.UTC)
+	end := start.Add(30 * time.Second)
+	var value loadSession
+	value.Spec.ScenarioID = "journey"
+	value.Spec.Steps = append(value.Spec.Steps, loadStep{Type: "sinusoidal", DurationSeconds: 30, BaselineRPS: 15, AmplitudeRPS: 5, PeriodSeconds: 30})
+	series := configuredLoadSeries(value, start, end, 15*time.Second)
+	values := make([]float64, 0, len(series.Points))
+	for _, point := range series.Points {
+		values = append(values, point.Value)
+	}
+	if len(values) != 31 || slices.Max(values) < 19.8 || slices.Min(values) > 10.2 {
+		t.Fatalf("sinusoidal input was aliased: %#v", values)
+	}
+}
+
+func TestLoadMetricsUseTheSourceProxy(t *testing.T) {
+	definitions := metricDefinitions("experiment", "^(?:gateway)$")
+	for _, definition := range definitions[:4] {
+		if !strings.Contains(definition.Query, `reporter="source"`) || !strings.Contains(definition.Query, `source_workload_namespace="experiment"`) || !strings.Contains(definition.Query, `source_workload=~"^(?:gateway)$"`) {
+			t.Fatalf("load query must identify the load driver at the source proxy: %s", definition.Query)
+		}
+	}
+}
+
+func TestSLOViolationSeriesMarksOnlyExceededWindows(t *testing.T) {
+	start := time.Date(2026, 9, 10, 10, 0, 0, 0, time.UTC)
+	response := metricSeries{Points: []metricPoint{{Timestamp: start, Value: 200}, {Timestamp: start.Add(time.Minute), Value: 251}, {Timestamp: start.Add(2 * time.Minute), Value: 250}}}
+	series := sloViolationSeries(response, 250)
+	if series.Metric != "load.slo_violation_percentage" || series.Unit != "percent" || len(series.Points) != 3 || series.Points[0].Value != 0 || series.Points[1].Value != 100 || series.Points[2].Value != 0 {
+		t.Fatalf("unexpected SLO violation series %#v", series)
+	}
+}
+
+func TestTrafficEntryPointMatcherUsesApplicationContract(t *testing.T) {
+	var deployment applicationDeployment
+	deployment.Spec.Workloads = append(deployment.Spec.Workloads,
+		struct {
+			Name   string   `json:"name"`
+			Traits []string `json:"traits"`
+		}{Name: "node.proxy", Traits: []string{"traffic-entrypoint"}},
+		struct {
+			Name   string   `json:"name"`
+			Traits []string `json:"traits"`
+		}{Name: "frontend", Traits: []string{"scalable"}},
+	)
+	if matcher := trafficEntryPointMatcher(deployment); matcher != `^(?:node\.proxy)$` {
+		t.Fatalf("unexpected matcher %q", matcher)
+	}
+}
+
+func TestDecodeMatrixSkipsPrometheusWarmupNaN(t *testing.T) {
+	start := time.Unix(100, 0).UTC()
+	end := time.Unix(130, 0).UTC()
+	raw := `{"status":"success","data":{"resultType":"matrix","result":[{"metric":{},"values":[[100,"NaN"],[115,"12.5"]]}]}}`
+	series, err := decodeMatrix(raw, metricDefinition{ID: "load.p95_response_time", Unit: "milliseconds", Aggregation: "mean"}, start, end)
+	if err != nil || len(series) != 1 || len(series[0].Points) != 1 || series[0].Points[0].Value != 12.5 {
+		t.Fatalf("unexpected decoded series %#v: %v", series, err)
+	}
 }
 
 func discardLog(string, string) error { return nil }

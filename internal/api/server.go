@@ -88,9 +88,17 @@ func NewServer(store *storage.Store, registry *plugins.Registry, artifactStore *
 	router.HandleFunc("POST /api/v1/plugin-runtime/deactivate", server.deactivatePluginRuntime)
 	router.HandleFunc("GET /api/v1/catalog/applications", server.listCatalogApplications)
 	router.HandleFunc("POST /api/v1/catalog/applications", server.importCatalogApplication)
+	router.HandleFunc("GET /api/v1/catalog/applications/{id}/{version}/manifest", server.getCatalogApplicationManifest)
+	router.HandleFunc("GET /api/v1/catalog/application-factories", server.listApplicationFactories)
+	router.HandleFunc("POST /api/v1/catalog/application-factories/{id}", server.generateCatalogApplication)
+	router.HandleFunc("DELETE /api/v1/catalog/applications/{id}/{version}", server.deleteCatalogApplication)
+	router.HandleFunc("GET /api/v1/catalog/strategies", server.listCatalogStrategies)
+	router.HandleFunc("POST /api/v1/catalog/strategies", server.importCatalogStrategy)
+	router.HandleFunc("DELETE /api/v1/catalog/strategies/{id}", server.deleteCatalogStrategy)
 	router.HandleFunc("GET /api/v1/credentials", server.listCredentials)
 	router.HandleFunc("POST /api/v1/credentials", server.createCredential)
 	router.HandleFunc("GET /api/v1/connections", server.listConnections)
+	router.HandleFunc("GET /api/v1/connections/{id}", server.getConnectionDetails)
 	router.HandleFunc("POST /api/v1/connections", server.createConnection)
 	router.HandleFunc("DELETE /api/v1/connections/{id}", server.deleteConnection)
 	router.HandleFunc("GET /api/v1/machine-templates", server.listMachineTemplates)
@@ -105,10 +113,13 @@ func NewServer(store *storage.Store, registry *plugins.Registry, artifactStore *
 	router.HandleFunc("POST /api/v1/kubernetes-clusters", server.createKubernetesCluster)
 	router.HandleFunc("GET /api/v1/kubernetes-clusters/{id}", server.getKubernetesCluster)
 	router.HandleFunc("DELETE /api/v1/kubernetes-clusters/{id}", server.deleteKubernetesCluster)
+	router.HandleFunc("POST /api/v1/kubernetes-clusters/{id}/recreate", server.recreateKubernetesCluster)
 	router.HandleFunc("GET /api/v1/kubernetes-clusters/{id}/kubeconfig", server.downloadKubeconfig)
+	router.HandleFunc("POST /api/v1/managed-resources/{id}/access", server.revealManagedResourceAccess)
 	router.HandleFunc("GET /api/v1/experiment-configurations", server.listExperimentConfigurations)
 	router.HandleFunc("POST /api/v1/experiment-configurations", server.createExperimentConfiguration)
 	router.HandleFunc("GET /api/v1/experiment-configurations/{id}", server.getExperimentConfiguration)
+	router.HandleFunc("PUT /api/v1/experiment-configurations/{id}", server.updateExperimentConfiguration)
 	router.HandleFunc("POST /api/v1/experiment-configurations/{id}/clone", server.cloneExperimentConfiguration)
 	router.HandleFunc("DELETE /api/v1/experiment-configurations/{id}", server.deleteExperimentConfiguration)
 	router.HandleFunc("POST /api/v1/experiment-instances", server.createExperimentInstance)
@@ -130,6 +141,11 @@ func NewServer(store *storage.Store, registry *plugins.Registry, artifactStore *
 	router.HandleFunc("POST /api/v1/pipeline-runs/{id}/cancel", server.cancelPipelineRun)
 	router.HandleFunc("GET /api/v1/experiments", server.listExperiments)
 	router.HandleFunc("POST /api/v1/experiments", server.createCompletedExperiment)
+	router.HandleFunc("POST /api/v1/experiments/{id}/cancel", server.cancelExperiment)
+	router.HandleFunc("DELETE /api/v1/experiments/{id}", server.deleteExperiment)
+	router.HandleFunc("GET /api/v1/experiments/{id}/figures", server.listExperimentFigures)
+	router.HandleFunc("POST /api/v1/experiments/{id}/figures", server.saveExperimentFigure)
+	router.HandleFunc("GET /api/v1/figures/{id}/download", server.downloadExperimentFigure)
 	router.HandleFunc("POST /api/v1/experiment-runs", server.createPipelineExperiment)
 	router.HandleFunc("GET /api/v1/operations", server.listOperations)
 	router.HandleFunc("POST /api/v1/operations", server.createOperation)
@@ -810,6 +826,337 @@ func (s *Server) listCatalogApplications(response http.ResponseWriter, request *
 	writeJSON(response, http.StatusOK, map[string]any{"items": items})
 }
 
+func (s *Server) getCatalogApplicationManifest(response http.ResponseWriter, request *http.Request) {
+	application, err := s.store.GetCatalogApplication(request.Context(), request.PathValue("id"), request.PathValue("version"))
+	if errors.Is(err, storage.ErrNotFound) {
+		writeError(response, http.StatusNotFound, "not_found", "Catalog application not found.")
+		return
+	}
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, "database_error", "Could not read the catalog application.")
+		return
+	}
+	var descriptor catalog.Descriptor
+	if err := json.Unmarshal(application.Descriptor, &descriptor); err != nil {
+		writeError(response, http.StatusConflict, "invalid_application", "The catalog application descriptor is invalid.")
+		return
+	}
+	plugin, err := s.applicationMaterializer(request.Context(), application.Reference)
+	if err != nil {
+		writeError(response, http.StatusConflict, "materializer_unavailable", err.Error())
+		return
+	}
+	configuration, err := json.Marshal(map[string]any{"applicationRef": application.Reference, "values": descriptor.Spec.Defaults})
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, "materialization_failed", "Could not prepare application defaults.")
+		return
+	}
+	issues, err := schema.Validate(plugin.Manifest().Schema, configuration)
+	if err != nil || len(issues) != 0 {
+		writeError(response, http.StatusConflict, "invalid_defaults", "Application defaults do not satisfy the materializer schema.")
+		return
+	}
+	validation := plugin.Validate(request.Context(), configuration)
+	if !validation.Valid {
+		writeJSON(response, http.StatusUnprocessableEntity, map[string]any{"code": "validation_failed", "validation": validation})
+		return
+	}
+	plan, err := plugin.Plan(request.Context(), configuration)
+	if err != nil || len(plan.Steps) != 1 {
+		message := "The application materializer produced an invalid plan."
+		if err != nil {
+			message = err.Error()
+		}
+		writeError(response, http.StatusUnprocessableEntity, "planning_failed", message)
+		return
+	}
+	step := plan.Steps[0]
+	if step.Mutating || len(step.Effects) != 0 || len(step.ArtifactInputs) != 0 {
+		writeError(response, http.StatusUnprocessableEntity, "unsafe_materializer", "Application manifest previews must be side-effect free.")
+		return
+	}
+	quiet := func(string, string) error { return nil }
+	precheck, err := plugin.Precheck(request.Context(), step, quiet)
+	if err != nil || precheck.Status != domain.HealthHealthy {
+		message := precheck.Summary
+		if err != nil {
+			message = err.Error()
+		}
+		writeError(response, http.StatusUnprocessableEntity, "precheck_failed", message)
+		return
+	}
+	result, err := plugin.Execute(request.Context(), step, quiet)
+	if err != nil {
+		writeError(response, http.StatusUnprocessableEntity, "materialization_failed", err.Error())
+		return
+	}
+	health, err := plugin.Verify(request.Context(), step, result, quiet)
+	if err != nil || health.Status != domain.HealthHealthy {
+		message := health.Summary
+		if err != nil {
+			message = err.Error()
+		}
+		writeError(response, http.StatusUnprocessableEntity, "verification_failed", message)
+		return
+	}
+	var materialized struct {
+		ManifestSet struct {
+			Metadata struct {
+				Digest string `json:"digest"`
+			} `json:"metadata"`
+			Spec struct {
+				Renderer string `json:"renderer"`
+				Content  string `json:"content"`
+			} `json:"spec"`
+		} `json:"manifestSet"`
+	}
+	if json.Unmarshal(result, &materialized) != nil || strings.TrimSpace(materialized.ManifestSet.Spec.Content) == "" || !strings.HasPrefix(materialized.ManifestSet.Metadata.Digest, "sha256:") {
+		writeError(response, http.StatusUnprocessableEntity, "materialization_failed", "The materializer returned no verified deployment manifest.")
+		return
+	}
+	response.Header().Set("Cache-Control", "private, max-age=300")
+	writeJSON(response, http.StatusOK, map[string]any{"applicationRef": application.Reference, "renderer": materialized.ManifestSet.Spec.Renderer, "digest": materialized.ManifestSet.Metadata.Digest, "content": materialized.ManifestSet.Spec.Content})
+}
+
+func (s *Server) listApplicationFactories(response http.ResponseWriter, _ *http.Request) {
+	items := []plugins.Manifest{}
+	for _, manifest := range s.registry.Manifests() {
+		if manifest.HasCapability("catalog.application.generate") {
+			items = append(items, manifest)
+		}
+	}
+	writeJSON(response, http.StatusOK, map[string]any{"items": items})
+}
+
+func (s *Server) generateCatalogApplication(response http.ResponseWriter, request *http.Request) {
+	plugin, err := s.registry.Get(request.PathValue("id"))
+	if err != nil || !plugin.Manifest().HasCapability("catalog.application.generate") {
+		writeError(response, http.StatusNotFound, "factory_not_found", "Application generator not found.")
+		return
+	}
+	var configuration json.RawMessage
+	if err := decodeJSON(request, &configuration); err != nil {
+		writeError(response, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	issues, err := schema.Validate(plugin.Manifest().Schema, configuration)
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, "invalid_schema", err.Error())
+		return
+	}
+	if len(issues) != 0 {
+		converted := make([]domain.ValidationIssue, 0, len(issues))
+		for _, issue := range issues {
+			converted = append(converted, domain.ValidationIssue{Level: "error", Path: issue.Path, Message: issue.Message})
+		}
+		writeJSON(response, http.StatusUnprocessableEntity, map[string]any{"code": "validation_failed", "validation": domain.ValidationReport{Valid: false, Issues: converted, CheckedAt: time.Now().UTC()}})
+		return
+	}
+	validation := plugin.Validate(request.Context(), configuration)
+	if !validation.Valid {
+		writeJSON(response, http.StatusUnprocessableEntity, map[string]any{"code": "validation_failed", "validation": validation})
+		return
+	}
+	plan, err := plugin.Plan(request.Context(), configuration)
+	if err != nil || len(plan.Steps) != 1 {
+		message := "The application generator produced an invalid plan."
+		if err != nil {
+			message = err.Error()
+		}
+		writeError(response, http.StatusUnprocessableEntity, "planning_failed", message)
+		return
+	}
+	step := plan.Steps[0]
+	if step.Mutating || len(step.Effects) != 0 || len(step.ArtifactInputs) != 0 {
+		writeError(response, http.StatusUnprocessableEntity, "unsafe_factory", "Application generators must be local and side-effect free.")
+		return
+	}
+	quiet := func(string, string) error { return nil }
+	precheck, err := plugin.Precheck(request.Context(), step, quiet)
+	if err != nil || precheck.Status != domain.HealthHealthy {
+		message := precheck.Summary
+		if err != nil {
+			message = err.Error()
+		}
+		writeError(response, http.StatusUnprocessableEntity, "precheck_failed", message)
+		return
+	}
+	result, err := plugin.Execute(request.Context(), step, quiet)
+	if err != nil {
+		writeError(response, http.StatusUnprocessableEntity, "generation_failed", err.Error())
+		return
+	}
+	health, err := plugin.Verify(request.Context(), step, result, quiet)
+	if err != nil || health.Status != domain.HealthHealthy {
+		message := health.Summary
+		if err != nil {
+			message = err.Error()
+		}
+		writeError(response, http.StatusUnprocessableEntity, "generation_failed", message)
+		return
+	}
+	var generated struct {
+		Descriptor json.RawMessage `json:"descriptor"`
+	}
+	if json.Unmarshal(result, &generated) != nil || len(generated.Descriptor) == 0 {
+		writeError(response, http.StatusUnprocessableEntity, "generation_failed", "The generator returned no application descriptor.")
+		return
+	}
+	application, err := catalog.Parse(generated.Descriptor, "imported")
+	if err != nil {
+		writeError(response, http.StatusUnprocessableEntity, "invalid_application", err.Error())
+		return
+	}
+	application, err = s.store.CreateCatalogApplication(request.Context(), application)
+	if errors.Is(err, storage.ErrConflict) {
+		writeError(response, http.StatusConflict, "application_conflict", "This generated application already exists in the catalog.")
+		return
+	}
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, "database_error", "Could not store the generated application.")
+		return
+	}
+	writeJSON(response, http.StatusCreated, application)
+}
+
+func (s *Server) listCatalogStrategies(response http.ResponseWriter, request *http.Request) {
+	items, err := s.store.ListCatalogStrategies(request.Context())
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, "database_error", "Could not list strategy images.")
+		return
+	}
+	for index := range items {
+		if items[index].ArtifactID == "" {
+			continue
+		}
+		artifact, err := s.store.GetArtifact(request.Context(), items[index].ArtifactID)
+		if err != nil {
+			continue
+		}
+		raw, err := s.readArtifactPayload(request.Context(), artifact)
+		if err != nil {
+			continue
+		}
+		var value struct {
+			StrategyImage struct {
+				Spec struct {
+					SourceDigest   string `json:"sourceDigest"`
+					MirroredImage  string `json:"mirroredImage"`
+					MirroredDigest string `json:"mirroredDigest"`
+				} `json:"spec"`
+			} `json:"strategyImage"`
+		}
+		if json.Unmarshal(raw, &value) == nil {
+			items[index].SourceDigest = value.StrategyImage.Spec.SourceDigest
+			items[index].MirroredImage = value.StrategyImage.Spec.MirroredImage
+			items[index].MirroredDigest = value.StrategyImage.Spec.MirroredDigest
+		}
+	}
+	writeJSON(response, http.StatusOK, map[string]any{"items": items})
+}
+
+func (s *Server) importCatalogStrategy(response http.ResponseWriter, request *http.Request) {
+	var input struct {
+		WorkspaceID          string          `json:"workspaceId"`
+		HarborResourceID     string          `json:"harborResourceId"`
+		Name                 string          `json:"name"`
+		Kind                 string          `json:"kind"`
+		SourceImage          string          `json:"sourceImage"`
+		DefaultConfiguration json.RawMessage `json:"defaultConfiguration"`
+	}
+	if err := decodeJSON(request, &input); err != nil {
+		writeError(response, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	input.WorkspaceID = strings.TrimSpace(input.WorkspaceID)
+	input.HarborResourceID = strings.TrimSpace(input.HarborResourceID)
+	input.Name = strings.TrimSpace(input.Name)
+	input.Kind = strings.TrimSpace(input.Kind)
+	input.SourceImage = strings.TrimSpace(input.SourceImage)
+	if len(input.DefaultConfiguration) == 0 {
+		input.DefaultConfiguration = json.RawMessage(`{}`)
+	}
+	strategyPlugin, err := s.pluginForCapability("", input.Kind+".kubernetes.install")
+	if err != nil {
+		writeError(response, http.StatusUnprocessableEntity, "strategy_unsupported", "No installed plugin can run this strategy type.")
+		return
+	}
+	strategyConfiguration := map[string]any{}
+	if json.Unmarshal(input.DefaultConfiguration, &strategyConfiguration) != nil {
+		writeError(response, http.StatusUnprocessableEntity, "invalid_strategy_configuration", "Default strategy configuration must be a JSON object.")
+		return
+	}
+	strategyConfiguration["clusterConnectionRef"] = "art_validation_cluster"
+	strategyConfiguration["applicationDeploymentRef"] = "art_validation_application"
+	strategyConfiguration["targetBindingRef"] = "art_validation_binding"
+	strategyConfiguration["image"] = "harbor.invalid/kubephos/validation@sha256:" + strings.Repeat("a", 64)
+	strategyRaw, _ := json.Marshal(strategyConfiguration)
+	strategyReport := strategyPlugin.Validate(request.Context(), strategyRaw)
+	if !strategyReport.Valid {
+		writeJSON(response, http.StatusUnprocessableEntity, map[string]any{"code": "invalid_strategy_configuration", "validation": strategyReport})
+		return
+	}
+	harbor, err := s.store.GetManagedResource(request.Context(), input.HarborResourceID)
+	if err != nil || harbor.Kind != "harbor" || harbor.Status != "ready" || harbor.WorkspaceID != input.WorkspaceID {
+		writeError(response, http.StatusUnprocessableEntity, "invalid_harbor", "Select a ready Harbor registry in the same environment.")
+		return
+	}
+	endpoint, err := s.store.GetPipelineRunArtifact(request.Context(), harbor.PipelineRunID, "registry-endpoint")
+	if err != nil || endpoint.Type != "RegistryEndpoint" || endpoint.Sensitive {
+		writeError(response, http.StatusConflict, "registry_invalid", "The selected Harbor endpoint is unavailable.")
+		return
+	}
+	credential, err := s.store.GetPipelineRunArtifact(request.Context(), harbor.PipelineRunID, "registry-push-credential")
+	if err != nil || credential.Type != "RegistryCredential" || !credential.Sensitive {
+		writeError(response, http.StatusConflict, "registry_invalid", "The selected Harbor push identity is unavailable.")
+		return
+	}
+	plugin, err := s.pluginForCapability("", "catalog.strategy.mirror")
+	if err != nil {
+		writeError(response, http.StatusUnprocessableEntity, "capability_unavailable", err.Error())
+		return
+	}
+	spec, _ := json.Marshal(map[string]any{"registryEndpointRef": endpoint.ID, "registryCredentialRef": credential.ID, "name": input.Name, "kind": input.Kind, "sourceImage": input.SourceImage, "defaultConfiguration": input.DefaultConfiguration})
+	operation, failure := s.validatedManagedOperation(request.Context(), input.WorkspaceID, plugin, "Import "+input.Kind+" "+input.Name, spec)
+	if failure != nil {
+		failure.write(response)
+		return
+	}
+	strategy := domain.CatalogStrategy{ID: id.New("strategy"), WorkspaceID: input.WorkspaceID, HarborResourceID: harbor.ID, Name: input.Name, Kind: input.Kind, SourceImage: input.SourceImage, DefaultConfiguration: input.DefaultConfiguration}
+	strategy, err = s.store.CreateCatalogStrategy(request.Context(), strategy, operation)
+	if errors.Is(err, storage.ErrConflict) {
+		writeError(response, http.StatusConflict, "strategy_conflict", "A strategy with this name and type already exists in the environment.")
+		return
+	}
+	if err != nil {
+		var databaseError *pgconn.PgError
+		if errors.As(err, &databaseError) && databaseError.Code == "23505" {
+			writeError(response, http.StatusConflict, "strategy_conflict", "A strategy with this name and type already exists in the environment.")
+			return
+		}
+		writeError(response, http.StatusInternalServerError, "database_error", "Could not queue the strategy image import.")
+		return
+	}
+	writeJSON(response, http.StatusAccepted, strategy)
+}
+
+func (s *Server) deleteCatalogStrategy(response http.ResponseWriter, request *http.Request) {
+	err := s.store.DeleteCatalogStrategy(request.Context(), request.PathValue("id"))
+	if errors.Is(err, storage.ErrNotFound) {
+		writeError(response, http.StatusNotFound, "not_found", "Catalog image not found.")
+		return
+	}
+	if errors.Is(err, storage.ErrConflict) {
+		writeError(response, http.StatusConflict, "strategy_in_use", "Wait for the import to finish and remove experiment configurations that use this image first.")
+		return
+	}
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, "database_error", "Could not remove the catalog image.")
+		return
+	}
+	response.WriteHeader(http.StatusNoContent)
+}
+
 func (s *Server) importCatalogApplication(response http.ResponseWriter, request *http.Request) {
 	var input struct {
 		Descriptor string `json:"descriptor"`
@@ -833,6 +1180,23 @@ func (s *Server) importCatalogApplication(response http.ResponseWriter, request 
 		return
 	}
 	writeJSON(response, http.StatusCreated, application)
+}
+
+func (s *Server) deleteCatalogApplication(response http.ResponseWriter, request *http.Request) {
+	err := s.store.DeleteCatalogApplication(request.Context(), request.PathValue("id"), request.PathValue("version"))
+	if errors.Is(err, storage.ErrNotFound) {
+		writeError(response, http.StatusNotFound, "not_found", "Application version not found.")
+		return
+	}
+	if errors.Is(err, storage.ErrConflict) {
+		writeError(response, http.StatusConflict, "application_in_use", "Delete the experiment configurations that use this application version first.")
+		return
+	}
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, "database_error", "Could not remove the application from the catalog.")
+		return
+	}
+	response.WriteHeader(http.StatusNoContent)
 }
 
 func (s *Server) listCredentials(response http.ResponseWriter, request *http.Request) {
@@ -1325,6 +1689,26 @@ type managedMachineCapacity struct {
 	DiskGiB   int `json:"diskGiB"`
 }
 
+type managedKubernetesClusterInput struct {
+	WorkspaceID          string                 `json:"workspaceId"`
+	ConnectionID         string                 `json:"connectionId"`
+	TemplateID           string                 `json:"templateId"`
+	HarborID             string                 `json:"harborId"`
+	NFSID                string                 `json:"nfsId"`
+	Name                 string                 `json:"name"`
+	BaseVMID             int                    `json:"baseVMID"`
+	AddressStart         string                 `json:"addressStart"`
+	PrefixLength         int                    `json:"prefixLength"`
+	Gateway              string                 `json:"gateway"`
+	DNSServer            string                 `json:"dnsServer"`
+	ControlPlanes        int                    `json:"controlPlanes"`
+	ControlPlaneZones    []string               `json:"controlPlaneZones"`
+	ControlPlaneCapacity managedMachineCapacity `json:"controlPlaneCapacity"`
+	ManagementPool       managedNodePoolInput   `json:"managementPool"`
+	ApplicationPools     []managedNodePoolInput `json:"applicationPools"`
+	ManagedProfile       string                 `json:"managedProfile"`
+}
+
 func (s *Server) listKubernetesClusters(response http.ResponseWriter, request *http.Request) {
 	items, err := s.store.ListManagedResources(request.Context(), "kubernetes-cluster")
 	if err != nil {
@@ -1355,6 +1739,7 @@ type experimentConfigurationInput struct {
 	Description       string                                 `json:"description"`
 	ApplicationRef    string                                 `json:"applicationRef"`
 	Definition        experimentConfigurationDefinitionInput `json:"definition"`
+	UpdatedAt         *time.Time                             `json:"updatedAt,omitempty"`
 }
 
 type experimentConfigurationDefinitionInput struct {
@@ -1364,6 +1749,7 @@ type experimentConfigurationDefinitionInput struct {
 
 type experimentConfigurationComponentInput struct {
 	ID            string          `json:"id"`
+	StrategyID    string          `json:"strategyId,omitempty"`
 	PluginID      string          `json:"pluginId"`
 	PluginVersion string          `json:"pluginVersion,omitempty"`
 	PluginDigest  string          `json:"pluginDigest,omitempty"`
@@ -1418,6 +1804,38 @@ func (s *Server) createExperimentConfiguration(response http.ResponseWriter, req
 		return
 	}
 	writeJSON(response, http.StatusCreated, created)
+}
+
+func (s *Server) updateExperimentConfiguration(response http.ResponseWriter, request *http.Request) {
+	var input experimentConfigurationInput
+	if err := decodeJSON(request, &input); err != nil {
+		writeError(response, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	if input.UpdatedAt == nil {
+		writeError(response, http.StatusBadRequest, "missing_revision", "Reload the experiment configuration before editing it.")
+		return
+	}
+	configuration, failure := s.validatedExperimentConfiguration(request.Context(), input)
+	if failure != nil {
+		failure.write(response)
+		return
+	}
+	configuration.ID = request.PathValue("id")
+	updated, err := s.store.UpdateExperimentConfiguration(request.Context(), configuration, *input.UpdatedAt)
+	if errors.Is(err, storage.ErrNotFound) {
+		writeError(response, http.StatusNotFound, "not_found", "Experiment configuration not found.")
+		return
+	}
+	if errors.Is(err, storage.ErrConflict) {
+		writeError(response, http.StatusConflict, "configuration_conflict", "The configuration changed in another session or its name is already in use. Reload it and try again.")
+		return
+	}
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, "database_error", "Could not update the experiment configuration.")
+		return
+	}
+	writeJSON(response, http.StatusOK, updated)
 }
 
 func (s *Server) cloneExperimentConfiguration(response http.ResponseWriter, request *http.Request) {
@@ -1546,6 +1964,43 @@ func (s *Server) validatedExperimentConfiguration(ctx context.Context, input exp
 		}
 		if len(component.Configuration) == 0 {
 			component.Configuration = json.RawMessage(`{}`)
+		}
+		component.StrategyID = strings.TrimSpace(component.StrategyID)
+		if component.StrategyID != "" {
+			strategy, err := s.store.GetCatalogStrategy(ctx, component.StrategyID)
+			if err != nil || strategy.WorkspaceID != input.WorkspaceID || strategy.Status != domain.OperationSucceeded || strategy.ArtifactID == "" || !strings.HasPrefix(component.Capability, strategy.Kind+".") {
+				return domain.ExperimentConfiguration{}, &managedOperationFailure{status: http.StatusUnprocessableEntity, code: "invalid_strategy", message: "Select a ready strategy image matching the component type."}
+			}
+			artifact, err := s.store.GetArtifact(ctx, strategy.ArtifactID)
+			if err != nil {
+				return domain.ExperimentConfiguration{}, &managedOperationFailure{status: http.StatusConflict, code: "invalid_strategy", message: "The mirrored strategy image is unavailable."}
+			}
+			raw, err := s.readArtifactPayload(ctx, artifact)
+			if err != nil {
+				return domain.ExperimentConfiguration{}, &managedOperationFailure{status: http.StatusConflict, code: "invalid_strategy", message: "The mirrored strategy image failed integrity verification."}
+			}
+			var mirrored struct {
+				StrategyImage struct {
+					Spec struct {
+						MirroredImage string          `json:"mirroredImage"`
+						Configuration json.RawMessage `json:"defaultConfiguration"`
+					} `json:"spec"`
+				} `json:"strategyImage"`
+			}
+			if json.Unmarshal(raw, &mirrored) != nil || mirrored.StrategyImage.Spec.MirroredImage == "" {
+				return domain.ExperimentConfiguration{}, &managedOperationFailure{status: http.StatusConflict, code: "invalid_strategy", message: "The mirrored strategy artifact is invalid."}
+			}
+			merged := map[string]any{}
+			_ = json.Unmarshal(mirrored.StrategyImage.Spec.Configuration, &merged)
+			var overrides map[string]any
+			if json.Unmarshal(component.Configuration, &overrides) != nil || overrides == nil {
+				return domain.ExperimentConfiguration{}, &managedOperationFailure{status: http.StatusUnprocessableEntity, code: "invalid_strategy", message: "Strategy configuration must be a JSON object."}
+			}
+			for key, value := range overrides {
+				merged[key] = value
+			}
+			merged["image"] = mirrored.StrategyImage.Spec.MirroredImage
+			component.Configuration, _ = json.Marshal(merged)
 		}
 		configSchema, err := experimentComponentSchema(manifest.Schema)
 		if err != nil {
@@ -1729,18 +2184,29 @@ func (s *Server) createExperimentInstance(response http.ResponseWriter, request 
 }
 
 type experimentSuiteInput struct {
-	Name             string     `json:"name"`
-	Description      string     `json:"description"`
-	ConfigurationIDs []string   `json:"configurationIds"`
-	Runs             int        `json:"runs"`
-	ScheduledFor     *time.Time `json:"scheduledFor"`
+	Name             string                        `json:"name"`
+	Description      string                        `json:"description"`
+	ConfigurationIDs []string                      `json:"configurationIds"`
+	Variants         []experimentSuiteVariantInput `json:"variants"`
+	Runs             int                           `json:"runs"`
+	ScheduledFor     *time.Time                    `json:"scheduledFor"`
+}
+
+type experimentSuiteVariantInput struct {
+	ConfigurationID string `json:"configurationId"`
+	Alias           string `json:"alias"`
+	Color           string `json:"color"`
 }
 
 type validatedSuiteVariant struct {
 	Configuration domain.ExperimentConfiguration
 	Definition    experimentConfigurationDefinitionInput
 	Pipeline      workflows.Result
+	Alias         string
+	Color         string
 }
+
+var suitePlotColors = []string{"#1f77b4", "#d55e00", "#009e73", "#cc79a7", "#e69f00", "#56b4e9", "#000000", "#7f7f7f"}
 
 func (s *Server) createExperimentSuite(response http.ResponseWriter, request *http.Request) {
 	var input experimentSuiteInput
@@ -1750,7 +2216,12 @@ func (s *Server) createExperimentSuite(response http.ResponseWriter, request *ht
 	}
 	input.Name = strings.TrimSpace(input.Name)
 	input.Description = strings.TrimSpace(input.Description)
-	if input.Name == "" || len([]rune(input.Name)) > 120 || len([]rune(input.Description)) > 1000 || input.Runs < 1 || input.Runs > 20 || len(input.ConfigurationIDs) < 2 || len(input.ConfigurationIDs) > 8 {
+	if len(input.Variants) == 0 {
+		for index, configurationID := range input.ConfigurationIDs {
+			input.Variants = append(input.Variants, experimentSuiteVariantInput{ConfigurationID: configurationID, Color: suitePlotColors[index%len(suitePlotColors)]})
+		}
+	}
+	if input.Name == "" || len([]rune(input.Name)) > 120 || len([]rune(input.Description)) > 1000 || input.Runs < 1 || input.Runs > 20 || len(input.Variants) < 2 || len(input.Variants) > 8 {
 		writeError(response, http.StatusUnprocessableEntity, "invalid_suite", "A suite requires a name, two to eight configurations and one to twenty runs per configuration.")
 		return
 	}
@@ -1763,9 +2234,11 @@ func (s *Server) createExperimentSuite(response http.ResponseWriter, request *ht
 		input.ScheduledFor = &value
 	}
 	seen := map[string]bool{}
-	variants := make([]validatedSuiteVariant, 0, len(input.ConfigurationIDs))
-	for _, rawID := range input.ConfigurationIDs {
-		configurationID := strings.TrimSpace(rawID)
+	seenAliases := map[string]bool{}
+	seenColors := map[string]bool{}
+	variants := make([]validatedSuiteVariant, 0, len(input.Variants))
+	for position, requested := range input.Variants {
+		configurationID := strings.TrimSpace(requested.ConfigurationID)
 		if configurationID == "" || seen[configurationID] {
 			writeError(response, http.StatusUnprocessableEntity, "invalid_suite", "Suite configurations must be unique.")
 			return
@@ -1780,6 +2253,21 @@ func (s *Server) createExperimentSuite(response http.ResponseWriter, request *ht
 			writeError(response, http.StatusInternalServerError, "database_error", "Could not read suite configurations.")
 			return
 		}
+		alias := strings.TrimSpace(requested.Alias)
+		if alias == "" {
+			alias = configuration.Name
+		}
+		color := strings.ToLower(strings.TrimSpace(requested.Color))
+		if color == "" {
+			color = suitePlotColors[position%len(suitePlotColors)]
+		}
+		aliasKey := strings.ToLower(alias)
+		if len([]rune(alias)) > 80 || seenAliases[aliasKey] || !regexp.MustCompile(`^#[0-9a-f]{6}$`).MatchString(color) || seenColors[color] {
+			writeError(response, http.StatusUnprocessableEntity, "invalid_suite_presentation", "Every strategy requires a unique alias and a unique six-digit plot color.")
+			return
+		}
+		seenAliases[aliasKey] = true
+		seenColors[color] = true
 		var definition experimentConfigurationDefinitionInput
 		if err := json.Unmarshal(configuration.Definition, &definition); err != nil {
 			writeError(response, http.StatusConflict, "invalid_snapshot", "A saved experiment configuration is invalid.")
@@ -1825,7 +2313,7 @@ func (s *Server) createExperimentSuite(response http.ResponseWriter, request *ht
 			writeError(response, http.StatusUnprocessableEntity, "incompatible_results", "Every suite configuration must produce the same result contract.")
 			return
 		}
-		variants = append(variants, validatedSuiteVariant{Configuration: configuration, Definition: definition, Pipeline: validated})
+		variants = append(variants, validatedSuiteVariant{Configuration: configuration, Definition: definition, Pipeline: validated, Alias: alias, Color: color})
 	}
 	suiteID := id.New("exp")
 	experiment := domain.Experiment{
@@ -1844,7 +2332,7 @@ func (s *Server) createExperimentSuite(response http.ResponseWriter, request *ht
 			return
 		}
 		variantID := id.New("variant")
-		variant := domain.ExperimentVariant{ID: variantID, ExperimentID: suiteID, Position: variantPosition + 1, Name: item.Configuration.Name, PipelineID: pipeline.ID, PipelineHash: pipeline.Hash, ConfigurationID: item.Configuration.ID, Configuration: item.Configuration.Definition}
+		variant := domain.ExperimentVariant{ID: variantID, ExperimentID: suiteID, Position: variantPosition + 1, Name: item.Configuration.Name, Alias: item.Alias, Color: item.Color, PipelineID: pipeline.ID, PipelineHash: pipeline.Hash, ConfigurationID: item.Configuration.ID, Configuration: item.Configuration.Definition}
 		for trialPosition := 1; trialPosition <= input.Runs; trialPosition++ {
 			trialID := id.New("trial")
 			run := domain.PipelineRun{
@@ -1881,7 +2369,7 @@ func (s *Server) experimentInstancePipeline(ctx context.Context, configuration d
 	if err != nil || observability.Type != "ObservabilityCapability" || observability.Version != "v1alpha1" {
 		return domain.PipelineDefinition{}, &managedOperationFailure{status: http.StatusConflict, code: "observability_invalid", message: "Managed observability is unavailable on the cluster."}
 	}
-	inspectPlugin, err := s.pluginForCapability("", "applications.inspect")
+	inspectPlugin, err := s.applicationMaterializer(ctx, configuration.ApplicationRef)
 	if err != nil {
 		return domain.PipelineDefinition{}, &managedOperationFailure{status: http.StatusConflict, code: "capability_unavailable", message: err.Error()}
 	}
@@ -1974,6 +2462,32 @@ func (s *Server) experimentInstancePipeline(ctx context.Context, configuration d
 	return definitionResult, nil
 }
 
+func (s *Server) applicationMaterializer(ctx context.Context, applicationRef string) (plugins.Plugin, error) {
+	applicationID, version, err := catalog.ParseReference(applicationRef)
+	if err != nil {
+		return nil, err
+	}
+	raw, err := s.store.GetCatalogApplicationDescriptor(ctx, applicationID, version)
+	if err != nil {
+		return nil, err
+	}
+	var descriptor catalog.Descriptor
+	if err := json.Unmarshal(raw, &descriptor); err != nil {
+		return nil, errors.New("catalog application descriptor is invalid")
+	}
+	if descriptor.Spec.Materializer == "" {
+		return s.pluginForCapability("", "applications.inspect")
+	}
+	plugin, err := s.registry.Get(descriptor.Spec.Materializer)
+	if err != nil {
+		return nil, err
+	}
+	if !plugin.Manifest().HasCapability("applications.materialize") {
+		return nil, fmt.Errorf("plugin %s cannot materialize applications", descriptor.Spec.Materializer)
+	}
+	return plugin, nil
+}
+
 func experimentArtifactBindings(spec map[string]any, manifest plugins.Manifest, sources map[string]experimentArtifactSource, applicationRef string) ([]domain.PipelineBinding, *managedOperationFailure) {
 	var schemaDefinition struct {
 		Properties map[string]struct {
@@ -2031,25 +2545,7 @@ func marshalRaw(value any) json.RawMessage {
 }
 
 func (s *Server) createKubernetesCluster(response http.ResponseWriter, request *http.Request) {
-	var input struct {
-		WorkspaceID          string                 `json:"workspaceId"`
-		ConnectionID         string                 `json:"connectionId"`
-		TemplateID           string                 `json:"templateId"`
-		HarborID             string                 `json:"harborId"`
-		NFSID                string                 `json:"nfsId"`
-		Name                 string                 `json:"name"`
-		BaseVMID             int                    `json:"baseVMID"`
-		AddressStart         string                 `json:"addressStart"`
-		PrefixLength         int                    `json:"prefixLength"`
-		Gateway              string                 `json:"gateway"`
-		DNSServer            string                 `json:"dnsServer"`
-		ControlPlanes        int                    `json:"controlPlanes"`
-		ControlPlaneZones    []string               `json:"controlPlaneZones"`
-		ControlPlaneCapacity managedMachineCapacity `json:"controlPlaneCapacity"`
-		ManagementPool       managedNodePoolInput   `json:"managementPool"`
-		ApplicationPools     []managedNodePoolInput `json:"applicationPools"`
-		ManagedProfile       string                 `json:"managedProfile"`
-	}
+	var input managedKubernetesClusterInput
 	if err := decodeJSON(request, &input); err != nil {
 		writeError(response, http.StatusBadRequest, "invalid_request", err.Error())
 		return
@@ -2063,7 +2559,7 @@ func (s *Server) createKubernetesCluster(response http.ResponseWriter, request *
 	input.AddressStart = strings.TrimSpace(input.AddressStart)
 	input.Gateway = strings.TrimSpace(input.Gateway)
 	input.DNSServer = strings.TrimSpace(input.DNSServer)
-	input.ManagedProfile = "2026.09"
+	input.ManagedProfile = "2026.09.2"
 	labelPattern := regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,31}$`)
 	if !labelPattern.MatchString(input.Name) {
 		writeError(response, http.StatusUnprocessableEntity, "invalid_name", "Cluster name must be a lowercase label with at most 32 characters.")
@@ -2212,8 +2708,8 @@ func (s *Server) createKubernetesCluster(response http.ResponseWriter, request *
 		{ID: "machines", PluginID: topologyPlugin.Manifest().ID, Title: "Provision cluster machines", Spec: topologySpec},
 		{ID: "kubernetes", PluginID: clusterPlugin.Manifest().ID, Title: "Bootstrap Kubernetes", Spec: clusterSpec, Bindings: []domain.PipelineBinding{{Path: "/machineSetRef", FromStage: "machines", FromOutput: "machine-set"}, {Path: "/machineAccessRef", FromStage: "machines", FromOutput: "machine-access"}}},
 		{ID: "storage", PluginID: storagePlugin.Manifest().ID, Title: "Attach managed storage", Spec: storageSpec, Bindings: []domain.PipelineBinding{{Path: "/clusterConnectionRef", FromStage: "kubernetes", FromOutput: "cluster-connection"}}},
-		{ID: "platform", PluginID: platformPlugin.Manifest().ID, Title: "Install managed platform", Spec: platformSpec, Bindings: []domain.PipelineBinding{{Path: "/clusterConnectionRef", FromStage: "kubernetes", FromOutput: "cluster-connection"}}},
 		{ID: "observability", PluginID: observabilityPlugin.Manifest().ID, Title: "Install managed observability", Spec: observabilitySpec, Bindings: []domain.PipelineBinding{{Path: "/clusterConnectionRef", FromStage: "kubernetes", FromOutput: "cluster-connection"}, {Path: "/storageClassCapabilityRef", FromStage: "storage", FromOutput: "storage-class-capability"}}},
+		{ID: "platform", PluginID: platformPlugin.Manifest().ID, Title: "Install managed platform", Spec: platformSpec, Bindings: []domain.PipelineBinding{{Path: "/clusterConnectionRef", FromStage: "kubernetes", FromOutput: "cluster-connection"}}},
 	}, Result: domain.PipelineOutput{Stage: "observability", Output: "observability-capability"}}
 	validated, failure := s.validatedManagedPipeline(request.Context(), input.WorkspaceID, definition)
 	if failure != nil {
@@ -2334,6 +2830,221 @@ func (s *Server) deleteKubernetesCluster(response http.ResponseWriter, request *
 	s.deleteManagedPipelineResource(response, request, resource, "cluster")
 }
 
+func (s *Server) recreateKubernetesCluster(response http.ResponseWriter, request *http.Request) {
+	resource, err := s.store.GetManagedResource(request.Context(), request.PathValue("id"))
+	if errors.Is(err, storage.ErrNotFound) || err == nil && resource.Kind != "kubernetes-cluster" {
+		writeError(response, http.StatusNotFound, "not_found", "Kubernetes cluster not found.")
+		return
+	}
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, "database_error", "Could not read the Kubernetes cluster.")
+		return
+	}
+	cleanupRunID := resource.PipelineRunID
+	provisionPipelineID := resource.PipelineID
+	recovering := resource.Status == "recreation-failed"
+	if recovering {
+		cleanupRunID = resource.RecreationPipelineRunID
+		provisionPipelineID = resource.RecreationPipelineID
+		failedRun, runErr := s.store.GetPipelineRun(request.Context(), cleanupRunID)
+		if runErr != nil || failedRun.Status != domain.OperationFailed && failedRun.Status != domain.OperationCanceled || len(failedRun.Stages) == 0 {
+			writeError(response, http.StatusConflict, "recreation_unavailable", "The failed recreation lifecycle is unavailable.")
+			return
+		}
+		if _, pipelineErr := s.store.GetPipeline(request.Context(), provisionPipelineID); pipelineErr != nil {
+			writeError(response, http.StatusConflict, "recreation_unavailable", "The failed recreation workflow is unavailable.")
+			return
+		}
+		if err := s.store.ResetFailedManagedResourceRecreation(request.Context(), resource.ID); err != nil {
+			writeError(response, http.StatusConflict, "recreation_unavailable", "The failed recreation cannot be retried in its current state.")
+			return
+		}
+		resource, err = s.store.GetManagedResource(request.Context(), resource.ID)
+		if err != nil {
+			writeError(response, http.StatusInternalServerError, "database_error", "Could not reload the Kubernetes cluster.")
+			return
+		}
+	}
+	if resource.Status != "ready" || resource.PipelineRunID == "" || resource.PipelineID == "" {
+		writeError(response, http.StatusConflict, "cluster_not_ready", "Only a ready cluster can be recreated.")
+		return
+	}
+	var input managedKubernetesClusterInput
+	if err := json.Unmarshal(resource.Spec, &input); err != nil {
+		writeError(response, http.StatusConflict, "configuration_invalid", "The saved cluster configuration is invalid.")
+		return
+	}
+	input.ManagedProfile = "2026.09.2"
+	connection, err := s.store.GetProviderConnectionConfiguration(request.Context(), input.ConnectionID)
+	if err != nil || connection.ID != resource.ConnectionID {
+		writeError(response, http.StatusConflict, "connection_unavailable", "The saved Proxmox connection is unavailable.")
+		return
+	}
+	for _, dependency := range []struct{ id, kind string }{{input.TemplateID, "machine-template"}, {input.HarborID, "harbor"}, {input.NFSID, "nfs"}} {
+		if _, failure := s.managedDependency(request.Context(), dependency.id, dependency.kind, resource.WorkspaceID, resource.ConnectionID); failure != nil {
+			failure.write(response)
+			return
+		}
+	}
+	sourceRun, err := s.store.GetPipelineRun(request.Context(), cleanupRunID)
+	if err != nil || !terminal(sourceRun.Status) || !recovering && sourceRun.Status != domain.OperationSucceeded || len(sourceRun.Stages) == 0 {
+		writeError(response, http.StatusConflict, "recreation_unavailable", "The cluster lifecycle is unavailable.")
+		return
+	}
+	sourcePipeline, err := s.store.GetPipeline(request.Context(), provisionPipelineID)
+	if err != nil {
+		writeError(response, http.StatusConflict, "recreation_unavailable", "The saved cluster workflow is unavailable.")
+		return
+	}
+	definition := domain.PipelineDefinition{}
+	resolution := domain.PipelineResolution{}
+	validation := domain.ValidationReport{Valid: true, CheckedAt: time.Now().UTC()}
+	for sourcePosition := len(sourceRun.Stages) - 1; sourcePosition >= 0; sourcePosition-- {
+		sourceStage := sourceRun.Stages[sourcePosition]
+		if sourceStage.OperationID == "" {
+			continue
+		}
+		source, err := s.store.GetOperation(request.Context(), sourceStage.OperationID)
+		if err != nil {
+			writeError(response, http.StatusConflict, "recreation_unavailable", "A cluster lifecycle stage is unavailable.")
+			return
+		}
+		if _, err := cleanupPlan(source); errors.Is(err, workflows.ErrNoCleanupSteps) {
+			continue
+		}
+		cleanup, failure := s.validatedManagedCleanup(request.Context(), source)
+		if failure != nil {
+			failure.write(response)
+			return
+		}
+		stageID := "cleanup-" + sourceStage.StageID
+		definition.Stages = append(definition.Stages, domain.PipelineStage{ID: stageID, PluginID: cleanup.PluginID, Title: "Remove " + strings.ToLower(sourceStage.Title), Spec: cleanup.Spec})
+		resolution.Stages = append(resolution.Stages, domain.ResolvedPipelineStage{ID: stageID, PluginID: cleanup.PluginID, PluginVersion: cleanup.PluginVersion, PluginDigest: cleanup.PluginDigest, Spec: cleanup.Spec, Plan: cleanup.Plan})
+		validation.Issues = append(validation.Issues, cleanup.Validation.Issues...)
+	}
+	provisionDefinition := clusterProvisioningStages(sourcePipeline.Definition)
+	if !pipelineHasStage(provisionDefinition, "platform") {
+		platformPlugin, err := s.pluginForCapability("", "platform.managed.install")
+		if err != nil {
+			writeError(response, http.StatusUnprocessableEntity, "recreation_invalid", err.Error())
+			return
+		}
+		provisionDefinition = withManagedPlatformStage(provisionDefinition, platformPlugin.Manifest().ID)
+	}
+	provision, err := workflows.ValidateDeferred(request.Context(), s.registry, provisionDefinition)
+	if err != nil || !provision.Validation.Valid {
+		message := "The saved cluster configuration is no longer valid."
+		if err != nil {
+			message = err.Error()
+		}
+		writeError(response, http.StatusUnprocessableEntity, "recreation_invalid", message)
+		return
+	}
+	for _, stage := range provision.Resolution.Stages {
+		plugin, err := s.registry.Get(stage.PluginID)
+		if err != nil || validatePlanEffects(plugin.Manifest(), stage.Plan) != nil {
+			writeError(response, http.StatusUnprocessableEntity, "recreation_invalid", "A provisioning plugin no longer satisfies its saved contract.")
+			return
+		}
+		if err := s.validateExternalArtifactInputs(request.Context(), resource.WorkspaceID, withoutPipelineBindings(stage.Plan)); err != nil {
+			writeError(response, http.StatusUnprocessableEntity, "recreation_invalid", err.Error())
+			return
+		}
+	}
+	offset := len(definition.Stages)
+	for index := range provision.Resolution.Stages {
+		shiftPipelineTokens(&provision.Resolution.Stages[index], index+1, offset+index+1)
+	}
+	definition.Stages = append(definition.Stages, provision.Definition.Stages...)
+	definition.Result = provision.Definition.Result
+	resolution.Stages = append(resolution.Stages, provision.Resolution.Stages...)
+	resolution.Result = provision.Resolution.Result
+	validation.Issues = append(validation.Issues, provision.Validation.Issues...)
+	validation.Issues = append(validation.Issues, domain.ValidationIssue{Level: "info", Message: "Provisioning health checks will run after the current cluster has been removed."})
+	hash, err := workflows.Fingerprint(definition, resolution)
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, "planning_failed", "Could not fingerprint the recreation workflow.")
+		return
+	}
+	pipelineID := id.New("pipe")
+	pipeline := domain.Pipeline{ID: pipelineID, WorkspaceID: resource.WorkspaceID, Name: "recreate-managed-" + resource.ID + "-" + strings.TrimPrefix(pipelineID, "pipe_")[:8], Definition: definition, Resolution: resolution, Validation: validation, Hash: hash}
+	run := pipelineRunForManagedPipeline(pipeline, "Recreate "+resource.Name)
+	desiredSpec, _ := json.Marshal(input)
+	if err := s.store.CreateManagedResourceRecreation(request.Context(), resource.ID, desiredSpec, pipeline, run); errors.Is(err, storage.ErrConflict) {
+		writeError(response, http.StatusConflict, "cluster_in_use", "The cluster is running an experiment or another lifecycle operation.")
+		return
+	} else if err != nil {
+		writeError(response, http.StatusInternalServerError, "database_error", "Could not queue the cluster recreation workflow.")
+		return
+	}
+	resource, err = s.store.GetManagedResource(request.Context(), resource.ID)
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, "database_error", "Could not read the recreation workflow.")
+		return
+	}
+	writeJSON(response, http.StatusAccepted, resource)
+}
+
+func clusterProvisioningStages(source domain.PipelineDefinition) domain.PipelineDefinition {
+	byID := map[string]domain.PipelineStage{}
+	for _, stage := range source.Stages {
+		if !strings.HasPrefix(stage.ID, "cleanup-") {
+			byID[stage.ID] = stage
+		}
+	}
+	stages := []domain.PipelineStage{}
+	for _, stageID := range []string{"machines", "kubernetes", "storage", "observability", "platform"} {
+		if stage, exists := byID[stageID]; exists {
+			stages = append(stages, stage)
+			delete(byID, stageID)
+		}
+	}
+	for _, stage := range source.Stages {
+		if current, exists := byID[stage.ID]; exists {
+			stages = append(stages, current)
+			delete(byID, stage.ID)
+		}
+	}
+	return domain.PipelineDefinition{Stages: stages, Result: source.Result}
+}
+
+func pipelineHasStage(definition domain.PipelineDefinition, stageID string) bool {
+	for _, stage := range definition.Stages {
+		if stage.ID == stageID {
+			return true
+		}
+	}
+	return false
+}
+
+func withManagedPlatformStage(definition domain.PipelineDefinition, pluginID string) domain.PipelineDefinition {
+	if pipelineHasStage(definition, "platform") {
+		return definition
+	}
+	definition.Stages = append(definition.Stages, domain.PipelineStage{ID: "platform", PluginID: pluginID, Title: "Install managed platform", Spec: json.RawMessage(`{"clusterConnectionRef":""}`), Bindings: []domain.PipelineBinding{{Path: "/clusterConnectionRef", FromStage: "kubernetes", FromOutput: "cluster-connection"}}})
+	return definition
+}
+
+func shiftPipelineTokens(stage *domain.ResolvedPipelineStage, previousPosition, currentPosition int) {
+	if previousPosition == currentPosition {
+		return
+	}
+	for bindingIndex := range stage.Bindings {
+		previous := fmt.Sprintf("art_pipeline_%d_%d", previousPosition, bindingIndex+1)
+		current := fmt.Sprintf("art_pipeline_%d_%d", currentPosition, bindingIndex+1)
+		stage.Spec = bytes.ReplaceAll(stage.Spec, []byte(previous), []byte(current))
+		for stepIndex := range stage.Plan.Steps {
+			step := &stage.Plan.Steps[stepIndex]
+			step.Input = bytes.ReplaceAll(step.Input, []byte(previous), []byte(current))
+			for inputIndex := range step.ArtifactInputs {
+				if step.ArtifactInputs[inputIndex].ArtifactID == previous {
+					step.ArtifactInputs[inputIndex].ArtifactID = current
+				}
+			}
+		}
+	}
+}
+
 func (s *Server) deleteManagedPipelineResource(response http.ResponseWriter, request *http.Request, resource domain.ManagedResource, label string) {
 	if resource.Status == "deletion-failed" {
 		if err := s.store.ResetFailedManagedResourceDeletion(request.Context(), resource.ID); err != nil {
@@ -2347,11 +3058,15 @@ func (s *Server) deleteManagedPipelineResource(response http.ResponseWriter, req
 			return
 		}
 	}
-	if resource.Status != "ready" && resource.Status != "failed" || resource.PipelineRunID == "" {
+	sourceRunID := resource.PipelineRunID
+	if resource.Status == "recreation-failed" {
+		sourceRunID = resource.RecreationPipelineRunID
+	}
+	if resource.Status != "ready" && resource.Status != "failed" && resource.Status != "recreation-failed" || sourceRunID == "" {
 		writeError(response, http.StatusConflict, label+"_not_ready", "Only a completed managed lifecycle can be deleted.")
 		return
 	}
-	sourceRun, err := s.store.GetPipelineRun(request.Context(), resource.PipelineRunID)
+	sourceRun, err := s.store.GetPipelineRun(request.Context(), sourceRunID)
 	if err != nil || !terminal(sourceRun.Status) || len(sourceRun.Stages) == 0 {
 		writeError(response, http.StatusConflict, "cleanup_unavailable", "The completed managed lifecycle is unavailable.")
 		return
@@ -2618,8 +3333,8 @@ func (s *Server) validatedManagedCleanup(ctx context.Context, source domain.Oper
 		return domain.Operation{}, &managedOperationFailure{status: http.StatusUnprocessableEntity, code: "invalid_plugin", message: err.Error()}
 	}
 	manifest := plugin.Manifest()
-	if !terminal(source.Status) || !manifest.Matches(source.PluginVersion, source.PluginDigest) || !manifest.HasCapability("lifecycle.cleanup") {
-		return domain.Operation{}, &managedOperationFailure{status: http.StatusConflict, code: "cleanup_unavailable", message: "A completed source lifecycle and its exact cleanup plugin are required."}
+	if !managedCleanupCompatible(manifest, source) {
+		return domain.Operation{}, &managedOperationFailure{status: http.StatusConflict, code: "cleanup_unavailable", message: "A completed source lifecycle and a cleanup-compatible plugin are required."}
 	}
 	plan, err := cleanupPlan(source)
 	if err != nil {
@@ -2656,6 +3371,10 @@ func (s *Server) validatedManagedCleanup(ctx context.Context, source domain.Oper
 		return domain.Operation{}, &managedOperationFailure{status: http.StatusInternalServerError, code: "planning_failed", message: "Could not fingerprint the cleanup plan."}
 	}
 	return domain.Operation{ID: id.New("op"), WorkspaceID: source.WorkspaceID, PluginID: source.PluginID, PluginVersion: manifest.Version, PluginDigest: manifest.Runtime.Digest, Title: "Delete " + source.Title, Status: domain.OperationReady, Spec: spec, Plan: plan, Validation: validation, PlanHash: planHash}, nil
+}
+
+func managedCleanupCompatible(manifest plugins.Manifest, source domain.Operation) bool {
+	return terminal(source.Status) && manifest.HasCapability("lifecycle.cleanup") && (manifest.Matches(source.PluginVersion, source.PluginDigest) || manifest.HasCapability("lifecycle.cleanup.compatible"))
 }
 
 func (s *Server) listInfrastructureResources(response http.ResponseWriter, request *http.Request) {
@@ -2778,6 +3497,40 @@ func (s *Server) listExperiments(response http.ResponseWriter, request *http.Req
 		return
 	}
 	writeJSON(response, http.StatusOK, map[string]any{"items": items})
+}
+
+func (s *Server) deleteExperiment(response http.ResponseWriter, request *http.Request) {
+	err := s.store.DeleteExperiment(request.Context(), request.PathValue("id"))
+	if errors.Is(err, storage.ErrNotFound) {
+		writeError(response, http.StatusNotFound, "not_found", "Experiment not found.")
+		return
+	}
+	if errors.Is(err, storage.ErrConflict) {
+		writeError(response, http.StatusConflict, "experiment_active", "A running or queued experiment cannot be deleted.")
+		return
+	}
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, "database_error", "Could not delete the experiment.")
+		return
+	}
+	response.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) cancelExperiment(response http.ResponseWriter, request *http.Request) {
+	err := s.store.RequestExperimentCancel(request.Context(), request.PathValue("id"))
+	if errors.Is(err, storage.ErrNotFound) {
+		writeError(response, http.StatusNotFound, "not_found", "Experiment not found.")
+		return
+	}
+	if errors.Is(err, storage.ErrConflict) {
+		writeError(response, http.StatusConflict, "invalid_transition", "Only a queued or running experiment can be stopped.")
+		return
+	}
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, "database_error", "Could not stop the experiment.")
+		return
+	}
+	response.WriteHeader(http.StatusAccepted)
 }
 
 func (s *Server) createCompletedExperiment(response http.ResponseWriter, request *http.Request) {
@@ -3636,6 +4389,15 @@ func auditTarget(request *http.Request) (string, string, string, bool) {
 	if len(parts) == 3 && parts[0] == "pipelines" && parts[2] == "runs" {
 		return "pipeline.run.create", "pipeline", parts[1], true
 	}
+	if len(parts) == 2 && parts[0] == "experiments" && request.Method == http.MethodDelete {
+		return "experiment.delete", "experiment", parts[1], true
+	}
+	if len(parts) == 3 && parts[0] == "experiments" && parts[2] == "figures" && request.Method == http.MethodPost {
+		return "experiment.figure.create", "experiment", parts[1], true
+	}
+	if len(parts) == 3 && parts[0] == "experiments" && parts[2] == "cancel" {
+		return "experiment.cancel", "experiment", parts[1], true
+	}
 	if len(parts) == 2 && parts[0] == "plugins" && parts[1] == "inspect" {
 		return "plugin.inspect", "plugin", "", true
 	}
@@ -3658,8 +4420,14 @@ func auditTarget(request *http.Request) (string, string, string, bool) {
 	if len(parts) == 3 && parts[0] == "pipeline-runs" && parts[2] == "cancel" {
 		return "pipeline.run.cancel", "pipeline-run", parts[1], true
 	}
+	if len(parts) == 3 && parts[0] == "managed-resources" && parts[2] == "access" {
+		return "managed-resource.access.reveal", "managed-resource", parts[1], true
+	}
 	if len(parts) == 2 && parts[0] == "catalog" && parts[1] == "applications" {
 		return "application.import", "catalog-application", "", true
+	}
+	if len(parts) == 4 && parts[0] == "catalog" && parts[1] == "applications" {
+		return "application.delete", "catalog-application", parts[2] + "@" + parts[3], true
 	}
 	if len(parts) == 3 && parts[0] == "operations" {
 		switch parts[2] {
@@ -3710,16 +4478,37 @@ func writeSSE(response io.Writer, event string, value any) {
 func requestLog(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		started := time.Now()
-		next.ServeHTTP(response, request)
+		writer := &statusResponseWriter{ResponseWriter: response, status: http.StatusOK}
+		next.ServeHTTP(writer, request)
 		if strings.HasPrefix(request.URL.Path, "/api/") {
-			slog.Info("request", "method", request.Method, "path", request.URL.Path, "duration", time.Since(started))
+			slog.Info("request", "method", request.Method, "path", request.URL.Path, "status", writer.status, "duration", time.Since(started))
 		}
 	})
 }
 
+type statusResponseWriter struct {
+	http.ResponseWriter
+	status int
+}
+
+func (writer *statusResponseWriter) WriteHeader(status int) {
+	writer.status = status
+	writer.ResponseWriter.WriteHeader(status)
+}
+
+func (writer *statusResponseWriter) Write(value []byte) (int, error) {
+	return writer.ResponseWriter.Write(value)
+}
+
+func (writer *statusResponseWriter) Flush() {
+	if flusher, ok := writer.ResponseWriter.(http.Flusher); ok {
+		flusher.Flush()
+	}
+}
+
 func securityHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
-		response.Header().Set("Content-Security-Policy", "default-src 'self'; connect-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'")
+		response.Header().Set("Content-Security-Policy", "default-src 'self'; connect-src 'self'; img-src 'self' data: blob:; style-src 'self'; script-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'")
 		response.Header().Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
 		response.Header().Set("Referrer-Policy", "no-referrer")
 		response.Header().Set("X-Content-Type-Options", "nosniff")

@@ -3,7 +3,7 @@ kind: Plugin
 metadata:
   id: io.kubephos.cluster.k3s.bootstrap
   name: Kubernetes cluster bootstrap
-  version: 0.2.0
+  version: 0.3.1
   description: Builds a managed K3s cluster from a verified machine topology.
 spec:
   protocol: v1alpha1
@@ -119,6 +119,7 @@ spec:
     - cluster.preflight
     - cluster.cleanup
     - lifecycle.cleanup
+    - lifecycle.cleanup.compatible
   permissions:
     - network.ssh
     - cluster.admin

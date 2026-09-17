@@ -209,12 +209,12 @@ type chartFetcher interface {
 
 func (Plugin) Manifest() plugins.Manifest {
 	return plugins.Manifest{
-		ID: pluginID, Name: "Managed observability", Version: "0.2.0",
+		ID: pluginID, Name: "Managed observability", Version: "0.2.2",
 		Description:     "Installs the release-managed metrics and dashboard profile on a Kubernetes cluster.",
 		Schema:          json.RawMessage(`{"type":"object","additionalProperties":false,"required":["clusterConnectionRef","storageClassCapabilityRef","scrapeInterval","retention"],"properties":{"clusterConnectionRef":{"type":"string","title":"Kubernetes cluster","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ClusterConnection","x-kubephos-artifact-version":"v1alpha1"},"storageClassCapabilityRef":{"type":"string","title":"Persistent storage","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"StorageClassCapability","x-kubephos-artifact-version":"v1alpha1"},"scrapeInterval":{"type":"string","title":"Metrics interval","enum":["5s","10s","15s","30s"],"default":"15s"},"retention":{"type":"string","title":"Metrics retention","enum":["1d","7d","15d"],"default":"7d"}}}`),
 		ArtifactInputs:  []domain.ArtifactContract{{Type: "ClusterConnection", Version: "v1alpha1"}, {Type: "StorageClassCapability", Version: "v1alpha1"}},
 		ArtifactOutputs: []domain.ArtifactContract{{Type: "ObservabilityCapability", Version: "v1alpha1"}, {Type: "ServiceCredential", Version: "v1alpha1"}},
-		Capabilities:    []string{"observability.metrics.install", "observability.dashboards.install", "observability.preflight", "observability.cleanup", "lifecycle.cleanup"},
+		Capabilities:    []string{"observability.metrics.install", "observability.dashboards.install", "observability.preflight", "observability.cleanup", "lifecycle.cleanup", "lifecycle.cleanup.compatible"},
 		Permissions:     []string{"cluster.admin", "network.http"},
 	}
 }
@@ -560,14 +560,33 @@ func managedValues(input stepInput, storageClass, password string) ([]byte, erro
 		"kubeProxy":             map[string]any{"enabled": false},
 		"grafana": map[string]any{
 			"adminUser": grafanaUser, "adminPassword": password,
-			"initChownData": map[string]any{"enabled": false},
-			"persistence":   map[string]any{"enabled": true, "storageClassName": storageClass, "accessModes": []string{"ReadWriteOnce"}, "size": "2Gi"},
-			"service":       map[string]any{"type": "NodePort", "nodePort": grafanaPort},
+			"deploymentStrategy": map[string]any{"type": "Recreate"},
+			"initChownData":      map[string]any{"enabled": false},
+			"nodeSelector":       map[string]string{"kubephos.dev/role": "management"},
+			"persistence":        map[string]any{"enabled": true, "storageClassName": storageClass, "accessModes": []string{"ReadWriteOnce"}, "size": "2Gi"},
+			"podSecurityContext": map[string]any{"fsGroup": 472, "fsGroupChangePolicy": "OnRootMismatch"},
+			"service":            map[string]any{"type": "NodePort", "nodePort": grafanaPort},
+			"additionalDataSources": []any{
+				map[string]any{"name": "Loki", "type": "loki", "uid": "loki", "access": "proxy", "url": "http://kubephos-loki-gateway.kubephos-observability.svc.cluster.local:80", "isDefault": false, "jsonData": map[string]any{"maxLines": 2000}},
+				map[string]any{"name": "Jaeger", "type": "jaeger", "uid": "jaeger", "access": "proxy", "url": "http://jaeger.kubephos-observability.svc.cluster.local:16686", "isDefault": false},
+			},
 		},
 		"prometheus": map[string]any{
 			"service": map[string]any{"type": "NodePort", "nodePort": prometheusPort},
 			"prometheusSpec": map[string]any{
 				"scrapeInterval": input.ScrapeInterval, "evaluationInterval": input.ScrapeInterval, "retention": input.Retention,
+				"additionalScrapeConfigs": []any{map[string]any{
+					"job_name":              "istio-mesh",
+					"kubernetes_sd_configs": []any{map[string]any{"role": "pod"}},
+					"relabel_configs": []any{
+						map[string]any{"action": "keep", "source_labels": []string{"__meta_kubernetes_pod_annotation_prometheus_io_scrape"}, "regex": "true"},
+						map[string]any{"action": "keep", "source_labels": []string{"__meta_kubernetes_pod_annotation_prometheus_io_path"}, "regex": "/stats/prometheus"},
+						map[string]any{"action": "replace", "source_labels": []string{"__meta_kubernetes_pod_annotation_prometheus_io_path"}, "target_label": "__metrics_path__", "regex": "(.+)"},
+						map[string]any{"action": "replace", "source_labels": []string{"__address__", "__meta_kubernetes_pod_annotation_prometheus_io_port"}, "target_label": "__address__", "regex": "([^:]+)(?::\\d+)?;(\\d+)", "replacement": "$1:$2"},
+						map[string]any{"action": "replace", "source_labels": []string{"__meta_kubernetes_namespace"}, "target_label": "namespace"},
+						map[string]any{"action": "replace", "source_labels": []string{"__meta_kubernetes_pod_name"}, "target_label": "pod"},
+					},
+				}},
 				"storageSpec": map[string]any{"volumeClaimTemplate": map[string]any{"spec": map[string]any{"storageClassName": storageClass, "accessModes": []string{"ReadWriteOnce"}, "resources": map[string]any{"requests": map[string]string{"storage": "10Gi"}}}}},
 			},
 		},
@@ -827,8 +846,9 @@ func verifyCRDOwnership(ctx context.Context, runner clusterRunner, kubeconfig, m
 		}
 	}
 	for _, resource := range []string{"clusterrole/" + monAgentName, "clusterrolebinding/" + monAgentName} {
-		if _, err := runner.Kubectl(ctx, kubeconfig, nil, "get", resource); err == nil {
-			return fmt.Errorf("managed resource %s remains after cleanup", resource)
+		value, err := runner.Kubectl(ctx, kubeconfig, nil, "get", resource, "-o", "jsonpath={.metadata.annotations.kubephos\\.dev/ownership-marker}")
+		if err != nil || strings.TrimSpace(value) != marker {
+			return fmt.Errorf("managed resource %s failed ownership verification", resource)
 		}
 	}
 	return nil
@@ -841,6 +861,11 @@ func verifyCleanup(ctx context.Context, runner clusterRunner, kubeconfig string)
 	for _, crd := range managedCRDs {
 		if _, err := runner.Kubectl(ctx, kubeconfig, nil, "get", "crd", crd); err == nil {
 			return fmt.Errorf("managed CRD %s remains after cleanup", crd)
+		}
+	}
+	for _, resource := range []string{"clusterrole/" + monAgentName, "clusterrolebinding/" + monAgentName} {
+		if _, err := runner.Kubectl(ctx, kubeconfig, nil, "get", resource); err == nil {
+			return fmt.Errorf("managed resource %s remains after cleanup", resource)
 		}
 	}
 	return nil

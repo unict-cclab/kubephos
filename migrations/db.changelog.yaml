@@ -188,3 +188,31 @@ databaseChangeLog:
         - sqlFile:
             path: changes/027-reusable-managed-resource-names.sql
             relativeToChangelogFile: true
+  - changeSet:
+      id: 028-managed-resource-recreation
+      author: kubephos
+      changes:
+        - sqlFile:
+            path: changes/028-managed-resource-recreation.sql
+            relativeToChangelogFile: true
+  - changeSet:
+      id: 029-strategy-catalog
+      author: kubephos
+      changes:
+        - sqlFile:
+            path: changes/029-strategy-catalog.sql
+            relativeToChangelogFile: true
+  - changeSet:
+      id: 030-experiment-figures
+      author: kubephos
+      changes:
+        - sqlFile:
+            path: changes/030-experiment-figures.sql
+            relativeToChangelogFile: true
+  - changeSet:
+      id: 031-experiment-variant-presentation
+      author: kubephos
+      changes:
+        - sqlFile:
+            path: changes/031-experiment-variant-presentation.sql
+            relativeToChangelogFile: true

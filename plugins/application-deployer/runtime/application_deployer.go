@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
@@ -95,6 +96,8 @@ type workloadTarget struct {
 	Name       string            `json:"name"`
 	Selector   map[string]string `json:"selector"`
 	Traits     []string          `json:"traits"`
+	NodeName   string            `json:"nodeName,omitempty"`
+	NodeZone   string            `json:"nodeZone,omitempty"`
 }
 
 type serviceEndpoint struct {
@@ -138,7 +141,7 @@ type commandRunner interface {
 
 func (Plugin) Manifest() plugins.Manifest {
 	return plugins.Manifest{
-		ID: pluginID, Name: "Kubernetes application deployer", Version: "0.2.1",
+		ID: pluginID, Name: "Kubernetes application deployer", Version: "0.3.0",
 		Description:     "Deploys any validated application package into an isolated Kubernetes namespace.",
 		Schema:          json.RawMessage(`{"type":"object","additionalProperties":false,"required":["clusterConnectionRef","manifestSetRef","workloadTargetsRef","serviceEndpointsRef"],"properties":{"clusterConnectionRef":{"type":"string","title":"Kubernetes cluster","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ClusterConnection","x-kubephos-artifact-version":"v1alpha1"},"manifestSetRef":{"type":"string","title":"Application manifests","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ManifestSet","x-kubephos-artifact-version":"v1alpha1"},"workloadTargetsRef":{"type":"string","title":"Application workloads","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"WorkloadTargets","x-kubephos-artifact-version":"v1alpha1"},"serviceEndpointsRef":{"type":"string","title":"Application endpoints","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ServiceEndpoints","x-kubephos-artifact-version":"v1alpha1"}}}`),
 		ArtifactInputs:  []domain.ArtifactContract{{Type: "ClusterConnection", Version: "v1alpha1"}, {Type: "ManifestSet", Version: "v1alpha1"}, {Type: "WorkloadTargets", Version: "v1alpha1"}, {Type: "ServiceEndpoints", Version: "v1alpha1"}},
@@ -243,10 +246,21 @@ func (plugin Plugin) Precheck(ctx context.Context, step domain.PlanStep, log plu
 	if err := validateManifestIsolation([]byte(manifests.Spec.Content), clusterScoped); err != nil {
 		return unhealthy(err.Error(), "isolation", "rejected"), nil
 	}
-	if _, err := runner.Run(ctx, cluster.Spec.Kubeconfig, []byte(manifests.Spec.Content), "apply", "--dry-run=server", "--namespace", "default", "-f", "-"); err != nil {
+	runtimeManifest, effectiveWorkloads, proxyNodes, err := prepareRuntimePackage(ctx, runner, cluster.Spec.Kubeconfig, manifests.Spec.Content, workloads, endpoints)
+	if err != nil {
+		return unhealthy(err.Error(), "trafficEntrypoints", "rejected"), nil
+	}
+	if err := validateManifestIsolation([]byte(runtimeManifest), clusterScoped); err != nil {
+		return unhealthy(err.Error(), "runtimeIsolation", "rejected"), nil
+	}
+	if _, err := runner.Run(ctx, cluster.Spec.Kubeconfig, []byte(runtimeManifest), "apply", "--dry-run=server", "--namespace", "default", "-f", "-"); err != nil {
 		return unhealthy("Server-side manifest admission failed: "+err.Error(), "admission", "rejected"), nil
 	}
-	return domain.HealthReport{Status: domain.HealthHealthy, Summary: "The application passed every pre-deployment gate", Checks: map[string]string{"api": "ready", "authorization": "cluster-admin", "namespace": "available", "isolation": "verified", "admission": "accepted", "workloads": fmt.Sprint(len(workloads)), "endpoints": fmt.Sprint(len(endpoints))}}, nil
+	checks := map[string]string{"api": "ready", "authorization": "cluster-admin", "namespace": "available", "isolation": "verified", "admission": "accepted", "workloads": fmt.Sprint(len(effectiveWorkloads)), "endpoints": fmt.Sprint(len(endpoints))}
+	if proxyNodes > 0 {
+		checks["trafficProxies"] = fmt.Sprintf("%d application nodes", proxyNodes)
+	}
+	return domain.HealthReport{Status: domain.HealthHealthy, Summary: "The application passed every pre-deployment gate", Checks: checks}, nil
 }
 
 func (plugin Plugin) Execute(ctx context.Context, step domain.PlanStep, log plugins.Logger) (json.RawMessage, error) {
@@ -255,20 +269,28 @@ func (plugin Plugin) Execute(ctx context.Context, step domain.PlanStep, log plug
 		return nil, err
 	}
 	runner := plugin.runner()
+	runtimeManifest, effectiveWorkloads, proxyNodes, err := prepareRuntimePackage(ctx, runner, cluster.Spec.Kubeconfig, manifests.Spec.Content, workloads, endpoints)
+	if err != nil {
+		return nil, err
+	}
 	namespaceManifest, _ := json.Marshal(map[string]any{"apiVersion": "v1", "kind": "Namespace", "metadata": map[string]any{"name": input.Namespace, "annotations": map[string]string{ownershipKey: input.Marker}, "labels": map[string]string{"app.kubernetes.io/managed-by": "kubephos", "istio-injection": "enabled", "kubephos.dev/monitored": "true"}}})
 	if _, err := runner.Run(ctx, cluster.Spec.Kubeconfig, namespaceManifest, "apply", "-f", "-"); err != nil {
 		return nil, fmt.Errorf("create isolated namespace: %w", err)
 	}
-	if err := log("info", "Applying the immutable manifest set to the isolated namespace"); err != nil {
+	message := "Applying the immutable manifest set to the isolated namespace"
+	if proxyNodes > 0 {
+		message = fmt.Sprintf("Creating one isolated traffic proxy on each of %d application nodes", proxyNodes)
+	}
+	if err := log("info", message); err != nil {
 		return nil, err
 	}
-	if _, err := runner.Run(ctx, cluster.Spec.Kubeconfig, []byte(manifests.Spec.Content), "apply", "--namespace", input.Namespace, "-f", "-"); err != nil {
+	if _, err := runner.Run(ctx, cluster.Spec.Kubeconfig, []byte(runtimeManifest), "apply", "--namespace", input.Namespace, "-f", "-"); err != nil {
 		return nil, fmt.Errorf("apply application manifests: %w", err)
 	}
 	value := result{ApplicationDeployment: applicationDeployment{
 		APIVersion: artifactAPI, Kind: "ApplicationDeployment",
 		Metadata: applicationDeploymentMetadata{Name: input.Namespace, Version: "v1alpha1", OwnershipMarker: input.Marker},
-		Spec:     applicationDeploymentSpec{ApplicationRef: manifests.Metadata.ApplicationRef, ClusterServer: cluster.Spec.Server, Namespace: input.Namespace, ManifestDigest: manifests.Metadata.Digest, Workloads: workloads, Endpoints: endpoints},
+		Spec:     applicationDeploymentSpec{ApplicationRef: manifests.Metadata.ApplicationRef, ClusterServer: cluster.Spec.Server, Namespace: input.Namespace, ManifestDigest: manifests.Metadata.Digest, Workloads: effectiveWorkloads, Endpoints: endpoints},
 	}}
 	return json.Marshal(value)
 }
@@ -293,23 +315,31 @@ func (plugin Plugin) Verify(ctx context.Context, step domain.PlanStep, raw json.
 	if err := json.Unmarshal(raw, &value); err != nil {
 		return domain.HealthReport{}, err
 	}
-	if err := validateResult(value, input, cluster, manifests, workloads, endpoints); err != nil {
+	_, effectiveWorkloads, proxyNodes, err := prepareRuntimePackage(ctx, runner, cluster.Spec.Kubeconfig, manifests.Spec.Content, workloads, endpoints)
+	if err != nil {
+		return unhealthy(err.Error(), "trafficEntrypoints", "unhealthy"), nil
+	}
+	if err := validateResult(value, input, cluster, manifests, effectiveWorkloads, endpoints); err != nil {
 		return unhealthy(err.Error(), "artifact", "invalid"), nil
 	}
 	owned, err := namespaceOwnership(ctx, runner, cluster.Spec.Kubeconfig, input.Namespace, input.Marker)
 	if err != nil || !owned {
 		return unhealthy("The isolated namespace failed ownership verification", "ownership", "invalid"), nil
 	}
-	if err := log("info", fmt.Sprintf("Waiting for %d declared workloads in parallel", len(workloads))); err != nil {
+	if err := log("info", fmt.Sprintf("Waiting for %d declared workloads in parallel", len(effectiveWorkloads))); err != nil {
 		return domain.HealthReport{}, err
 	}
-	if err := plugin.verifyStableWorkloads(ctx, runner, cluster.Spec.Kubeconfig, input.Namespace, workloads, log); err != nil {
+	if err := plugin.verifyStableWorkloads(ctx, runner, cluster.Spec.Kubeconfig, input.Namespace, effectiveWorkloads, log); err != nil {
 		return unhealthy(err.Error(), "workloads", "unhealthy"), nil
 	}
 	if err := verifyEndpoints(ctx, runner, cluster.Spec.Kubeconfig, input.Namespace, endpoints); err != nil {
 		return unhealthy(err.Error(), "endpoints", "unhealthy"), nil
 	}
-	return domain.HealthReport{Status: domain.HealthHealthy, Summary: "The isolated application deployment is ready", Checks: map[string]string{"namespace": input.Namespace, "ownership": "verified", "workloads": fmt.Sprintf("%d ready", len(workloads)), "endpoints": fmt.Sprintf("%d ready", len(endpoints)), "manifest": "verified"}}, nil
+	checks := map[string]string{"namespace": input.Namespace, "ownership": "verified", "workloads": fmt.Sprintf("%d ready", len(effectiveWorkloads)), "endpoints": fmt.Sprintf("%d ready", len(endpoints)), "manifest": "verified"}
+	if proxyNodes > 0 {
+		checks["trafficProxies"] = fmt.Sprintf("%d nodes covered", proxyNodes)
+	}
+	return domain.HealthReport{Status: domain.HealthHealthy, Summary: "The isolated application deployment is ready", Checks: checks}, nil
 }
 
 func (plugin Plugin) verifyStableWorkloads(ctx context.Context, runner commandRunner, kubeconfig, namespace string, workloads []workloadTarget, log plugins.Logger) error {
@@ -590,6 +620,14 @@ func verifyWorkloads(ctx context.Context, runner commandRunner, kubeconfig, name
 				results <- workloadResult{workload.ID, fmt.Errorf("declared workload %s has no selected pods", workload.ID)}
 				return
 			}
+			if workload.NodeName != "" {
+				assigned, err := runner.Run(ctx, kubeconfig, nil, "get", "pods", "-n", namespace, "-l", selector, "-o", "jsonpath={range .items[*]}{.spec.nodeName}{'\\n'}{end}")
+				nodes := strings.Fields(assigned)
+				if err != nil || len(nodes) != 1 || nodes[0] != workload.NodeName {
+					results <- workloadResult{workload.ID, fmt.Errorf("traffic entrypoint %s is not uniquely pinned to node %s", workload.Name, workload.NodeName)}
+					return
+				}
+			}
 			if _, err := runner.Run(ctx, kubeconfig, nil, "wait", "--for=condition=Ready", "pod", "-n", namespace, "-l", selector, "--timeout=10m"); err != nil {
 				results <- workloadResult{workload.ID, fmt.Errorf("declared workload %s did not become ready: %w", workload.ID, err)}
 				return
@@ -674,7 +712,7 @@ func selectorValue(selector map[string]string) string {
 
 func validateResult(value result, input stepInput, cluster clusterConnection, manifests manifestSet, workloads []workloadTarget, endpoints []serviceEndpoint) error {
 	deployment := value.ApplicationDeployment
-	if deployment.APIVersion != artifactAPI || deployment.Kind != "ApplicationDeployment" || deployment.Metadata.Name != input.Namespace || deployment.Metadata.Version != "v1alpha1" || deployment.Metadata.OwnershipMarker != input.Marker || deployment.Spec.ApplicationRef != manifests.Metadata.ApplicationRef || deployment.Spec.ClusterServer != cluster.Spec.Server || deployment.Spec.Namespace != input.Namespace || deployment.Spec.ManifestDigest != manifests.Metadata.Digest || len(deployment.Spec.Workloads) != len(workloads) || len(deployment.Spec.Endpoints) != len(endpoints) {
+	if deployment.APIVersion != artifactAPI || deployment.Kind != "ApplicationDeployment" || deployment.Metadata.Name != input.Namespace || deployment.Metadata.Version != "v1alpha1" || deployment.Metadata.OwnershipMarker != input.Marker || deployment.Spec.ApplicationRef != manifests.Metadata.ApplicationRef || deployment.Spec.ClusterServer != cluster.Spec.Server || deployment.Spec.Namespace != input.Namespace || deployment.Spec.ManifestDigest != manifests.Metadata.Digest || !reflect.DeepEqual(deployment.Spec.Workloads, workloads) || !reflect.DeepEqual(deployment.Spec.Endpoints, endpoints) {
 		return errors.New("application deployment artifact does not match the validated plan")
 	}
 	return nil

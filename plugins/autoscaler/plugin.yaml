@@ -1,0 +1,48 @@
+apiVersion: plugins.kubephos.io/v1alpha1
+kind: Plugin
+metadata:
+  id: io.kubephos.autoscaler.kubernetes.cpa
+  name: Custom Pod Autoscaler
+  version: 0.2.0
+  description: Creates one isolated CustomPodAutoscaler for every selected scalable workload.
+spec:
+  protocol: v1alpha1
+  commands: [describe, validate, plan, precheck, execute, verify, status, cancel, cleanup]
+  configurationSchema:
+    type: object
+    additionalProperties: false
+    required: [clusterConnectionRef, applicationDeploymentRef, targetBindingRef, image, intervalSeconds, minReplicas, maxReplicas, parameters, targetOverrides]
+    properties:
+      clusterConnectionRef: {type: string, format: kubephos-artifact-ref, x-kubephos-artifact-type: ClusterConnection, x-kubephos-artifact-version: v1alpha1}
+      applicationDeploymentRef: {type: string, format: kubephos-artifact-ref, x-kubephos-artifact-type: ApplicationDeployment, x-kubephos-artifact-version: v1alpha1}
+      targetBindingRef: {type: string, format: kubephos-artifact-ref, x-kubephos-artifact-type: TargetBinding, x-kubephos-artifact-version: v1alpha1}
+      image: {type: string, format: kubephos-strategy-image}
+      intervalSeconds: {type: integer, title: Evaluation interval in seconds, minimum: 5, maximum: 3600, default: 15}
+      minReplicas: {type: integer, title: Minimum replicas, minimum: 1, maximum: 1000, default: 1}
+      maxReplicas: {type: integer, title: Maximum replicas, minimum: 1, maximum: 1000, default: 10}
+      parameters:
+        type: string
+        title: Autoscaler parameters
+        description: JSON object passed unchanged to the autoscaler image for every selected workload.
+        x-kubephos-multiline: true
+        minLength: 2
+        maxLength: 131072
+        default: '{}'
+      targetOverrides:
+        type: string
+        title: Per-microservice overrides
+        description: JSON object keyed by application component ID.
+        minLength: 2
+        maxLength: 524288
+        default: '{}'
+  runtime: {executable: autoscaler-plugin, timeout: 20m}
+  artifacts:
+    inputs:
+      - {type: ClusterConnection, version: v1alpha1}
+      - {type: ApplicationDeployment, version: v1alpha1}
+      - {type: TargetBinding, version: v1alpha1}
+    outputs:
+      - {type: StrategyDeployment, version: v1alpha1}
+  targeting: {requiredTrait: scalable}
+  capabilities: [autoscaler.kubernetes.install, autoscaler.kubernetes.preflight, autoscaler.kubernetes.cleanup, lifecycle.cleanup]
+  permissions: [cluster.admin]

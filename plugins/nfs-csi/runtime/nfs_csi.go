@@ -142,12 +142,12 @@ type endpointProbe interface {
 
 func (Plugin) Manifest() plugins.Manifest {
 	return plugins.Manifest{
-		ID: pluginID, Name: "Kubernetes shared storage", Version: "0.1.0",
+		ID: pluginID, Name: "Kubernetes shared storage", Version: "0.2.0",
 		Description:     "Attaches validated shared storage to a Kubernetes cluster.",
 		Schema:          json.RawMessage(`{"type":"object","additionalProperties":false,"required":["clusterConnectionRef","sharedStorageEndpointRef","storageClassName"],"properties":{"clusterConnectionRef":{"type":"string","title":"Kubernetes cluster","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ClusterConnection","x-kubephos-artifact-version":"v1alpha1"},"sharedStorageEndpointRef":{"type":"string","title":"Shared storage","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"SharedStorageEndpoint","x-kubephos-artifact-version":"v1alpha1"},"storageClassName":{"type":"string","title":"Storage class name","pattern":"^[a-z0-9]([-a-z0-9]*[a-z0-9])?$","maxLength":63,"default":"shared-storage"}}}`),
 		ArtifactInputs:  []domain.ArtifactContract{{Type: "ClusterConnection", Version: "v1alpha1"}, {Type: "SharedStorageEndpoint", Version: "v1alpha1"}},
 		ArtifactOutputs: []domain.ArtifactContract{{Type: "StorageClassCapability", Version: "v1alpha1"}},
-		Capabilities:    []string{"storage.kubernetes.attach", "storage.kubernetes.preflight", "storage.kubernetes.cleanup", "lifecycle.cleanup"},
+		Capabilities:    []string{"storage.kubernetes.attach", "storage.kubernetes.preflight", "storage.kubernetes.cleanup", "lifecycle.cleanup", "lifecycle.cleanup.compatible"},
 		Permissions:     []string{"cluster.admin", "network.http", "network.tcp"},
 	}
 }
@@ -247,6 +247,9 @@ func (plugin Plugin) Execute(ctx context.Context, step domain.PlanStep, log plug
 	runner := plugin.runner()
 	if _, err := runner.Run(ctx, cluster.Spec.Kubeconfig, bundle, "apply", "-f", "-"); err != nil {
 		return nil, fmt.Errorf("apply CSI driver: %w", err)
+	}
+	if _, err := runner.Run(ctx, cluster.Spec.Kubeconfig, nil, "patch", "csidriver", provisioner, "--type=merge", "--patch", `{"spec":{"fsGroupPolicy":"None"}}`); err != nil {
+		return nil, fmt.Errorf("configure NFS ownership policy: %w", err)
 	}
 	for _, target := range []string{"csidriver/" + provisioner, "deployment/csi-nfs-controller", "daemonset/csi-nfs-node"} {
 		args := []string{"annotate", "--overwrite", target, "kubephos.dev/ownership-marker=" + input.Marker}
@@ -514,6 +517,7 @@ func verifyManagedResources(ctx context.Context, runner commandRunner, kubeconfi
 		expected string
 	}{
 		{[]string{"get", "csidriver", provisioner, "-o", "jsonpath={.metadata.annotations.kubephos\\.dev/ownership-marker}"}, input.Marker},
+		{[]string{"get", "csidriver", provisioner, "-o", "jsonpath={.spec.fsGroupPolicy}"}, "None"},
 		{[]string{"get", "deployment", "csi-nfs-controller", "-n", "kube-system", "-o", "jsonpath={.metadata.annotations.kubephos\\.dev/ownership-marker}"}, input.Marker},
 		{[]string{"get", "daemonset", "csi-nfs-node", "-n", "kube-system", "-o", "jsonpath={.metadata.annotations.kubephos\\.dev/ownership-marker}"}, input.Marker},
 		{[]string{"get", "storageclass", input.StorageClassName, "-o", "jsonpath={.metadata.annotations.kubephos\\.dev/ownership-marker}"}, input.Marker},
@@ -547,12 +551,25 @@ func runProvisioningProbe(ctx context.Context, runner commandRunner, kubeconfig 
 	if _, err := runner.Run(ctx, kubeconfig, nil, "wait", "--for=condition=Ready", "pod/storage-probe", "-n", namespace, "--timeout=5m"); err != nil {
 		return err
 	}
-	value, err := runner.Run(ctx, kubeconfig, nil, "exec", "pod/storage-probe", "-n", namespace, "--", "sh", "-c", "printf kubephos-storage-ready > /data/probe && cat /data/probe")
+	value, err := runner.Run(ctx, kubeconfig, nil, "exec", "pod/storage-probe", "-n", namespace, "--", "sh", "-c", "mkdir -m 0700 /data/private && printf kubephos-storage-ready > /data/private/probe && cat /data/private/probe")
 	if err != nil {
 		return err
 	}
 	if strings.TrimSpace(value) != "kubephos-storage-ready" {
 		return errors.New("storage probe returned unexpected data")
+	}
+	if _, err := runner.Run(ctx, kubeconfig, nil, "delete", "pod/storage-probe", "-n", namespace, "--wait=true", "--timeout=2m"); err != nil {
+		return err
+	}
+	if _, err := runner.Run(ctx, kubeconfig, manifest, "apply", "-f", "-"); err != nil {
+		return err
+	}
+	if _, err := runner.Run(ctx, kubeconfig, nil, "wait", "--for=condition=Ready", "pod/storage-probe", "-n", namespace, "--timeout=5m"); err != nil {
+		return err
+	}
+	value, err = runner.Run(ctx, kubeconfig, nil, "exec", "pod/storage-probe", "-n", namespace, "--", "cat", "/data/private/probe")
+	if err != nil || strings.TrimSpace(value) != "kubephos-storage-ready" {
+		return errors.New("storage remount probe could not read non-root data")
 	}
 	return nil
 }
@@ -561,7 +578,7 @@ func probeManifest(namespace, storageClass string) ([]byte, error) {
 	objects := []map[string]any{
 		{"apiVersion": "v1", "kind": "Namespace", "metadata": map[string]any{"name": namespace}},
 		{"apiVersion": "v1", "kind": "PersistentVolumeClaim", "metadata": map[string]any{"name": "storage-probe", "namespace": namespace}, "spec": map[string]any{"accessModes": []string{"ReadWriteMany"}, "storageClassName": storageClass, "resources": map[string]any{"requests": map[string]string{"storage": "16Mi"}}}},
-		{"apiVersion": "v1", "kind": "Pod", "metadata": map[string]any{"name": "storage-probe", "namespace": namespace}, "spec": map[string]any{"restartPolicy": "Never", "containers": []map[string]any{{"name": "probe", "image": "busybox:1.37.0", "command": []string{"sh", "-c", "sleep 600"}, "volumeMounts": []map[string]any{{"name": "data", "mountPath": "/data"}}}}, "volumes": []map[string]any{{"name": "data", "persistentVolumeClaim": map[string]string{"claimName": "storage-probe"}}}}},
+		{"apiVersion": "v1", "kind": "Pod", "metadata": map[string]any{"name": "storage-probe", "namespace": namespace}, "spec": map[string]any{"restartPolicy": "Never", "securityContext": map[string]any{"runAsUser": 472, "runAsGroup": 472}, "containers": []map[string]any{{"name": "probe", "image": "busybox:1.37.0", "command": []string{"sh", "-c", "sleep 600"}, "volumeMounts": []map[string]any{{"name": "data", "mountPath": "/data"}}}}, "volumes": []map[string]any{{"name": "data", "persistentVolumeClaim": map[string]string{"claimName": "storage-probe"}}}}},
 	}
 	parts := make([]string, 0, len(objects))
 	for _, object := range objects {
