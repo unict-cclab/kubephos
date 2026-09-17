@@ -17,35 +17,17 @@ RUN go mod download
 COPY . .
 ARG VERSION=dev
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -X main.version=${VERSION}" -o /out/kubephos ./cmd/kubephos
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/reference-plugin ./cmd/reference-plugin
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/proxmox-plugin ./cmd/proxmox-plugin
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/proxmox-vm-plugin ./cmd/proxmox-vm-plugin
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/proxmox-topology-plugin ./cmd/proxmox-topology-plugin
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/proxmox-template-plugin ./cmd/proxmox-template-plugin
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/application-inspector-plugin ./cmd/application-inspector-plugin
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/application-deployer-plugin ./cmd/application-deployer-plugin
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/mubench-factory-plugin ./cmd/mubench-factory-plugin
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/mubench-application-plugin ./cmd/mubench-application-plugin
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/load-session-plugin ./cmd/load-session-plugin
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/metrics-collector-plugin ./cmd/metrics-collector-plugin
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/target-binding-plugin ./cmd/target-binding-plugin
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/secondary-scheduler-plugin ./cmd/secondary-scheduler-plugin
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/k3s-plugin ./cmd/k3s-plugin
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/nfs-plugin ./cmd/nfs-plugin
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/harbor-plugin ./cmd/harbor-plugin
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/nfs-csi-plugin ./cmd/nfs-csi-plugin
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/managed-observability-plugin ./cmd/managed-observability-plugin
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/managed-platform-plugin ./cmd/managed-platform-plugin
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/network-injection-plugin ./cmd/network-injection-plugin
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/mon-agent-profile-plugin ./cmd/mon-agent-profile-plugin
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/oci-build-plugin ./cmd/oci-build-plugin
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/oci-executor-plugin ./cmd/oci-executor-plugin
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/ssh-command-plugin ./cmd/ssh-command-plugin
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/harbor-browser-plugin ./cmd/harbor-browser-plugin
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/nfs-browser-plugin ./cmd/nfs-browser-plugin
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/strategy-image-plugin ./cmd/strategy-image-plugin
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/descheduler-plugin ./cmd/descheduler-plugin
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/autoscaler-plugin ./cmd/autoscaler-plugin
+RUN set -eu; \
+    for manifest in plugins/*/plugin.yaml; do \
+      plugin_dir="${manifest%/plugin.yaml}"; \
+      plugin_name="${plugin_dir##*/}"; \
+      executable="${plugin_name}-plugin"; \
+      test -d "cmd/${executable}"; \
+      target="/out/plugins/${plugin_name}"; \
+      mkdir -p "${target}"; \
+      CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o "${target}/${executable}" "./cmd/${executable}"; \
+      cp "${manifest}" "${target}/plugin.yaml"; \
+    done
 
 FROM alpine:3.23
 
@@ -53,64 +35,7 @@ ARG TARGETARCH
 RUN apk add --no-cache ca-certificates curl git skopeo tzdata && case "${TARGETARCH}" in amd64) KUBECTL_SHA256=123d8c8844f46b1244c547fffb3c17180c0c26dac9890589fe7e67763298748e; HELM_SHA256=15e041a93a590dce8100f39385cd98c84a765c9e36aeeb9e2dc6ff9e4769e2e0 ;; arm64) KUBECTL_SHA256=9f9d9c44a7b5264515ac9da5991584e2395bd50662e651132337e7b4d0c56f8f; HELM_SHA256=67f58155079ff9ffab98ba5c88daff0ed9b542f3a4732f5dd426dde7dd0f5244 ;; *) exit 1 ;; esac && curl -fsSLo /tmp/kubectl "https://dl.k8s.io/release/v1.36.0/bin/linux/${TARGETARCH}/kubectl" && printf '%s  %s\n' "${KUBECTL_SHA256}" /tmp/kubectl | sha256sum -c - && install -m 0755 /tmp/kubectl /usr/local/bin/kubectl && curl -fsSLo /tmp/helm.tgz "https://get.helm.sh/helm-v3.21.3-linux-${TARGETARCH}.tar.gz" && printf '%s  %s\n' "${HELM_SHA256}" /tmp/helm.tgz | sha256sum -c - && tar -xzf /tmp/helm.tgz -C /tmp && install -m 0755 "/tmp/linux-${TARGETARCH}/helm" /usr/local/bin/helm && rm -rf /tmp/kubectl /tmp/helm.tgz "/tmp/linux-${TARGETARCH}" && addgroup -S -g 10001 kubephos && adduser -S -D -H -u 10001 -G kubephos kubephos && mkdir -p /var/lib/kubephos && chown 10001:10001 /var/lib/kubephos
 COPY --from=build /out/kubephos /usr/local/bin/kubephos
 COPY --from=dockercli /usr/local/bin/docker /usr/local/bin/docker
-COPY --from=build /out/reference-plugin /opt/kubephos/plugins/reference/reference-plugin
-COPY plugins/reference/plugin.yaml /opt/kubephos/plugins/reference/plugin.yaml
-COPY --from=build /out/proxmox-plugin /opt/kubephos/plugins/proxmox/proxmox-plugin
-COPY plugins/proxmox/plugin.yaml /opt/kubephos/plugins/proxmox/plugin.yaml
-COPY --from=build /out/proxmox-vm-plugin /opt/kubephos/plugins/proxmox-vm/proxmox-vm-plugin
-COPY plugins/proxmox-vm/plugin.yaml /opt/kubephos/plugins/proxmox-vm/plugin.yaml
-COPY --from=build /out/proxmox-topology-plugin /opt/kubephos/plugins/proxmox-topology/proxmox-topology-plugin
-COPY plugins/proxmox-topology/plugin.yaml /opt/kubephos/plugins/proxmox-topology/plugin.yaml
-COPY --from=build /out/proxmox-template-plugin /opt/kubephos/plugins/proxmox-template/proxmox-template-plugin
-COPY plugins/proxmox-template/plugin.yaml /opt/kubephos/plugins/proxmox-template/plugin.yaml
-COPY --from=build /out/application-inspector-plugin /opt/kubephos/plugins/application-inspector/application-inspector-plugin
-COPY plugins/application-inspector/plugin.yaml /opt/kubephos/plugins/application-inspector/plugin.yaml
-COPY --from=build /out/application-deployer-plugin /opt/kubephos/plugins/application-deployer/application-deployer-plugin
-COPY plugins/application-deployer/plugin.yaml /opt/kubephos/plugins/application-deployer/plugin.yaml
-COPY --from=build /out/mubench-factory-plugin /opt/kubephos/plugins/mubench-factory/mubench-factory-plugin
-COPY plugins/mubench-factory/plugin.yaml /opt/kubephos/plugins/mubench-factory/plugin.yaml
-COPY --from=build /out/mubench-application-plugin /opt/kubephos/plugins/mubench-application/mubench-application-plugin
-COPY plugins/mubench-application/plugin.yaml /opt/kubephos/plugins/mubench-application/plugin.yaml
-COPY --from=build /out/load-session-plugin /opt/kubephos/plugins/load-session/load-session-plugin
-COPY plugins/load-session/plugin.yaml /opt/kubephos/plugins/load-session/plugin.yaml
-COPY --from=build /out/metrics-collector-plugin /opt/kubephos/plugins/metrics-collector/metrics-collector-plugin
-COPY plugins/metrics-collector/plugin.yaml /opt/kubephos/plugins/metrics-collector/plugin.yaml
-COPY --from=build /out/target-binding-plugin /opt/kubephos/plugins/target-binding/target-binding-plugin
-COPY plugins/target-binding/plugin.yaml /opt/kubephos/plugins/target-binding/plugin.yaml
-COPY --from=build /out/secondary-scheduler-plugin /opt/kubephos/plugins/secondary-scheduler/secondary-scheduler-plugin
-COPY plugins/secondary-scheduler/plugin.yaml /opt/kubephos/plugins/secondary-scheduler/plugin.yaml
-COPY --from=build /out/k3s-plugin /opt/kubephos/plugins/k3s/k3s-plugin
-COPY plugins/k3s/plugin.yaml /opt/kubephos/plugins/k3s/plugin.yaml
-COPY --from=build /out/nfs-plugin /opt/kubephos/plugins/nfs/nfs-plugin
-COPY plugins/nfs/plugin.yaml /opt/kubephos/plugins/nfs/plugin.yaml
-COPY --from=build /out/harbor-plugin /opt/kubephos/plugins/harbor/harbor-plugin
-COPY plugins/harbor/plugin.yaml /opt/kubephos/plugins/harbor/plugin.yaml
-COPY --from=build /out/nfs-csi-plugin /opt/kubephos/plugins/nfs-csi/nfs-csi-plugin
-COPY plugins/nfs-csi/plugin.yaml /opt/kubephos/plugins/nfs-csi/plugin.yaml
-COPY --from=build /out/managed-observability-plugin /opt/kubephos/plugins/managed-observability/managed-observability-plugin
-COPY plugins/managed-observability/plugin.yaml /opt/kubephos/plugins/managed-observability/plugin.yaml
-COPY --from=build /out/managed-platform-plugin /opt/kubephos/plugins/managed-platform/managed-platform-plugin
-COPY plugins/managed-platform/plugin.yaml /opt/kubephos/plugins/managed-platform/plugin.yaml
-COPY --from=build /out/network-injection-plugin /opt/kubephos/plugins/network-injection/network-injection-plugin
-COPY plugins/network-injection/plugin.yaml /opt/kubephos/plugins/network-injection/plugin.yaml
-COPY --from=build /out/mon-agent-profile-plugin /opt/kubephos/plugins/mon-agent-profile/mon-agent-profile-plugin
-COPY plugins/mon-agent-profile/plugin.yaml /opt/kubephos/plugins/mon-agent-profile/plugin.yaml
-COPY --from=build /out/oci-build-plugin /opt/kubephos/plugins/oci-build/oci-build-plugin
-COPY plugins/oci-build/plugin.yaml /opt/kubephos/plugins/oci-build/plugin.yaml
-COPY --from=build /out/oci-executor-plugin /opt/kubephos/plugins/oci-executor/oci-executor-plugin
-COPY plugins/oci-executor/plugin.yaml /opt/kubephos/plugins/oci-executor/plugin.yaml
-COPY --from=build /out/ssh-command-plugin /opt/kubephos/plugins/ssh-command/ssh-command-plugin
-COPY plugins/ssh-command/plugin.yaml /opt/kubephos/plugins/ssh-command/plugin.yaml
-COPY --from=build /out/harbor-browser-plugin /opt/kubephos/plugins/harbor-browser/harbor-browser-plugin
-COPY plugins/harbor-browser/plugin.yaml /opt/kubephos/plugins/harbor-browser/plugin.yaml
-COPY --from=build /out/nfs-browser-plugin /opt/kubephos/plugins/nfs-browser/nfs-browser-plugin
-COPY plugins/nfs-browser/plugin.yaml /opt/kubephos/plugins/nfs-browser/plugin.yaml
-COPY --from=build /out/strategy-image-plugin /opt/kubephos/plugins/strategy-image/strategy-image-plugin
-COPY plugins/strategy-image/plugin.yaml /opt/kubephos/plugins/strategy-image/plugin.yaml
-COPY --from=build /out/descheduler-plugin /opt/kubephos/plugins/descheduler/descheduler-plugin
-COPY plugins/descheduler/plugin.yaml /opt/kubephos/plugins/descheduler/plugin.yaml
-COPY --from=build /out/autoscaler-plugin /opt/kubephos/plugins/autoscaler/autoscaler-plugin
-COPY plugins/autoscaler/plugin.yaml /opt/kubephos/plugins/autoscaler/plugin.yaml
+COPY --from=build /out/plugins /opt/kubephos/plugins
 COPY catalog/applications /opt/kubephos/catalog/applications
 COPY migrations /opt/kubephos/migrations
 COPY --from=web /src/frontend/dist /opt/kubephos/web
