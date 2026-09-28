@@ -84,7 +84,7 @@ export function PipelineDialog({open, close, session, workspaces, plugins, appli
       await request('/pipelines', {method: 'POST', body: JSON.stringify({
         workspaceId: selectedWorkspace,
         name: new FormData(form).get('name'),
-        description: new FormData(form).get('description'),
+        description: '',
         definition: {stages: definitionStages, result: {stage: definitionStages.at(-1)?.id, type: resultType, version: resultVersion}}
       })}, session.csrfToken)
       close()
@@ -96,20 +96,19 @@ export function PipelineDialog({open, close, session, workspaces, plugins, appli
     }
   }
 
-  return <Dialog open={open} onClose={close} title="Create reusable flow" eyebrow="GUIDED PIPELINE" className="pipeline-modal">
+  return <Dialog open={open} onClose={close} title="Create reusable flow" className="pipeline-modal">
     <form onSubmit={submit}>
       <div className="pipeline-basics">
         <label>Workspace<select value={selectedWorkspace} onChange={event => setWorkspaceId(event.target.value)} required>{workspaces.map(workspace => <option key={workspace.id} value={workspace.id}>{workspace.name}</option>)}</select></label>
         <label>Name<input name="name" maxLength={120} placeholder="Scheduler comparison flow" required autoFocus /></label>
-        <label className="wide">Description<textarea name="description" maxLength={500} rows={2} placeholder="What should this flow prepare and measure?" /></label>
       </div>
-      <div className="pipeline-guide"><span>1</span><p><strong>Add capabilities in execution order.</strong> Compatible outputs are connected automatically and every stage is validated before the flow is saved.</p></div>
+      <div className="form-section"><strong>Execution order</strong></div>
       <div className="pipeline-stages">{stages.map((stage, index) => {
         const plugin = plugins.find(item => item.id === stage.pluginId) ?? plugins[0]
         const virtual = virtualArtifacts(stages.slice(0, index), plugins)
         const available = [...virtual, ...workspaceArtifacts]
         return <article className="pipeline-stage" key={stage.key}>
-          <div className="pipeline-stage-head"><span>{index + 1}</span><div><strong>{plugin?.name ?? 'Capability'}</strong><small>{plugin?.description}</small></div>{stages.length > 1 && <button type="button" className="text-button danger" onClick={() => removeStage(stage.key)}>Remove</button>}</div>
+          <div className="pipeline-stage-head"><span>{index + 1}</span><strong>{plugin?.name ?? 'Capability'}</strong>{stages.length > 1 && <button type="button" className="text-button danger" onClick={() => removeStage(stage.key)}>Remove</button>}</div>
           <div className="pipeline-stage-fields" key={plugin?.id}>
             <label>Capability<select value={plugin?.id ?? ''} onChange={event => setPlugin(stage.key, event.target.value)} required>{plugins.map(item => <option key={item.id} value={item.id}>{item.name} · {item.version}</option>)}</select></label>
             <label>Stage name<input name={`pipeline-title-${stage.key}`} maxLength={120} defaultValue={plugin?.name} required /></label>
@@ -119,8 +118,7 @@ export function PipelineDialog({open, close, session, workspaces, plugins, appli
         </article>
       })}</div>
       <button type="button" className="pipeline-add" onClick={addStage} disabled={!plugins.length || stages.length >= 16}><span>＋</span>Add another capability</button>
-      <div className="pipeline-result"><div><strong>Result to keep</strong><small>The final verified output becomes the trial result.</small></div><select name="resultContract" required disabled={!resultContracts.length}>{resultContracts.length ? resultContracts.map(contract => <option key={`${contract.type}/${contract.version}`} value={`${contract.type}|${contract.version}`}>{contract.type} · {contract.version}</option>) : <option value="">The last stage has no output</option>}</select></div>
-      <div className="validation-callout"><span>✓</span><p><strong>Nothing runs yet.</strong> KubePhos validates schemas, plug-in plans, artifact compatibility, existing inputs and reachable health checks before saving this flow.</p></div>
+      <div className="pipeline-result"><strong>Result to keep</strong><select name="resultContract" required disabled={!resultContracts.length}>{resultContracts.length ? resultContracts.map(contract => <option key={`${contract.type}/${contract.version}`} value={`${contract.type}|${contract.version}`}>{contract.type} · {contract.version}</option>) : <option value="">The last stage has no output</option>}</select></div>
       <p className="form-error">{error}</p>
       <div className="modal-actions"><button className="button secondary" type="button" onClick={close}>Cancel</button><button className="button primary" disabled={pending || !stages.length || !resultContracts.length}>{pending ? 'Validating every stage…' : 'Validate and save flow'}</button></div>
     </form>

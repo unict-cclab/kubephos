@@ -164,9 +164,13 @@ func (w *Worker) reconcilePipelineRun(ctx context.Context, owner string, run dom
 }
 
 func (w *Worker) reconcilePipelineCleanup(ctx context.Context, owner string, run domain.PipelineRun) (bool, error) {
+	failures := []error{}
 	for position := len(run.Stages) - 1; position >= 0; position-- {
 		stage := run.Stages[position]
-		if stage.CleanupStatus == domain.StepSucceeded || stage.CleanupStatus == "skipped" {
+		if complete, failure := cleanupStageResult(stage); complete {
+			if failure != nil {
+				failures = append(failures, failure)
+			}
 			continue
 		}
 		if stage.OperationID == "" {
@@ -218,18 +222,34 @@ func (w *Worker) reconcilePipelineCleanup(ctx context.Context, owner string, run
 		if err := w.store.SyncPipelineRunStageCleanup(ctx, stage.ID, operation); err != nil {
 			return false, err
 		}
-		switch operation.Status {
-		case domain.OperationSucceeded:
+		stage.CleanupStatus = operation.Status
+		stage.CleanupError = operation.Error
+		if complete, failure := cleanupStageResult(stage); complete {
+			if failure != nil {
+				failures = append(failures, failure)
+			}
 			continue
-		case domain.OperationFailed:
-			return false, fmt.Errorf("cleanup for stage %q failed: %s", stage.Title, operation.Error)
-		case domain.OperationCanceled:
-			return false, fmt.Errorf("cleanup for stage %q was canceled", stage.Title)
-		default:
-			return false, nil
 		}
+		return false, nil
 	}
-	return true, nil
+	return true, errors.Join(failures...)
+}
+
+func cleanupStageResult(stage domain.PipelineRunStage) (bool, error) {
+	switch stage.CleanupStatus {
+	case domain.StepSucceeded, "skipped":
+		return true, nil
+	case domain.StepFailed:
+		message := strings.TrimSpace(stage.CleanupError)
+		if message == "" {
+			message = "cleanup operation failed"
+		}
+		return true, fmt.Errorf("cleanup for stage %q failed: %s", stage.Title, message)
+	case domain.StepCanceled:
+		return true, fmt.Errorf("cleanup for stage %q was canceled", stage.Title)
+	default:
+		return false, nil
+	}
 }
 
 func (w *Worker) deferPipelineTermination(ctx context.Context, owner string, run domain.PipelineRun, pipeline domain.Pipeline, position int, status string, cause error) error {

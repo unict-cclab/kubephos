@@ -1,0 +1,179 @@
+apiVersion: catalog.kubephos.dev/v1alpha1
+kind: Application
+metadata:
+  id: dev.kubephos.bank-of-anthos
+  name: Bank of Anthos
+  version: 0.6.10-kubephos.4
+  description: Cloud-native banking system with immutable user journeys and source-aware traffic ingress.
+spec:
+  package:
+    type: git
+    format: plain-yaml
+    repository: https://github.com/GoogleCloudPlatform/bank-of-anthos.git
+    revision: 37f465d4f02852fc1bcfac04627efd3db6cb678f
+    path: .
+    entrypoint: kubernetes-manifests/config.yaml
+    additionalEntrypoints:
+      - extras/jwt/jwt-secret.yaml
+      - kubernetes-manifests/accounts-db.yaml
+      - kubernetes-manifests/balance-reader.yaml
+      - kubernetes-manifests/contacts.yaml
+      - kubernetes-manifests/frontend.yaml
+      - kubernetes-manifests/ledger-db.yaml
+      - kubernetes-manifests/ledger-writer.yaml
+      - kubernetes-manifests/transaction-history.yaml
+      - kubernetes-manifests/userservice.yaml
+  interface:
+    group: bank-of-anthos
+    components:
+      - id: node-proxy
+        workload: {apiVersion: apps/v1, kind: DaemonSet, name: node-proxy}
+        selector: {app: node-proxy}
+        traits: [traffic-entrypoint]
+        index: 0
+        dependencies: [frontend]
+      - id: frontend
+        workload: {apiVersion: apps/v1, kind: Deployment, name: frontend}
+        selector: {app: frontend}
+        traits: [scalable, schedulable, deschedulable]
+        index: 1
+        dependencies: [balancereader, contacts, ledgerwriter, transactionhistory, userservice]
+      - id: balancereader
+        workload: {apiVersion: apps/v1, kind: Deployment, name: balancereader}
+        selector: {app: balancereader}
+        traits: [scalable, schedulable, deschedulable]
+        index: 2
+        dependencies: [ledger-db]
+      - id: contacts
+        workload: {apiVersion: apps/v1, kind: Deployment, name: contacts}
+        selector: {app: contacts}
+        traits: [scalable, schedulable, deschedulable]
+        index: 2
+        dependencies: [accounts-db]
+      - id: ledgerwriter
+        workload: {apiVersion: apps/v1, kind: Deployment, name: ledgerwriter}
+        selector: {app: ledgerwriter}
+        traits: [scalable, schedulable, deschedulable]
+        index: 2
+        dependencies: [ledger-db]
+      - id: transactionhistory
+        workload: {apiVersion: apps/v1, kind: Deployment, name: transactionhistory}
+        selector: {app: transactionhistory}
+        traits: [scalable, schedulable, deschedulable]
+        index: 2
+        dependencies: [ledger-db]
+      - id: userservice
+        workload: {apiVersion: apps/v1, kind: Deployment, name: userservice}
+        selector: {app: userservice}
+        traits: [scalable, schedulable, deschedulable]
+        index: 2
+        dependencies: [accounts-db]
+      - id: accounts-db
+        workload: {apiVersion: apps/v1, kind: StatefulSet, name: accounts-db}
+        selector: {app: accounts-db}
+        traits: [schedulable, stateful, deschedulable]
+        index: 3
+      - id: ledger-db
+        workload: {apiVersion: apps/v1, kind: StatefulSet, name: ledger-db}
+        selector: {app: ledger-db}
+        traits: [schedulable, stateful, deschedulable]
+        index: 3
+    endpoints:
+      - id: frontend-http
+        component: frontend
+        service: frontend
+        port: 80
+        protocol: http
+        path: /
+      - id: node-proxy-http
+        component: node-proxy
+        service: node-proxy
+        port: 80
+        protocol: http
+        path: /
+    loadScenarios:
+      - id: banking-journey
+        engine: locust
+        script: src/loadgenerator/locustfile.py
+        runtimeImage: us-central1-docker.pkg.dev/bank-of-anthos-ci/bank-of-anthos/loadgenerator:v0.6.10@sha256:dd7e27f1b1bcbb9c85070eb900a6060d098d06d62ef03f98182424919895df83
+        targetEndpoint: node-proxy-http
+  additionalManifests:
+    - id: node-proxy
+      content: |
+        apiVersion: v1
+        kind: ConfigMap
+        metadata:
+          name: node-proxy
+        data:
+          default.conf.template: |
+            server {
+              listen 8080;
+              location / {
+                proxy_http_version 1.1;
+                proxy_set_header X-Real-IP $remote_addr;
+                proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                proxy_set_header X-Forwarded-Proto $scheme;
+                proxy_set_header X-Kubephos-Proxy-Node ${NODE_NAME};
+                proxy_set_header X-Kubephos-Proxy-Zone ${NODE_ZONE};
+                proxy_pass http://frontend:80;
+              }
+            }
+        ---
+        apiVersion: apps/v1
+        kind: DaemonSet
+        metadata:
+          name: node-proxy
+          labels: {app: node-proxy, component: node-proxy}
+        spec:
+          selector:
+            matchLabels: {app: node-proxy}
+          template:
+            metadata:
+              labels: {app: node-proxy, component: node-proxy}
+            spec:
+              nodeSelector: {kubephos.dev/role: application}
+              containers:
+                - name: nginx
+                  image: nginx:1.27-alpine
+                  ports: [{name: http, containerPort: 8080}]
+                  env:
+                    - name: NODE_NAME
+                      valueFrom:
+                        fieldRef: {fieldPath: spec.nodeName}
+                    - name: NODE_ZONE
+                      valueFrom:
+                        fieldRef: {fieldPath: "metadata.labels['topology.kubernetes.io/zone']"}
+                  volumeMounts:
+                    - {name: config, mountPath: /etc/nginx/templates/default.conf.template, subPath: default.conf.template}
+                  resources:
+                    requests: {cpu: 25m, memory: 32Mi}
+                    limits: {cpu: 250m, memory: 128Mi}
+              volumes:
+                - name: config
+                  configMap: {name: node-proxy}
+        ---
+        apiVersion: v1
+        kind: Service
+        metadata:
+          name: node-proxy
+        spec:
+          type: NodePort
+          externalTrafficPolicy: Local
+          selector: {app: node-proxy}
+          ports: [{name: http, port: 80, targetPort: 8080}]
+  valuesSchema:
+    type: object
+    additionalProperties: false
+    properties:
+      initialReplicas:
+        type: integer
+        title: Initial replicas
+        minimum: 1
+        maximum: 20
+      replicaOverrides:
+        type: object
+        title: Service overrides
+        additionalProperties: true
+  defaults:
+    initialReplicas: 1
+    replicaOverrides: {}

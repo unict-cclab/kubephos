@@ -216,3 +216,39 @@ databaseChangeLog:
         - sqlFile:
             path: changes/031-experiment-variant-presentation.sql
             relativeToChangelogFile: true
+  - changeSet:
+      id: 032-catalog-application-previews
+      author: kubephos
+      changes:
+        - sqlFile:
+            path: changes/032-catalog-application-previews.sql
+            relativeToChangelogFile: true
+  - changeSet:
+      id: 033-generated-catalog-applications
+      author: kubephos
+      changes:
+        - sqlFile:
+            path: changes/033-generated-catalog-applications.sql
+            relativeToChangelogFile: true
+  - changeSet:
+      id: 034-provider-connection-description
+      author: kubephos
+      changes:
+        - sqlFile:
+            path: changes/034-provider-connection-description.sql
+            relativeToChangelogFile: true
+  - changeSet:
+      id: 035-registry-agnostic-strategies
+      author: kubephos
+      changes:
+        - sqlFile:
+            path: changes/035-registry-agnostic-strategies.sql
+            relativeToChangelogFile: true
+  - changeSet:
+      id: 036-multi-user-keycloak
+      author: kubephos
+      changes:
+        - sqlFile:
+            path: changes/036-multi-user-keycloak.sql
+            relativeToChangelogFile: true
+            splitStatements: false

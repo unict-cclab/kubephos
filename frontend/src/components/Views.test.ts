@@ -1,5 +1,5 @@
 import {describe, expect, it} from 'vitest'
-import {buildRecentActivity} from './Views'
+import {buildRecentActivity, canDeleteKubernetesCluster} from './Views'
 import type {Experiment, ManagedResource} from '../types'
 
 describe('buildRecentActivity', () => {
@@ -11,5 +11,12 @@ describe('buildRecentActivity', () => {
     expect(items.map(item => item.title)).toEqual(['Experiment in progress', 'Kubernetes cluster ready'])
     expect(items[0].detail).toBe('Scheduler comparison')
     expect(items[0].href).toBe('results/instance/exp-1')
+  })
+})
+
+describe('canDeleteKubernetesCluster', () => {
+  it('allows retrying a failed deletion', () => {
+    expect(canDeleteKubernetesCluster('deletion-failed')).toBe(true)
+    expect(canDeleteKubernetesCluster('deleting')).toBe(false)
   })
 })

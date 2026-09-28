@@ -37,7 +37,8 @@ func TestNetworkManifestCreatesNodeShapersWithEveryImpairment(t *testing.T) {
 				Template struct {
 					Spec struct {
 						Containers []struct {
-							Args []string `json:"args"`
+							Args  []string `json:"args"`
+							Image string   `json:"image"`
 						} `json:"containers"`
 					} `json:"spec"`
 				} `json:"template"`
@@ -58,6 +59,35 @@ func TestNetworkManifestCreatesNodeShapersWithEveryImpairment(t *testing.T) {
 	}
 	if list.Items[0].Metadata.Labels[profileLabel] != "abc123" {
 		t.Fatalf("unexpected ownership labels: %#v", list.Items[0].Metadata.Labels)
+	}
+	if image := list.Items[0].Spec.Template.Spec.Containers[0].Image; image != chaosImage {
+		t.Fatalf("unexpected chaos image %q", image)
+	}
+}
+
+func TestShapingScriptKeepsNetworkEffectsIndependent(t *testing.T) {
+	tests := []struct {
+		name       string
+		spec       Spec
+		expected   string
+		unexpected []string
+	}{
+		{name: "latency", spec: Spec{NetworkInterface: "flannel.1", EnableLatency: true, LatencyMilliseconds: 80}, expected: " netem delay 80ms", unexpected: []string{" rate ", " loss "}},
+		{name: "bandwidth", spec: Spec{NetworkInterface: "flannel.1", EnableBandwidth: true, BandwidthBytesPerSecond: 12500000}, expected: " netem rate 12500000bps", unexpected: []string{" delay ", " loss "}},
+		{name: "packet loss", spec: Spec{NetworkInterface: "flannel.1", EnablePacketLoss: true, PacketLossPercent: 2.5}, expected: " netem loss 2.5% 0%", unexpected: []string{" delay ", " rate "}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			script := shapingScript(test.spec, "zone-a", []string{"zone-b"}, map[string][]string{"zone-b": {"10.42.2.0/24"}})
+			if !strings.Contains(script, test.expected) {
+				t.Fatalf("shaper script is missing %q:\n%s", test.expected, script)
+			}
+			for _, unexpected := range test.unexpected {
+				if strings.Contains(script, unexpected) {
+					t.Fatalf("shaper script for %s unexpectedly contains %q:\n%s", test.name, unexpected, script)
+				}
+			}
+		})
 	}
 }
 
@@ -99,6 +129,36 @@ func TestNetworkManifestCanShapeOnlyDeclaredPair(t *testing.T) {
 	}
 }
 
+func TestValidateArtifactsAcceptsClusterWithoutRegistryHost(t *testing.T) {
+	var cluster clusterConnection
+	cluster.APIVersion = artifactAPI
+	cluster.Kind = "ClusterConnection"
+	cluster.Metadata.Name = "k3s"
+	cluster.Metadata.Version = "v1alpha1"
+	cluster.Spec.Server = "https://192.0.2.10:6443"
+	cluster.Spec.Kubeconfig = "verified-kubeconfig"
+
+	var application applicationDeployment
+	application.APIVersion = artifactAPI
+	application.Kind = "ApplicationDeployment"
+	application.Metadata.Version = "v1alpha1"
+	application.Metadata.OwnershipMarker = "experiment"
+	application.Spec.Namespace = "experiment"
+	application.Spec.ClusterServer = cluster.Spec.Server
+
+	var platform managedPlatform
+	platform.APIVersion = artifactAPI
+	platform.Kind = "ManagedPlatformCapability"
+	platform.Spec.ClusterServer = cluster.Spec.Server
+	platform.Spec.Components = append(platform.Spec.Components, struct {
+		Name   string `json:"name"`
+		Status string `json:"status"`
+	}{Name: "chaos-mesh", Status: "ready"})
+
+	if err := validateArtifacts(cluster, application, platform); err != nil {
+		t.Fatalf("cluster without registryHost was rejected: %v", err)
+	}
+}
 func TestVerifyQdiscsChecksEveryKernelParameter(t *testing.T) {
 	spec := Spec{EnableLatency: true, LatencyMilliseconds: 100, EnableBandwidth: true, BandwidthBytesPerSecond: 12500000, EnablePacketLoss: true, PacketLossPercent: 20}
 	raw := []byte(`[{"kind":"prio","handle":"1:","root":true,"options":{"bands":2}},{"kind":"netem","handle":"20:","parent":"1:2","options":{"delay":{"delay":0.1,"jitter":0,"correlation":0},"loss-random":{"loss":0.2,"correlation":0},"rate":{"rate":12500000}}}]`)

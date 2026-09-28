@@ -1,6 +1,6 @@
 import {useEffect, useState} from 'react'
 import {request} from '../api'
-import {formatDate, humanize} from '../lib'
+import {formatDate} from '../lib'
 import type {Application} from '../types'
 import {ApplicationTopologyGraph} from './ApplicationTopologyGraph'
 import {DetailBreadcrumb} from './DetailBreadcrumb'
@@ -12,31 +12,57 @@ interface Props {
   remove: (application: Application) => Promise<boolean>
 }
 
+interface MaterializedLoadScenario {
+  id: string
+  engine: string
+  targetEndpoint: string
+  runtimeImage: string
+  script: string
+  scriptDigest: string
+}
+
+interface ApplicationPreview {
+  content: string
+  loadScenarios: MaterializedLoadScenario[]
+}
+
 export function ApplicationDetailsPage({application, close, canDelete, remove}: Props) {
   const [manifest, setManifest] = useState('')
   const [manifestLoading, setManifestLoading] = useState(false)
   const [manifestError, setManifestError] = useState('')
-  useEffect(() => { setManifest(''); setManifestError(''); setManifestLoading(false) }, [application?.reference])
+  const [materializedScenarios, setMaterializedScenarios] = useState<MaterializedLoadScenario[]>([])
+  const [selectedScenarioID, setSelectedScenarioID] = useState('')
+  useEffect(() => { setManifest(''); setManifestError(''); setManifestLoading(false); setMaterializedScenarios([]); setSelectedScenarioID('') }, [application?.reference])
   if (!application) return null
   const specification = application.descriptor.spec ?? {}
-  const source = specification.package ?? {}
   const contract = specification.interface ?? {}
   const components = contract.components ?? []
-  const endpoints = contract.endpoints ?? []
   const scenarios = contract.loadScenarios ?? []
-  const generation = specification.materializerConfig ?? {}
-  const orderedComponents = [...components].sort((left, right) => (left.index ?? Number.MAX_SAFE_INTEGER) - (right.index ?? Number.MAX_SAFE_INTEGER) || left.id.localeCompare(right.id))
-  const loadManifest = async () => {
+  const dynamicTopology = Boolean(specification.valuesSchema?.['x-kubephos-dynamic-topology'])
+  const orderedComponents = [...components].sort((left, right) => left.id.localeCompare(right.id))
+  const loadPreview = async (scenarioID?: string, refresh = false) => {
     setManifestLoading(true)
     setManifestError('')
     try {
-      const result = await request<{content: string}>(`/catalog/applications/${encodeURIComponent(application.id)}/${encodeURIComponent(application.version)}/manifest`)
+      const result = await request<ApplicationPreview>(`/catalog/applications/${encodeURIComponent(application.id)}/${encodeURIComponent(application.version)}/manifest${refresh ? '?refresh=true' : ''}`)
       setManifest(result.content)
+      setMaterializedScenarios(result.loadScenarios ?? [])
+      if (scenarioID) {
+        if (!(result.loadScenarios ?? []).some(scenario => scenario.id === scenarioID)) throw new Error('The selected Locust file is not available.')
+        setSelectedScenarioID(scenarioID)
+      }
     } catch (cause) {
-      setManifestError(cause instanceof Error ? cause.message : 'Could not prepare the deployment manifest.')
+      setManifestError(cause instanceof Error ? cause.message : 'Could not prepare the application preview.')
     } finally {
       setManifestLoading(false)
     }
+  }
+  const showScenario = async (scenarioID: string) => {
+    if (materializedScenarios.some(scenario => scenario.id === scenarioID)) {
+      setSelectedScenarioID(scenarioID)
+      return
+    }
+    await loadPreview(scenarioID)
   }
   const downloadManifest = () => {
     const url = URL.createObjectURL(new Blob([manifest], {type: 'application/yaml;charset=utf-8'}))
@@ -46,22 +72,49 @@ export function ApplicationDetailsPage({application, close, canDelete, remove}: 
     link.click()
     URL.revokeObjectURL(url)
   }
-  return <div className="detail-page"><DetailBreadcrumb parent="Catalog" current={application.name} back={close} /><div className="detail-page-heading"><div><h2>{application.name}</h2><p>{application.version} · {application.origin}</p></div><div className="detail-page-actions">{canDelete && <button className="button danger" onClick={() => remove(application)}>Delete from catalog</button>}</div></div><article className="detail-page-card">
+  const selectedScenario = materializedScenarios.find(scenario => scenario.id === selectedScenarioID)
+  const selectedScenarioLabel = scenarioLabel(materializedScenarios.findIndex(scenario => scenario.id === selectedScenarioID), materializedScenarios.length)
+  const downloadScenario = () => {
+    if (!selectedScenario) return
+    const url = URL.createObjectURL(new Blob([selectedScenario.script], {type: 'text/x-python;charset=utf-8'}))
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `${selectedScenarioLabel.replaceAll(' ', '-')}.py`
+    link.click()
+    URL.revokeObjectURL(url)
+  }
+  const openDeploymentFiles = (open: boolean) => {
+    if (open && !manifest && !manifestLoading) void loadPreview()
+  }
+  const openLocustFile = (open: boolean) => {
+    const scenarioID = String(scenarios[0]?.id ?? '')
+    if (open && scenarioID && !selectedScenario && !manifestLoading) void showScenario(scenarioID)
+  }
+  return <div className="detail-page"><DetailBreadcrumb parent="Catalog" current={application.name} back={close} /><div className="detail-page-heading"><div><h2>{application.name}</h2><p>Version {application.version}</p></div><div className="detail-page-actions">{canDelete && <button className="button danger" onClick={() => remove(application)}>Delete from catalog</button>}</div></div><article className="detail-page-card">
     <div className="details-summary">
       <div><span>Version</span><strong>{application.version}</strong></div>
-      <div><span>Application group</span><strong>{contract.group ?? '—'}</strong></div>
-      <div><span>Origin</span><strong>{application.origin}</strong></div>
-      <div><span>Deployment</span><strong>{String(source.type ?? 'Included')}</strong></div>
+      <div><span>Source</span><strong>{application.origin === 'built-in' ? 'Included' : 'Imported'}</strong></div>
+      <div><span>Services</span><strong>{dynamicTopology ? 'Configurable' : components.length}</strong></div>
       <div><span>Created</span><strong>{application.createdAt ? formatDate(application.createdAt) : '—'}</strong></div>
       <div><span>Updated</span><strong>{application.updatedAt ? formatDate(application.updatedAt) : '—'}</strong></div>
+      <div><span>Load scenarios</span><strong>{scenarios.length}</strong></div>
     </div>
-    {application.description && <section className="details-section"><div className="details-heading"><strong>Description</strong></div><p className="details-copy">{application.description}</p></section>}
-    {Object.keys(generation).length > 0 && <section className="details-section"><div className="details-heading"><strong>Generated application</strong></div><div className="application-value-list">{Object.entries(generation).filter(([name]) => name !== 'serviceImage').map(([name, value]) => <div key={name}><strong>{humanize(name)}</strong><span>Generation setting</span><code>{String(value)}</code></div>)}</div></section>}
-    <ApplicationTopologyGraph components={components} />
-    <section className="details-section application-manifest-section"><div className="details-heading"><div><strong>Deployment manifest</strong><span>Validated default Kubernetes resources</span></div><div className="chart-export-actions">{manifest && <button type="button" onClick={downloadManifest}>Download .yml</button>}<button type="button" disabled={manifestLoading} onClick={() => void loadManifest()}>{manifestLoading ? 'Preparing…' : manifest ? 'Refresh' : 'View YAML'}</button></div></div>{manifestError && <p className="form-error">{manifestError}</p>}{manifest ? <pre aria-label="Deployment manifest YAML">{manifest}</pre> : <p className="details-copy">Generate the fully validated manifest using the application's default settings.</p>}</section>
-    <section className="details-section"><div className="details-heading"><strong>Services</strong><span>{components.length}</span></div><div className="application-details-list">{orderedComponents.map(component => <article key={component.id}><div><strong>{component.id}</strong><span>{component.workload ? `${component.workload.kind ?? 'Workload'} · ${component.workload.name ?? component.id}` : 'Workload'}</span></div><div className="application-component-meta">{component.index !== undefined && <span className="topology-index">Index {component.index}</span>}<div className="trait-list">{(component.traits ?? []).map(trait => <span key={trait}>{trait}</span>)}</div></div></article>)}</div></section>
-    <section className="details-section"><div className="details-heading"><strong>Endpoints</strong><span>{endpoints.length}</span></div>{endpoints.length ? <div className="details-dependencies">{endpoints.map((endpoint, index) => <div key={String(endpoint.id ?? index)}><span>{String(endpoint.protocol ?? 'endpoint')}</span><strong>{String(endpoint.id ?? endpoint.service ?? index)}</strong><small>{String(endpoint.service ?? '—')}:{String(endpoint.port ?? '—')}{String(endpoint.path ?? '')}</small></div>)}</div> : <p className="details-copy">No exposed endpoint.</p>}</section>
-    <section className="details-section"><div className="details-heading"><strong>Load scenarios</strong><span>{scenarios.length}</span></div>{scenarios.length ? <div className="details-dependencies">{scenarios.map((scenario, index) => <div key={String(scenario.id ?? index)}><span>{String(scenario.engine ?? 'load')}</span><strong>{String(scenario.id ?? index)}</strong><small>Target: {String(scenario.targetEndpoint ?? '—')}</small></div>)}</div> : <p className="details-copy">No load scenario available.</p>}</section>
-    <section className="details-section"><div className="details-heading"><strong>Application settings</strong></div>{Object.keys(specification.valuesSchema?.properties ?? {}).length ? <div className="application-value-list">{Object.entries(specification.valuesSchema?.properties ?? {}).map(([name, property]) => <div key={name}><strong>{property.title ?? name}</strong><span>{property.description ?? property.type ?? 'value'}</span><code>{String(specification.defaults?.[name] ?? property.default ?? 'no default')}</code></div>)}</div> : <p className="details-copy">No custom settings.</p>}</section>
+    {!dynamicTopology && <ApplicationTopologyGraph components={components} />}
+    {!dynamicTopology && <section className="details-section"><div className="details-heading"><strong>Services</strong><span>{components.length}</span></div><div className="application-details-list">{orderedComponents.map(component => <article key={component.id}><div><strong>{component.id}</strong><span>{component.workload ? `${component.workload.kind ?? 'Workload'} · ${component.workload.name ?? component.id}` : 'Workload'}</span></div><div className="application-component-meta"><div className="trait-list">{(component.traits ?? []).map(trait => <span key={trait}>{trait}</span>)}</div></div></article>)}</div></section>}
+    <div className="application-file-selectors">
+      <details className="technical-disclosure application-file-disclosure" onToggle={event => openDeploymentFiles(event.currentTarget.open)}>
+        <summary><strong>Deployment files</strong></summary>
+        <div className="application-file-content"><div className="details-heading"><strong>Manifest YAML</strong><div className="chart-export-actions">{manifest && <button type="button" onClick={downloadManifest}>Download .yml</button>}<button type="button" disabled={manifestLoading} onClick={() => void loadPreview(undefined, Boolean(manifest))}>{manifestLoading ? 'Preparing…' : manifest ? 'Refresh' : 'Load'}</button></div></div>{manifestError && <p className="form-error">{manifestError}</p>}{manifest && <pre aria-label="Deployment manifest YAML">{manifest}</pre>}</div>
+      </details>
+      <details className="technical-disclosure application-file-disclosure" onToggle={event => openLocustFile(event.currentTarget.open)}>
+        <summary><strong>Locust file</strong></summary>
+        <div className="application-file-content">{scenarios.length ? <>{scenarios.length > 1 && <label>Scenario<select value={selectedScenarioID} onChange={event => void showScenario(event.target.value)}>{scenarios.map((scenario, index) => <option key={String(scenario.id ?? index)} value={String(scenario.id ?? index)}>{scenarioLabel(index, scenarios.length)}</option>)}</select></label>}{manifestError && <p className="form-error">{manifestError}</p>}{selectedScenario && <><div className="details-heading"><strong>{selectedScenarioLabel}.py</strong><div className="chart-export-actions"><button type="button" onClick={downloadScenario}>Download .py</button></div></div><pre aria-label={`Locust file for ${selectedScenarioLabel}`}>{selectedScenario.script}</pre></>}</> : <p className="details-copy">No Locust file available.</p>}</div>
+      </details>
+    </div>
   </article></div>
+}
+
+function scenarioLabel(index: number, total: number): string {
+  if (total <= 1 || index <= 0) return 'default'
+  return `scenario ${index + 1}`
 }

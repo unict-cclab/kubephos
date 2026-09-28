@@ -17,6 +17,7 @@ import (
 	"kubephos.dev/kubephos/internal/artifacts"
 	"kubephos.dev/kubephos/internal/config"
 	"kubephos.dev/kubephos/internal/domain"
+	"kubephos.dev/kubephos/internal/managedcomponents"
 	"kubephos.dev/kubephos/internal/secrets"
 	"kubephos.dev/kubephos/internal/storage"
 )
@@ -45,6 +46,14 @@ type rolloutDeployment struct {
 			} `json:"spec"`
 		} `json:"template"`
 	} `json:"spec"`
+}
+
+type rolloutClusterRole struct {
+	Rules []struct {
+		APIGroups []string `json:"apiGroups"`
+		Resources []string `json:"resources"`
+		Verbs     []string `json:"verbs"`
+	} `json:"rules"`
 }
 
 func releaseClusterLensRollout(configValue config.Config) error {
@@ -126,10 +135,10 @@ func releaseClusterLensRollout(configValue config.Config) error {
 	if err := os.WriteFile(authenticationPath, authentication, 0600); err != nil {
 		return err
 	}
-	tagImage := endpoint.Spec.Host + "/kubephos-dev/cluster-lens:v1.2.2"
+	tagImage := managedcomponents.Image(endpoint.Spec.Host, managedcomponents.ClusterLensName, managedcomponents.ClusterLensVersion)
 	manifest, err := exec.CommandContext(ctx, "skopeo", "inspect", "--raw", "--authfile", authenticationPath, "--cert-dir", temporary, "docker://"+tagImage).Output()
 	if err != nil {
-		return fmt.Errorf("managed Cluster Lens v1.2.2 image is not available in Harbor: %w", err)
+		return fmt.Errorf("managed Cluster Lens %s image is not available in Harbor: %w", managedcomponents.ClusterLensVersion, err)
 	}
 	digest := sha256.Sum256(manifest)
 	image := tagImage + "@sha256:" + hex.EncodeToString(digest[:])
@@ -146,8 +155,15 @@ func releaseClusterLensRollout(configValue config.Config) error {
 		return fmt.Errorf("refusing to replace unexpected Cluster Lens image %q", current)
 	}
 	if checking {
+		role, roleErr := kubectlRelease(ctx, kubeconfigPath, "get", "clusterrole", "kubephos-cluster-lens", "-o", "json")
+		if roleErr != nil || !clusterRoleAllowsNodeMetrics(role) {
+			return errors.New("Cluster Lens service account cannot read Kubernetes node metrics")
+		}
 		fmt.Printf("PASS cluster=%s current=%s target=%s\n", cluster.Name, current, image)
 		return nil
+	}
+	if err := ensureClusterLensMetricsRBAC(ctx, kubeconfigPath); err != nil {
+		return err
 	}
 	rollback := func(cause error) error {
 		if current == image {
@@ -190,8 +206,12 @@ func releaseClusterLensRollout(configValue config.Config) error {
 }
 
 func managedPreviousClusterLensImage(image, host string) bool {
-	for _, version := range []string{"v1.1.0", "v1.2.0", "v1.2.1"} {
-		prefix := host + "/kubephos-dev/cluster-lens:" + version + "@sha256:"
+	for _, version := range []string{"v1.1.0", "v1.2.0", "v1.2.1", "v1.2.2", "v1.2.3", "v1.2.4", "v1.2.5"} {
+		tag := host + "/kubephos-dev/cluster-lens:" + version
+		if image == tag {
+			return true
+		}
+		prefix := tag + "@sha256:"
 		if !strings.HasPrefix(image, prefix) {
 			continue
 		}
@@ -199,6 +219,50 @@ func managedPreviousClusterLensImage(image, host string) bool {
 		return err == nil && len(digest) == sha256.Size
 	}
 	return false
+}
+
+func clusterRoleAllowsNodeMetrics(raw []byte) bool {
+	var role rolloutClusterRole
+	if json.Unmarshal(raw, &role) != nil {
+		return false
+	}
+	for _, rule := range role.Rules {
+		groups := false
+		resources := false
+		list := false
+		for _, value := range rule.APIGroups {
+			groups = groups || value == "metrics.k8s.io" || value == "*"
+		}
+		for _, value := range rule.Resources {
+			resources = resources || value == "nodes" || value == "*"
+		}
+		for _, value := range rule.Verbs {
+			list = list || value == "list" || value == "*"
+		}
+		if groups && resources && list {
+			return true
+		}
+	}
+	return false
+}
+
+func ensureClusterLensMetricsRBAC(ctx context.Context, kubeconfigPath string) error {
+	raw, err := kubectlRelease(ctx, kubeconfigPath, "get", "clusterrole", "kubephos-cluster-lens", "-o", "json")
+	if err != nil {
+		return fmt.Errorf("read Cluster Lens RBAC: %w", err)
+	}
+	if clusterRoleAllowsNodeMetrics(raw) {
+		return nil
+	}
+	patch := `[{"op":"add","path":"/rules/-","value":{"apiGroups":["metrics.k8s.io"],"resources":["nodes"],"verbs":["get","list"]}}]`
+	if _, err := kubectlRelease(ctx, kubeconfigPath, "patch", "clusterrole", "kubephos-cluster-lens", "--type=json", "-p", patch); err != nil {
+		return fmt.Errorf("grant Cluster Lens node metrics access: %w", err)
+	}
+	raw, err = kubectlRelease(ctx, kubeconfigPath, "get", "clusterrole", "kubephos-cluster-lens", "-o", "json")
+	if err != nil || !clusterRoleAllowsNodeMetrics(raw) {
+		return errors.New("Cluster Lens node metrics permission was not applied")
+	}
+	return nil
 }
 
 func kubectlRelease(ctx context.Context, kubeconfigPath string, arguments ...string) ([]byte, error) {

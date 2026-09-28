@@ -1,10 +1,10 @@
 import {fireEvent, render, screen} from '@testing-library/react'
 import {createElement} from 'react'
 import {describe, expect, it, vi} from 'vitest'
-import {ExecutionProgressGraph, type ProgressNode} from './ExecutionProgressGraph'
+import {ExecutionProgressGraph, highLevelExecutionNodes, type ProgressNode} from './ExecutionProgressGraph'
 
 describe('execution progress graph', () => {
-  it('shows the active step, dependencies and its logs', () => {
+  it('shows the active step and its logs', () => {
     const openOperation = vi.fn()
     const nodes: ProgressNode[] = [
       {id: 'prepare', title: 'Prepare cluster', status: 'succeeded', operationId: 'op_prepare'},
@@ -15,8 +15,8 @@ describe('execution progress graph', () => {
 
     expect(screen.getByText('Step 2 of 3')).toBeInTheDocument()
     expect(screen.getByRole('button', {name: '2. Install platform: Running'})).toHaveAttribute('aria-pressed', 'true')
-    expect(screen.getByText('Depends on Prepare cluster')).toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', {name: 'Open step logs'}))
+    expect(screen.queryByText('Depends on Prepare cluster')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', {name: 'Open logs'}))
     expect(openOperation).toHaveBeenCalledWith('op_install')
     fireEvent.click(screen.getByRole('button', {name: '1. Prepare cluster: Succeeded'}))
     expect(screen.getByRole('button', {name: '1. Prepare cluster: Succeeded'})).toHaveAttribute('aria-pressed', 'true')
@@ -29,5 +29,37 @@ describe('execution progress graph', () => {
     rerender(createElement(ExecutionProgressGraph, {nodes: [{...nodes[0], status: 'succeeded'}, {...nodes[1], status: 'running'}], label: 'Experiment'}))
     expect(screen.getByText('Step 2 of 2')).toBeInTheDocument()
     expect(screen.getByRole('button', {name: '2. Second: Running'})).toHaveAttribute('aria-pressed', 'true')
+  })
+
+  it('groups experiment internals into high-level phases', () => {
+    const nodes: ProgressNode[] = [
+      {id: 'application', title: 'Prepare application package', status: 'succeeded'},
+      {id: 'prepare', title: 'Prepare isolated application namespace', status: 'succeeded'},
+      {id: 'capability-1', title: 'chaos.network.zones', status: 'succeeded'},
+      {id: 'targets-2', title: 'Select targets for component-2', status: 'succeeded'},
+      {id: 'capability-2', title: 'descheduler.kubernetes.install', status: 'succeeded'},
+      {id: 'targets-3', title: 'Select targets for component-3', status: 'succeeded'},
+      {id: 'capability-3', title: 'scheduler.kubernetes.install', status: 'succeeded'},
+      {id: 'deploy', title: 'Deploy isolated application', status: 'succeeded'},
+      {id: 'capability-4', title: 'load.session.control', status: 'running'},
+      {id: 'capability-5', title: 'metrics.timeseries.collect', status: 'pending'}
+    ]
+
+    expect(highLevelExecutionNodes(nodes).map(node => node.title)).toEqual(['Prepare application', 'Configure experiment', 'Deploy application', 'Run workload', 'Collect results'])
+    render(createElement(ExecutionProgressGraph, {nodes, label: 'Experiment'}))
+    expect(screen.getByText('Step 4 of 5')).toBeInTheDocument()
+    expect(screen.getByRole('button', {name: '4. Run workload: Running'})).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.queryByText('chaos.network.zones')).not.toBeInTheDocument()
+    expect(screen.queryByText('load.session.control')).not.toBeInTheDocument()
+  })
+
+  it('uses high-level names for an external destination pipeline', () => {
+    const nodes: ProgressNode[] = [
+      {id: 'external-destination', title: 'Prepare external destination', status: 'succeeded'},
+      {id: 'capability-1', title: 'load.session.control', status: 'running'},
+      {id: 'capability-2', title: 'metrics.timeseries.collect', status: 'pending'}
+    ]
+
+    expect(highLevelExecutionNodes(nodes).map(node => node.title)).toEqual(['Prepare external workload', 'Run workload', 'Collect results'])
   })
 })

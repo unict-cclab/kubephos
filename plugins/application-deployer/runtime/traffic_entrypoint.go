@@ -18,6 +18,7 @@ import (
 
 const (
 	trafficEntrypointTrait = "traffic-entrypoint"
+	deschedulableTrait     = "deschedulable"
 	trafficEntrypointLabel = "kubephos.dev/traffic-entrypoint"
 	proxyInstanceLabel     = "kubephos.dev/proxy-instance"
 )
@@ -48,20 +49,77 @@ type nodeList struct {
 	} `json:"items"`
 }
 
-func prepareRuntimePackage(ctx context.Context, runner commandRunner, kubeconfig, content string, workloads []workloadTarget, endpoints []serviceEndpoint) (string, []workloadTarget, int, error) {
+func prepareRuntimePackage(ctx context.Context, runner commandRunner, kubeconfig, content string, workloads []workloadTarget, endpoints []serviceEndpoint, pdbMinAvailable int) (string, []workloadTarget, int, error) {
+	content, err := assignApplicationPlacement(content, workloads)
+	if err != nil {
+		return "", nil, 0, err
+	}
+	effectiveWorkloads := workloads
+	proxyNodes := 0
 	entrypoints := trafficEntrypoints(workloads)
-	if len(entrypoints) == 0 {
-		return content, workloads, 0, nil
+	if len(entrypoints) > 0 {
+		nodes, err := discoverApplicationNodes(ctx, runner, kubeconfig)
+		if err != nil {
+			return "", nil, 0, err
+		}
+		content, effectiveWorkloads, err = expandTrafficEntrypoints(content, workloads, endpoints, nodes)
+		if err != nil {
+			return "", nil, 0, err
+		}
+		proxyNodes = len(nodes)
 	}
-	nodes, err := discoverApplicationNodes(ctx, runner, kubeconfig)
+	content, err = addPodDisruptionBudgets(content, effectiveWorkloads, pdbMinAvailable)
 	if err != nil {
 		return "", nil, 0, err
 	}
-	manifest, effectiveWorkloads, err := expandTrafficEntrypoints(content, workloads, endpoints, nodes)
-	if err != nil {
-		return "", nil, 0, err
+	return content, effectiveWorkloads, proxyNodes, nil
+}
+
+func addPodDisruptionBudgets(content string, workloads []workloadTarget, minAvailable int) (string, error) {
+	if minAvailable == 0 {
+		return content, nil
 	}
-	return manifest, effectiveWorkloads, len(nodes), nil
+	if minAvailable < 1 || minAvailable > 20 {
+		return "", errors.New("PDB minAvailable must be between 1 and 20")
+	}
+	resources, err := decodeManifestResources(content)
+	if err != nil {
+		return "", err
+	}
+	existing := map[string]int{}
+	for index, resource := range resources {
+		if fmt.Sprint(resource["apiVersion"]) != "policy/v1" || fmt.Sprint(resource["kind"]) != "PodDisruptionBudget" {
+			continue
+		}
+		metadata, _ := resource["metadata"].(map[string]any)
+		if name := fmt.Sprint(metadata["name"]); name != "" {
+			existing[name] = index
+		}
+	}
+	for _, workload := range workloads {
+		if !hasTrait(workload, deschedulableTrait) || workload.APIVersion != "apps/v1" || (workload.Kind != "Deployment" && workload.Kind != "StatefulSet") {
+			continue
+		}
+		name := boundedDNSLabel("kubephos-" + workload.Name)
+		labels := map[string]any{"app.kubernetes.io/managed-by": "kubephos", "kubephos.dev/component": workload.ID}
+		selector := make(map[string]any, len(workload.Selector))
+		for key, value := range workload.Selector {
+			selector[key] = value
+		}
+		pdb := map[string]any{
+			"apiVersion": "policy/v1",
+			"kind":       "PodDisruptionBudget",
+			"metadata":   map[string]any{"name": name, "labels": labels},
+			"spec":       map[string]any{"minAvailable": minAvailable, "selector": map[string]any{"matchLabels": selector}},
+		}
+		if index, found := existing[name]; found {
+			resources[index] = pdb
+			continue
+		}
+		existing[name] = len(resources)
+		resources = append(resources, pdb)
+	}
+	return encodeManifestResources(resources)
 }
 
 func discoverApplicationNodes(ctx context.Context, runner commandRunner, kubeconfig string) ([]applicationNode, error) {

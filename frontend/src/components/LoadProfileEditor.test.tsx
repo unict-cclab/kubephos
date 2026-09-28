@@ -12,6 +12,10 @@ describe('load profile preview', () => {
     expect(screen.getAllByRole('spinbutton', {name: 'Duration (minutes)'})[0]).toHaveValue(2)
     expect(view.container.querySelector<HTMLInputElement>('input[name="component-1.steps"]')?.value).toContain('"rps":77')
     expect(view.container.querySelector<HTMLInputElement>('input[name="component-1.geographicSteps"]')?.value).toContain('"zone-a":3')
+    const phase = screen.getByRole('combobox', {name: 'Workload phase 1 type'}).closest('.timeline-card')
+    const preview = screen.getByLabelText('Input load preview')
+    expect(phase).not.toBeNull()
+    expect(Boolean(phase!.compareDocumentPosition(preview) & Node.DOCUMENT_POSITION_FOLLOWING)).toBe(true)
   })
 
   it('replaces a zero workload value without forcing it back while typing', () => {

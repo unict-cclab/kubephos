@@ -506,7 +506,7 @@ func (p *Process) invoke(parent context.Context, command string, input, output a
 		}
 		defer releaseEnvironment()
 		process.Stdin = bytes.NewReader(payload)
-		output := &limitedBuffer{limit: containerOutputLimit}
+		output := &limitedBuffer{limit: pluginOutputLimit}
 		process.Stdout = output
 		stderr, err := process.StderrPipe()
 		if err != nil {
@@ -526,7 +526,7 @@ func (p *Process) invoke(parent context.Context, command string, input, output a
 		return ctx.Err()
 	}
 	if outputExceeded {
-		return errors.New("plugin output exceeds 1 MiB")
+		return errors.New("plugin output exceeds 16 MiB")
 	}
 	if processErr != nil {
 		return errors.New(pluginErrorMessage(messages, processErr))

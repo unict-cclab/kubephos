@@ -12,9 +12,8 @@ const components: ApplicationComponent[] = [
 ]
 
 describe('application topology graph', () => {
-  it('orders components by topology index and connects declared dependencies', () => {
+  it('orders connected components without exposing index layers', () => {
     const topology = buildApplicationTopology(components)
-    expect(topology?.layers).toEqual([-1, 0, 1, 2])
     expect(topology?.nodes.map(node => node.component.id)).toEqual(['node-proxy', 'frontend', 'worker', 'database'])
     expect(topology?.edges.map(edge => `${edge.source.component.id}->${edge.target.component.id}`)).toEqual(['node-proxy->frontend', 'frontend->worker', 'worker->database'])
   })
@@ -25,16 +24,40 @@ describe('application topology graph', () => {
     expect(graph).toBeInTheDocument()
     expect(screen.getByRole('button', {name: 'PDF'})).toBeInTheDocument()
     expect(screen.getByRole('button', {name: 'PNG 600 DPI'})).toBeInTheDocument()
+    expect(screen.queryByText('How services connect')).not.toBeInTheDocument()
+    expect(screen.queryByText('Arrows show declared downstream dependencies')).not.toBeInTheDocument()
     expect(graph.querySelectorAll('.application-topology-node circle')).toHaveLength(4)
-    expect(graph.querySelectorAll('.application-topology-node rect')).toHaveLength(0)
+    expect(graph.querySelectorAll('.application-topology-node rect')).toHaveLength(4)
+    expect(graph.querySelector('.application-topology-label-bg')).toHaveAttribute('fill', '#ffffff')
+    expect(graph.querySelector('.application-topology-label-bg')).toHaveAttribute('stroke', '#dfe4eb')
+    expect(graph.querySelectorAll('.application-topology-layer')).toHaveLength(0)
+    expect(graph.querySelectorAll('.application-topology-edges path')).toHaveLength(3)
+    expect(screen.getByText('3 connections')).toBeInTheDocument()
     const pdf = new TextDecoder().decode(svgToPDF(graph))
-    expect(pdf).toContain('/MediaBox [0 0 504')
+    expect(pdf).toMatch(/\/MediaBox \[0 0 [\d.]+ [\d.]+\]/)
     expect(pdf).toContain('(node-proxy) Tj')
-    expect(pdf).toMatch(/ c\n/)
+    expect(pdf.match(/0\.1882 0\.2196 0\.2588 rg/g)).toHaveLength(4)
+    expect(pdf.match(/\nS\n/g)?.length).toBeGreaterThanOrEqual(3)
   })
 
-  it('hides the graph for legacy descriptors without topology metadata', () => {
+  it('renders applications without index metadata', () => {
     const {container} = render(<ApplicationTopologyGraph components={[{...components[0], index: undefined}]} />)
-    expect(container).toBeEmptyDOMElement()
+    expect(container.querySelectorAll('.application-topology-node')).toHaveLength(1)
+  })
+
+  it('keeps complete service names in publication exports', () => {
+    render(<ApplicationTopologyGraph components={[{id: 'a-very-long-product-catalog-service-name', traits: ['scalable'], dependencies: []}]} />)
+    expect(screen.getAllByText('a-very-long-product-catalog-service-name')).toHaveLength(2)
+    expect(screen.queryByText(/…/)).not.toBeInTheDocument()
+  })
+
+  it('packs large topology layers into bounded rows', () => {
+    const large = Array.from({length: 40}, (_, index) => ({id: `service-${index}`, index: 1, traits: ['scalable'], dependencies: []}))
+    const topology = buildApplicationTopology([{id: 'node-proxy', index: 0, traits: ['traffic-entrypoint'], dependencies: large.map(item => item.id)}, ...large])
+    expect(topology).not.toBeNull()
+    expect(topology?.height).toBeLessThan(1000)
+    expect(new Set(topology?.nodes.map(node => node.x)).size).toBeGreaterThan(4)
+    expect(topology?.edges).toHaveLength(40)
+    expect(topology?.height).toBeLessThan(1800)
   })
 })

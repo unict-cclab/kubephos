@@ -1,0 +1,565 @@
+apiVersion: catalog.kubephos.dev/v1alpha1
+kind: Application
+metadata:
+  id: dev.kubephos.train-ticket
+  name: Train Ticket
+  version: 1.0.0-kubephos.4
+  description: Large railway booking benchmark with managed NFS storage, source-aware ingress and a reproducible search journey.
+spec:
+  package:
+    type: git
+    format: plain-yaml
+    repository: https://github.com/FudanSELab/train-ticket.git
+    revision: 313886e99befb94be6cd45f085c98e0019f59829
+    path: deployment/kubernetes-manifests/quickstart-k8s-pvc-nfs
+    entrypoint: quickstart-ts-deployment-part1.yml
+    additionalEntrypoints:
+      - quickstart-ts-deployment-part2.yml
+      - quickstart-ts-deployment-part3.yml
+  interface:
+    group: train-ticket
+    components:
+      - id: node-proxy
+        workload: {apiVersion: apps/v1, kind: DaemonSet, name: node-proxy}
+        selector: {app: node-proxy}
+        traits: [traffic-entrypoint]
+        index: 0
+        dependencies: [ui-dashboard, admin-basic-info, admin-order, admin-route, admin-travel, admin-user, assurance, basic, cancel, config, consign-price, consign, contacts, execute, food-map, food, inside-payment, auth, news, notification, order-other, order, payment, preserve-other, preserve, price, rebook, route-plan, route, seat, security, user, station, ticket-office, ticketinfo, train, travel2, travel-plan, travel, verification-code, voucher]
+      - id: ui-dashboard
+        workload: {apiVersion: apps/v1, kind: Deployment, name: ts-ui-dashboard}
+        selector: {app: ts-ui-dashboard}
+        traits: [scalable, schedulable, deschedulable]
+        index: 1
+      - id: admin-basic-info
+        workload: {apiVersion: apps/v1, kind: Deployment, name: ts-admin-basic-info-service}
+        selector: {app: ts-admin-basic-info-service}
+        traits: [scalable, schedulable, deschedulable]
+        index: 2
+      - id: admin-order
+        workload: {apiVersion: apps/v1, kind: Deployment, name: ts-admin-order-service}
+        selector: {app: ts-admin-order-service}
+        traits: [scalable, schedulable, deschedulable]
+        index: 2
+      - id: admin-route
+        workload: {apiVersion: apps/v1, kind: Deployment, name: ts-admin-route-service}
+        selector: {app: ts-admin-route-service}
+        traits: [scalable, schedulable, deschedulable]
+        index: 2
+      - id: admin-travel
+        workload: {apiVersion: apps/v1, kind: Deployment, name: ts-admin-travel-service}
+        selector: {app: ts-admin-travel-service}
+        traits: [scalable, schedulable, deschedulable]
+        index: 2
+      - id: admin-user
+        workload: {apiVersion: apps/v1, kind: Deployment, name: ts-admin-user-service}
+        selector: {app: ts-admin-user-service}
+        traits: [scalable, schedulable, deschedulable]
+        index: 2
+      - id: assurance
+        workload: {apiVersion: apps/v1, kind: Deployment, name: ts-assurance-service}
+        selector: {app: ts-assurance-service}
+        traits: [scalable, schedulable, deschedulable]
+        index: 2
+        dependencies: [assurance-db]
+      - id: basic
+        workload: {apiVersion: apps/v1, kind: Deployment, name: ts-basic-service}
+        selector: {app: ts-basic-service}
+        traits: [scalable, schedulable, deschedulable]
+        index: 2
+      - id: cancel
+        workload: {apiVersion: apps/v1, kind: Deployment, name: ts-cancel-service}
+        selector: {app: ts-cancel-service}
+        traits: [scalable, schedulable, deschedulable]
+        index: 2
+      - id: config
+        workload: {apiVersion: apps/v1, kind: Deployment, name: ts-config-service}
+        selector: {app: ts-config-service}
+        traits: [scalable, schedulable, deschedulable]
+        index: 2
+        dependencies: [config-db]
+      - id: consign-price
+        workload: {apiVersion: apps/v1, kind: Deployment, name: ts-consign-price-service}
+        selector: {app: ts-consign-price-service}
+        traits: [scalable, schedulable, deschedulable]
+        index: 2
+        dependencies: [consign-price-db]
+      - id: consign
+        workload: {apiVersion: apps/v1, kind: Deployment, name: ts-consign-service}
+        selector: {app: ts-consign-service}
+        traits: [scalable, schedulable, deschedulable]
+        index: 2
+        dependencies: [consign-db]
+      - id: contacts
+        workload: {apiVersion: apps/v1, kind: Deployment, name: ts-contacts-service}
+        selector: {app: ts-contacts-service}
+        traits: [scalable, schedulable, deschedulable]
+        index: 2
+        dependencies: [contacts-db]
+      - id: execute
+        workload: {apiVersion: apps/v1, kind: Deployment, name: ts-execute-service}
+        selector: {app: ts-execute-service}
+        traits: [scalable, schedulable, deschedulable]
+        index: 2
+      - id: food-map
+        workload: {apiVersion: apps/v1, kind: Deployment, name: ts-food-map-service}
+        selector: {app: ts-food-map-service}
+        traits: [scalable, schedulable, deschedulable]
+        index: 2
+        dependencies: [food-map-db]
+      - id: food
+        workload: {apiVersion: apps/v1, kind: Deployment, name: ts-food-service}
+        selector: {app: ts-food-service}
+        traits: [scalable, schedulable, deschedulable]
+        index: 2
+        dependencies: [food-db]
+      - id: inside-payment
+        workload: {apiVersion: apps/v1, kind: Deployment, name: ts-inside-payment-service}
+        selector: {app: ts-inside-payment-service}
+        traits: [scalable, schedulable, deschedulable]
+        index: 2
+        dependencies: [inside-payment-db]
+      - id: auth
+        workload: {apiVersion: apps/v1, kind: Deployment, name: ts-auth-service}
+        selector: {app: ts-auth-service}
+        traits: [scalable, schedulable, deschedulable]
+        index: 2
+        dependencies: [auth-db]
+      - id: news
+        workload: {apiVersion: apps/v1, kind: Deployment, name: ts-news-service}
+        selector: {app: ts-news-service}
+        traits: [scalable, schedulable, deschedulable]
+        index: 2
+      - id: notification
+        workload: {apiVersion: apps/v1, kind: Deployment, name: ts-notification-service}
+        selector: {app: ts-notification-service}
+        traits: [scalable, schedulable, deschedulable]
+        index: 2
+      - id: order-other
+        workload: {apiVersion: apps/v1, kind: Deployment, name: ts-order-other-service}
+        selector: {app: ts-order-other-service}
+        traits: [scalable, schedulable, deschedulable]
+        index: 2
+        dependencies: [order-other-db]
+      - id: order
+        workload: {apiVersion: apps/v1, kind: Deployment, name: ts-order-service}
+        selector: {app: ts-order-service}
+        traits: [scalable, schedulable, deschedulable]
+        index: 2
+        dependencies: [order-db]
+      - id: payment
+        workload: {apiVersion: apps/v1, kind: Deployment, name: ts-payment-service}
+        selector: {app: ts-payment-service}
+        traits: [scalable, schedulable, deschedulable]
+        index: 2
+        dependencies: [payment-db]
+      - id: preserve-other
+        workload: {apiVersion: apps/v1, kind: Deployment, name: ts-preserve-other-service}
+        selector: {app: ts-preserve-other-service}
+        traits: [scalable, schedulable, deschedulable]
+        index: 2
+      - id: preserve
+        workload: {apiVersion: apps/v1, kind: Deployment, name: ts-preserve-service}
+        selector: {app: ts-preserve-service}
+        traits: [scalable, schedulable, deschedulable]
+        index: 2
+      - id: price
+        workload: {apiVersion: apps/v1, kind: Deployment, name: ts-price-service}
+        selector: {app: ts-price-service}
+        traits: [scalable, schedulable, deschedulable]
+        index: 2
+        dependencies: [price-db]
+      - id: rebook
+        workload: {apiVersion: apps/v1, kind: Deployment, name: ts-rebook-service}
+        selector: {app: ts-rebook-service}
+        traits: [scalable, schedulable, deschedulable]
+        index: 2
+      - id: route-plan
+        workload: {apiVersion: apps/v1, kind: Deployment, name: ts-route-plan-service}
+        selector: {app: ts-route-plan-service}
+        traits: [scalable, schedulable, deschedulable]
+        index: 2
+      - id: route
+        workload: {apiVersion: apps/v1, kind: Deployment, name: ts-route-service}
+        selector: {app: ts-route-service}
+        traits: [scalable, schedulable, deschedulable]
+        index: 2
+        dependencies: [route-db]
+      - id: seat
+        workload: {apiVersion: apps/v1, kind: Deployment, name: ts-seat-service}
+        selector: {app: ts-seat-service}
+        traits: [scalable, schedulable, deschedulable]
+        index: 2
+      - id: security
+        workload: {apiVersion: apps/v1, kind: Deployment, name: ts-security-service}
+        selector: {app: ts-security-service}
+        traits: [scalable, schedulable, deschedulable]
+        index: 2
+        dependencies: [security-db]
+      - id: user
+        workload: {apiVersion: apps/v1, kind: Deployment, name: ts-user-service}
+        selector: {app: ts-user-service}
+        traits: [scalable, schedulable, deschedulable]
+        index: 2
+        dependencies: [user-db]
+      - id: station
+        workload: {apiVersion: apps/v1, kind: Deployment, name: ts-station-service}
+        selector: {app: ts-station-service}
+        traits: [scalable, schedulable, deschedulable]
+        index: 2
+        dependencies: [station-db]
+      - id: ticket-office
+        workload: {apiVersion: apps/v1, kind: Deployment, name: ts-ticket-office-service}
+        selector: {app: ts-ticket-office-service}
+        traits: [scalable, schedulable, deschedulable]
+        index: 2
+        dependencies: [ticket-office-db]
+      - id: ticketinfo
+        workload: {apiVersion: apps/v1, kind: Deployment, name: ts-ticketinfo-service}
+        selector: {app: ts-ticketinfo-service}
+        traits: [scalable, schedulable, deschedulable]
+        index: 2
+      - id: train
+        workload: {apiVersion: apps/v1, kind: Deployment, name: ts-train-service}
+        selector: {app: ts-train-service}
+        traits: [scalable, schedulable, deschedulable]
+        index: 2
+        dependencies: [train-db]
+      - id: travel2
+        workload: {apiVersion: apps/v1, kind: Deployment, name: ts-travel2-service}
+        selector: {app: ts-travel2-service}
+        traits: [scalable, schedulable, deschedulable]
+        index: 2
+        dependencies: [travel2-db]
+      - id: travel-plan
+        workload: {apiVersion: apps/v1, kind: Deployment, name: ts-travel-plan-service}
+        selector: {app: ts-travel-plan-service}
+        traits: [scalable, schedulable, deschedulable]
+        index: 2
+      - id: travel
+        workload: {apiVersion: apps/v1, kind: Deployment, name: ts-travel-service}
+        selector: {app: ts-travel-service}
+        traits: [scalable, schedulable, deschedulable]
+        index: 2
+        dependencies: [travel-db]
+      - id: verification-code
+        workload: {apiVersion: apps/v1, kind: Deployment, name: ts-verification-code-service}
+        selector: {app: ts-verification-code-service}
+        traits: [scalable, schedulable, deschedulable]
+        index: 2
+      - id: voucher
+        workload: {apiVersion: apps/v1, kind: Deployment, name: ts-voucher-service}
+        selector: {app: ts-voucher-service}
+        traits: [scalable, schedulable, deschedulable]
+        index: 2
+        dependencies: [voucher-db]
+      - id: user-db
+        workload: {apiVersion: apps/v1, kind: Deployment, name: ts-user-mongo}
+        selector: {app: ts-user-mongo}
+        traits: [schedulable, stateful, deschedulable]
+        index: 3
+      - id: auth-db
+        workload: {apiVersion: apps/v1, kind: Deployment, name: ts-auth-mongo}
+        selector: {app: ts-auth-mongo}
+        traits: [schedulable, stateful, deschedulable]
+        index: 3
+      - id: route-db
+        workload: {apiVersion: apps/v1, kind: Deployment, name: ts-route-mongo}
+        selector: {app: ts-route-mongo}
+        traits: [schedulable, stateful, deschedulable]
+        index: 3
+      - id: contacts-db
+        workload: {apiVersion: apps/v1, kind: Deployment, name: ts-contacts-mongo}
+        selector: {app: ts-contacts-mongo}
+        traits: [schedulable, stateful, deschedulable]
+        index: 3
+      - id: order-db
+        workload: {apiVersion: apps/v1, kind: Deployment, name: ts-order-mongo}
+        selector: {app: ts-order-mongo}
+        traits: [schedulable, stateful, deschedulable]
+        index: 3
+      - id: order-other-db
+        workload: {apiVersion: apps/v1, kind: Deployment, name: ts-order-other-mongo}
+        selector: {app: ts-order-other-mongo}
+        traits: [schedulable, stateful, deschedulable]
+        index: 3
+      - id: config-db
+        workload: {apiVersion: apps/v1, kind: Deployment, name: ts-config-mongo}
+        selector: {app: ts-config-mongo}
+        traits: [schedulable, stateful, deschedulable]
+        index: 3
+      - id: station-db
+        workload: {apiVersion: apps/v1, kind: Deployment, name: ts-station-mongo}
+        selector: {app: ts-station-mongo}
+        traits: [schedulable, stateful, deschedulable]
+        index: 3
+      - id: train-db
+        workload: {apiVersion: apps/v1, kind: Deployment, name: ts-train-mongo}
+        selector: {app: ts-train-mongo}
+        traits: [schedulable, stateful, deschedulable]
+        index: 3
+      - id: travel-db
+        workload: {apiVersion: apps/v1, kind: Deployment, name: ts-travel-mongo}
+        selector: {app: ts-travel-mongo}
+        traits: [schedulable, stateful, deschedulable]
+        index: 3
+      - id: travel2-db
+        workload: {apiVersion: apps/v1, kind: Deployment, name: ts-travel2-mongo}
+        selector: {app: ts-travel2-mongo}
+        traits: [schedulable, stateful, deschedulable]
+        index: 3
+      - id: price-db
+        workload: {apiVersion: apps/v1, kind: Deployment, name: ts-price-mongo}
+        selector: {app: ts-price-mongo}
+        traits: [schedulable, stateful, deschedulable]
+        index: 3
+      - id: security-db
+        workload: {apiVersion: apps/v1, kind: Deployment, name: ts-security-mongo}
+        selector: {app: ts-security-mongo}
+        traits: [schedulable, stateful, deschedulable]
+        index: 3
+      - id: inside-payment-db
+        workload: {apiVersion: apps/v1, kind: Deployment, name: ts-inside-payment-mongo}
+        selector: {app: ts-inside-payment-mongo}
+        traits: [schedulable, stateful, deschedulable]
+        index: 3
+      - id: payment-db
+        workload: {apiVersion: apps/v1, kind: Deployment, name: ts-payment-mongo}
+        selector: {app: ts-payment-mongo}
+        traits: [schedulable, stateful, deschedulable]
+        index: 3
+      - id: assurance-db
+        workload: {apiVersion: apps/v1, kind: Deployment, name: ts-assurance-mongo}
+        selector: {app: ts-assurance-mongo}
+        traits: [schedulable, stateful, deschedulable]
+        index: 3
+      - id: ticket-office-db
+        workload: {apiVersion: apps/v1, kind: Deployment, name: ts-ticket-office-mongo}
+        selector: {app: ts-ticket-office-mongo}
+        traits: [schedulable, stateful, deschedulable]
+        index: 3
+      - id: voucher-db
+        workload: {apiVersion: apps/v1, kind: Deployment, name: ts-voucher-mysql}
+        selector: {app: ts-voucher-mysql}
+        traits: [schedulable, stateful, deschedulable]
+        index: 3
+      - id: food-map-db
+        workload: {apiVersion: apps/v1, kind: Deployment, name: ts-food-map-mongo}
+        selector: {app: ts-food-map-mongo}
+        traits: [schedulable, stateful, deschedulable]
+        index: 3
+      - id: consign-db
+        workload: {apiVersion: apps/v1, kind: Deployment, name: ts-consign-mongo}
+        selector: {app: ts-consign-mongo}
+        traits: [schedulable, stateful, deschedulable]
+        index: 3
+      - id: consign-price-db
+        workload: {apiVersion: apps/v1, kind: Deployment, name: ts-consign-price-mongo}
+        selector: {app: ts-consign-price-mongo}
+        traits: [schedulable, stateful, deschedulable]
+        index: 3
+      - id: food-db
+        workload: {apiVersion: apps/v1, kind: Deployment, name: ts-food-mongo}
+        selector: {app: ts-food-mongo}
+        traits: [schedulable, stateful, deschedulable]
+        index: 3
+    endpoints:
+      - id: ui-http
+        component: ui-dashboard
+        service: ts-ui-dashboard
+        port: 8080
+        protocol: http
+        path: /
+      - id: node-proxy-http
+        component: node-proxy
+        service: node-proxy
+        port: 80
+        protocol: http
+        path: /
+    loadScenarios:
+      - id: ticket-search-journey
+        engine: locust
+        script: kubephos/train-ticket-locustfile.py
+        content: |
+          from datetime import date, timedelta
+          from locust import HttpUser, between, task
+
+          class WebsiteUser(HttpUser):
+              wait_time = between(1, 3)
+
+              def on_start(self):
+                  response = self.client.post(
+                      "/api/v1/users/login",
+                      json={"username": "fdse_microservice", "password": "111111"},
+                      name="login",
+                  )
+                  if response.ok:
+                      data = response.json().get("data") or {}
+                      token = data.get("token")
+                      if token:
+                          self.client.headers.update({"Authorization": "Bearer " + token})
+
+              @task(3)
+              def high_speed_search(self):
+                  self.search("/api/v1/travelservice/trips/left", "Shang Hai", "Su Zhou", "high-speed search")
+
+              @task(2)
+              def regular_search(self):
+                  self.search("/api/v1/travel2service/trips/left", "Shang Hai", "Nan Jing", "regular search")
+
+              def search(self, path, departure, arrival, name):
+                  payload = {
+                      "departureTime": (date.today() + timedelta(days=1)).isoformat(),
+                      "startingPlace": departure,
+                      "endPlace": arrival,
+                  }
+                  with self.client.post(path, json=payload, name=name, catch_response=True) as response:
+                      if not response.ok:
+                          response.failure("HTTP " + str(response.status_code))
+                          return
+                      try:
+                          body = response.json()
+                      except ValueError:
+                          response.failure("invalid JSON response")
+                          return
+                      if body.get("data") is None:
+                          response.failure(str(body.get("msg") or "missing result"))
+        runtimeImage: locustio/locust:2.42.6
+        targetEndpoint: node-proxy-http
+  additionalManifests:
+    - id: node-proxy
+      content: |
+        apiVersion: v1
+        kind: ConfigMap
+        metadata:
+          name: node-proxy
+        data:
+          default.conf.template: |
+            server {
+              listen 8080;
+              proxy_http_version 1.1;
+              proxy_set_header Connection "";
+              proxy_set_header X-Real-IP $remote_addr;
+              proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+              proxy_set_header X-Forwarded-Proto $scheme;
+              proxy_set_header X-Kubephos-Proxy-Node ${NODE_NAME};
+              proxy_set_header X-Kubephos-Proxy-Zone ${NODE_ZONE};
+              location /api/v1/adminbasicservice/ { proxy_pass http://ts-admin-basic-info-service:18767; }
+              location /api/v1/adminorderservice/ { proxy_pass http://ts-admin-order-service:16112; }
+              location /api/v1/adminrouteservice/ { proxy_pass http://ts-admin-route-service:16113; }
+              location /api/v1/admintravelservice/ { proxy_pass http://ts-admin-travel-service:16114; }
+              location /api/v1/adminuserservice/ { proxy_pass http://ts-admin-user-service:16115; }
+              location /api/v1/assuranceservice/ { proxy_pass http://ts-assurance-service:18888; }
+              location /api/v1/auth { proxy_pass http://ts-auth-service:12340; }
+              location /api/v1/users/login { proxy_pass http://ts-auth-service:12340; }
+              location /api/v1/users/ { proxy_pass http://ts-auth-service:12340; }
+              location /api/v1/basicservice/ { proxy_pass http://ts-basic-service:15680; }
+              location /api/v1/cancelservice/ { proxy_pass http://ts-cancel-service:18885; }
+              location /api/v1/configservice/ { proxy_pass http://ts-config-service:15679; }
+              location /api/v1/consignpriceservice/ { proxy_pass http://ts-consign-price-service:16110; }
+              location /api/v1/consignservice/ { proxy_pass http://ts-consign-service:16111; }
+              location /api/v1/contactservice/ { proxy_pass http://ts-contacts-service:12347; }
+              location /api/v1/executeservice/ { proxy_pass http://ts-execute-service:12386; }
+              location /api/v1/foodservice/ { proxy_pass http://ts-food-service:18856; }
+              location /api/v1/inside_pay_service/ { proxy_pass http://ts-inside-payment-service:18673; }
+              location /api/v1/newsservice/ { proxy_pass http://ts-news-service:12862; }
+              location /api/v1/notifyservice/ { proxy_pass http://ts-notification-service:17853; }
+              location /api/v1/orderOtherService/ { proxy_pass http://ts-order-other-service:12032; }
+              location /api/v1/orderservice/ { proxy_pass http://ts-order-service:12031; }
+              location /api/v1/paymentservice/ { proxy_pass http://ts-payment-service:19001; }
+              location /api/v1/preserveotherservice/ { proxy_pass http://ts-preserve-other-service:14569; }
+              location /api/v1/preserveservice/ { proxy_pass http://ts-preserve-service:14568; }
+              location /api/v1/priceservice/ { proxy_pass http://ts-price-service:16579; }
+              location /api/v1/rebookservice/ { proxy_pass http://ts-rebook-service:18886; }
+              location /api/v1/routeplanservice/ { proxy_pass http://ts-route-plan-service:14578; }
+              location /api/v1/routeservice/ { proxy_pass http://ts-route-service:11178; }
+              location /api/v1/seatservice/ { proxy_pass http://ts-seat-service:18898; }
+              location /api/v1/securityservice/ { proxy_pass http://ts-security-service:11188; }
+              location /api/v1/stationservice/ { proxy_pass http://ts-station-service:12345; }
+              location /api/v1/ticketoffice/ { proxy_pass http://ts-ticket-office-service:16108; }
+              location /api/v1/ticketinfoservice/ { proxy_pass http://ts-ticketinfo-service:15681; }
+              location /api/v1/trainservice/ { proxy_pass http://ts-train-service:14567; }
+              location /api/v1/travel2service/ { proxy_pass http://ts-travel2-service:16346; }
+              location /api/v1/travelplanservice/ { proxy_pass http://ts-travel-plan-service:14322; }
+              location /api/v1/travelservice/ { proxy_pass http://ts-travel-service:12346; }
+              location /api/v1/userservice/ { proxy_pass http://ts-user-service:12342; }
+              location /api/v1/verifycode/ { proxy_pass http://ts-verification-code-service:15678; }
+              location /api/v1/voucherservice/ { proxy_pass http://ts-voucher-service:16101; }
+              location / { proxy_pass http://ts-ui-dashboard:8080; }
+            }
+        ---
+        apiVersion: apps/v1
+        kind: DaemonSet
+        metadata:
+          name: node-proxy
+          labels: {app: node-proxy, component: node-proxy}
+        spec:
+          selector:
+            matchLabels: {app: node-proxy}
+          template:
+            metadata:
+              labels: {app: node-proxy, component: node-proxy}
+            spec:
+              nodeSelector: {kubephos.dev/role: application}
+              containers:
+                - name: nginx
+                  image: nginx:1.27-alpine
+                  ports: [{name: http, containerPort: 8080}]
+                  env:
+                    - name: NODE_NAME
+                      valueFrom:
+                        fieldRef: {fieldPath: spec.nodeName}
+                    - name: NODE_ZONE
+                      valueFrom:
+                        fieldRef: {fieldPath: "metadata.labels['topology.kubernetes.io/zone']"}
+                  volumeMounts:
+                    - {name: config, mountPath: /etc/nginx/templates/default.conf.template, subPath: default.conf.template}
+                  resources:
+                    requests: {cpu: 25m, memory: 32Mi}
+                    limits: {cpu: 250m, memory: 128Mi}
+              volumes:
+                - name: config
+                  configMap: {name: node-proxy}
+        ---
+        apiVersion: v1
+        kind: Service
+        metadata:
+          name: node-proxy
+        spec:
+          type: NodePort
+          externalTrafficPolicy: Local
+          selector: {app: node-proxy}
+          ports: [{name: http, port: 80, targetPort: 8080}]
+  excludeResources:
+    - {apiVersion: apps/v1, kind: Deployment, name: jaeger}
+    - {apiVersion: v1, kind: Service, name: jaeger-query}
+    - {apiVersion: v1, kind: Service, name: jaeger-collector}
+    - {apiVersion: v1, kind: Service, name: jaeger}
+    - {apiVersion: v1, kind: Service, name: zipkin}
+  storageClassMappings:
+    - source: nfs
+      target: shared-storage
+      removeStaticVolumes: true
+  imageMappings:
+    - source: mongo
+      target: mongo:4.0.28
+  valuesSchema:
+    type: object
+    additionalProperties: false
+    properties:
+      initialReplicas:
+        type: integer
+        title: Initial replicas
+        minimum: 1
+        maximum: 20
+      replicaOverrides:
+        type: object
+        title: Service overrides
+        additionalProperties: true
+  defaults:
+    initialReplicas: 1
+    replicaOverrides: {}
+  overlays:
+    - target: {apiVersion: v1, kind: Service, name: ts-ui-dashboard}
+      operations:
+        - {op: remove, path: /spec/ports/0/nodePort}
+        - {op: remove, path: /spec/type}

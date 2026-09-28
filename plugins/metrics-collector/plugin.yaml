@@ -3,7 +3,7 @@ kind: Plugin
 metadata:
   id: io.kubephos.metrics.prometheus.collect
   name: Kubernetes metrics collector
-  version: 0.3.2
+  version: 0.3.4
   description: Collects a normalized workload dataset through a compatible metrics capability.
 spec:
   protocol: v1alpha1
@@ -54,7 +54,8 @@ spec:
         x-kubephos-artifact-version: v1alpha1
       window:
         type: string
-        title: Maximum fallback lookback
+        title: Metrics fallback window
+        x-kubephos-hidden: true
         enum:
           - 5m
           - 15m
@@ -72,11 +73,10 @@ spec:
         default: 15s
       sloMilliseconds:
         type: integer
-        title: Response time SLO (ms)
-        description: A time window violates the SLO when its P95 response time exceeds this value.
+        title: Response time SLO (optional, ms)
+        description: Leave empty to omit the SLO target line and violation metrics.
         minimum: 1
         maximum: 600000
-        default: 250
   runtime:
     executable: metrics-collector-plugin
     timeout: 10m

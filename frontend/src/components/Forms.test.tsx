@@ -58,6 +58,15 @@ describe('RuntimeDialog', () => {
     expect(selectors[1].querySelector('option[value="art_registry_one"]')).not.toBeInTheDocument()
     expect(selectors[1].querySelector('option[value="art_registry_two"]')).toBeInTheDocument()
   })
+
+  it('shows unavailable saved artifacts instead of blank runtime selectors', () => {
+    const runtime = {configured: true, status: 'invalid', message: '', profile: {endpointArtifactId: 'art_old_executor', credentialArtifactId: 'art_old_executor_credential', registries: [{endpointArtifactId: 'art_old_registry', credentialArtifactId: 'art_old_pull'}]}}
+    render(<RuntimeDialog open close={() => {}} runtime={runtime} session={{authenticated: true}} applications={[]} artifacts={artifacts} connections={[]} credentials={[]} onDone={async () => {}} />)
+    expect(screen.getByRole('combobox', {name: 'Executor endpoint'})).toHaveValue('art_old_executor')
+    expect(screen.getByRole('option', {name: 'art_old_executor · unavailable'})).toBeInTheDocument()
+    expect(screen.getByRole('combobox', {name: 'Registry endpoint'})).toHaveValue('art_old_registry')
+    expect(screen.getByRole('button', {name: 'Validate configuration'})).toBeDisabled()
+  })
 })
 
 describe('ConnectionDialog', () => {
@@ -71,16 +80,17 @@ describe('ConnectionDialog', () => {
     render(<ConnectionDialog open close={close} plugins={[proxmoxPlugin]} session={{authenticated: true, csrfToken: 'csrf'}} applications={[]} artifacts={[]} connections={[]} credentials={[]} onDone={onDone} />)
 
     fireEvent.change(screen.getByRole('textbox', {name: 'Name'}), {target: {value: 'Lab Proxmox'}})
-    fireEvent.change(screen.getByRole('textbox', {name: 'Credential name'}), {target: {value: 'Lab token'}})
+    expect(screen.queryByRole('textbox', {name: 'Description'})).not.toBeInTheDocument()
     fireEvent.change(screen.getByRole('textbox', {name: 'Token ID'}), {target: {value: 'root@pam!kubephos'}})
     fireEvent.change(screen.getByLabelText('Token secret'), {target: {value: 'secret-value'}})
-    fireEvent.change(screen.getByRole('textbox', {name: 'Proxmox endpoint'}), {target: {value: 'https://proxmox.test:8006'}})
+    fireEvent.change(screen.getByRole('textbox', {name: 'Endpoint'}), {target: {value: 'https://proxmox.test:8006'}})
     fireEvent.click(screen.getByRole('button', {name: 'Validate and save'}))
 
     await waitFor(() => expect(fetch).toHaveBeenCalledTimes(2))
-    expect(JSON.parse(fetch.mock.calls[0][1].body)).toEqual({name: 'Lab token', kind: 'proxmox-api-token', value: {tokenId: 'root@pam!kubephos', tokenSecret: 'secret-value'}})
+    expect(JSON.parse(fetch.mock.calls[0][1].body)).toEqual({name: 'Lab Proxmox API token', kind: 'proxmox-api-token', value: {tokenId: 'root@pam!kubephos', tokenSecret: 'secret-value'}})
     expect(JSON.parse(fetch.mock.calls[1][1].body)).toMatchObject({
       name: 'Lab Proxmox',
+      description: '',
       pluginId: 'io.kubephos.infrastructure.proxmox.discovery',
       configuration: {endpoint: 'https://proxmox.test:8006', credentialRef: 'cred_created', verifyTLS: true}
     })
@@ -103,13 +113,12 @@ describe('InfrastructureServiceDialog', () => {
       credentials: [],
       onDone: async () => {}
     }
-    const view = render(<InfrastructureServiceDialog {...props} />)
+    const view = render(<InfrastructureServiceDialog {...props} initialKind="nfs" />)
 
-    fireEvent.click(screen.getByRole('button', {name: /NFS/}))
     fireEvent.change(screen.getByRole('textbox', {name: 'Service name'}), {target: {value: 'shared-data'}})
     expect(screen.getByRole('button', {name: 'Create NFS'})).toBeInTheDocument()
 
-    view.rerender(<InfrastructureServiceDialog {...props} workspaces={[{...workspace}]} connections={[{...connection}]} templates={[{...machineTemplate}]} />)
+    view.rerender(<InfrastructureServiceDialog {...props} initialKind="nfs" workspaces={[{...workspace}]} connections={[{...connection}]} templates={[{...machineTemplate}]} />)
 
     await waitFor(() => expect(screen.getByRole('button', {name: 'Create NFS'})).toBeInTheDocument())
     expect(screen.getByRole('textbox', {name: 'Service name'})).toHaveValue('shared-data')
@@ -140,24 +149,25 @@ describe('KubernetesClusterDialog', () => {
 })
 
 describe('ApplicationDialog', () => {
-  it('generates an application from safe defaults without requiring a descriptor', async () => {
-    const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({ref: 'app:dev.kubephos.mubench.generated@v1'}), {status: 201, headers: {'Content-Type': 'application/json'}}))
+  it('imports a validated application descriptor', async () => {
+    const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({reference: 'app:example.application@1.0.0'}), {status: 201, headers: {'Content-Type': 'application/json'}}))
     vi.stubGlobal('fetch', fetch)
     const close = vi.fn()
     const onDone = vi.fn().mockResolvedValue(undefined)
 
-    render(<ApplicationDialog open close={close} plugins={[applicationFactoryPlugin]} session={{authenticated: true, csrfToken: 'csrf'}} applications={[]} artifacts={[]} connections={[]} credentials={[]} onDone={onDone} />)
+    render(<ApplicationDialog open close={close} plugins={[]} session={{authenticated: true, csrfToken: 'csrf'}} applications={[]} artifacts={[]} connections={[]} credentials={[]} onDone={onDone} />)
 
-    expect(screen.getByRole('button', {name: 'Generate'})).toHaveClass('active')
-    expect(screen.getByRole('spinbutton', {name: 'Services'})).toHaveValue(6)
-    expect(screen.queryByText(/custom function/i)).not.toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', {name: 'Generate application'}))
+	const descriptor = 'apiVersion: catalog.kubephos.dev/v1alpha1\nkind: Application\n'
+	const file = new File([descriptor], 'application.yaml', {type: 'application/yaml'})
+	Object.defineProperty(file, 'text', {value: async () => descriptor})
+	fireEvent.change(screen.getByLabelText('Application descriptor'), {target: {files: [file]}})
+	fireEvent.submit(screen.getByRole('button', {name: 'Validate and import'}).closest('form')!)
 
     await waitFor(() => expect(fetch).toHaveBeenCalledOnce())
-    expect(fetch.mock.calls[0][0]).toBe('/api/v1/catalog/application-factories/io.kubephos.applications.mubench.generate')
-    expect(JSON.parse(fetch.mock.calls[0][1].body)).toEqual({name: 'muBench application', serviceCount: 6, topology: 'chain'})
+    expect(fetch.mock.calls[0][0]).toBe('/api/v1/catalog/applications')
+    expect(JSON.parse(fetch.mock.calls[0][1].body)).toEqual({descriptor})
     expect(close).toHaveBeenCalledOnce()
-    expect(onDone).toHaveBeenCalledWith('Application generated and added to the catalog.')
+    expect(onDone).toHaveBeenCalledWith('Application validated and imported.')
   })
 })
 
@@ -195,24 +205,6 @@ const proxmoxPlugin: Plugin = {
       }
     }
   }]
-}
-
-const applicationFactoryPlugin: Plugin = {
-  id: 'io.kubephos.applications.mubench.generate',
-  name: 'muBench application generator',
-  version: '0.1.3',
-  description: 'Generate muBench applications.',
-  capabilities: ['catalog.application.generate'],
-  runtime: {kind: 'process'},
-  schema: {
-    type: 'object',
-    required: ['name', 'serviceCount', 'topology'],
-    properties: {
-      name: {type: 'string', title: 'Application name', default: 'muBench application'},
-      serviceCount: {type: 'integer', title: 'Services', default: 6, minimum: 2, maximum: 100},
-      topology: {type: 'string', title: 'Request topology', default: 'chain', enum: ['chain', 'fan-out', 'tree']}
-    }
-  }
 }
 
 const workspace: Workspace = {id: 'ws_default', name: 'Default', description: '', status: 'ready', createdAt: '2026-09-12T00:00:00Z'}

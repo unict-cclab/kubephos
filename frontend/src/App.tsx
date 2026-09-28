@@ -1,9 +1,10 @@
 import {lazy, Suspense, useCallback, useEffect, useMemo, useState} from 'react'
 import {ApiError, request} from './api'
 import {ApplicationDialog, AuthDialog, ConnectionDialog, CredentialDialog, InfrastructureServiceDialog, KubernetesClusterDialog, MachineTemplateDialog, OperationDialog, PluginDialog, RuntimeDialog, WorkspaceDialog} from './components/Forms'
-import {OperationDetailsPage} from './components/OperationDrawer'
+import {OperationDetailsPage, PipelineRunLogsPage} from './components/OperationDrawer'
 import {PipelineDialog} from './components/PipelineDialog'
 import {ToastRegion, type ToastMessage} from './components/ToastRegion'
+import {ThemeToggle} from './components/ThemeToggle'
 import {Views} from './components/Views'
 import {WorkspaceFlowDialog} from './components/WorkspaceFlowDialog'
 import type {Application, PlatformData, PluginPackage, Session, View, Workspace} from './types'
@@ -11,7 +12,7 @@ import {hashView} from './detailRoute'
 
 const TerminalDialog = lazy(() => import('./components/TerminalDialog').then(module => ({default: module.TerminalDialog})))
 
-const emptyData: PlatformData = {system: null, pluginRuntime: null, workspaces: [], pipelines: [], pipelineRuns: [], experiments: [], experimentConfigurations: [], operations: [], artifacts: [], plugins: [], pluginPackages: [], pluginImports: [], applications: [], strategies: [], credentials: [], connections: [], machineTemplates: [], infrastructureServices: [], kubernetesClusters: [], resources: [], audit: []}
+const emptyData: PlatformData = {system: null, pluginRuntime: null, workspaces: [], pipelines: [], pipelineRuns: [], experiments: [], experimentConfigurations: [], operations: [], artifacts: [], plugins: [], pluginPackages: [], pluginImports: [], applications: [], strategies: [], credentials: [], connections: [], machineTemplates: [], infrastructureServices: [], kubernetesClusters: [], resources: [], audit: [], users: [], clusterAssignments: []}
 const viewMetadata: Record<View, string> = {
   overview: 'Overview',
   workspaces: 'Workspaces',
@@ -25,6 +26,7 @@ const viewMetadata: Record<View, string> = {
   experiments: 'Configurations',
   suites: 'Suites',
   advanced: 'Advanced'
+  ,users: 'Users'
 }
 const navigation: Array<[View, string]> = [
   ['overview', 'Overview'],
@@ -35,7 +37,6 @@ const navigation: Array<[View, string]> = [
   ['results', 'Experiments'],
   ['suites', 'Suites']
 ]
-const navigationGroups = [navigation.slice(0, 4), navigation.slice(4)]
 
 function NavigationIcon({view}: {view: View}) {
   const common = {fill: 'none', stroke: 'currentColor', strokeWidth: 1.8, strokeLinecap: 'round' as const, strokeLinejoin: 'round' as const}
@@ -47,6 +48,7 @@ function NavigationIcon({view}: {view: View}) {
     experiments: <><path d="M6 4h12v16H6zM9 8h6M9 12h6M9 16h4"/></>,
     results: <><circle cx="12" cy="12" r="9"/><path d="m10 8 6 4-6 4z"/></>,
     suites: <><path d="M4 7h14m-3-3 3 3-3 3M20 17H6m3-3-3 3 3 3"/></>
+    ,users: <><circle cx="9" cy="8" r="3"/><path d="M3.5 19c.5-4 2.3-6 5.5-6s5 2 5.5 6M16 7h5M18.5 4.5v5"/></>
   } as Partial<Record<View, React.ReactNode>>
   return <svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true" {...common}>{shape[view]}</svg>
 }
@@ -65,6 +67,7 @@ export default function App() {
   const [operationPluginID, setOperationPluginID] = useState<string | undefined>()
   const [operationPreset, setOperationPreset] = useState<Record<string, unknown>>({})
   const [operationID, setOperationID] = useState<string | null>(null)
+  const [pipelineRunID, setPipelineRunID] = useState<string | null>(null)
   const [toasts, setToasts] = useState<ToastMessage[]>([])
   const [clusterActions, setClusterActions] = useState<Record<string, {pending: boolean; message: string; error: boolean}>>({})
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
@@ -79,30 +82,33 @@ export default function App() {
     if (!session?.authenticated) return
     setRefreshing(true)
     try {
-		const [system, pluginRuntime, workspaces, pipelines, pipelineRuns, experiments, experimentConfigurations, operations, artifacts, plugins, pluginPackages, pluginImports, applications, strategies, credentials, connections, machineTemplates, infrastructureServices, kubernetesClusters, resources, audit] = await Promise.all([
+		const admin = session.user?.role === 'admin'
+		const emptyItems = {items: []}
+		const [system, pluginRuntime, workspaces, pipelines, pipelineRuns, experiments, experimentConfigurations, operations, artifacts, plugins, pluginPackages, pluginImports, applications, strategies, credentials, connections, machineTemplates, infrastructureServices, kubernetesClusters, resources, audit, users] = await Promise.all([
         request<PlatformData['system']>('/system'),
-        request<PlatformData['pluginRuntime']>('/plugin-runtime'),
+		admin ? request<PlatformData['pluginRuntime']>('/plugin-runtime') : Promise.resolve(null),
         request<{items: PlatformData['workspaces']}>('/workspaces'),
-        request<{items: PlatformData['pipelines']}>('/pipelines'),
+		admin ? request<{items: PlatformData['pipelines']}>('/pipelines') : Promise.resolve(emptyItems),
         request<{items: PlatformData['pipelineRuns']}>('/pipeline-runs'),
         request<{items: PlatformData['experiments']}>('/experiments'),
         request<{items: PlatformData['experimentConfigurations']}>('/experiment-configurations'),
         request<{items: PlatformData['operations']}>('/operations'),
         request<{items: PlatformData['artifacts']}>('/artifacts?limit=500'),
         request<{items: PlatformData['plugins']}>('/plugins'),
-        request<{items: PlatformData['pluginPackages']}>('/plugin-packages'),
-        request<{items: PlatformData['pluginImports']}>('/plugin-imports'),
+		admin ? request<{items: PlatformData['pluginPackages']}>('/plugin-packages') : Promise.resolve(emptyItems),
+		admin ? request<{items: PlatformData['pluginImports']}>('/plugin-imports') : Promise.resolve(emptyItems),
         request<{items: PlatformData['applications']}>('/catalog/applications'),
         request<{items: PlatformData['strategies']}>('/catalog/strategies'),
-        request<{items: PlatformData['credentials']}>('/credentials'),
-		request<{items: PlatformData['connections']}>('/connections'),
-		request<{items: PlatformData['machineTemplates']}>('/machine-templates'),
-		request<{items: PlatformData['infrastructureServices']}>('/infrastructure-services'),
+		admin ? request<{items: PlatformData['credentials']}>('/credentials') : Promise.resolve(emptyItems),
+		admin ? request<{items: PlatformData['connections']}>('/connections') : Promise.resolve(emptyItems),
+		admin ? request<{items: PlatformData['machineTemplates']}>('/machine-templates') : Promise.resolve(emptyItems),
+		admin ? request<{items: PlatformData['infrastructureServices']}>('/infrastructure-services') : Promise.resolve(emptyItems),
 		request<{items: PlatformData['kubernetesClusters']}>('/kubernetes-clusters'),
-		request<{items: PlatformData['resources']}>('/infrastructure/resources'),
-        request<{items: PlatformData['audit']}>('/audit?limit=20')
+		admin ? request<{items: PlatformData['resources']}>('/infrastructure/resources') : Promise.resolve(emptyItems),
+		admin ? request<{items: PlatformData['audit']}>('/audit?limit=20') : Promise.resolve(emptyItems),
+		admin ? request<{items: PlatformData['users']; assignments: PlatformData['clusterAssignments']}>('/users') : Promise.resolve({items: [], assignments: []})
       ])
-		setData({system, pluginRuntime, workspaces: workspaces.items, pipelines: pipelines.items, pipelineRuns: pipelineRuns.items, experiments: experiments.items, experimentConfigurations: experimentConfigurations.items, operations: operations.items, artifacts: artifacts.items, plugins: plugins.items, pluginPackages: pluginPackages.items, pluginImports: pluginImports.items, applications: applications.items, strategies: strategies.items, credentials: credentials.items, connections: connections.items, machineTemplates: machineTemplates.items, infrastructureServices: infrastructureServices.items, kubernetesClusters: kubernetesClusters.items, resources: resources.items, audit: audit.items})
+		setData({system, pluginRuntime, workspaces: workspaces.items, pipelines: pipelines.items, pipelineRuns: pipelineRuns.items, experiments: experiments.items, experimentConfigurations: experimentConfigurations.items, operations: operations.items, artifacts: artifacts.items, plugins: plugins.items, pluginPackages: pluginPackages.items, pluginImports: pluginImports.items, applications: applications.items, strategies: strategies.items, credentials: credentials.items, connections: connections.items, machineTemplates: machineTemplates.items, infrastructureServices: infrastructureServices.items, kubernetesClusters: kubernetesClusters.items, resources: resources.items, audit: audit.items, users: users.items, clusterAssignments: users.assignments})
       setConnected(true)
       if (!silent) notify('Everything is up to date.')
     } catch (cause) {
@@ -112,7 +118,7 @@ export default function App() {
     } finally {
       setRefreshing(false)
     }
-  }, [notify, session?.authenticated])
+  }, [notify, session?.authenticated, session?.user?.role])
 
   useEffect(() => {
     request<Session>('/auth/status').then(result => setSession(result)).catch(cause => notify(cause instanceof Error ? cause.message : 'Could not check session.', true)).finally(() => setCheckingSession(false))
@@ -126,12 +132,18 @@ export default function App() {
   }, [load, session?.authenticated])
 
   useEffect(() => {
-    const update = () => setView(initialView())
+    const update = () => {
+      setView(initialView())
+      setOperationID(null)
+      setPipelineRunID(null)
+    }
     window.addEventListener('hashchange', update)
     return () => window.removeEventListener('hashchange', update)
   }, [])
 
   const navigate = (next: View) => {
+    setOperationID(null)
+    setPipelineRunID(null)
     window.location.hash = next
     setView(next)
   }
@@ -143,7 +155,9 @@ export default function App() {
 
   const logout = async () => {
     try {
-      await request('/auth/logout', {method: 'POST', body: '{}'}, session?.csrfToken)
+	  const result = await request<{logoutURL: string}>('/auth/logout', {method: 'POST', body: '{}'}, session?.csrfToken)
+	  window.location.assign(result.logoutURL)
+	  return
     } catch (cause) {
       notify(cause instanceof Error ? cause.message : 'Could not close the session.', true)
     }
@@ -273,7 +287,7 @@ export default function App() {
   }
 
   if (checkingSession) return <div className="startup-screen"><span className="brand-mark">K</span><strong>Loading…</strong></div>
-  if (!session?.authenticated) return <><AuthDialog setupRequired={Boolean(session?.setupRequired)} onAuthenticated={result => {setSession(result); notify(session?.setupRequired ? 'Administrator created.' : 'Signed in.')}} /><ToastRegion items={toasts} dismiss={dismiss} /></>
+  if (!session?.authenticated) return <><div className="auth-theme-toggle"><ThemeToggle /></div><AuthDialog setupRequired={Boolean(session?.setupRequired)} onAuthenticated={result => {setSession(result); notify(session?.setupRequired ? 'Administrator created.' : 'Signed in.')}} /><ToastRegion items={toasts} dismiss={dismiss} /></>
 
   const title = viewMetadata[view]
   const healthy = connected && data.system?.status === 'healthy'
@@ -282,12 +296,12 @@ export default function App() {
       <aside className="sidebar">
         <button className="brand" onClick={() => navigate('overview')} aria-label="KubePhos home"><span className="brand-mark">K</span><strong>KubePhos</strong></button>
         <button className="sidebar-toggle" type="button" aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'} onClick={() => setSidebarCollapsed(value => !value)}>{sidebarCollapsed ? '›' : '‹'}</button>
-        <nav className="navigation" aria-label="Main navigation">{navigationGroups.map((group, index) => <div className="navigation-group" key={index}>{group.map(([target, label]) => <button className={`nav-item ${view === target ? 'active' : ''}`} title={sidebarCollapsed ? label : undefined} aria-label={label} key={target} onClick={() => navigate(target)} aria-current={view === target ? 'page' : undefined}><NavigationIcon view={target} /><span className="nav-label">{label}</span></button>)}</div>)}</nav>
-        <div className="sidebar-footer"><div className={`health-dot ${healthy ? 'healthy' : 'unhealthy'}`} /><span><strong>{healthy ? 'Healthy' : connected ? 'Needs attention' : 'Offline'}</strong><small>{data.system?.version ?? 'dev'}</small></span></div>
+		<nav className="navigation" aria-label="Main navigation">{visibleNavigation(session.user?.role === 'admin').map((group, index) => <div className="navigation-group" key={index}>{group.map(([target, label]) => <button className={`nav-item ${view === target ? 'active' : ''}`} title={sidebarCollapsed ? label : undefined} aria-label={label} key={target} onClick={() => navigate(target)} aria-current={view === target ? 'page' : undefined}><NavigationIcon view={target} /><span className="nav-label">{label}</span></button>)}</div>)}</nav>
+		<div className="sidebar-footer"><div className={`health-dot ${healthy ? 'healthy' : 'unhealthy'}`} /><span><strong>{healthy ? 'Healthy' : connected ? 'Needs attention' : 'Offline'}</strong>{data.system?.version && data.system.version !== 'dev' && <small>{data.system.version}</small>}</span></div>
       </aside>
       <main className="main">
-		<header className="topbar"><nav className="app-breadcrumbs" aria-label="Breadcrumb"><button onClick={() => navigate('overview')}>KubePhos</button><span aria-hidden="true">/</span><strong aria-current="page">{title}</strong></nav><div className="topbar-actions"><span className="signed-user">{session.user?.username}</span><button className="button secondary compact" disabled={refreshing} onClick={() => load(false)}>{refreshing ? 'Refreshing…' : 'Refresh'}</button><button className="button secondary compact" onClick={logout}>Sign out</button></div></header>
-        <div className="page-content">{operationID ? <OperationDetailsPage operationID={operationID} session={session} plugins={data.plugins} close={() => setOperationID(null)} open={setOperationID} changed={() => load(true)} notify={notify} /> : <Views
+		<header className="topbar"><nav className="app-breadcrumbs" aria-label="Breadcrumb"><button onClick={() => navigate('overview')}>KubePhos</button><span aria-hidden="true">/</span><strong aria-current="page">{title}</strong></nav><div className="topbar-actions"><span className="signed-user">{session.user?.username}</span><ThemeToggle /><button className="button secondary compact" disabled={refreshing} onClick={() => load(false)}>{refreshing ? 'Refreshing…' : 'Refresh'}</button><button className="button secondary compact" onClick={logout}>Sign out</button></div></header>
+        <div className="page-content">{pipelineRunID ? <PipelineRunLogsPage runID={pipelineRunID} close={() => setPipelineRunID(null)} notify={notify} /> : operationID ? <OperationDetailsPage operationID={operationID} session={session} plugins={data.plugins} close={() => setOperationID(null)} open={setOperationID} changed={() => load(true)} notify={notify} /> : <Views
           view={view}
           {...data}
           session={session}
@@ -299,6 +313,7 @@ export default function App() {
           createOperation={openOperationForm}
           openWorkspace={openWorkspace}
           openOperation={setOperationID}
+          openPipelineRun={setPipelineRunID}
           importApplication={() => setModal('application')}
           deleteApplication={deleteApplication}
           importPlugin={() => setModal('plugin')}
@@ -340,5 +355,10 @@ export default function App() {
 
 function initialView(): View {
   const next = hashView(window.location.hash)
-  return navigation.some(([view]) => view === next) ? next : 'overview'
+  return next === 'users' || navigation.some(([view]) => view === next) ? next : 'overview'
+}
+
+function visibleNavigation(admin: boolean): Array<Array<[View, string]>> {
+	const items = admin ? [...navigation, ['users', 'Users'] as [View, string]] : navigation.filter(([view]) => !['infrastructure'].includes(view))
+	return [items.slice(0, admin ? 4 : 3), items.slice(admin ? 4 : 3)]
 }

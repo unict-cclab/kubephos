@@ -20,6 +20,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"kubephos.dev/kubephos/internal/domain"
+	"kubephos.dev/kubephos/internal/managedcomponents"
 	"kubephos.dev/kubephos/internal/plugins"
 )
 
@@ -35,8 +36,7 @@ const (
 	grafanaUser     = "admin"
 	grafanaPort     = 32000
 	prometheusPort  = 32090
-	monAgentVersion = "v0.0.7"
-	monAgentImage   = "ghcr.io/unict-cclab/mon-agent:" + monAgentVersion
+	monAgentVersion = managedcomponents.MonAgentVersion
 	monAgentName    = "kubephos-mon-agent"
 )
 
@@ -85,6 +85,7 @@ type clusterConnection struct {
 		Distribution string `json:"distribution"`
 		Server       string `json:"server"`
 		Kubeconfig   string `json:"kubeconfig"`
+		RegistryHost string `json:"registryHost"`
 	} `json:"spec"`
 }
 
@@ -198,6 +199,15 @@ type podList struct {
 	} `json:"items"`
 }
 
+type nodeList struct {
+	Items []struct {
+		Metadata struct {
+			Name        string            `json:"name"`
+			Annotations map[string]string `json:"annotations"`
+		} `json:"metadata"`
+	} `json:"items"`
+}
+
 type clusterRunner interface {
 	Kubectl(context.Context, string, []byte, ...string) (string, error)
 	Helm(context.Context, string, []byte, []byte, ...string) (string, error)
@@ -209,7 +219,7 @@ type chartFetcher interface {
 
 func (Plugin) Manifest() plugins.Manifest {
 	return plugins.Manifest{
-		ID: pluginID, Name: "Managed observability", Version: "0.2.2",
+		ID: pluginID, Name: "Managed observability", Version: "0.2.3",
 		Description:     "Installs the release-managed metrics and dashboard profile on a Kubernetes cluster.",
 		Schema:          json.RawMessage(`{"type":"object","additionalProperties":false,"required":["clusterConnectionRef","storageClassCapabilityRef","scrapeInterval","retention"],"properties":{"clusterConnectionRef":{"type":"string","title":"Kubernetes cluster","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ClusterConnection","x-kubephos-artifact-version":"v1alpha1"},"storageClassCapabilityRef":{"type":"string","title":"Persistent storage","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"StorageClassCapability","x-kubephos-artifact-version":"v1alpha1"},"scrapeInterval":{"type":"string","title":"Metrics interval","enum":["5s","10s","15s","30s"],"default":"15s"},"retention":{"type":"string","title":"Metrics retention","enum":["1d","7d","15d"],"default":"7d"}}}`),
 		ArtifactInputs:  []domain.ArtifactContract{{Type: "ClusterConnection", Version: "v1alpha1"}, {Type: "StorageClassCapability", Version: "v1alpha1"}},
@@ -354,7 +364,7 @@ func (plugin Plugin) Execute(ctx context.Context, step domain.PlanStep, log plug
 		return nil, err
 	}
 	prometheus := endpointByName(endpoints, "prometheus")
-	manifest, err := monAgentManifest(input.Marker, prometheus)
+	manifest, err := monAgentManifest(input.Marker, prometheus, cluster.Spec.RegistryHost)
 	if err != nil {
 		return nil, err
 	}
@@ -403,6 +413,9 @@ func (plugin Plugin) Verify(ctx context.Context, step domain.PlanStep, raw json.
 	if _, err := runner.Kubectl(ctx, cluster.Spec.Kubeconfig, nil, "rollout", "status", "deployment/"+monAgentName, "-n", namespace, "--timeout=5m"); err != nil {
 		return unhealthy("Managed mon-agent is not ready: "+err.Error(), "monAgent", "unhealthy"), nil
 	}
+	if err := waitForNodeResourceAnnotations(ctx, runner, cluster.Spec.Kubeconfig, 2*time.Minute); err != nil {
+		return unhealthy(err.Error(), "nodeResourceAnnotations", "unhealthy"), nil
+	}
 	if err := verifyPVCs(ctx, runner, cluster.Spec.Kubeconfig); err != nil {
 		return unhealthy(err.Error(), "persistence", "unhealthy"), nil
 	}
@@ -418,7 +431,7 @@ func (plugin Plugin) Verify(ctx context.Context, step domain.PlanStep, raw json.
 	if err := log("info", "Prometheus API, Grafana API, mon-agent, exporters, dashboards and persistent volumes are verified"); err != nil {
 		return domain.HealthReport{}, err
 	}
-	return domain.HealthReport{Status: domain.HealthHealthy, Summary: "Managed observability is ready", Checks: map[string]string{"chart": chartVersion, "prometheus": "ready", "grafana": "ready", "monAgent": monAgentVersion, "pods": "ready", "persistence": "bound", "scrapeInterval": input.ScrapeInterval, "retention": input.Retention}}, nil
+	return domain.HealthReport{Status: domain.HealthHealthy, Summary: "Managed observability is ready", Checks: map[string]string{"chart": chartVersion, "prometheus": "ready", "grafana": "ready", "monAgent": monAgentVersion, "nodeResourceAnnotations": "ready", "pods": "ready", "persistence": "bound", "scrapeInterval": input.ScrapeInterval, "retention": input.Retention}}, nil
 }
 
 func (plugin Plugin) Cleanup(ctx context.Context, step domain.PlanStep, _ json.RawMessage, log plugins.Logger) error {
@@ -487,6 +500,9 @@ func validateArtifacts(cluster clusterConnection, storage storageClassCapability
 	if err := validateKubeconfig(cluster.Spec.Kubeconfig, cluster.Spec.Server); err != nil {
 		return err
 	}
+	if requireWritableDirectories && !validManagedRegistryHost(cluster.Spec.RegistryHost) {
+		return errors.New("managed Harbor address is missing from the verified cluster connection")
+	}
 	if storage.APIVersion != artifactAPI || storage.Kind != "StorageClassCapability" || storage.Metadata.Name == "" || storage.Metadata.Version == "" || storage.Spec.ClusterServer != cluster.Spec.Server || storage.Spec.Provisioner == "" || !storage.Spec.Expansion {
 		return errors.New("persistent storage capability does not match the target cluster")
 	}
@@ -494,6 +510,11 @@ func validateArtifacts(cluster clusterConnection, storage storageClassCapability
 		return errors.New("persistent storage does not guarantee writable workload directories")
 	}
 	return nil
+}
+
+func validManagedRegistryHost(host string) bool {
+	parsed, err := url.Parse("https://" + host)
+	return err == nil && parsed.Hostname() != "" && parsed.Path == "" && parsed.RawQuery == "" && parsed.Fragment == "" && parsed.User == nil
 }
 
 func validateKubeconfig(value, server string) error {
@@ -594,7 +615,10 @@ func managedValues(input stepInput, storageClass, password string) ([]byte, erro
 	return yaml.Marshal(values)
 }
 
-func monAgentManifest(marker string, prometheus serviceEndpoint) ([]byte, error) {
+func monAgentManifest(marker string, prometheus serviceEndpoint, registryHost string) ([]byte, error) {
+	if !validManagedRegistryHost(registryHost) {
+		return nil, errors.New("managed Harbor address is missing from the verified cluster connection")
+	}
 	annotations := map[string]string{ownershipKey: marker}
 	labels := map[string]string{"app.kubernetes.io/name": monAgentName, "app.kubernetes.io/managed-by": "kubephos"}
 	resources := []any{
@@ -608,7 +632,7 @@ func monAgentManifest(marker string, prometheus serviceEndpoint) ([]byte, error)
 		map[string]any{"apiVersion": "apps/v1", "kind": "Deployment", "metadata": map[string]any{"name": monAgentName, "namespace": namespace, "annotations": annotations, "labels": labels}, "spec": map[string]any{
 			"replicas": 1, "selector": map[string]any{"matchLabels": labels}, "template": map[string]any{"metadata": map[string]any{"labels": labels}, "spec": map[string]any{
 				"serviceAccountName": monAgentName, "nodeSelector": map[string]string{"kubephos.dev/role": "management"}, "containers": []any{map[string]any{
-					"name": monAgentName, "image": monAgentImage, "imagePullPolicy": "IfNotPresent",
+					"name": monAgentName, "image": managedcomponents.Image(registryHost, managedcomponents.MonAgentName, monAgentVersion), "imagePullPolicy": "IfNotPresent",
 					"env": []any{
 						map[string]any{"name": "PROMETHEUS_URL", "value": fmt.Sprintf("http://%s.%s.svc:%d", prometheus.ServiceName, namespace, prometheus.Port)},
 						map[string]any{"name": "SCRAPE_PERIOD_SECONDS", "value": "30"},
@@ -778,6 +802,48 @@ func verifyPVCs(ctx context.Context, runner clusterRunner, kubeconfig string) er
 	for _, value := range values {
 		if value != "Bound" {
 			return errors.New("at least one managed observability volume is not bound")
+		}
+	}
+	return nil
+}
+
+func waitForNodeResourceAnnotations(ctx context.Context, runner clusterRunner, kubeconfig string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	var last error
+	for {
+		last = verifyNodeResourceAnnotations(ctx, runner, kubeconfig)
+		if last == nil {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return last
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(3 * time.Second):
+		}
+	}
+}
+
+func verifyNodeResourceAnnotations(ctx context.Context, runner clusterRunner, kubeconfig string) error {
+	raw, err := runner.Kubectl(ctx, kubeconfig, nil, "get", "nodes", "-o", "json")
+	if err != nil {
+		return fmt.Errorf("read node resource annotations: %w", err)
+	}
+	var list nodeList
+	if err := json.Unmarshal([]byte(raw), &list); err != nil {
+		return fmt.Errorf("decode node resource annotations: %w", err)
+	}
+	if len(list.Items) == 0 {
+		return errors.New("node resource annotation inventory is empty")
+	}
+	required := []string{"cpu-usage", "memory-usage", "disk-throughput", "network-throughput"}
+	for _, node := range list.Items {
+		for _, key := range required {
+			if strings.TrimSpace(node.Metadata.Annotations[key]) == "" {
+				return fmt.Errorf("node %s is missing resource annotation %s", node.Metadata.Name, key)
+			}
 		}
 	}
 	return nil

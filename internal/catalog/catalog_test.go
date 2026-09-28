@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"kubephos.dev/kubephos/internal/domain"
 )
 
 const validDescriptor = `apiVersion: catalog.kubephos.dev/v1alpha1
@@ -174,6 +176,76 @@ func TestParseValidatesLoadScenarioEndpoint(t *testing.T) {
 	}
 }
 
+func TestParseAcceptsMultipleEntrypointsAndInlineLoadScript(t *testing.T) {
+	raw := strings.Replace(validDescriptor, "    entrypoint: application.yaml", "    entrypoint: application.yaml\n    additionalEntrypoints: [database.yaml, worker.yaml]", 1)
+	raw = strings.Replace(raw, "  valuesSchema:", `    loadScenarios:
+      - id: default-load
+        engine: locust
+        script: kubephos/default.py
+        content: |
+          from locust import HttpUser
+        runtimeImage: example.test/load:1.0.0
+        targetEndpoint: http
+  valuesSchema:`, 1)
+	application, err := Parse([]byte(raw), "imported")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var descriptor Descriptor
+	if err := json.Unmarshal(application.Descriptor, &descriptor); err != nil {
+		t.Fatal(err)
+	}
+	if len(descriptor.Spec.Package.AdditionalEntrypoints) != 2 || descriptor.Spec.Interface.LoadScenarios[0].Content == "" {
+		t.Fatalf("generic package extensions were not retained: %#v", descriptor.Spec)
+	}
+	duplicate := strings.Replace(raw, "[database.yaml, worker.yaml]", "[database.yaml, application.yaml]", 1)
+	if _, err := Parse([]byte(duplicate), "imported"); err == nil {
+		t.Fatal("expected duplicate package entrypoint rejection")
+	}
+}
+
+func TestParseValidatesStorageClassMappings(t *testing.T) {
+	raw := strings.Replace(validDescriptor, "  valuesSchema:", "  storageClassMappings:\n    - source: nfs\n      target: shared-storage\n      removeStaticVolumes: true\n  valuesSchema:", 1)
+	application, err := Parse([]byte(raw), "imported")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var descriptor Descriptor
+	if err := json.Unmarshal(application.Descriptor, &descriptor); err != nil {
+		t.Fatal(err)
+	}
+	if len(descriptor.Spec.StorageClassMappings) != 1 || !descriptor.Spec.StorageClassMappings[0].RemoveStaticVolumes {
+		t.Fatalf("storage class mapping was not retained: %#v", descriptor.Spec.StorageClassMappings)
+	}
+	duplicate := strings.Replace(raw, "  valuesSchema:", "  storageClassMappings:\n    - source: nfs\n      target: other-storage\n  valuesSchema:", 1)
+	if _, err := Parse([]byte(duplicate), "imported"); err == nil {
+		t.Fatal("expected duplicate source storage class rejection")
+	}
+	same := strings.Replace(raw, "target: shared-storage", "target: nfs", 1)
+	if _, err := Parse([]byte(same), "imported"); err == nil {
+		t.Fatal("expected identity storage class mapping rejection")
+	}
+}
+
+func TestParseValidatesImageMappings(t *testing.T) {
+	raw := strings.Replace(validDescriptor, "  valuesSchema:", "  imageMappings:\n    - source: example.test/api\n      target: example.test/api:1.2.3\n  valuesSchema:", 1)
+	application, err := Parse([]byte(raw), "imported")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var descriptor Descriptor
+	if err := json.Unmarshal(application.Descriptor, &descriptor); err != nil {
+		t.Fatal(err)
+	}
+	if len(descriptor.Spec.ImageMappings) != 1 || descriptor.Spec.ImageMappings[0].Target != "example.test/api:1.2.3" {
+		t.Fatalf("image mapping was not retained: %#v", descriptor.Spec.ImageMappings)
+	}
+	mutable := strings.Replace(raw, "example.test/api:1.2.3", "example.test/api", 1)
+	if _, err := Parse([]byte(mutable), "imported"); err == nil {
+		t.Fatal("expected mutable target image rejection")
+	}
+}
+
 func TestApplicationReferenceRoundTrip(t *testing.T) {
 	value := Reference("dev.kubephos.test-app", "1.0.0")
 	applicationID, version, err := ParseReference(value)
@@ -206,11 +278,20 @@ func TestBuiltInCatalog(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(applications) != 1 || applications[0].ID != "dev.kubephos.online-boutique" {
+	if len(applications) != 5 {
 		t.Fatalf("unexpected built-in catalog: %#v", applications)
 	}
+	byID := map[string]domain.CatalogApplication{}
+	for _, application := range applications {
+		byID[application.ID] = application
+	}
+	for _, applicationID := range []string{"dev.kubephos.bank-of-anthos", "dev.kubephos.bookinfo", "dev.kubephos.mubench", "dev.kubephos.online-boutique", "dev.kubephos.train-ticket"} {
+		if byID[applicationID].ID == "" {
+			t.Fatalf("built-in application %s is missing", applicationID)
+		}
+	}
 	var descriptor Descriptor
-	if err := json.Unmarshal(applications[0].Descriptor, &descriptor); err != nil {
+	if err := json.Unmarshal(byID["dev.kubephos.online-boutique"].Descriptor, &descriptor); err != nil {
 		t.Fatal(err)
 	}
 	if descriptor.Spec.Interface.Group != "onlineboutique" || len(descriptor.Spec.Interface.LoadScenarios) != 1 || descriptor.Spec.Interface.LoadScenarios[0].TargetEndpoint != "node-proxy-http" || len(descriptor.Spec.AdditionalManifests) != 1 || len(descriptor.Spec.ExcludeResources) != 2 {
@@ -222,5 +303,23 @@ func TestBuiltInCatalog(t *testing.T) {
 	}
 	if components["node-proxy"].Index == nil || *components["node-proxy"].Index != 0 || len(components["node-proxy"].Dependencies) != 1 || components["node-proxy"].Dependencies[0] != "frontend" || components["redis-cart"].Index == nil || *components["redis-cart"].Index != 3 {
 		t.Fatalf("online boutique topology contract is incomplete: %#v", descriptor.Spec.Interface.Components)
+	}
+	if err := json.Unmarshal(byID["dev.kubephos.bookinfo"].Descriptor, &descriptor); err != nil {
+		t.Fatal(err)
+	}
+	if len(descriptor.Spec.Interface.Components) != 7 || descriptor.Spec.Interface.Group != "bookinfo" || descriptor.Spec.Interface.LoadScenarios[0].Content == "" {
+		t.Fatalf("bookinfo contract is incomplete: %#v", descriptor.Spec)
+	}
+	if err := json.Unmarshal(byID["dev.kubephos.bank-of-anthos"].Descriptor, &descriptor); err != nil {
+		t.Fatal(err)
+	}
+	if len(descriptor.Spec.Interface.Components) != 9 || descriptor.Spec.Interface.Group != "bank-of-anthos" || len(descriptor.Spec.Package.AdditionalEntrypoints) != 9 {
+		t.Fatalf("bank of anthos contract is incomplete: %#v", descriptor.Spec)
+	}
+	if err := json.Unmarshal(byID["dev.kubephos.train-ticket"].Descriptor, &descriptor); err != nil {
+		t.Fatal(err)
+	}
+	if len(descriptor.Spec.Interface.Components) != 64 || descriptor.Spec.Interface.Group != "train-ticket" || len(descriptor.Spec.Package.AdditionalEntrypoints) != 2 || len(descriptor.Spec.StorageClassMappings) != 1 || len(descriptor.Spec.ImageMappings) != 1 {
+		t.Fatalf("train ticket contract is incomplete: %#v", descriptor.Spec)
 	}
 }

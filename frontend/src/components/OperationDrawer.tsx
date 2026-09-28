@@ -1,8 +1,6 @@
 import {useCallback, useEffect, useRef, useState} from 'react'
 import {request} from '../api'
-import {formatBytes, formatDate, shortID} from '../lib'
-import type {Artifact, LogEntry, Operation, Plugin, Session} from '../types'
-import {JsonPreview} from './JsonPreview'
+import type {LogEntry, Operation, PipelineRun, PipelineRunLogEntry, PipelineStrategyLog, Plugin, Session} from '../types'
 import {ExecutionProgressGraph} from './ExecutionProgressGraph'
 import {DetailBreadcrumb} from './DetailBreadcrumb'
 import {Status} from './Views'
@@ -21,7 +19,6 @@ export function OperationDetailsPage({operationID, session, plugins, close, open
   const [operation, setOperation] = useState<Operation | null>(null)
   const [logs, setLogs] = useState<LogEntry[]>([])
   const [pending, setPending] = useState(false)
-  const [preview, setPreview] = useState<{artifact: Artifact; value: unknown} | null>(null)
   const logsRef = useRef<HTMLDivElement>(null)
 
   const load = useCallback(async () => {
@@ -37,7 +34,6 @@ export function OperationDetailsPage({operationID, session, plugins, close, open
   useEffect(() => {
     setOperation(null)
     setLogs([])
-    setPreview(null)
     if (!operationID) return
     load().catch(cause => notify(cause instanceof Error ? cause.message : 'Could not open operation.', true))
   }, [load, notify, operationID])
@@ -105,42 +101,79 @@ export function OperationDetailsPage({operationID, session, plugins, close, open
     }
   }
 
-  const previewArtifact = async (artifact: Artifact) => {
-    setPending(true)
-    try {
-      const response = await fetch(`/api/v1/artifacts/${artifact.id}/download`)
-      if (!response.ok) throw new Error('Could not open the artifact preview.')
-      setPreview({artifact, value: await response.json()})
-    } catch (cause) {
-      notify(cause instanceof Error ? cause.message : 'Could not open the artifact preview.', true)
-    } finally {
-      setPending(false)
-    }
-  }
-
   const canQueue = operation?.status === 'ready'
   const canCancel = operation && ['ready', 'queued', 'prechecking', 'running', 'verifying'].includes(operation.status)
   const canCleanup = operation && terminal(operation.status) && !operation.plan.steps.some(step => step.cleanup) && plugins.find(plugin => plugin.id === operation.pluginId)?.capabilities?.includes('lifecycle.cleanup')
-  const progressNodes = operation?.plan.steps.map((planStep, index) => {
+  const progressNodes = operation?.plan.steps.map(planStep => {
     const step = operation.steps.find(item => item.id === planStep.id)
-    const dependencies = [...new Set(planStep.artifactInputs?.map(input => operation.plan.steps.find(item => item.id === input.fromStep)?.name ?? input.fromStep).filter((name): name is string => Boolean(name)) ?? (index ? [operation.plan.steps[index - 1].name] : []))]
-    return {id: planStep.id, title: planStep.name, status: step?.status ?? 'queued', detail: step?.error ?? step?.health?.summary ?? effectSummary(operation, index), dependencies}
+    return {id: planStep.id, title: planStep.name, status: step?.status ?? 'queued', detail: step?.error || undefined}
   }) ?? []
   if (!operationID) return null
   return <div className="detail-page operation-detail-page">
     <DetailBreadcrumb parent="Back" current="Activity" back={close} />
-    <div className="detail-page-heading"><div><p className="eyebrow">ACTIVITY</p><h2>{operation?.title ?? 'Loading…'}</h2>{operation && <p>{shortID(operation.id)} · started {formatDate(operation.createdAt)}</p>}</div>{operation && <div className="detail-page-actions operation-heading-actions"><Status value={operation.status} />{canQueue && <button className="button primary" disabled={pending} onClick={queue}>Confirm plan and start</button>}{canCleanup && <button className="button danger" disabled={pending} onClick={prepareCleanup}>Prepare cleanup</button>}{canCancel && <button className="button danger" disabled={pending} onClick={cancel}>Cancel</button>}</div>}</div>
+    <div className="detail-page-heading"><h2>{operation?.title ?? 'Loading…'}</h2>{operation && <div className="detail-page-actions operation-heading-actions"><Status value={operation.status} />{canQueue && <button className="button primary" disabled={pending} onClick={queue}>Confirm plan and start</button>}{canCleanup && <button className="button danger" disabled={pending} onClick={prepareCleanup}>Prepare cleanup</button>}{canCancel && <button className="button danger" disabled={pending} onClick={cancel}>Cancel</button>}</div>}</div>
     {operation && <>
       {operation.error && <div className="validation-item error">{operation.error}</div>}
       <div className="operation-live-layout">
-        <section className="operation-page-section"><div className="operation-section-heading"><div><p className="eyebrow">PROGRESS</p><h3>Execution steps</h3></div><span>{operation.steps.filter(step => step.status === 'succeeded').length}/{operation.plan.steps.length}</span></div><ExecutionProgressGraph nodes={progressNodes} label={`${operation.title} execution progress`} showLogs={() => logsRef.current?.scrollIntoView({behavior: 'smooth', block: 'start'})} /></section>
-        <section className="operation-page-section operation-log-panel" ref={logsRef}><div className="operation-section-heading"><div><p className="eyebrow">LIVE LOGS</p><h3>Activity output</h3></div><span>{logs.length} entries</span></div><div className="log-console">{logs.length ? logs.map(log => <div className={`log-line ${log.level}`} key={log.sequence}><span className="time">{new Date(log.createdAt).toLocaleTimeString()}</span><span className="source">{log.source}</span><span className="message">{log.message}</span></div>) : <div className="log-empty">Waiting for logs…</div>}</div></section>
+        <section className="operation-page-section"><div className="operation-section-heading"><h3>Progress</h3></div><ExecutionProgressGraph nodes={progressNodes} label={`${operation.title} execution progress`} showLogs={() => logsRef.current?.scrollIntoView({behavior: 'smooth', block: 'start'})} /></section>
+        <section className="operation-page-section operation-log-panel" ref={logsRef}><div className="operation-section-heading"><h3>Logs</h3></div><div className="log-console">{logs.length ? logs.map(log => <div className={`log-line ${log.level}`} key={log.sequence}><span className="time">{new Date(log.createdAt).toLocaleTimeString()}</span><span className="message">{log.message}</span></div>) : <div className="log-empty">Waiting for logs…</div>}</div></section>
       </div>
-      <section className="operation-page-section"><div className="operation-section-heading"><div><p className="eyebrow">VALIDATION</p><h3>Validated plan</h3></div></div><div className="plan-hash" title={operation.planHash}>SHA-256 {operation.planHash}</div><div className="validation-list">{operation.validation.issues.map((issue, index) => <div className={`validation-item ${issue.level}`} key={`${issue.path ?? ''}-${index}`}><strong>{issue.level.toUpperCase()}</strong> {issue.message}</div>)}</div></section>
-      {!!operation.artifacts?.length && <section className="operation-page-section"><div className="operation-section-heading"><div><p className="eyebrow">OUTPUT</p><h3>Verified artifacts</h3></div></div><div className="artifact-list">{operation.artifacts.map(artifact => artifact.sensitive
-          ? <div className="artifact-row" key={artifact.id}><span>⌁</span><div><strong>{artifact.name}</strong><small>{artifact.type}/{artifact.version} · protected</small></div></div>
-          : <div className="artifact-row" key={artifact.id}><span>▤</span><div><strong>{artifact.name}</strong><small>{artifact.type}/{artifact.version} · {formatBytes(artifact.sizeBytes)} · {artifact.digest.slice(0, 20)}…</small></div><div className="artifact-actions">{artifact.mediaType === 'application/json' && <button className="text-button" disabled={pending} onClick={() => previewArtifact(artifact)}>Preview</button>}<a className="text-button" href={`/api/v1/artifacts/${artifact.id}/download`}>Download</a></div></div>)}</div>{preview && <section className="artifact-preview"><div className="artifact-preview-header"><p className="eyebrow">ARTIFACT PREVIEW</p><button className="icon-button" onClick={() => setPreview(null)} aria-label="Close artifact preview">×</button></div><h3>{preview.artifact.name}</h3><JsonPreview value={preview.value} /></section>}</section>}
     </>}
+  </div>
+}
+
+export function PipelineRunLogsPage({runID, close, notify}: {runID: string; close: () => void; notify: (message: string, error?: boolean) => void}) {
+  const [run, setRun] = useState<PipelineRun | null>(null)
+  const [logs, setLogs] = useState<PipelineRunLogEntry[]>([])
+  const [strategyLogs, setStrategyLogs] = useState<PipelineStrategyLog[]>([])
+  const lastSequence = useRef(0)
+  const load = useCallback(async () => {
+    const [current, runtimeLogs] = await Promise.all([
+      request<PipelineRun>(`/pipeline-runs/${runID}`),
+      request<{items: PipelineStrategyLog[]}>(`/pipeline-runs/${runID}/strategy-logs`)
+    ])
+    let after = lastSequence.current
+    const added: PipelineRunLogEntry[] = []
+    for (;;) {
+      const result = await request<{items: PipelineRunLogEntry[]}>(`/pipeline-runs/${runID}/logs?after=${after}`)
+      if (!result.items.length) break
+      added.push(...result.items)
+      after = result.items[result.items.length - 1].sequence
+      if (result.items.length < 5000) break
+    }
+    setRun(current)
+    setStrategyLogs(runtimeLogs.items)
+    if (added.length) {
+      lastSequence.current = after
+      setLogs(items => [...items, ...added])
+    }
+  }, [runID])
+
+  useEffect(() => {
+    setRun(null)
+    setLogs([])
+    setStrategyLogs([])
+    lastSequence.current = 0
+    load().catch(cause => notify(cause instanceof Error ? cause.message : 'Could not open run logs.', true))
+  }, [load, notify])
+
+  useEffect(() => {
+    if (!run || terminal(run.status)) return
+    const timer = window.setInterval(() => load().catch(() => undefined), 1000)
+    return () => window.clearInterval(timer)
+  }, [load, run?.status])
+
+  const progressNodes = run?.stages.map(stage => ({id: stage.stageId, title: stage.title, status: stage.status, detail: stage.error || undefined})) ?? []
+  return <div className="detail-page operation-detail-page pipeline-log-page">
+    <DetailBreadcrumb parent="Back" current="Run logs" back={close} />
+    <div className="detail-page-heading"><div><h2>{run?.name ?? 'Loading…'}</h2><p>Complete chronological process log</p></div>{run && <Status value={run.status} />}</div>
+    {run && <div className="operation-live-layout">
+      <section className="operation-page-section"><div className="operation-section-heading"><h3>Progress</h3></div><ExecutionProgressGraph nodes={progressNodes} label={`${run.name} execution progress`} /></section>
+      <div className="operation-log-stack">
+        <section className="operation-page-section operation-log-panel"><div className="operation-section-heading"><h3>Process logs</h3><span>{logs.length} entries</span></div><div className="log-console">{logs.length ? logs.map(log => <div className={`log-line ${log.level}`} key={log.sequence}><span className="time">{new Date(log.createdAt).toLocaleTimeString()}</span><span className="message"><span className="run-log-context">{log.stagePosition}. {log.stageTitle}{log.phase === 'cleanup' ? ' · cleanup' : ''}</span>{log.message}</span></div>) : <div className="log-empty">Waiting for process logs…</div>}</div></section>
+        {strategyLogs.map(runtime => <section className="operation-page-section runtime-log-panel" key={runtime.kind}><div className="operation-section-heading"><div><h3>{runtime.title} logs</h3>{runtime.namespace && <small>{runtime.namespace}{runtime.resource ? ` · ${runtime.resource}` : ''}</small>}</div><span>{runtime.state}</span></div><div className="log-console">{runtime.lines.length ? runtime.lines.map((line, index) => <div className="runtime-log-line" key={`${runtime.kind}-${index}`}>{line}</div>) : <div className="log-empty">{runtime.message ?? 'Waiting for runtime logs…'}</div>}</div></section>)}
+      </div>
+    </div>}
   </div>
 }
 
@@ -148,12 +181,4 @@ export const OperationDrawer = OperationDetailsPage
 
 function terminal(status: string): boolean {
   return ['succeeded', 'failed', 'canceled'].includes(status)
-}
-
-function effectSummary(operation: Operation, index: number): string {
-  const effects = operation.plan.steps[index]?.effects ?? []
-  if (effects.length) return effects.map(effect => `${effect.action} ${effect.kind} ${effect.name}`).join(', ')
-  const step = operation.plan.steps[index]
-  if (step?.artifactInputs?.length || step?.outputs?.length) return `${step.artifactInputs?.length ?? 0} typed inputs · ${step.outputs?.length ?? 0} typed outputs`
-  return 'Waiting for precheck'
 }

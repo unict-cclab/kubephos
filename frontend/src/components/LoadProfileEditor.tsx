@@ -53,8 +53,7 @@ export function LoadProfileEditor({prefix, zones, values = {}}: {prefix: string;
   return <div className="load-profile-editor">
     <input type="hidden" name={`${prefix}.steps`} value={JSON.stringify(serializedSteps)} readOnly />
     <input type="hidden" name={`${prefix}.geographicSteps`} value={JSON.stringify(serializedGeography)} readOnly />
-    <div className="timeline-heading"><div><strong>Workload timeline</strong><p>Each phase starts after the previous one. Total duration is calculated automatically.</p></div><span className="duration-badge">{formatDuration(duration)}</span></div>
-    <LoadProfilePreview steps={serializedSteps} />
+    <div className="timeline-heading"><strong>Workload timeline</strong><span className="duration-badge">{formatDuration(duration)}</span></div>
     <div className="timeline-list">{steps.map((step, index) => <article className="timeline-card" key={step.id}>
       <div className="timeline-card-head"><span className="timeline-index">{index + 1}</span><select aria-label={`Workload phase ${index + 1} type`} value={step.type} onChange={event => updateLoadStep(setSteps, step.id, {type: event.target.value as LoadStep['type']})}><option value="constant">Constant</option><option value="sinusoidal">Sinusoidal</option><option value="exponential">Exponential</option></select><TimelineActions index={index} count={steps.length} move={direction => setSteps(items => move(items, index, direction))} remove={() => setSteps(items => items.filter(item => item.id !== step.id))} /></div>
       <div className="timeline-fields"><Minutes label="Duration" value={step.durationSeconds} set={value => updateLoadStep(setSteps, step.id, {durationSeconds: value})} />
@@ -64,7 +63,8 @@ export function LoadProfileEditor({prefix, zones, values = {}}: {prefix: string;
       </div>
     </article>)}</div>
     <button type="button" className="button secondary compact" onClick={addLoadStep}>Add workload phase</button>
-    {zones.length > 0 && <><div className="timeline-heading geographic-heading"><div><strong>Geographic timeline</strong><p>Keep traffic fixed in the zones or move it progressively between them.</p></div><span className={`duration-badge ${duration === geographicDuration ? '' : 'mismatch'}`}>{formatDuration(geographicDuration)} / {formatDuration(duration)}</span></div>
+    <LoadProfilePreview steps={serializedSteps} />
+    {zones.length > 0 && <><div className="timeline-heading geographic-heading"><strong>Geographic timeline</strong><span className={`duration-badge ${duration === geographicDuration ? '' : 'mismatch'}`}>{formatDuration(geographicDuration)} / {formatDuration(duration)}</span></div>
       <div className="timeline-list">{geographicSteps.map((step, index) => <article className="timeline-card geographic-card" key={step.id}>
         <div className="timeline-card-head"><span className="timeline-index">{index + 1}</span><select aria-label={`Geographic phase ${index + 1} type`} value={step.type} onChange={event => updateGeographicStep(setGeographicSteps, step.id, {type: event.target.value as GeographicStep['type']})}><option value="constant">Fixed distribution</option><option value="linear">Linear transition</option></select><TimelineActions index={index} count={geographicSteps.length} move={direction => setGeographicSteps(items => move(items, index, direction))} remove={() => setGeographicSteps(items => items.filter(item => item.id !== step.id))} /></div>
         <div className="timeline-fields"><Minutes label="Duration" value={step.durationSeconds} set={value => updateGeographicStep(setGeographicSteps, step.id, {durationSeconds: value})} /></div>

@@ -1,0 +1,53 @@
+apiVersion: plugins.kubephos.io/v1alpha1
+kind: Plugin
+metadata:
+  id: io.kubephos.load.external.target
+  name: External load destination
+  version: 0.1.0
+  description: Prepares an isolated Locust driver namespace and a verified external HTTP destination.
+spec:
+  protocol: v1alpha1
+  commands: [describe, validate, plan, precheck, execute, verify, status, cancel, cleanup]
+  configurationSchema:
+    type: object
+    additionalProperties: false
+    required: [clusterConnectionRef, targetUrl, runtimeImage, script]
+    properties:
+      clusterConnectionRef:
+        type: string
+        format: kubephos-artifact-ref
+        x-kubephos-artifact-type: ClusterConnection
+        x-kubephos-artifact-version: v1alpha1
+      targetUrl:
+        type: string
+        title: External endpoint
+        minLength: 1
+        maxLength: 2048
+      runtimeImage:
+        type: string
+        title: Locust runtime image
+        default: locustio/locust:2.42.6
+        minLength: 1
+        maxLength: 512
+      script:
+        type: string
+        title: Locust file template
+        format: multiline
+        x-kubephos-multiline: true
+        minLength: 1
+        maxLength: 262144
+      parameters:
+        type: object
+        title: Locust parameters
+        additionalProperties: true
+  runtime:
+    executable: external-load-target-plugin
+    timeout: 10m
+  artifacts:
+    inputs:
+      - {type: ClusterConnection, version: v1alpha1}
+    outputs:
+      - {type: ApplicationDeployment, version: v1alpha1}
+      - {type: LoadScenarioSet, version: v1alpha1}
+  capabilities: [loads.external.prepare, loads.external.preflight, loads.external.cleanup, lifecycle.cleanup]
+  permissions: [cluster.admin]

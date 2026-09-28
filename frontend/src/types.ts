@@ -1,10 +1,21 @@
-export type Role = 'admin' | 'operator' | 'viewer'
-export type View = 'overview' | 'infrastructure' | 'kubernetes' | 'experiments' | 'suites' | 'results' | 'advanced' | 'workspaces' | 'pipelines' | 'operations' | 'catalog' | 'plugins'
+export type Role = 'admin' | 'user'
+export type View = 'overview' | 'infrastructure' | 'kubernetes' | 'experiments' | 'suites' | 'results' | 'advanced' | 'workspaces' | 'pipelines' | 'operations' | 'catalog' | 'plugins' | 'users'
 
 export interface User {
   id: string
   username: string
+  email?: string
   role: Role
+  enabled?: boolean
+  createdAt?: string
+  updatedAt?: string
+}
+
+export interface ClusterUserAssignment {
+  userId: string
+  clusterResourceId: string
+  assignedBy: string
+  createdAt: string
 }
 
 export interface Session {
@@ -12,6 +23,7 @@ export interface Session {
   setupRequired?: boolean
   csrfToken?: string
   user?: User
+  loginURL?: string
 }
 
 export interface SchemaProperty {
@@ -39,12 +51,14 @@ export interface SchemaProperty {
   'x-kubephos-multiline'?: boolean
   'x-kubephos-schema-from-application'?: string
   'x-kubephos-visible-when'?: {property: string; values: Array<string | number | boolean>}
+  'x-kubephos-hidden'?: boolean
 }
 
 export interface JsonSchema {
   type?: string
   required?: string[]
   properties?: Record<string, SchemaProperty>
+  'x-kubephos-dynamic-topology'?: boolean
 }
 
 export interface Plugin {
@@ -94,7 +108,7 @@ export interface PluginImportJob {
 export interface CatalogStrategy {
   id: string
   workspaceId: string
-  harborResourceId: string
+  harborResourceId?: string
   name: string
   kind: 'scheduler' | 'descheduler' | 'autoscaler'
   sourceImage: string
@@ -102,7 +116,7 @@ export interface CatalogStrategy {
   mirroredImage?: string
   mirroredDigest?: string
   defaultConfiguration: Record<string, unknown>
-  operationId: string
+  operationId?: string
   artifactId?: string
   status: string
   error?: string
@@ -269,6 +283,8 @@ export interface Experiment {
   id: string
   workspaceId: string
   configurationId?: string
+  ownerUserId?: string
+  ownerUsername?: string
   kind: 'comparison' | 'instance' | 'suite'
   name: string
   description: string
@@ -307,11 +323,19 @@ export interface ExperimentConfiguration {
   id: string
   workspaceId: string
   clusterResourceId: string
+  ownerUserId?: string
+  ownerUsername?: string
   name: string
   description: string
   applicationRef: string
   applicationDigest: string
-  definition: {applicationValues: Record<string, unknown>; components: ExperimentConfigurationComponent[]}
+	definition: {
+	applicationValues: Record<string, unknown>
+		destinationMode?: 'application' | 'external'
+		externalDestination?: {targetUrl: string; runtimeImage: string; script: string; parameters?: Record<string, string>}
+		podDisruptionBudgetMinAvailable?: number
+		components: ExperimentConfigurationComponent[]
+	}
   validation: ValidationReport
   createdAt: string
   updatedAt: string
@@ -424,6 +448,7 @@ export interface ApplicationLoadScenario {
   id?: string
   engine?: string
   script?: string
+  content?: string
   runtimeImage?: string
   targetEndpoint?: string
 }
@@ -438,7 +463,7 @@ export interface Application {
   digest: string
   descriptor: {
     spec?: {
-      package?: {type?: string; format?: string; repository?: string; revision?: string; path?: string; entrypoint?: string}
+      package?: {type?: string; format?: string; repository?: string; revision?: string; path?: string; entrypoint?: string; additionalEntrypoints?: string[]}
       materializer?: string
       materializerConfig?: Record<string, unknown>
       interface?: {group?: string; components?: ApplicationComponent[]; endpoints?: ApplicationEndpoint[]; loadScenarios?: ApplicationLoadScenario[]}
@@ -460,6 +485,7 @@ export interface Credential {
 export interface Connection {
   id: string
   name: string
+  description?: string
   provider: string
   pluginId: string
   createdAt: string
@@ -519,6 +545,23 @@ export interface LogEntry {
   createdAt: string
 }
 
+export interface PipelineRunLogEntry extends LogEntry {
+  stageId: string
+  stageTitle: string
+  stagePosition: number
+  phase: 'execution' | 'cleanup'
+}
+
+export interface PipelineStrategyLog {
+  kind: 'scheduler' | 'descheduler' | 'autoscaler'
+  title: string
+  namespace?: string
+  resource?: string
+  state: 'waiting' | 'available' | 'unavailable'
+  lines: string[]
+  message?: string
+}
+
 export interface SystemStatus {
   version: string
   status: string
@@ -549,4 +592,6 @@ export interface PlatformData {
   kubernetesClusters: ManagedResource[]
   resources: InfrastructureResource[]
   audit: AuditEvent[]
+  users: User[]
+  clusterAssignments: ClusterUserAssignment[]
 }

@@ -3,12 +3,15 @@ package managedplatform
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"slices"
 	"testing"
 
 	"gopkg.in/yaml.v3"
+
+	"kubephos.dev/kubephos/internal/domain"
 )
 
 func TestCPAPlacementUsesInlinePatch(t *testing.T) {
@@ -24,9 +27,23 @@ type namespaceRunner struct {
 	err   error
 }
 
+func TestCleanupDoesNotRequireManagedRegistry(t *testing.T) {
+	step := domain.PlanStep{
+		Input:   json.RawMessage(`{"clusterConnectionRef":"art_cluster","marker":"marker"}`),
+		Cleanup: true,
+		ResolvedInputs: map[string]domain.ResolvedArtifact{
+			"cluster-connection": {Value: json.RawMessage(`{"apiVersion":"artifacts.kubephos.dev/v1alpha1","kind":"ClusterConnection","metadata":{"name":"cluster","version":"1"},"spec":{"distribution":"k3s","server":"https://cluster.example.test","kubeconfig":"config"}}`)},
+		},
+	}
+	err := (Plugin{Runner: namespaceRunner{}}).Cleanup(context.Background(), step, nil, func(string, string) error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestManagedSupportManifestsAndValuesAreValidYAML(t *testing.T) {
 	prometheus := prometheusService{Name: "observability-prometheus", Namespace: observabilityNamespace, Port: 9090}
-	values := [][]byte{lokiValues(), alloyValues(), kialiValues(prometheus), extendedObservabilityManifest("marker")}
+	values := [][]byte{lokiValues(), alloyValues(), kialiValues(prometheus), headlampValues("marker"), extendedObservabilityManifest("marker")}
 	support, err := supportManifest("marker", "registry.example.test")
 	if err != nil {
 		t.Fatal(err)
@@ -44,6 +61,38 @@ func TestManagedSupportManifestsAndValuesAreValidYAML(t *testing.T) {
 				t.Fatalf("document %d: %v", index, err)
 			}
 		}
+	}
+}
+
+func TestHeadlampIsClusterAdminAndRequiresTokenLogin(t *testing.T) {
+	values := headlampValues("marker")
+	for _, expected := range [][]byte{
+		[]byte("clusterRoleBinding:\n  create: false"),
+		[]byte("kind: ClusterRoleBinding"),
+		[]byte("name: kubephos-headlamp-cluster-admin"),
+		[]byte("kind: ClusterRole\n    name: cluster-admin"),
+		[]byte("unsafeUseServiceAccountToken: false"),
+		[]byte("secret:\n      create: false"),
+		[]byte("registry: ghcr.io"),
+		[]byte("repository: headlamp-k8s/headlamp"),
+		[]byte("tag: v0.45.0"),
+		[]byte("nodePort: 30003"),
+		[]byte("kubephos.dev/role: management"),
+		[]byte("kubernetes.io/service-account.name: kubephos-headlamp"),
+	} {
+		if !bytes.Contains(values, expected) {
+			t.Fatalf("Headlamp values do not contain %s", expected)
+		}
+	}
+}
+
+func TestReadHeadlampTokenDecodesSecret(t *testing.T) {
+	token, err := readHeadlampToken(context.Background(), namespaceRunner{value: "dmlld2VyLXRva2Vu"}, "config")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if token != "viewer-token" {
+		t.Fatalf("unexpected Headlamp token %q", token)
 	}
 }
 
@@ -95,6 +144,9 @@ func TestClusterLensUsesManagedRegistry(t *testing.T) {
 	}
 	if !bytes.Contains(manifest, []byte("image: "+host+"/kubephos-dev/cluster-lens:"+clusterLensVersion)) {
 		t.Fatal("Cluster Lens image does not use the selected managed registry")
+	}
+	if !bytes.Contains(manifest, []byte("image: "+host+"/kubephos-dev/mentat:"+mentatVersion)) {
+		t.Fatal("Mentat image does not use the selected managed registry")
 	}
 }
 

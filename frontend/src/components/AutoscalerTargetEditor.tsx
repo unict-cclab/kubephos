@@ -20,7 +20,7 @@ export function AutoscalerTargetEditor({prefix, components, defaults, resetKey, 
   return <div className="autoscaler-target-editor">
     <input type="hidden" name={`exclude-${prefix.replace('component-', '')}`} value={excludedTargets.join(',')} readOnly />
     <input type="hidden" name={`${prefix}.targetOverrides`} value={JSON.stringify(configured)} readOnly />
-    <div className="target-editor-heading"><div><strong>Scalable microservices</strong><p>Defaults apply to every selected service. Enable an override only where values differ.</p></div><span>{targets.filter(target => selected[target.id] !== false).length} / {targets.length}</span></div>
+    <div className="target-editor-heading"><strong>Scalable microservices</strong><span>{targets.filter(target => selected[target.id] !== false).length} / {targets.length}</span></div>
     <div className="target-editor-list">{targets.map(target => {
       const values = overrides[target.id] ?? defaultSettings(defaults)
       const enabled = selected[target.id] !== false

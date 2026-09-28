@@ -12,6 +12,8 @@ import (
 	"log/slog"
 	"mime"
 	"net/http"
+	"net/http/httputil"
+	"net/url"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -26,6 +28,7 @@ import (
 	"kubephos.dev/kubephos/internal/catalog"
 	"kubephos.dev/kubephos/internal/domain"
 	"kubephos.dev/kubephos/internal/id"
+	"kubephos.dev/kubephos/internal/keycloak"
 	kubeconfigutil "kubephos.dev/kubephos/internal/kubeconfig"
 	"kubephos.dev/kubephos/internal/plugins"
 	"kubephos.dev/kubephos/internal/pluginssh"
@@ -36,6 +39,8 @@ import (
 	"kubephos.dev/kubephos/internal/workflows"
 )
 
+var strategyNamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
+
 type Server struct {
 	store          *storage.Store
 	registry       *plugins.Registry
@@ -45,10 +50,14 @@ type Server struct {
 	loadPlugin     func([]byte) (plugins.Plugin, error)
 	version        string
 	pluginMu       sync.Mutex
+	previewMu      sync.Mutex
+	previewFlights map[string]*applicationPreviewFlight
 	terminalMu     sync.Mutex
 	terminals      map[string]terminalTicket
 	terminalActive map[string]int
 	terminalSSH    *pluginssh.Client
+	identity       *keycloak.Client
+	applicationURL string
 }
 
 type runtimeConfigurator interface {
@@ -60,8 +69,8 @@ type runtimeConfigurator interface {
 	DeactivateProfile(context.Context) error
 }
 
-func NewServer(store *storage.Store, registry *plugins.Registry, artifactStore *artifacts.Client, vault *secrets.Vault, runtime plugins.ContainerRunner, loadPlugin func([]byte) (plugins.Plugin, error), version, webDirectory string) (http.Handler, error) {
-	server := &Server{store: store, registry: registry, artifacts: artifactStore, vault: vault, runtime: runtime, loadPlugin: loadPlugin, version: version, terminals: map[string]terminalTicket{}, terminalActive: map[string]int{}, terminalSSH: pluginssh.New()}
+func NewServer(store *storage.Store, registry *plugins.Registry, artifactStore *artifacts.Client, vault *secrets.Vault, runtime plugins.ContainerRunner, loadPlugin func([]byte) (plugins.Plugin, error), identity *keycloak.Client, applicationURL, version, webDirectory string) (http.Handler, error) {
+	server := &Server{store: store, registry: registry, artifacts: artifactStore, vault: vault, runtime: runtime, loadPlugin: loadPlugin, identity: identity, applicationURL: applicationURL, version: version, previewFlights: map[string]*applicationPreviewFlight{}, terminals: map[string]terminalTicket{}, terminalActive: map[string]int{}, terminalSSH: pluginssh.New()}
 	webHandler, err := webui.Handler(webDirectory)
 	if err != nil {
 		return nil, err
@@ -70,9 +79,15 @@ func NewServer(store *storage.Store, registry *plugins.Registry, artifactStore *
 	router.HandleFunc("GET /health/live", server.live)
 	router.HandleFunc("GET /health/ready", server.ready)
 	router.HandleFunc("GET /api/v1/auth/status", server.authStatus)
+	router.HandleFunc("GET /api/v1/auth/login", server.authLogin)
+	router.HandleFunc("GET /api/v1/auth/callback", server.authCallback)
 	router.HandleFunc("POST /api/v1/auth/setup", server.authSetup)
-	router.HandleFunc("POST /api/v1/auth/login", server.authLogin)
 	router.HandleFunc("POST /api/v1/auth/logout", server.authLogout)
+	router.HandleFunc("GET /api/v1/users", server.listUsers)
+	router.HandleFunc("POST /api/v1/users", server.createUser)
+	router.HandleFunc("DELETE /api/v1/users/{id}", server.deleteUser)
+	router.HandleFunc("GET /api/v1/users/{id}/clusters", server.listUserClusters)
+	router.HandleFunc("PUT /api/v1/users/{id}/clusters", server.replaceUserClusters)
 	router.HandleFunc("GET /api/v1/system", server.system)
 	router.HandleFunc("GET /api/v1/plugins", server.listPlugins)
 	router.HandleFunc("POST /api/v1/plugins/inspect", server.inspectPlugin)
@@ -89,8 +104,7 @@ func NewServer(store *storage.Store, registry *plugins.Registry, artifactStore *
 	router.HandleFunc("GET /api/v1/catalog/applications", server.listCatalogApplications)
 	router.HandleFunc("POST /api/v1/catalog/applications", server.importCatalogApplication)
 	router.HandleFunc("GET /api/v1/catalog/applications/{id}/{version}/manifest", server.getCatalogApplicationManifest)
-	router.HandleFunc("GET /api/v1/catalog/application-factories", server.listApplicationFactories)
-	router.HandleFunc("POST /api/v1/catalog/application-factories/{id}", server.generateCatalogApplication)
+	router.HandleFunc("POST /api/v1/catalog/applications/{id}/{version}/resolve", server.resolveCatalogApplication)
 	router.HandleFunc("DELETE /api/v1/catalog/applications/{id}/{version}", server.deleteCatalogApplication)
 	router.HandleFunc("GET /api/v1/catalog/strategies", server.listCatalogStrategies)
 	router.HandleFunc("POST /api/v1/catalog/strategies", server.importCatalogStrategy)
@@ -99,6 +113,7 @@ func NewServer(store *storage.Store, registry *plugins.Registry, artifactStore *
 	router.HandleFunc("POST /api/v1/credentials", server.createCredential)
 	router.HandleFunc("GET /api/v1/connections", server.listConnections)
 	router.HandleFunc("GET /api/v1/connections/{id}", server.getConnectionDetails)
+	router.HandleFunc("POST /api/v1/connections/{id}/secret", server.revealConnectionSecret)
 	router.HandleFunc("POST /api/v1/connections", server.createConnection)
 	router.HandleFunc("DELETE /api/v1/connections/{id}", server.deleteConnection)
 	router.HandleFunc("GET /api/v1/machine-templates", server.listMachineTemplates)
@@ -138,6 +153,8 @@ func NewServer(store *storage.Store, registry *plugins.Registry, artifactStore *
 	router.HandleFunc("POST /api/v1/pipelines/{id}/runs", server.createPipelineRun)
 	router.HandleFunc("GET /api/v1/pipeline-runs", server.listPipelineRuns)
 	router.HandleFunc("GET /api/v1/pipeline-runs/{id}", server.getPipelineRun)
+	router.HandleFunc("GET /api/v1/pipeline-runs/{id}/logs", server.listPipelineRunLogs)
+	router.HandleFunc("GET /api/v1/pipeline-runs/{id}/strategy-logs", server.listPipelineRunStrategyLogs)
 	router.HandleFunc("POST /api/v1/pipeline-runs/{id}/cancel", server.cancelPipelineRun)
 	router.HandleFunc("GET /api/v1/experiments", server.listExperiments)
 	router.HandleFunc("POST /api/v1/experiments", server.createCompletedExperiment)
@@ -157,7 +174,27 @@ func NewServer(store *storage.Store, registry *plugins.Registry, artifactStore *
 	router.HandleFunc("GET /api/v1/operations/{id}/events", server.operationEvents)
 	router.HandleFunc("GET /api/v1/artifacts", server.listAvailableArtifacts)
 	router.HandleFunc("GET /api/v1/artifacts/{id}/download", server.downloadArtifact)
+	if identity != nil {
+		target, parseErr := url.Parse(identity.ProxyTarget())
+		if parseErr != nil {
+			return nil, parseErr
+		}
+		proxy := httputil.NewSingleHostReverseProxy(target)
+		director := proxy.Director
+		proxy.Director = func(request *http.Request) {
+			host := request.Host
+			protocol := "http"
+			if request.TLS != nil {
+				protocol = "https"
+			}
+			director(request)
+			request.Header.Set("X-Forwarded-Host", host)
+			request.Header.Set("X-Forwarded-Proto", protocol)
+		}
+		router.Handle("/auth/", proxy)
+	}
 	router.Handle("/", webHandler)
+	go server.warmApplicationPreviews()
 	return securityHeaders(requestLog(server.authenticate(auditMutations(store, recoverer(router))))), nil
 }
 
@@ -291,7 +328,12 @@ func (s *Server) listPipelineRuns(response http.ResponseWriter, request *http.Re
 			limit = parsed
 		}
 	}
-	items, err := s.store.ListPipelineRuns(request.Context(), limit)
+	user := requestUser(request)
+	ownerID := user.ID
+	if user.Role == "admin" {
+		ownerID = ""
+	}
+	items, err := s.store.ListPipelineRunsForUser(request.Context(), ownerID, limit)
 	if err != nil {
 		writeError(response, http.StatusInternalServerError, "database_error", "Could not list pipeline runs.")
 		return
@@ -309,7 +351,30 @@ func (s *Server) getPipelineRun(response http.ResponseWriter, request *http.Requ
 		writeError(response, http.StatusInternalServerError, "database_error", "Could not read pipeline run.")
 		return
 	}
+	if !ownsResource(requestUser(request), run.OwnerUserID) {
+		writeError(response, http.StatusNotFound, "not_found", "Pipeline run not found.")
+		return
+	}
 	writeJSON(response, http.StatusOK, run)
+}
+
+func (s *Server) listPipelineRunLogs(response http.ResponseWriter, request *http.Request) {
+	run, err := s.store.GetPipelineRun(request.Context(), request.PathValue("id"))
+	if errors.Is(err, storage.ErrNotFound) || err == nil && !ownsResource(requestUser(request), run.OwnerUserID) {
+		writeError(response, http.StatusNotFound, "not_found", "Pipeline run not found.")
+		return
+	}
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, "database_error", "Could not read pipeline run.")
+		return
+	}
+	after, _ := strconv.ParseInt(request.URL.Query().Get("after"), 10, 64)
+	items, err := s.store.ListPipelineRunLogs(request.Context(), run.ID, after, 5000)
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, "database_error", "Could not read pipeline run logs.")
+		return
+	}
+	writeJSON(response, http.StatusOK, map[string]any{"items": items})
 }
 
 func (s *Server) createPipelineRun(response http.ResponseWriter, request *http.Request) {
@@ -375,6 +440,11 @@ func (s *Server) createPipelineRun(response http.ResponseWriter, request *http.R
 }
 
 func (s *Server) cancelPipelineRun(response http.ResponseWriter, request *http.Request) {
+	run, readErr := s.store.GetPipelineRun(request.Context(), request.PathValue("id"))
+	if readErr != nil || !ownsResource(requestUser(request), run.OwnerUserID) {
+		writeError(response, http.StatusNotFound, "not_found", "Pipeline run not found.")
+		return
+	}
 	if err := s.store.RequestPipelineRunCancel(request.Context(), request.PathValue("id")); errors.Is(err, storage.ErrConflict) {
 		writeError(response, http.StatusConflict, "invalid_transition", "Pipeline run cannot be canceled in its current state.")
 		return
@@ -826,79 +896,63 @@ func (s *Server) listCatalogApplications(response http.ResponseWriter, request *
 	writeJSON(response, http.StatusOK, map[string]any{"items": items})
 }
 
-func (s *Server) getCatalogApplicationManifest(response http.ResponseWriter, request *http.Request) {
-	application, err := s.store.GetCatalogApplication(request.Context(), request.PathValue("id"), request.PathValue("version"))
-	if errors.Is(err, storage.ErrNotFound) {
-		writeError(response, http.StatusNotFound, "not_found", "Catalog application not found.")
-		return
+type applicationPreview struct {
+	ApplicationRef     string                           `json:"applicationRef"`
+	Renderer           string                           `json:"renderer"`
+	Digest             string                           `json:"digest"`
+	Content            string                           `json:"content"`
+	LoadScenarioDigest string                           `json:"loadScenarioDigest,omitempty"`
+	LoadScenarios      []applicationLoadScenarioPreview `json:"loadScenarios"`
+	WorkloadTargets    []applicationWorkloadPreview     `json:"workloadTargets"`
+}
+
+type applicationWorkloadPreview struct {
+	ID           string            `json:"id"`
+	APIVersion   string            `json:"apiVersion"`
+	Kind         string            `json:"kind"`
+	Name         string            `json:"name"`
+	Selector     map[string]string `json:"selector"`
+	Traits       []string          `json:"traits"`
+	Index        *int              `json:"index,omitempty"`
+	Dependencies []string          `json:"dependencies,omitempty"`
+}
+
+type applicationLoadScenarioPreview struct {
+	ID             string `json:"id"`
+	Engine         string `json:"engine"`
+	TargetEndpoint string `json:"targetEndpoint"`
+	RuntimeImage   string `json:"runtimeImage"`
+	Script         string `json:"script"`
+	ScriptDigest   string `json:"scriptDigest"`
+}
+
+type applicationPreviewFlight struct {
+	done    chan struct{}
+	preview applicationPreview
+	failure *managedOperationFailure
+}
+
+func validateApplicationPreview(preview applicationPreview, applicationRef string) error {
+	if preview.ApplicationRef != applicationRef || strings.TrimSpace(preview.Content) == "" || !strings.HasPrefix(preview.Digest, "sha256:") {
+		return errors.New("the materializer returned no verified deployment manifest")
 	}
-	if err != nil {
-		writeError(response, http.StatusInternalServerError, "database_error", "Could not read the catalog application.")
-		return
+	if len(preview.LoadScenarios) != 0 && !strings.HasPrefix(preview.LoadScenarioDigest, "sha256:") {
+		return errors.New("the materializer returned unverified load scenarios")
 	}
-	var descriptor catalog.Descriptor
-	if err := json.Unmarshal(application.Descriptor, &descriptor); err != nil {
-		writeError(response, http.StatusConflict, "invalid_application", "The catalog application descriptor is invalid.")
-		return
-	}
-	plugin, err := s.applicationMaterializer(request.Context(), application.Reference)
-	if err != nil {
-		writeError(response, http.StatusConflict, "materializer_unavailable", err.Error())
-		return
-	}
-	configuration, err := json.Marshal(map[string]any{"applicationRef": application.Reference, "values": descriptor.Spec.Defaults})
-	if err != nil {
-		writeError(response, http.StatusInternalServerError, "materialization_failed", "Could not prepare application defaults.")
-		return
-	}
-	issues, err := schema.Validate(plugin.Manifest().Schema, configuration)
-	if err != nil || len(issues) != 0 {
-		writeError(response, http.StatusConflict, "invalid_defaults", "Application defaults do not satisfy the materializer schema.")
-		return
-	}
-	validation := plugin.Validate(request.Context(), configuration)
-	if !validation.Valid {
-		writeJSON(response, http.StatusUnprocessableEntity, map[string]any{"code": "validation_failed", "validation": validation})
-		return
-	}
-	plan, err := plugin.Plan(request.Context(), configuration)
-	if err != nil || len(plan.Steps) != 1 {
-		message := "The application materializer produced an invalid plan."
-		if err != nil {
-			message = err.Error()
+	for _, scenario := range preview.LoadScenarios {
+		if strings.TrimSpace(scenario.ID) == "" || strings.TrimSpace(scenario.Engine) == "" || strings.TrimSpace(scenario.TargetEndpoint) == "" || strings.TrimSpace(scenario.RuntimeImage) == "" || strings.TrimSpace(scenario.Script) == "" || !strings.HasPrefix(scenario.ScriptDigest, "sha256:") {
+			return errors.New("the materializer returned an invalid load scenario")
 		}
-		writeError(response, http.StatusUnprocessableEntity, "planning_failed", message)
-		return
 	}
-	step := plan.Steps[0]
-	if step.Mutating || len(step.Effects) != 0 || len(step.ArtifactInputs) != 0 {
-		writeError(response, http.StatusUnprocessableEntity, "unsafe_materializer", "Application manifest previews must be side-effect free.")
-		return
-	}
-	quiet := func(string, string) error { return nil }
-	precheck, err := plugin.Precheck(request.Context(), step, quiet)
-	if err != nil || precheck.Status != domain.HealthHealthy {
-		message := precheck.Summary
-		if err != nil {
-			message = err.Error()
+	for _, workload := range preview.WorkloadTargets {
+		if strings.TrimSpace(workload.ID) == "" || strings.TrimSpace(workload.APIVersion) == "" || strings.TrimSpace(workload.Kind) == "" || strings.TrimSpace(workload.Name) == "" {
+			return errors.New("the materializer returned an invalid workload target")
 		}
-		writeError(response, http.StatusUnprocessableEntity, "precheck_failed", message)
-		return
 	}
-	result, err := plugin.Execute(request.Context(), step, quiet)
-	if err != nil {
-		writeError(response, http.StatusUnprocessableEntity, "materialization_failed", err.Error())
-		return
-	}
-	health, err := plugin.Verify(request.Context(), step, result, quiet)
-	if err != nil || health.Status != domain.HealthHealthy {
-		message := health.Summary
-		if err != nil {
-			message = err.Error()
-		}
-		writeError(response, http.StatusUnprocessableEntity, "verification_failed", message)
-		return
-	}
+	return nil
+}
+
+func decodeApplicationPreview(result []byte, applicationRef string) (applicationPreview, error) {
 	var materialized struct {
 		ManifestSet struct {
 			Metadata struct {
@@ -909,114 +963,245 @@ func (s *Server) getCatalogApplicationManifest(response http.ResponseWriter, req
 				Content  string `json:"content"`
 			} `json:"spec"`
 		} `json:"manifestSet"`
+		LoadScenarioSet struct {
+			Metadata struct {
+				Digest string `json:"digest"`
+			} `json:"metadata"`
+			Spec struct {
+				Scenarios []applicationLoadScenarioPreview `json:"scenarios"`
+			} `json:"spec"`
+		} `json:"loadScenarioSet"`
+		WorkloadTargets []applicationWorkloadPreview `json:"workloadTargets"`
 	}
-	if json.Unmarshal(result, &materialized) != nil || strings.TrimSpace(materialized.ManifestSet.Spec.Content) == "" || !strings.HasPrefix(materialized.ManifestSet.Metadata.Digest, "sha256:") {
-		writeError(response, http.StatusUnprocessableEntity, "materialization_failed", "The materializer returned no verified deployment manifest.")
-		return
+	if err := json.Unmarshal(result, &materialized); err != nil {
+		return applicationPreview{}, errors.New("the materializer returned no verified deployment manifest")
 	}
-	response.Header().Set("Cache-Control", "private, max-age=300")
-	writeJSON(response, http.StatusOK, map[string]any{"applicationRef": application.Reference, "renderer": materialized.ManifestSet.Spec.Renderer, "digest": materialized.ManifestSet.Metadata.Digest, "content": materialized.ManifestSet.Spec.Content})
+	preview := applicationPreview{
+		ApplicationRef: applicationRef, Renderer: materialized.ManifestSet.Spec.Renderer, Digest: materialized.ManifestSet.Metadata.Digest,
+		Content: materialized.ManifestSet.Spec.Content, LoadScenarioDigest: materialized.LoadScenarioSet.Metadata.Digest, LoadScenarios: materialized.LoadScenarioSet.Spec.Scenarios, WorkloadTargets: materialized.WorkloadTargets,
+	}
+	return preview, validateApplicationPreview(preview, applicationRef)
 }
 
-func (s *Server) listApplicationFactories(response http.ResponseWriter, _ *http.Request) {
-	items := []plugins.Manifest{}
-	for _, manifest := range s.registry.Manifests() {
-		if manifest.HasCapability("catalog.application.generate") {
-			items = append(items, manifest)
+func (s *Server) getCatalogApplicationManifest(response http.ResponseWriter, request *http.Request) {
+	application, err := s.store.GetCatalogApplication(request.Context(), request.PathValue("id"), request.PathValue("version"))
+	if errors.Is(err, storage.ErrNotFound) {
+		writeError(response, http.StatusNotFound, "not_found", "Catalog application not found.")
+		return
+	}
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, "database_error", "Could not read the catalog application.")
+		return
+	}
+	refresh := request.URL.Query().Get("refresh") == "true"
+	preview, cached, failure := s.catalogApplicationPreview(request.Context(), application, refresh)
+	if failure != nil {
+		failure.write(response)
+		return
+	}
+	if cached {
+		response.Header().Set("X-KubePhos-Preview-Cache", "hit")
+	} else {
+		response.Header().Set("X-KubePhos-Preview-Cache", "materialized")
+	}
+	if refresh {
+		response.Header().Set("Cache-Control", "private, no-store")
+	} else {
+		response.Header().Set("Cache-Control", "private, max-age=300")
+	}
+	writeJSON(response, http.StatusOK, preview)
+}
+
+func (s *Server) resolveCatalogApplication(response http.ResponseWriter, request *http.Request) {
+	application, err := s.store.GetCatalogApplication(request.Context(), request.PathValue("id"), request.PathValue("version"))
+	if errors.Is(err, storage.ErrNotFound) {
+		writeError(response, http.StatusNotFound, "not_found", "Catalog application not found.")
+		return
+	}
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, "database_error", "Could not read the catalog application.")
+		return
+	}
+	var values map[string]any
+	if err := decodeJSON(request, &values); err != nil || values == nil {
+		writeError(response, http.StatusBadRequest, "invalid_request", "Application values must be a JSON object.")
+		return
+	}
+	preview, failure := s.buildApplicationPreviewWithValues(request.Context(), application, values)
+	if failure != nil {
+		failure.write(response)
+		return
+	}
+	writeJSON(response, http.StatusOK, preview)
+}
+
+func (s *Server) catalogApplicationPreview(ctx context.Context, application domain.CatalogApplication, refresh bool) (applicationPreview, bool, *managedOperationFailure) {
+	if !refresh {
+		raw, err := s.store.GetCatalogApplicationPreview(ctx, application.ID, application.Version, application.Digest)
+		if err == nil {
+			var preview applicationPreview
+			if json.Unmarshal(raw, &preview) == nil && validateApplicationPreview(preview, application.Reference) == nil {
+				return preview, true, nil
+			}
+			slog.Warn("discard invalid application preview", "application", application.Reference)
+		} else if !errors.Is(err, storage.ErrNotFound) {
+			return applicationPreview{}, false, &managedOperationFailure{status: http.StatusInternalServerError, code: "database_error", message: "Could not read the application preview."}
 		}
 	}
-	writeJSON(response, http.StatusOK, map[string]any{"items": items})
+	preview, failure := s.materializeApplicationPreview(ctx, application)
+	return preview, false, failure
 }
 
-func (s *Server) generateCatalogApplication(response http.ResponseWriter, request *http.Request) {
-	plugin, err := s.registry.Get(request.PathValue("id"))
-	if err != nil || !plugin.Manifest().HasCapability("catalog.application.generate") {
-		writeError(response, http.StatusNotFound, "factory_not_found", "Application generator not found.")
-		return
+func (s *Server) materializeApplicationPreview(ctx context.Context, application domain.CatalogApplication) (applicationPreview, *managedOperationFailure) {
+	key := application.Reference + ":" + application.Digest
+	s.previewMu.Lock()
+	if s.previewFlights == nil {
+		s.previewFlights = map[string]*applicationPreviewFlight{}
 	}
-	var configuration json.RawMessage
-	if err := decodeJSON(request, &configuration); err != nil {
-		writeError(response, http.StatusBadRequest, "invalid_request", err.Error())
-		return
+	if flight := s.previewFlights[key]; flight != nil {
+		s.previewMu.Unlock()
+		select {
+		case <-flight.done:
+			return flight.preview, flight.failure
+		case <-ctx.Done():
+			return applicationPreview{}, &managedOperationFailure{status: http.StatusRequestTimeout, code: "materialization_canceled", message: "Application preview preparation was canceled."}
+		}
+	}
+	flight := &applicationPreviewFlight{done: make(chan struct{})}
+	s.previewFlights[key] = flight
+	s.previewMu.Unlock()
+
+	preview, failure := s.buildApplicationPreview(ctx, application)
+	if failure == nil {
+		raw, err := json.Marshal(preview)
+		if err != nil {
+			failure = &managedOperationFailure{status: http.StatusInternalServerError, code: "materialization_failed", message: "Could not encode the application preview."}
+		} else if err := s.store.PutCatalogApplicationPreview(ctx, application.ID, application.Version, application.Digest, raw); err != nil {
+			slog.Warn("store application preview", "application", application.Reference, "error", err)
+		}
+	}
+
+	s.previewMu.Lock()
+	flight.preview = preview
+	flight.failure = failure
+	close(flight.done)
+	delete(s.previewFlights, key)
+	s.previewMu.Unlock()
+	return preview, failure
+}
+
+func (s *Server) buildApplicationPreview(ctx context.Context, application domain.CatalogApplication) (applicationPreview, *managedOperationFailure) {
+	return s.buildApplicationPreviewWithValues(ctx, application, nil)
+}
+
+func (s *Server) buildApplicationPreviewWithValues(ctx context.Context, application domain.CatalogApplication, overrides map[string]any) (applicationPreview, *managedOperationFailure) {
+	var descriptor catalog.Descriptor
+	if err := json.Unmarshal(application.Descriptor, &descriptor); err != nil {
+		return applicationPreview{}, &managedOperationFailure{status: http.StatusConflict, code: "invalid_application", message: "The catalog application descriptor is invalid."}
+	}
+	plugin, err := s.applicationMaterializer(ctx, application.Reference)
+	if err != nil {
+		return applicationPreview{}, &managedOperationFailure{status: http.StatusConflict, code: "materializer_unavailable", message: err.Error()}
+	}
+	values := map[string]any{}
+	for name, value := range descriptor.Spec.Defaults {
+		values[name] = value
+	}
+	for name, value := range overrides {
+		values[name] = value
+	}
+	configuration, err := json.Marshal(map[string]any{"applicationRef": application.Reference, "values": values})
+	if err != nil {
+		return applicationPreview{}, &managedOperationFailure{status: http.StatusInternalServerError, code: "materialization_failed", message: "Could not prepare application defaults."}
 	}
 	issues, err := schema.Validate(plugin.Manifest().Schema, configuration)
-	if err != nil {
-		writeError(response, http.StatusInternalServerError, "invalid_schema", err.Error())
-		return
+	if err != nil || len(issues) != 0 {
+		return applicationPreview{}, &managedOperationFailure{status: http.StatusConflict, code: "invalid_defaults", message: "Application defaults do not satisfy the materializer schema."}
 	}
-	if len(issues) != 0 {
-		converted := make([]domain.ValidationIssue, 0, len(issues))
-		for _, issue := range issues {
-			converted = append(converted, domain.ValidationIssue{Level: "error", Path: issue.Path, Message: issue.Message})
-		}
-		writeJSON(response, http.StatusUnprocessableEntity, map[string]any{"code": "validation_failed", "validation": domain.ValidationReport{Valid: false, Issues: converted, CheckedAt: time.Now().UTC()}})
-		return
-	}
-	validation := plugin.Validate(request.Context(), configuration)
+	validation := plugin.Validate(ctx, configuration)
 	if !validation.Valid {
-		writeJSON(response, http.StatusUnprocessableEntity, map[string]any{"code": "validation_failed", "validation": validation})
-		return
+		return applicationPreview{}, &managedOperationFailure{status: http.StatusUnprocessableEntity, payload: map[string]any{"code": "validation_failed", "validation": validation}}
 	}
-	plan, err := plugin.Plan(request.Context(), configuration)
+	plan, err := plugin.Plan(ctx, configuration)
 	if err != nil || len(plan.Steps) != 1 {
-		message := "The application generator produced an invalid plan."
+		message := "The application materializer produced an invalid plan."
 		if err != nil {
 			message = err.Error()
 		}
-		writeError(response, http.StatusUnprocessableEntity, "planning_failed", message)
-		return
+		return applicationPreview{}, &managedOperationFailure{status: http.StatusUnprocessableEntity, code: "planning_failed", message: message}
 	}
 	step := plan.Steps[0]
 	if step.Mutating || len(step.Effects) != 0 || len(step.ArtifactInputs) != 0 {
-		writeError(response, http.StatusUnprocessableEntity, "unsafe_factory", "Application generators must be local and side-effect free.")
-		return
+		return applicationPreview{}, &managedOperationFailure{status: http.StatusUnprocessableEntity, code: "unsafe_materializer", message: "Application manifest previews must be side-effect free."}
 	}
 	quiet := func(string, string) error { return nil }
-	precheck, err := plugin.Precheck(request.Context(), step, quiet)
+	precheck, err := plugin.Precheck(ctx, step, quiet)
 	if err != nil || precheck.Status != domain.HealthHealthy {
 		message := precheck.Summary
 		if err != nil {
 			message = err.Error()
 		}
-		writeError(response, http.StatusUnprocessableEntity, "precheck_failed", message)
-		return
+		return applicationPreview{}, &managedOperationFailure{status: http.StatusUnprocessableEntity, code: "precheck_failed", message: message}
 	}
-	result, err := plugin.Execute(request.Context(), step, quiet)
+	result, err := plugin.Execute(ctx, step, quiet)
 	if err != nil {
-		writeError(response, http.StatusUnprocessableEntity, "generation_failed", err.Error())
-		return
+		return applicationPreview{}, &managedOperationFailure{status: http.StatusUnprocessableEntity, code: "materialization_failed", message: err.Error()}
 	}
-	health, err := plugin.Verify(request.Context(), step, result, quiet)
+	health, err := plugin.Verify(ctx, step, result, quiet)
 	if err != nil || health.Status != domain.HealthHealthy {
 		message := health.Summary
 		if err != nil {
 			message = err.Error()
 		}
-		writeError(response, http.StatusUnprocessableEntity, "generation_failed", message)
-		return
+		return applicationPreview{}, &managedOperationFailure{status: http.StatusUnprocessableEntity, code: "verification_failed", message: message}
 	}
-	var generated struct {
-		Descriptor json.RawMessage `json:"descriptor"`
-	}
-	if json.Unmarshal(result, &generated) != nil || len(generated.Descriptor) == 0 {
-		writeError(response, http.StatusUnprocessableEntity, "generation_failed", "The generator returned no application descriptor.")
-		return
-	}
-	application, err := catalog.Parse(generated.Descriptor, "imported")
+	preview, err := decodeApplicationPreview(result, application.Reference)
 	if err != nil {
-		writeError(response, http.StatusUnprocessableEntity, "invalid_application", err.Error())
-		return
+		return applicationPreview{}, &managedOperationFailure{status: http.StatusUnprocessableEntity, code: "materialization_failed", message: err.Error() + "."}
 	}
-	application, err = s.store.CreateCatalogApplication(request.Context(), application)
-	if errors.Is(err, storage.ErrConflict) {
-		writeError(response, http.StatusConflict, "application_conflict", "This generated application already exists in the catalog.")
-		return
-	}
+	return preview, nil
+}
+
+func (s *Server) warmApplicationPreviews() {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	applications, err := s.store.ListCatalogApplications(ctx)
 	if err != nil {
-		writeError(response, http.StatusInternalServerError, "database_error", "Could not store the generated application.")
+		slog.Warn("list applications for preview warmup", "error", err)
 		return
 	}
-	writeJSON(response, http.StatusCreated, application)
+	jobs := make(chan domain.CatalogApplication)
+	var workers sync.WaitGroup
+	for range 2 {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			for application := range jobs {
+				if _, _, failure := s.catalogApplicationPreview(ctx, application, false); failure != nil {
+					slog.Warn("warm application preview", "application", application.Reference, "error", failure.message)
+				}
+			}
+		}()
+	}
+	for _, application := range applications {
+		select {
+		case jobs <- application:
+		case <-ctx.Done():
+			close(jobs)
+			workers.Wait()
+			return
+		}
+	}
+	close(jobs)
+	workers.Wait()
+}
+
+func (s *Server) warmApplicationPreview(application domain.CatalogApplication) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	if _, _, failure := s.catalogApplicationPreview(ctx, application, false); failure != nil {
+		slog.Warn("warm application preview", "application", application.Reference, "error", failure.message)
+	}
 }
 
 func (s *Server) listCatalogStrategies(response http.ResponseWriter, request *http.Request) {
@@ -1058,7 +1243,6 @@ func (s *Server) listCatalogStrategies(response http.ResponseWriter, request *ht
 func (s *Server) importCatalogStrategy(response http.ResponseWriter, request *http.Request) {
 	var input struct {
 		WorkspaceID          string          `json:"workspaceId"`
-		HarborResourceID     string          `json:"harborResourceId"`
 		Name                 string          `json:"name"`
 		Kind                 string          `json:"kind"`
 		SourceImage          string          `json:"sourceImage"`
@@ -1069,12 +1253,15 @@ func (s *Server) importCatalogStrategy(response http.ResponseWriter, request *ht
 		return
 	}
 	input.WorkspaceID = strings.TrimSpace(input.WorkspaceID)
-	input.HarborResourceID = strings.TrimSpace(input.HarborResourceID)
 	input.Name = strings.TrimSpace(input.Name)
 	input.Kind = strings.TrimSpace(input.Kind)
 	input.SourceImage = strings.TrimSpace(input.SourceImage)
 	if len(input.DefaultConfiguration) == 0 {
 		input.DefaultConfiguration = json.RawMessage(`{}`)
+	}
+	if !strategyNamePattern.MatchString(input.Name) || !map[string]bool{"scheduler": true, "descheduler": true, "autoscaler": true}[input.Kind] || input.SourceImage == "" || len(input.SourceImage) > 512 || strings.ContainsAny(input.SourceImage, "\n\r\t ") {
+		writeError(response, http.StatusUnprocessableEntity, "invalid_strategy", "Name, type or Docker image is invalid.")
+		return
 	}
 	strategyPlugin, err := s.pluginForCapability("", input.Kind+".kubernetes.install")
 	if err != nil {
@@ -1089,41 +1276,15 @@ func (s *Server) importCatalogStrategy(response http.ResponseWriter, request *ht
 	strategyConfiguration["clusterConnectionRef"] = "art_validation_cluster"
 	strategyConfiguration["applicationDeploymentRef"] = "art_validation_application"
 	strategyConfiguration["targetBindingRef"] = "art_validation_binding"
-	strategyConfiguration["image"] = "harbor.invalid/kubephos/validation@sha256:" + strings.Repeat("a", 64)
+	strategyConfiguration["image"] = input.SourceImage
 	strategyRaw, _ := json.Marshal(strategyConfiguration)
 	strategyReport := strategyPlugin.Validate(request.Context(), strategyRaw)
 	if !strategyReport.Valid {
 		writeJSON(response, http.StatusUnprocessableEntity, map[string]any{"code": "invalid_strategy_configuration", "validation": strategyReport})
 		return
 	}
-	harbor, err := s.store.GetManagedResource(request.Context(), input.HarborResourceID)
-	if err != nil || harbor.Kind != "harbor" || harbor.Status != "ready" || harbor.WorkspaceID != input.WorkspaceID {
-		writeError(response, http.StatusUnprocessableEntity, "invalid_harbor", "Select a ready Harbor registry in the same environment.")
-		return
-	}
-	endpoint, err := s.store.GetPipelineRunArtifact(request.Context(), harbor.PipelineRunID, "registry-endpoint")
-	if err != nil || endpoint.Type != "RegistryEndpoint" || endpoint.Sensitive {
-		writeError(response, http.StatusConflict, "registry_invalid", "The selected Harbor endpoint is unavailable.")
-		return
-	}
-	credential, err := s.store.GetPipelineRunArtifact(request.Context(), harbor.PipelineRunID, "registry-push-credential")
-	if err != nil || credential.Type != "RegistryCredential" || !credential.Sensitive {
-		writeError(response, http.StatusConflict, "registry_invalid", "The selected Harbor push identity is unavailable.")
-		return
-	}
-	plugin, err := s.pluginForCapability("", "catalog.strategy.mirror")
-	if err != nil {
-		writeError(response, http.StatusUnprocessableEntity, "capability_unavailable", err.Error())
-		return
-	}
-	spec, _ := json.Marshal(map[string]any{"registryEndpointRef": endpoint.ID, "registryCredentialRef": credential.ID, "name": input.Name, "kind": input.Kind, "sourceImage": input.SourceImage, "defaultConfiguration": input.DefaultConfiguration})
-	operation, failure := s.validatedManagedOperation(request.Context(), input.WorkspaceID, plugin, "Import "+input.Kind+" "+input.Name, spec)
-	if failure != nil {
-		failure.write(response)
-		return
-	}
-	strategy := domain.CatalogStrategy{ID: id.New("strategy"), WorkspaceID: input.WorkspaceID, HarborResourceID: harbor.ID, Name: input.Name, Kind: input.Kind, SourceImage: input.SourceImage, DefaultConfiguration: input.DefaultConfiguration}
-	strategy, err = s.store.CreateCatalogStrategy(request.Context(), strategy, operation)
+	strategy := domain.CatalogStrategy{ID: id.New("strategy"), WorkspaceID: input.WorkspaceID, Name: input.Name, Kind: input.Kind, SourceImage: input.SourceImage, DefaultConfiguration: input.DefaultConfiguration}
+	strategy, err = s.store.CreateCatalogStrategy(request.Context(), strategy)
 	if errors.Is(err, storage.ErrConflict) {
 		writeError(response, http.StatusConflict, "strategy_conflict", "A strategy with this name and type already exists in the environment.")
 		return
@@ -1134,10 +1295,10 @@ func (s *Server) importCatalogStrategy(response http.ResponseWriter, request *ht
 			writeError(response, http.StatusConflict, "strategy_conflict", "A strategy with this name and type already exists in the environment.")
 			return
 		}
-		writeError(response, http.StatusInternalServerError, "database_error", "Could not queue the strategy image import.")
+		writeError(response, http.StatusInternalServerError, "database_error", "Could not save the strategy image.")
 		return
 	}
-	writeJSON(response, http.StatusAccepted, strategy)
+	writeJSON(response, http.StatusCreated, strategy)
 }
 
 func (s *Server) deleteCatalogStrategy(response http.ResponseWriter, request *http.Request) {
@@ -1179,6 +1340,7 @@ func (s *Server) importCatalogApplication(response http.ResponseWriter, request 
 		writeError(response, http.StatusInternalServerError, "database_error", "Could not store application.")
 		return
 	}
+	go s.warmApplicationPreview(application)
 	writeJSON(response, http.StatusCreated, application)
 }
 
@@ -1286,6 +1448,7 @@ func (s *Server) listConnections(response http.ResponseWriter, request *http.Req
 func (s *Server) createConnection(response http.ResponseWriter, request *http.Request) {
 	var input struct {
 		Name          string          `json:"name"`
+		Description   string          `json:"description"`
 		PluginID      string          `json:"pluginId"`
 		Configuration json.RawMessage `json:"configuration"`
 	}
@@ -1294,8 +1457,13 @@ func (s *Server) createConnection(response http.ResponseWriter, request *http.Re
 		return
 	}
 	input.Name = strings.TrimSpace(input.Name)
+	input.Description = strings.TrimSpace(input.Description)
 	if input.Name == "" || len(input.Name) > 80 {
 		writeError(response, http.StatusUnprocessableEntity, "invalid_name", "Name must contain between 1 and 80 characters.")
+		return
+	}
+	if len(input.Description) > 280 {
+		writeError(response, http.StatusUnprocessableEntity, "invalid_description", "Description must not exceed 280 characters.")
 		return
 	}
 	plugin, err := s.registry.Get(input.PluginID)
@@ -1322,7 +1490,7 @@ func (s *Server) createConnection(response http.ResponseWriter, request *http.Re
 		writeJSON(response, http.StatusUnprocessableEntity, map[string]any{"code": "validation_failed", "validation": report})
 		return
 	}
-	connection, err := s.store.CreateProviderConnection(request.Context(), domain.ProviderConnection{ID: id.New("conn"), Name: input.Name, Provider: manifest.Provider, PluginID: manifest.ID, Configuration: input.Configuration})
+	connection, err := s.store.CreateProviderConnection(request.Context(), domain.ProviderConnection{ID: id.New("conn"), Name: input.Name, Description: input.Description, Provider: manifest.Provider, PluginID: manifest.ID, Configuration: input.Configuration})
 	if err != nil {
 		var databaseError *pgconn.PgError
 		if errors.As(err, &databaseError) && databaseError.Code == "23505" {
@@ -1715,6 +1883,25 @@ func (s *Server) listKubernetesClusters(response http.ResponseWriter, request *h
 		writeError(response, http.StatusInternalServerError, "database_error", "Could not list Kubernetes clusters.")
 		return
 	}
+	user := requestUser(request)
+	if user.Role != "admin" {
+		assignments, assignmentErr := s.store.ListClusterAssignments(request.Context(), user.ID)
+		if assignmentErr != nil {
+			writeError(response, http.StatusInternalServerError, "database_error", "Could not list assigned Kubernetes clusters.")
+			return
+		}
+		allowed := map[string]bool{}
+		for _, assignment := range assignments {
+			allowed[assignment.ClusterResourceID] = true
+		}
+		filtered := items[:0]
+		for _, item := range items {
+			if allowed[item.ID] {
+				filtered = append(filtered, item)
+			}
+		}
+		items = filtered
+	}
 	writeJSON(response, http.StatusOK, map[string]any{"items": items})
 }
 
@@ -1727,6 +1914,9 @@ func (s *Server) getKubernetesCluster(response http.ResponseWriter, request *htt
 	if err != nil {
 		slog.Error("read managed cluster", "error", err)
 		writeError(response, http.StatusInternalServerError, "database_error", "Could not read the Kubernetes cluster.")
+		return
+	}
+	if !s.validateClusterAssignment(response, request, requestUser(request), resource.ID) {
 		return
 	}
 	writeJSON(response, http.StatusOK, resource)
@@ -1743,8 +1933,18 @@ type experimentConfigurationInput struct {
 }
 
 type experimentConfigurationDefinitionInput struct {
-	ApplicationValues json.RawMessage                         `json:"applicationValues"`
-	Components        []experimentConfigurationComponentInput `json:"components"`
+	DestinationMode                 string                                  `json:"destinationMode,omitempty"`
+	ExternalDestination             externalLoadDestinationInput            `json:"externalDestination,omitempty"`
+	ApplicationValues               json.RawMessage                         `json:"applicationValues"`
+	PodDisruptionBudgetMinAvailable int                                     `json:"podDisruptionBudgetMinAvailable,omitempty"`
+	Components                      []experimentConfigurationComponentInput `json:"components"`
+}
+
+type externalLoadDestinationInput struct {
+	TargetURL    string            `json:"targetUrl"`
+	RuntimeImage string            `json:"runtimeImage"`
+	Script       string            `json:"script"`
+	Parameters   map[string]string `json:"parameters,omitempty"`
 }
 
 type experimentConfigurationComponentInput struct {
@@ -1762,7 +1962,7 @@ type experimentConfigurationComponentInput struct {
 }
 
 func (s *Server) listExperimentConfigurations(response http.ResponseWriter, request *http.Request) {
-	items, err := s.store.ListExperimentConfigurations(request.Context())
+	items, err := s.store.ListExperimentConfigurationsForUser(request.Context(), "")
 	if err != nil {
 		writeError(response, http.StatusInternalServerError, "database_error", "Could not list experiment configurations.")
 		return
@@ -1789,11 +1989,16 @@ func (s *Server) createExperimentConfiguration(response http.ResponseWriter, req
 		writeError(response, http.StatusBadRequest, "invalid_request", err.Error())
 		return
 	}
+	user := requestUser(request)
+	if !s.validateClusterAssignment(response, request, user, input.ClusterResourceID) {
+		return
+	}
 	configuration, failure := s.validatedExperimentConfiguration(request.Context(), input)
 	if failure != nil {
 		failure.write(response)
 		return
 	}
+	configuration.OwnerUserID = user.ID
 	created, err := s.store.CreateExperimentConfiguration(request.Context(), configuration)
 	if errors.Is(err, storage.ErrConflict) {
 		writeError(response, http.StatusConflict, "configuration_conflict", "An experiment configuration with this name already exists in the environment.")
@@ -1816,12 +2021,22 @@ func (s *Server) updateExperimentConfiguration(response http.ResponseWriter, req
 		writeError(response, http.StatusBadRequest, "missing_revision", "Reload the experiment configuration before editing it.")
 		return
 	}
+	user := requestUser(request)
+	source, err := s.store.GetExperimentConfiguration(request.Context(), request.PathValue("id"))
+	if err != nil || !ownsResource(user, source.OwnerUserID) {
+		writeError(response, http.StatusNotFound, "not_found", "Experiment configuration not found.")
+		return
+	}
+	if !s.validateClusterAssignment(response, request, user, input.ClusterResourceID) {
+		return
+	}
 	configuration, failure := s.validatedExperimentConfiguration(request.Context(), input)
 	if failure != nil {
 		failure.write(response)
 		return
 	}
 	configuration.ID = request.PathValue("id")
+	configuration.OwnerUserID = source.OwnerUserID
 	updated, err := s.store.UpdateExperimentConfiguration(request.Context(), configuration, *input.UpdatedAt)
 	if errors.Is(err, storage.ErrNotFound) {
 		writeError(response, http.StatusNotFound, "not_found", "Experiment configuration not found.")
@@ -1855,6 +2070,14 @@ func (s *Server) cloneExperimentConfiguration(response http.ResponseWriter, requ
 		writeError(response, http.StatusInternalServerError, "database_error", "Could not read the experiment configuration.")
 		return
 	}
+	user := requestUser(request)
+	if !ownsResource(user, source.OwnerUserID) {
+		writeError(response, http.StatusNotFound, "not_found", "Experiment configuration not found.")
+		return
+	}
+	if !s.validateClusterAssignment(response, request, user, source.ClusterResourceID) {
+		return
+	}
 	var definition experimentConfigurationDefinitionInput
 	if err := json.Unmarshal(source.Definition, &definition); err != nil {
 		writeError(response, http.StatusConflict, "invalid_snapshot", "The stored experiment configuration is invalid.")
@@ -1865,6 +2088,7 @@ func (s *Server) cloneExperimentConfiguration(response http.ResponseWriter, requ
 		failure.write(response)
 		return
 	}
+	configuration.OwnerUserID = user.ID
 	created, err := s.store.CreateExperimentConfiguration(request.Context(), configuration)
 	if errors.Is(err, storage.ErrConflict) {
 		writeError(response, http.StatusConflict, "configuration_conflict", "An experiment configuration with this name already exists in the environment.")
@@ -1878,6 +2102,11 @@ func (s *Server) cloneExperimentConfiguration(response http.ResponseWriter, requ
 }
 
 func (s *Server) deleteExperimentConfiguration(response http.ResponseWriter, request *http.Request) {
+	configuration, readErr := s.store.GetExperimentConfiguration(request.Context(), request.PathValue("id"))
+	if readErr != nil || !ownsResource(requestUser(request), configuration.OwnerUserID) {
+		writeError(response, http.StatusNotFound, "not_found", "Experiment configuration not found.")
+		return
+	}
 	err := s.store.DeleteExperimentConfiguration(request.Context(), request.PathValue("id"))
 	if errors.Is(err, storage.ErrNotFound) {
 		writeError(response, http.StatusNotFound, "not_found", "Experiment configuration not found.")
@@ -1909,30 +2138,60 @@ func (s *Server) validatedExperimentConfiguration(ctx context.Context, input exp
 	if cluster.Status != "ready" || cluster.WorkspaceID != input.WorkspaceID {
 		return domain.ExperimentConfiguration{}, &managedOperationFailure{status: http.StatusConflict, code: "cluster_not_ready", message: "The selected cluster must be ready and belong to the same environment."}
 	}
-	applicationID, applicationVersion, err := catalog.ParseReference(input.ApplicationRef)
-	if err != nil {
-		return domain.ExperimentConfiguration{}, &managedOperationFailure{status: http.StatusUnprocessableEntity, code: "invalid_application", message: err.Error()}
+	input.Definition.DestinationMode = strings.ToLower(strings.TrimSpace(input.Definition.DestinationMode))
+	if input.Definition.DestinationMode == "" {
+		input.Definition.DestinationMode = "application"
 	}
-	application, err := s.store.GetCatalogApplication(ctx, applicationID, applicationVersion)
-	if errors.Is(err, storage.ErrNotFound) {
-		return domain.ExperimentConfiguration{}, &managedOperationFailure{status: http.StatusUnprocessableEntity, code: "invalid_application", message: "Select an enabled application version from the catalog."}
+	external := input.Definition.DestinationMode == "external"
+	if !external && input.Definition.DestinationMode != "application" {
+		return domain.ExperimentConfiguration{}, &managedOperationFailure{status: http.StatusUnprocessableEntity, code: "invalid_destination_mode", message: "Destination mode must be application or external."}
 	}
-	if err != nil {
-		return domain.ExperimentConfiguration{}, &managedOperationFailure{status: http.StatusInternalServerError, code: "database_error", message: "Could not validate the application."}
+	var application domain.CatalogApplication
+	var descriptor catalog.Descriptor
+	applicationRef := ""
+	applicationDigest := ""
+	if external {
+		destination, reference, digest, err := normalizeExternalLoadDestination(input.Definition.ExternalDestination)
+		if err != nil {
+			return domain.ExperimentConfiguration{}, &managedOperationFailure{status: http.StatusUnprocessableEntity, code: "invalid_external_destination", message: err.Error()}
+		}
+		input.Definition.ExternalDestination = destination
+		input.Definition.ApplicationValues = json.RawMessage(`{}`)
+		input.Definition.PodDisruptionBudgetMinAvailable = 0
+		applicationRef, applicationDigest = reference, digest
+	} else {
+		applicationID, applicationVersion, err := catalog.ParseReference(input.ApplicationRef)
+		if err != nil {
+			return domain.ExperimentConfiguration{}, &managedOperationFailure{status: http.StatusUnprocessableEntity, code: "invalid_application", message: err.Error()}
+		}
+		application, err = s.store.GetCatalogApplication(ctx, applicationID, applicationVersion)
+		if errors.Is(err, storage.ErrNotFound) {
+			return domain.ExperimentConfiguration{}, &managedOperationFailure{status: http.StatusUnprocessableEntity, code: "invalid_application", message: "Select an enabled application version from the catalog."}
+		}
+		if err != nil {
+			return domain.ExperimentConfiguration{}, &managedOperationFailure{status: http.StatusInternalServerError, code: "database_error", message: "Could not validate the application."}
+		}
+		if err := json.Unmarshal(application.Descriptor, &descriptor); err != nil {
+			return domain.ExperimentConfiguration{}, &managedOperationFailure{status: http.StatusConflict, code: "invalid_application", message: "The selected application contract is invalid."}
+		}
+		input.Definition.ExternalDestination = externalLoadDestinationInput{}
+		applicationRef, applicationDigest = application.Reference, application.Digest
 	}
 	if len(input.Definition.ApplicationValues) == 0 {
 		input.Definition.ApplicationValues = json.RawMessage(`{}`)
 	}
-	var descriptor catalog.Descriptor
-	if err := json.Unmarshal(application.Descriptor, &descriptor); err != nil {
-		return domain.ExperimentConfiguration{}, &managedOperationFailure{status: http.StatusConflict, code: "invalid_application", message: "The selected application contract is invalid."}
+	if input.Definition.PodDisruptionBudgetMinAvailable < 0 || input.Definition.PodDisruptionBudgetMinAvailable > 20 {
+		return domain.ExperimentConfiguration{}, &managedOperationFailure{status: http.StatusUnprocessableEntity, code: "invalid_pod_disruption_budget", message: "Minimum available replicas must be between 1 and 20."}
 	}
-	valuesSchema, _ := json.Marshal(descriptor.Spec.ValuesSchema)
-	if issues, err := schema.Validate(valuesSchema, input.Definition.ApplicationValues); err != nil {
-		return domain.ExperimentConfiguration{}, &managedOperationFailure{status: http.StatusInternalServerError, code: "invalid_schema", message: err.Error()}
-	} else if len(issues) > 0 {
-		return domain.ExperimentConfiguration{}, experimentConfigurationIssues("applicationValues", issues)
+	if !external {
+		valuesSchema, _ := json.Marshal(descriptor.Spec.ValuesSchema)
+		if issues, err := schema.Validate(valuesSchema, input.Definition.ApplicationValues); err != nil {
+			return domain.ExperimentConfiguration{}, &managedOperationFailure{status: http.StatusInternalServerError, code: "invalid_schema", message: err.Error()}
+		} else if len(issues) > 0 {
+			return domain.ExperimentConfiguration{}, experimentConfigurationIssues("applicationValues", issues)
+		}
 	}
+	validation := domain.ValidationReport{Valid: true, CheckedAt: time.Now().UTC()}
 	if len(input.Definition.Components) > 15 {
 		return domain.ExperimentConfiguration{}, &managedOperationFailure{status: http.StatusUnprocessableEntity, code: "invalid_components", message: "An experiment configuration can contain at most 15 component instances."}
 	}
@@ -1941,8 +2200,27 @@ func (s *Server) validatedExperimentConfiguration(ctx context.Context, input exp
 	for _, component := range descriptor.Spec.Interface.Components {
 		applicationComponents[component.ID] = true
 	}
+	if dynamic, _ := descriptor.Spec.ValuesSchema["x-kubephos-dynamic-topology"].(bool); dynamic {
+		var applicationValues map[string]any
+		if err := json.Unmarshal(input.Definition.ApplicationValues, &applicationValues); err != nil {
+			return domain.ExperimentConfiguration{}, &managedOperationFailure{status: http.StatusUnprocessableEntity, code: "invalid_application_values", message: "Application settings must be a JSON object."}
+		}
+		preview, failure := s.buildApplicationPreviewWithValues(ctx, application, applicationValues)
+		if failure != nil {
+			return domain.ExperimentConfiguration{}, failure
+		}
+		if len(preview.WorkloadTargets) == 0 {
+			return domain.ExperimentConfiguration{}, &managedOperationFailure{status: http.StatusUnprocessableEntity, code: "invalid_application_topology", message: "Application settings produced no targetable workload."}
+		}
+		applicationComponents = make(map[string]bool, len(preview.WorkloadTargets))
+		for _, workload := range preview.WorkloadTargets {
+			applicationComponents[workload.ID] = true
+		}
+		validation.Issues = append(validation.Issues, domain.ValidationIssue{Level: "info", Path: "applicationValues", Message: fmt.Sprintf("Application topology resolved to %d workloads.", len(preview.WorkloadTargets))})
+	}
 	seenIDs := map[string]bool{}
-	validation := domain.ValidationReport{Valid: true, CheckedAt: time.Now().UTC()}
+	externalLoadComponents := 0
+	externalMetricsComponents := 0
 	for index := range input.Definition.Components {
 		component := &input.Definition.Components[index]
 		component.ID = strings.TrimSpace(component.ID)
@@ -1962,36 +2240,63 @@ func (s *Server) validatedExperimentConfiguration(ctx context.Context, input exp
 		if component.Capability == "" || !manifest.HasCapability(component.Capability) || strings.HasSuffix(component.Capability, ".preflight") || strings.HasSuffix(component.Capability, ".cleanup") || component.Capability == "lifecycle.cleanup" {
 			return domain.ExperimentConfiguration{}, &managedOperationFailure{status: http.StatusUnprocessableEntity, code: "invalid_capability", message: "Each component must select a primary capability declared by its plugin."}
 		}
+		if external {
+			switch {
+			case manifest.HasCapability("load.session.control") && component.Capability == "load.session.control":
+				externalLoadComponents++
+			case manifest.HasCapability("metrics.timeseries.collect") && component.Capability == "metrics.timeseries.collect":
+				externalMetricsComponents++
+			default:
+				return domain.ExperimentConfiguration{}, &managedOperationFailure{status: http.StatusUnprocessableEntity, code: "invalid_external_component", message: "External destination configurations can contain only the load profile and metrics collector."}
+			}
+		}
 		if len(component.Configuration) == 0 {
 			component.Configuration = json.RawMessage(`{}`)
+		}
+		if external && component.Capability == "load.session.control" {
+			var loadConfiguration map[string]any
+			if json.Unmarshal(component.Configuration, &loadConfiguration) != nil || loadConfiguration == nil {
+				return domain.ExperimentConfiguration{}, &managedOperationFailure{status: http.StatusUnprocessableEntity, code: "invalid_load_configuration", message: "External load configuration must be a JSON object."}
+			}
+			loadConfiguration["action"] = "start"
+			loadConfiguration["interactive"] = false
+			loadConfiguration["scenarioId"] = "external-load"
+			delete(loadConfiguration, "geographicSteps")
+			component.Configuration, _ = json.Marshal(loadConfiguration)
 		}
 		component.StrategyID = strings.TrimSpace(component.StrategyID)
 		if component.StrategyID != "" {
 			strategy, err := s.store.GetCatalogStrategy(ctx, component.StrategyID)
-			if err != nil || strategy.WorkspaceID != input.WorkspaceID || strategy.Status != domain.OperationSucceeded || strategy.ArtifactID == "" || !strings.HasPrefix(component.Capability, strategy.Kind+".") {
+			if err != nil || strategy.WorkspaceID != input.WorkspaceID || strategy.Status != domain.OperationSucceeded || !strings.HasPrefix(component.Capability, strategy.Kind+".") {
 				return domain.ExperimentConfiguration{}, &managedOperationFailure{status: http.StatusUnprocessableEntity, code: "invalid_strategy", message: "Select a ready strategy image matching the component type."}
 			}
-			artifact, err := s.store.GetArtifact(ctx, strategy.ArtifactID)
-			if err != nil {
-				return domain.ExperimentConfiguration{}, &managedOperationFailure{status: http.StatusConflict, code: "invalid_strategy", message: "The mirrored strategy image is unavailable."}
-			}
-			raw, err := s.readArtifactPayload(ctx, artifact)
-			if err != nil {
-				return domain.ExperimentConfiguration{}, &managedOperationFailure{status: http.StatusConflict, code: "invalid_strategy", message: "The mirrored strategy image failed integrity verification."}
-			}
-			var mirrored struct {
-				StrategyImage struct {
-					Spec struct {
-						MirroredImage string          `json:"mirroredImage"`
-						Configuration json.RawMessage `json:"defaultConfiguration"`
-					} `json:"spec"`
-				} `json:"strategyImage"`
-			}
-			if json.Unmarshal(raw, &mirrored) != nil || mirrored.StrategyImage.Spec.MirroredImage == "" {
-				return domain.ExperimentConfiguration{}, &managedOperationFailure{status: http.StatusConflict, code: "invalid_strategy", message: "The mirrored strategy artifact is invalid."}
+			image := strategy.SourceImage
+			defaults := strategy.DefaultConfiguration
+			if strategy.ArtifactID != "" {
+				artifact, err := s.store.GetArtifact(ctx, strategy.ArtifactID)
+				if err != nil {
+					return domain.ExperimentConfiguration{}, &managedOperationFailure{status: http.StatusConflict, code: "invalid_strategy", message: "The mirrored strategy image is unavailable."}
+				}
+				raw, err := s.readArtifactPayload(ctx, artifact)
+				if err != nil {
+					return domain.ExperimentConfiguration{}, &managedOperationFailure{status: http.StatusConflict, code: "invalid_strategy", message: "The mirrored strategy image failed integrity verification."}
+				}
+				var mirrored struct {
+					StrategyImage struct {
+						Spec struct {
+							MirroredImage string          `json:"mirroredImage"`
+							Configuration json.RawMessage `json:"defaultConfiguration"`
+						} `json:"spec"`
+					} `json:"strategyImage"`
+				}
+				if json.Unmarshal(raw, &mirrored) != nil || mirrored.StrategyImage.Spec.MirroredImage == "" {
+					return domain.ExperimentConfiguration{}, &managedOperationFailure{status: http.StatusConflict, code: "invalid_strategy", message: "The mirrored strategy artifact is invalid."}
+				}
+				image = mirrored.StrategyImage.Spec.MirroredImage
+				defaults = mirrored.StrategyImage.Spec.Configuration
 			}
 			merged := map[string]any{}
-			_ = json.Unmarshal(mirrored.StrategyImage.Spec.Configuration, &merged)
+			_ = json.Unmarshal(defaults, &merged)
 			var overrides map[string]any
 			if json.Unmarshal(component.Configuration, &overrides) != nil || overrides == nil {
 				return domain.ExperimentConfiguration{}, &managedOperationFailure{status: http.StatusUnprocessableEntity, code: "invalid_strategy", message: "Strategy configuration must be a JSON object."}
@@ -1999,7 +2304,7 @@ func (s *Server) validatedExperimentConfiguration(ctx context.Context, input exp
 			for key, value := range overrides {
 				merged[key] = value
 			}
-			merged["image"] = mirrored.StrategyImage.Spec.MirroredImage
+			merged["image"] = image
 			component.Configuration, _ = json.Marshal(merged)
 		}
 		configSchema, err := experimentComponentSchema(manifest.Schema)
@@ -2011,14 +2316,64 @@ func (s *Server) validatedExperimentConfiguration(ctx context.Context, input exp
 		} else if len(issues) > 0 {
 			return domain.ExperimentConfiguration{}, experimentConfigurationIssues("components."+component.ID+".configuration", issues)
 		}
+		if manifest.HasCapability("load.session.control") {
+			report, err := validateExperimentComponentConfiguration(ctx, plugin, component.Configuration, applicationRef)
+			if err != nil {
+				return domain.ExperimentConfiguration{}, &managedOperationFailure{status: http.StatusInternalServerError, code: "invalid_component", message: err.Error()}
+			}
+			if !report.Valid {
+				for index := range report.Issues {
+					report.Issues[index].Path = "components." + component.ID + ".configuration." + strings.TrimPrefix(strings.TrimPrefix(report.Issues[index].Path, "$"), ".")
+				}
+				return domain.ExperimentConfiguration{}, &managedOperationFailure{status: http.StatusUnprocessableEntity, payload: map[string]any{"code": "validation_failed", "validation": report}}
+			}
+		}
 		if !validExperimentTargets(component.Targets.Include, component.Targets.Exclude, componentPattern, applicationComponents) {
 			return domain.ExperimentConfiguration{}, &managedOperationFailure{status: http.StatusUnprocessableEntity, code: "invalid_targets", message: "Component targets must contain unique catalog component IDs without overlap."}
 		}
 		validation.Issues = append(validation.Issues, domain.ValidationIssue{Level: "info", Path: "components." + component.ID, Message: manifest.Name + " " + manifest.Version + " is installed and its configurable inputs are valid."})
 	}
+	if external && (externalLoadComponents != 1 || externalMetricsComponents != 1 || len(input.Definition.Components) != 2) {
+		return domain.ExperimentConfiguration{}, &managedOperationFailure{status: http.StatusUnprocessableEntity, code: "invalid_external_components", message: "External destination configurations require exactly one load profile and one metrics collector."}
+	}
 	validation.Issues = append(validation.Issues, domain.ValidationIssue{Level: "info", Path: "clusterResourceId", Message: "Cluster health and every runtime dependency will be checked again before each run step."})
 	definition, _ := json.Marshal(input.Definition)
-	return domain.ExperimentConfiguration{ID: id.New("expcfg"), WorkspaceID: input.WorkspaceID, ClusterResourceID: input.ClusterResourceID, Name: input.Name, Description: input.Description, ApplicationRef: application.Reference, ApplicationDigest: application.Digest, Definition: definition, Validation: validation}, nil
+	return domain.ExperimentConfiguration{ID: id.New("expcfg"), WorkspaceID: input.WorkspaceID, ClusterResourceID: input.ClusterResourceID, Name: input.Name, Description: input.Description, ApplicationRef: applicationRef, ApplicationDigest: applicationDigest, Definition: definition, Validation: validation}, nil
+}
+
+func normalizeExternalLoadDestination(value externalLoadDestinationInput) (externalLoadDestinationInput, string, string, error) {
+	value.TargetURL = strings.TrimSpace(value.TargetURL)
+	value.RuntimeImage = strings.TrimSpace(value.RuntimeImage)
+	value.Script = strings.TrimSpace(value.Script)
+	target, err := url.Parse(value.TargetURL)
+	if err != nil || (target.Scheme != "http" && target.Scheme != "https") || target.Host == "" || target.User != nil || target.Fragment != "" || len(value.TargetURL) > 2048 {
+		return externalLoadDestinationInput{}, "", "", errors.New("External endpoint must be an HTTP or HTTPS URL without credentials or fragment.")
+	}
+	if value.RuntimeImage == "" || len(value.RuntimeImage) > 512 || strings.ContainsAny(value.RuntimeImage, "\n\r \t") {
+		return externalLoadDestinationInput{}, "", "", errors.New("Locust runtime image is invalid.")
+	}
+	if value.Script == "" || len(value.Script) > 262144 || (!strings.Contains(value.Script, "from locust") && !strings.Contains(value.Script, "import locust")) {
+		return externalLoadDestinationInput{}, "", "", errors.New("Locust file template must contain a Locust import and be at most 256 KiB.")
+	}
+	if len(value.Parameters) > 50 {
+		return externalLoadDestinationInput{}, "", "", errors.New("At most 50 Locust parameters are allowed.")
+	}
+	pattern := regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,63}$`)
+	seen := map[string]bool{}
+	for name, parameter := range value.Parameters {
+		key := strings.ToUpper(name)
+		if !pattern.MatchString(name) || len(parameter) > 4096 || seen[key] {
+			return externalLoadDestinationInput{}, "", "", fmt.Errorf("Locust parameter %q is invalid or duplicated case-insensitively.", name)
+		}
+		seen[key] = true
+	}
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return externalLoadDestinationInput{}, "", "", err
+	}
+	hash := sha256.Sum256(encoded)
+	digest := "sha256:" + hex.EncodeToString(hash[:])
+	return value, "external:" + hex.EncodeToString(hash[:]), digest, nil
 }
 
 func experimentConfigurationIssues(prefix string, issues []schema.Issue) *managedOperationFailure {
@@ -2053,6 +2408,32 @@ func experimentComponentSchema(raw json.RawMessage) (json.RawMessage, error) {
 	}
 	result := map[string]any{"type": "object", "additionalProperties": false, "properties": filtered, "required": required}
 	return json.Marshal(result)
+}
+
+func validateExperimentComponentConfiguration(ctx context.Context, plugin plugins.Plugin, configuration json.RawMessage, applicationRef string) (domain.ValidationReport, error) {
+	var spec map[string]any
+	if err := json.Unmarshal(configuration, &spec); err != nil {
+		return domain.ValidationReport{}, err
+	}
+	var definition struct {
+		Properties map[string]struct {
+			Format string `json:"format"`
+		} `json:"properties"`
+	}
+	if err := json.Unmarshal(plugin.Manifest().Schema, &definition); err != nil {
+		return domain.ValidationReport{}, err
+	}
+	artifactIndex := 0
+	for name, property := range definition.Properties {
+		switch property.Format {
+		case "kubephos-application-ref":
+			spec[name] = applicationRef
+		case "kubephos-artifact-ref":
+			artifactIndex++
+			spec[name] = fmt.Sprintf("art_configuration_validation_%d", artifactIndex)
+		}
+	}
+	return plugin.Validate(ctx, marshalRaw(spec)), nil
 }
 
 func validExperimentTargets(include, exclude []string, pattern *regexp.Regexp, allowed map[string]bool) bool {
@@ -2109,6 +2490,14 @@ func (s *Server) createExperimentInstance(response http.ResponseWriter, request 
 		writeError(response, http.StatusInternalServerError, "database_error", "Could not read the experiment configuration.")
 		return
 	}
+	user := requestUser(request)
+	if !ownsResource(user, configuration.OwnerUserID) {
+		writeError(response, http.StatusNotFound, "not_found", "Experiment configuration not found.")
+		return
+	}
+	if !s.validateClusterAssignment(response, request, user, configuration.ClusterResourceID) {
+		return
+	}
 	var definition experimentConfigurationDefinitionInput
 	if err := json.Unmarshal(configuration.Definition, &definition); err != nil {
 		writeError(response, http.StatusConflict, "invalid_snapshot", "The saved experiment configuration is invalid.")
@@ -2156,16 +2545,19 @@ func (s *Server) createExperimentInstance(response http.ResponseWriter, request 
 	variantID := id.New("variant")
 	experiment := domain.Experiment{
 		ID: instanceID, WorkspaceID: configuration.WorkspaceID, ConfigurationID: configuration.ID,
-		Kind: "instance",
-		Name: input.Name, Description: configuration.Description, Status: domain.OperationQueued,
+		OwnerUserID: user.ID,
+		Kind:        "instance",
+		Name:        input.Name, Description: configuration.Description, Status: domain.OperationQueued,
 		ResultType: validated.Resolution.Result.Type, ResultVersion: validated.Resolution.Result.Version, ScheduledFor: input.ScheduledFor,
 		Variants: []domain.ExperimentVariant{{ID: variantID, ExperimentID: instanceID, Position: 1, Name: configuration.Name, PipelineID: pipeline.ID, PipelineHash: pipeline.Hash, ConfigurationID: configuration.ID, Configuration: configuration.Definition}},
 	}
 	runs := map[string]domain.PipelineRun{}
+	isolationMode := experimentIsolationMode(definition)
 	for position := 1; position <= input.Runs; position++ {
 		trialID := id.New("trial")
 		run := domain.PipelineRun{
 			ID: id.New("run"), PipelineID: pipeline.ID, WorkspaceID: configuration.WorkspaceID, ClusterResourceID: configuration.ClusterResourceID,
+			OwnerUserID: user.ID, IsolationMode: isolationMode,
 			Name: fmt.Sprintf("%s · Run %d", input.Name, position), Status: domain.OperationQueued, PipelineHash: pipeline.Hash,
 			ResultType: experiment.ResultType, ResultVersion: experiment.ResultVersion, ScheduledFor: input.ScheduledFor,
 		}
@@ -2237,6 +2629,7 @@ func (s *Server) createExperimentSuite(response http.ResponseWriter, request *ht
 	seenAliases := map[string]bool{}
 	seenColors := map[string]bool{}
 	variants := make([]validatedSuiteVariant, 0, len(input.Variants))
+	user := requestUser(request)
 	for position, requested := range input.Variants {
 		configurationID := strings.TrimSpace(requested.ConfigurationID)
 		if configurationID == "" || seen[configurationID] {
@@ -2251,6 +2644,13 @@ func (s *Server) createExperimentSuite(response http.ResponseWriter, request *ht
 		}
 		if err != nil {
 			writeError(response, http.StatusInternalServerError, "database_error", "Could not read suite configurations.")
+			return
+		}
+		if !ownsResource(user, configuration.OwnerUserID) {
+			writeError(response, http.StatusUnprocessableEntity, "invalid_configuration", "A selected experiment configuration is unavailable.")
+			return
+		}
+		if !s.validateClusterAssignment(response, request, user, configuration.ClusterResourceID) {
 			return
 		}
 		alias := strings.TrimSpace(requested.Alias)
@@ -2318,7 +2718,8 @@ func (s *Server) createExperimentSuite(response http.ResponseWriter, request *ht
 	suiteID := id.New("exp")
 	experiment := domain.Experiment{
 		ID: suiteID, WorkspaceID: variants[0].Configuration.WorkspaceID, Kind: "suite", Name: input.Name, Description: input.Description,
-		Status: domain.OperationQueued, ResultType: variants[0].Pipeline.Resolution.Result.Type, ResultVersion: variants[0].Pipeline.Resolution.Result.Version, ScheduledFor: input.ScheduledFor,
+		OwnerUserID: user.ID,
+		Status:      domain.OperationQueued, ResultType: variants[0].Pipeline.Resolution.Result.Type, ResultVersion: variants[0].Pipeline.Resolution.Result.Version, ScheduledFor: input.ScheduledFor,
 	}
 	runs := map[string]domain.PipelineRun{}
 	for variantPosition, item := range variants {
@@ -2337,6 +2738,7 @@ func (s *Server) createExperimentSuite(response http.ResponseWriter, request *ht
 			trialID := id.New("trial")
 			run := domain.PipelineRun{
 				ID: id.New("run"), PipelineID: pipeline.ID, WorkspaceID: experiment.WorkspaceID, ClusterResourceID: item.Configuration.ClusterResourceID,
+				OwnerUserID: user.ID, IsolationMode: experimentIsolationMode(item.Definition),
 				Name: fmt.Sprintf("%s · %s · Run %d", input.Name, item.Configuration.Name, trialPosition), Status: domain.OperationQueued,
 				PipelineHash: pipeline.Hash, ResultType: experiment.ResultType, ResultVersion: experiment.ResultVersion, ScheduledFor: input.ScheduledFor,
 			}
@@ -2369,6 +2771,9 @@ func (s *Server) experimentInstancePipeline(ctx context.Context, configuration d
 	if err != nil || observability.Type != "ObservabilityCapability" || observability.Version != "v1alpha1" {
 		return domain.PipelineDefinition{}, &managedOperationFailure{status: http.StatusConflict, code: "observability_invalid", message: "Managed observability is unavailable on the cluster."}
 	}
+	if definition.DestinationMode == "external" {
+		return s.externalDestinationPipeline(configuration, definition, clusterConnection, observability)
+	}
 	inspectPlugin, err := s.applicationMaterializer(ctx, configuration.ApplicationRef)
 	if err != nil {
 		return domain.PipelineDefinition{}, &managedOperationFailure{status: http.StatusConflict, code: "capability_unavailable", message: err.Error()}
@@ -2397,60 +2802,123 @@ func (s *Server) experimentInstancePipeline(ctx context.Context, configuration d
 		artifactContractKey("ClusterConnection", "v1alpha1"):       {ExternalID: clusterConnection.ID},
 		artifactContractKey("ObservabilityCapability", "v1alpha1"): {ExternalID: observability.ID},
 	}
+	controlNamespace := false
+	managedPlatformLoaded := false
 	for _, component := range definition.Components {
 		plugin, err := s.registry.Get(component.PluginID)
 		if err != nil {
 			return domain.PipelineDefinition{}, &managedOperationFailure{status: http.StatusConflict, code: "plugin_changed", message: err.Error()}
 		}
-		if manifestNeedsArtifact(plugin.Manifest(), "ManagedPlatformCapability", "v1alpha1") {
+		manifest := plugin.Manifest()
+		if manifest.HasCapability("scheduler.kubernetes.install") || manifest.HasCapability("descheduler.kubernetes.install") {
+			controlNamespace = true
+		}
+		if !managedPlatformLoaded && manifestNeedsArtifact(manifest, "ManagedPlatformCapability", "v1alpha1") {
 			managedPlatform, err := s.store.GetPipelineRunArtifact(ctx, cluster.PipelineRunID, "managed-platform-capability")
 			if err != nil || managedPlatform.Type != "ManagedPlatformCapability" || managedPlatform.Version != "v1alpha1" {
 				return domain.PipelineDefinition{}, &managedOperationFailure{status: http.StatusConflict, code: "platform_invalid", message: "Managed Istio and Chaos Mesh are unavailable on the cluster."}
 			}
 			sources[artifactContractKey("ManagedPlatformCapability", "v1alpha1")] = experimentArtifactSource{ExternalID: managedPlatform.ID}
-			break
+			managedPlatformLoaded = true
 		}
 	}
 	registerExperimentOutputs(sources, "application", inspectPlugin.Manifest())
-	deploySpec := map[string]any{}
-	deployBindings, failure := experimentArtifactBindings(deploySpec, deployPlugin.Manifest(), sources, configuration.ApplicationRef)
+	prepareSpec := map[string]any{"mode": "prepare"}
+	if controlNamespace {
+		prepareSpec["controlNamespace"] = true
+	}
+	if definition.PodDisruptionBudgetMinAvailable > 0 {
+		prepareSpec["podDisruptionBudgetMinAvailable"] = definition.PodDisruptionBudgetMinAvailable
+	}
+	prepareBindings, failure := experimentArtifactBindings(prepareSpec, deployPlugin.Manifest(), sources, configuration.ApplicationRef)
 	if failure != nil {
 		return domain.PipelineDefinition{}, failure
 	}
-	definitionResult.Stages = append(definitionResult.Stages, domain.PipelineStage{ID: "deploy", PluginID: deployPlugin.Manifest().ID, Title: "Deploy isolated application", Spec: marshalRaw(deploySpec), Bindings: deployBindings})
-	registerExperimentOutputs(sources, "deploy", deployPlugin.Manifest())
-	for index, component := range definition.Components {
+	definitionResult.Stages = append(definitionResult.Stages, domain.PipelineStage{ID: "prepare", PluginID: deployPlugin.Manifest().ID, Title: "Prepare isolated application namespace", Spec: marshalRaw(prepareSpec), Bindings: prepareBindings})
+	registerExperimentOutputs(sources, "prepare", deployPlugin.Manifest())
+	appendComponent := func(index int) *managedOperationFailure {
+		component := definition.Components[index]
 		plugin, err := s.registry.Get(component.PluginID)
 		if err != nil {
-			return domain.PipelineDefinition{}, &managedOperationFailure{status: http.StatusConflict, code: "plugin_changed", message: err.Error()}
+			return &managedOperationFailure{status: http.StatusConflict, code: "plugin_changed", message: err.Error()}
 		}
 		manifest := plugin.Manifest()
 		if manifestNeedsArtifact(manifest, "TargetBinding", "v1alpha1") {
 			if manifest.Targeting == nil || manifest.Targeting.RequiredTrait == "" {
-				return domain.PipelineDefinition{}, &managedOperationFailure{status: http.StatusConflict, code: "invalid_plugin", message: "Plugin " + manifest.ID + " does not declare the required workload trait."}
+				return &managedOperationFailure{status: http.StatusConflict, code: "invalid_plugin", message: "Plugin " + manifest.ID + " does not declare the required workload trait."}
 			}
 			bindingID := fmt.Sprintf("targets-%d", index+1)
 			bindingSpec := map[string]any{"requiredTrait": manifest.Targeting.RequiredTrait, "includeComponentIds": component.Targets.Include, "excludeComponentIds": component.Targets.Exclude}
 			bindings, failure := experimentArtifactBindings(bindingSpec, bindingPlugin.Manifest(), sources, configuration.ApplicationRef)
 			if failure != nil {
-				return domain.PipelineDefinition{}, failure
+				return failure
 			}
 			definitionResult.Stages = append(definitionResult.Stages, domain.PipelineStage{ID: bindingID, PluginID: bindingPlugin.Manifest().ID, Title: "Select targets for " + component.ID, Spec: marshalRaw(bindingSpec), Bindings: bindings})
 			registerExperimentOutputs(sources, bindingID, bindingPlugin.Manifest())
 		}
 		var componentSpec map[string]any
 		if err := json.Unmarshal(component.Configuration, &componentSpec); err != nil || componentSpec == nil {
-			return domain.PipelineDefinition{}, &managedOperationFailure{status: http.StatusConflict, code: "invalid_snapshot", message: "Component configuration " + component.ID + " is invalid."}
+			return &managedOperationFailure{status: http.StatusConflict, code: "invalid_snapshot", message: "Component configuration " + component.ID + " is invalid."}
 		}
 		bindings, failure := experimentArtifactBindings(componentSpec, manifest, sources, configuration.ApplicationRef)
 		if failure != nil {
-			return domain.PipelineDefinition{}, failure
+			return failure
 		}
 		stageID := fmt.Sprintf("capability-%d", index+1)
 		definitionResult.Stages = append(definitionResult.Stages, domain.PipelineStage{ID: stageID, PluginID: component.PluginID, Title: component.Capability, Spec: marshalRaw(componentSpec), Bindings: bindings})
 		registerExperimentOutputs(sources, stageID, manifest)
 		if len(manifest.ArtifactOutputs) == 1 {
 			definitionResult.Result = domain.PipelineOutput{Stage: stageID, Type: manifest.ArtifactOutputs[0].Type, Version: manifest.ArtifactOutputs[0].Version}
+		}
+		return nil
+	}
+	setup := []int{}
+	postDeploy := []int{}
+	schedulerName := ""
+	var schedulerInclude, schedulerExclude []string
+	for index, component := range definition.Components {
+		plugin, err := s.registry.Get(component.PluginID)
+		if err != nil {
+			return domain.PipelineDefinition{}, &managedOperationFailure{status: http.StatusConflict, code: "plugin_changed", message: err.Error()}
+		}
+		manifest := plugin.Manifest()
+		if manifest.HasCapability("load.session.control") || manifest.HasCapability("metrics.timeseries.collect") {
+			postDeploy = append(postDeploy, index)
+		} else {
+			setup = append(setup, index)
+		}
+		if manifest.HasCapability("scheduler.kubernetes.install") {
+			schedulerName = "kubephos-" + domain.RuntimeExecutionIDToken
+			schedulerInclude = component.Targets.Include
+			schedulerExclude = component.Targets.Exclude
+		}
+	}
+	for _, index := range setup {
+		if failure := appendComponent(index); failure != nil {
+			return domain.PipelineDefinition{}, failure
+		}
+	}
+	deploySpec := map[string]any{"mode": "deploy"}
+	if controlNamespace {
+		deploySpec["controlNamespace"] = true
+	}
+	if definition.PodDisruptionBudgetMinAvailable > 0 {
+		deploySpec["podDisruptionBudgetMinAvailable"] = definition.PodDisruptionBudgetMinAvailable
+	}
+	if schedulerName != "" {
+		deploySpec["schedulerName"] = schedulerName
+		deploySpec["schedulerInclude"] = schedulerInclude
+		deploySpec["schedulerExclude"] = schedulerExclude
+	}
+	deployBindings, failure := experimentArtifactBindings(deploySpec, deployPlugin.Manifest(), sources, configuration.ApplicationRef)
+	if failure != nil {
+		return domain.PipelineDefinition{}, failure
+	}
+	definitionResult.Stages = append(definitionResult.Stages, domain.PipelineStage{ID: "deploy", PluginID: deployPlugin.Manifest().ID, Title: "Deploy isolated application", Spec: marshalRaw(deploySpec), Bindings: deployBindings})
+	registerExperimentOutputs(sources, "deploy", deployPlugin.Manifest())
+	for _, index := range postDeploy {
+		if failure := appendComponent(index); failure != nil {
+			return domain.PipelineDefinition{}, failure
 		}
 	}
 	if definitionResult.Result.Stage == "" {
@@ -2460,6 +2928,60 @@ func (s *Server) experimentInstancePipeline(ctx context.Context, configuration d
 		return domain.PipelineDefinition{}, &managedOperationFailure{status: http.StatusUnprocessableEntity, code: "too_many_stages", message: "The configuration expands to more than 32 validated stages."}
 	}
 	return definitionResult, nil
+}
+
+func (s *Server) externalDestinationPipeline(configuration domain.ExperimentConfiguration, definition experimentConfigurationDefinitionInput, clusterConnection, observability domain.Artifact) (domain.PipelineDefinition, *managedOperationFailure) {
+	preparePlugin, err := s.pluginForCapability("", "loads.external.prepare")
+	if err != nil {
+		return domain.PipelineDefinition{}, &managedOperationFailure{status: http.StatusConflict, code: "capability_unavailable", message: err.Error()}
+	}
+	sources := map[string]experimentArtifactSource{
+		artifactContractKey("ClusterConnection", "v1alpha1"):       {ExternalID: clusterConnection.ID},
+		artifactContractKey("ObservabilityCapability", "v1alpha1"): {ExternalID: observability.ID},
+	}
+	targetSpec := map[string]any{
+		"targetUrl": definition.ExternalDestination.TargetURL, "runtimeImage": definition.ExternalDestination.RuntimeImage,
+		"script": definition.ExternalDestination.Script, "parameters": definition.ExternalDestination.Parameters,
+	}
+	bindings, failure := experimentArtifactBindings(targetSpec, preparePlugin.Manifest(), sources, configuration.ApplicationRef)
+	if failure != nil {
+		return domain.PipelineDefinition{}, failure
+	}
+	result := domain.PipelineDefinition{CleanupAfterRun: true, Stages: []domain.PipelineStage{{ID: "external-destination", PluginID: preparePlugin.Manifest().ID, Title: "Prepare external destination", Spec: marshalRaw(targetSpec), Bindings: bindings}}}
+	registerExperimentOutputs(sources, "external-destination", preparePlugin.Manifest())
+	ordered := make([]int, 0, len(definition.Components))
+	for _, capability := range []string{"load.session.control", "metrics.timeseries.collect"} {
+		for index, component := range definition.Components {
+			if component.Capability == capability {
+				ordered = append(ordered, index)
+			}
+		}
+	}
+	for _, index := range ordered {
+		component := definition.Components[index]
+		plugin, err := s.registry.Get(component.PluginID)
+		if err != nil {
+			return domain.PipelineDefinition{}, &managedOperationFailure{status: http.StatusConflict, code: "plugin_changed", message: err.Error()}
+		}
+		var spec map[string]any
+		if json.Unmarshal(component.Configuration, &spec) != nil || spec == nil {
+			return domain.PipelineDefinition{}, &managedOperationFailure{status: http.StatusConflict, code: "invalid_snapshot", message: "External load component configuration is invalid."}
+		}
+		bindings, failure := experimentArtifactBindings(spec, plugin.Manifest(), sources, configuration.ApplicationRef)
+		if failure != nil {
+			return domain.PipelineDefinition{}, failure
+		}
+		stageID := fmt.Sprintf("capability-%d", index+1)
+		result.Stages = append(result.Stages, domain.PipelineStage{ID: stageID, PluginID: component.PluginID, Title: component.Capability, Spec: marshalRaw(spec), Bindings: bindings})
+		registerExperimentOutputs(sources, stageID, plugin.Manifest())
+		if component.Capability == "metrics.timeseries.collect" {
+			result.Result = domain.PipelineOutput{Stage: stageID, Type: "TimeSeriesDataset", Version: "v1alpha1"}
+		}
+	}
+	if len(ordered) != 2 || result.Result.Stage == "" {
+		return domain.PipelineDefinition{}, &managedOperationFailure{status: http.StatusUnprocessableEntity, code: "invalid_external_components", message: "External destination pipeline requires load and metrics components."}
+	}
+	return result, nil
 }
 
 func (s *Server) applicationMaterializer(ctx context.Context, applicationRef string) (plugins.Plugin, error) {
@@ -3491,7 +4013,7 @@ func (s *Server) listExperiments(response http.ResponseWriter, request *http.Req
 			limit = parsed
 		}
 	}
-	items, err := s.store.ListExperiments(request.Context(), limit)
+	items, err := s.store.ListExperimentsForUser(request.Context(), "", limit)
 	if err != nil {
 		writeError(response, http.StatusInternalServerError, "database_error", "Could not list experiments.")
 		return
@@ -3500,6 +4022,9 @@ func (s *Server) listExperiments(response http.ResponseWriter, request *http.Req
 }
 
 func (s *Server) deleteExperiment(response http.ResponseWriter, request *http.Request) {
+	if !s.authorizeExperiment(response, request, request.PathValue("id")) {
+		return
+	}
 	err := s.store.DeleteExperiment(request.Context(), request.PathValue("id"))
 	if errors.Is(err, storage.ErrNotFound) {
 		writeError(response, http.StatusNotFound, "not_found", "Experiment not found.")
@@ -3517,6 +4042,9 @@ func (s *Server) deleteExperiment(response http.ResponseWriter, request *http.Re
 }
 
 func (s *Server) cancelExperiment(response http.ResponseWriter, request *http.Request) {
+	if !s.authorizeExperiment(response, request, request.PathValue("id")) {
+		return
+	}
 	err := s.store.RequestExperimentCancel(request.Context(), request.PathValue("id"))
 	if errors.Is(err, storage.ErrNotFound) {
 		writeError(response, http.StatusNotFound, "not_found", "Experiment not found.")
@@ -3552,6 +4080,7 @@ func (s *Server) createCompletedExperiment(response http.ResponseWriter, request
 	}
 	experiment := domain.Experiment{
 		ID: id.New("exp"), WorkspaceID: input.WorkspaceID, Name: input.Name,
+		OwnerUserID: requestUser(request).ID,
 		Description: input.Description, Status: domain.OperationSucceeded,
 	}
 	seenArtifacts := map[string]bool{}
@@ -3669,7 +4198,8 @@ func (s *Server) createPipelineExperiment(response http.ResponseWriter, request 
 	}
 	experiment := domain.Experiment{
 		ID: id.New("exp"), WorkspaceID: input.WorkspaceID, Name: input.Name, Description: input.Description,
-		Status: domain.OperationQueued, ResultType: resultType, ResultVersion: resultVersion,
+		OwnerUserID: requestUser(request).ID,
+		Status:      domain.OperationQueued, ResultType: resultType, ResultVersion: resultVersion,
 		ScheduledFor: &scheduledFor,
 	}
 	runs := map[string]domain.PipelineRun{}
@@ -3683,6 +4213,7 @@ func (s *Server) createPipelineExperiment(response http.ResponseWriter, request 
 			trial := domain.ExperimentTrial{ID: id.New("trial"), VariantID: variant.ID, Position: trialPosition, Status: domain.OperationQueued}
 			run := domain.PipelineRun{
 				ID: id.New("run"), PipelineID: pipeline.ID, WorkspaceID: input.WorkspaceID,
+				OwnerUserID: experiment.OwnerUserID, IsolationMode: "exclusive",
 				Name:   fmt.Sprintf("%s · %s · Trial %d", input.Name, requested.Name, trialPosition),
 				Status: domain.OperationQueued, PipelineHash: pipeline.Hash,
 				ResultType: resultType, ResultVersion: resultVersion,
@@ -3840,7 +4371,12 @@ func (s *Server) listOperations(response http.ResponseWriter, request *http.Requ
 			limit = parsed
 		}
 	}
-	items, err := s.store.ListOperations(request.Context(), limit)
+	user := requestUser(request)
+	ownerID := user.ID
+	if user.Role == "admin" {
+		ownerID = ""
+	}
+	items, err := s.store.ListOperationsForUser(request.Context(), ownerID, limit)
 	if err != nil {
 		writeError(response, http.StatusInternalServerError, "database_error", "Could not list operations.")
 		return
@@ -3849,6 +4385,9 @@ func (s *Server) listOperations(response http.ResponseWriter, request *http.Requ
 }
 
 func (s *Server) getOperation(response http.ResponseWriter, request *http.Request) {
+	if !s.authorizeOperation(response, request, request.PathValue("id")) {
+		return
+	}
 	operation, err := s.store.GetOperation(request.Context(), request.PathValue("id"))
 	if errors.Is(err, storage.ErrNotFound) {
 		writeError(response, http.StatusNotFound, "not_found", "Operation not found.")
@@ -4098,6 +4637,9 @@ func (s *Server) cancelOperation(response http.ResponseWriter, request *http.Req
 }
 
 func (s *Server) listLogs(response http.ResponseWriter, request *http.Request) {
+	if !s.authorizeOperation(response, request, request.PathValue("id")) {
+		return
+	}
 	after, _ := strconv.ParseInt(request.URL.Query().Get("after"), 10, 64)
 	items, err := s.store.ListLogs(request.Context(), request.PathValue("id"), after, 1000)
 	if err != nil {
@@ -4108,6 +4650,9 @@ func (s *Server) listLogs(response http.ResponseWriter, request *http.Request) {
 }
 
 func (s *Server) operationEvents(response http.ResponseWriter, request *http.Request) {
+	if !s.authorizeOperation(response, request, request.PathValue("id")) {
+		return
+	}
 	flusher, ok := response.(http.Flusher)
 	if !ok {
 		writeError(response, http.StatusInternalServerError, "stream_unavailable", "Streaming is unavailable.")
@@ -4157,7 +4702,12 @@ func (s *Server) listAvailableArtifacts(response http.ResponseWriter, request *h
 			limit = parsed
 		}
 	}
-	items, err := s.store.ListAvailableArtifacts(request.Context(), limit)
+	user := requestUser(request)
+	ownerID := user.ID
+	if user.Role == "admin" {
+		ownerID = ""
+	}
+	items, err := s.store.ListAvailableArtifactsForUser(request.Context(), ownerID, limit)
 	if err != nil {
 		writeError(response, http.StatusInternalServerError, "database_error", "Could not list verified artifacts.")
 		return
@@ -4173,6 +4723,9 @@ func (s *Server) downloadArtifact(response http.ResponseWriter, request *http.Re
 	}
 	if err != nil {
 		writeError(response, http.StatusInternalServerError, "database_error", "Could not read artifact metadata.")
+		return
+	}
+	if !s.authorizeOperation(response, request, artifact.OperationID) {
 		return
 	}
 	if artifact.Sensitive {
@@ -4423,6 +4976,9 @@ func auditTarget(request *http.Request) (string, string, string, bool) {
 	if len(parts) == 3 && parts[0] == "managed-resources" && parts[2] == "access" {
 		return "managed-resource.access.reveal", "managed-resource", parts[1], true
 	}
+	if len(parts) == 3 && parts[0] == "connections" && parts[2] == "secret" {
+		return "connection.secret.reveal", "connection", parts[1], true
+	}
 	if len(parts) == 2 && parts[0] == "catalog" && parts[1] == "applications" {
 		return "application.import", "catalog-application", "", true
 	}
@@ -4508,6 +5064,10 @@ func (writer *statusResponseWriter) Flush() {
 
 func securityHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if strings.HasPrefix(request.URL.Path, "/auth/") {
+			next.ServeHTTP(response, request)
+			return
+		}
 		response.Header().Set("Content-Security-Policy", "default-src 'self'; connect-src 'self'; img-src 'self' data: blob:; style-src 'self'; script-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'")
 		response.Header().Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
 		response.Header().Set("Referrer-Policy", "no-referrer")

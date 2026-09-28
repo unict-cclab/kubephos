@@ -151,7 +151,7 @@ export function TerminalDialog({open, close, session, workspaces, initialWorkspa
     socket.current?.close(1000, 'Dialog closed')
     close()
   }
-  return <Dialog open={open} onClose={dismiss} title="Managed terminal" eyebrow="AUDITED SSH" className="terminal-modal">
+  return <Dialog open={open} onClose={dismiss} title="Managed terminal" className="terminal-modal">
     <form className="terminal-toolbar" onSubmit={connect}>
       <label>Workspace<select value={workspaceID} onChange={event => setWorkspaceID(event.target.value)} disabled={connected || !workspaces.length}>{workspaces.length ? workspaces.map(item => <option key={item.id} value={item.id}>{item.name}</option>) : <option value="">No workspace</option>}</select></label>
       <label>Machine<select value={selection} onChange={event => setSelection(event.target.value)} disabled={connected || loading || !selection}>{groups.flatMap(group => group.machines.map(machine => <option key={`${group.machineSetRef}:${machine.index}`} value={`${group.machineSetRef}:${machine.index}`}>{machine.name}</option>))}</select></label>
@@ -159,6 +159,6 @@ export function TerminalDialog({open, close, session, workspaces, initialWorkspa
     </form>
     <div className="terminal-status"><span className={connected ? 'connected' : ''} />{message}</div>
     <div className="terminal-viewport" ref={viewport} />
-    <p className="terminal-safety">The destination comes from verified MachineSet and encrypted MachineAccess artifacts. Sessions expire after 20 minutes of inactivity and after two hours.</p>
+    <div className="terminal-safety">20 min idle timeout · 2 h maximum</div>
   </Dialog>
 }

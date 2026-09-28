@@ -4,6 +4,8 @@ const selectionEl = document.getElementById("selection");
 const legendEl = document.getElementById("legend");
 const contextEl = document.getElementById("context");
 const statsEl = document.getElementById("stats");
+const gatewayTrafficEl = document.getElementById("gatewayTraffic");
+const applicationTrafficEl = document.getElementById("applicationTraffic");
 const statusEl = document.getElementById("connectionStatus");
 const warningsEl = document.getElementById("warnings");
 const emptyEl = document.getElementById("graphEmpty");
@@ -165,6 +167,9 @@ function render(snapshot) {
   const appPositions = layoutApps(visiblePods, podPositions);
   const zoneEdges = aggregateZoneEdges(snapshot.nodeEdges, snapshot.nodes);
   const zonePositions = zoneCenters(snapshot.nodes, nodePositions);
+  const visibleGatewayTraffic = (snapshot.gatewayTraffic || []).filter((item) => selectedNamespace === "all" || item.namespace === selectedNamespace);
+  const visibleApplicationTraffic = (snapshot.applicationTraffic || []).filter((item) => selectedNamespace === "all" || item.namespace === selectedNamespace);
+  const gatewayTrafficByZone = aggregateGatewayTraffic(visibleGatewayTraffic);
 
   contextEl.textContent = `${snapshot.context} · ${new Date(snapshot.generatedAt).toLocaleTimeString()}`;
   statsEl.innerHTML = [
@@ -173,14 +178,16 @@ function render(snapshot) {
     pill(zoneEdges.length, "Zone links"),
     pill(countGroups(visiblePods), "Groups"),
   ].join("");
+  renderGatewayTraffic(gatewayTrafficByZone);
+  renderApplicationTraffic(visibleApplicationTraffic);
   warningsEl.hidden = !snapshot.warnings?.length;
   warningsEl.textContent = snapshot.warnings?.join(" · ") || "";
   emptyEl.hidden = snapshot.nodes.length > 0;
   renderLegend(visiblePods);
 
-  drawZones(snapshot.nodes, nodePositions, visiblePods);
+  drawZones(snapshot.nodes, nodePositions, visiblePods, gatewayTrafficByZone);
   drawZoneEdges(zoneEdges, zonePositions);
-  if (showGateway) drawGatewayTraffic(visiblePods, snapshot.appEdges, nodePositions, appPositions, width, height);
+  if (showGateway) drawGatewayTraffic(visiblePods, snapshot.appEdges, nodePositions, appPositions, width, height, visibleGatewayTraffic);
   if (showPodLines) drawAppEdges(snapshot.appEdges, appPositions);
   drawNodes(snapshot.nodes, nodePositions, podsByNode);
   drawPods(visiblePods, podPositions, nodePositions);
@@ -271,10 +278,14 @@ function zoneCenters(nodes, nodePositions) {
   return centers;
 }
 
-function drawZones(nodes, nodePositions, pods) {
+function drawZones(nodes, nodePositions, pods, gatewayTrafficByZone = new Map()) {
   const byZone = groupBy(nodes, (node) => node.zone || "unassigned");
   for (const [zone, zoneNodes] of byZone.entries()) {
     if (!zoneNodes.some((node) => nodePositions.has(node.name))) continue;
+    const traffic = gatewayTrafficByZone.get(zone);
+    const requestsPerSecond = traffic?.requestsPerSecond || 0;
+    const trafficLabel = traffic ? ` · ${formatRPS(requestsPerSecond)}` : "";
+    const activeTraffic = requestsPerSecond > 0.05;
     const {minX, maxX, minY, maxY} = zoneBounds(zoneNodes, nodePositions, pods);
     const boundary = svg("rect", {
       x: minX,
@@ -282,21 +293,22 @@ function drawZones(nodes, nodePositions, pods) {
       width: maxX - minX,
       height: maxY - minY,
       rx: 24,
-      class: "zone-boundary",
+      class: activeTraffic ? "zone-boundary gateway-active" : "zone-boundary",
     });
     boundary.addEventListener("pointerdown", (event) => startZoneDrag(event, zone, zoneNodes, nodePositions));
     graph.append(boundary);
-    const headerWidth = Math.min(maxX - minX - 28, Math.max(96, zone.length * 7.5 + 28));
+    const headerWidth = Math.min(maxX - minX - 28, Math.max(96, (zone.length + trafficLabel.length) * 7.5 + 28));
     graph.append(svg("rect", {
       x: minX + 14,
       y: minY + 12,
       width: headerWidth,
       height: 30,
       rx: 15,
-      class: "zone-label-background",
+      class: activeTraffic ? "zone-label-background gateway-active" : "zone-label-background",
     }));
     const maxLabelCharacters = Math.max(4, Math.floor((headerWidth - 28) / 7.5));
-    const visibleZoneLabel = zone.length > maxLabelCharacters ? `${zone.slice(0, maxLabelCharacters - 1)}…` : zone;
+    const fullZoneLabel = `${zone}${trafficLabel}`;
+    const visibleZoneLabel = fullZoneLabel.length > maxLabelCharacters ? `${fullZoneLabel.slice(0, maxLabelCharacters - 1)}…` : fullZoneLabel;
     graph.append(svgText(minX + 28, minY + 32, visibleZoneLabel, "zone-label", "start"));
   }
 }
@@ -339,14 +351,22 @@ function layoutApps(pods, podPositions) {
 }
 
 function drawZoneEdges(edges, zonePositions) {
+  if (edges.length > 0) {
+    const defs = svg("defs");
+    const marker = svg("marker", {id: "zone-edge-arrow", markerWidth: "8", markerHeight: "8", refX: "7", refY: "3", orient: "auto", markerUnits: "strokeWidth"});
+    marker.append(svg("path", {d: "M 0 0 L 7 3 L 0 6 z", class: "zone-edge-arrow"}));
+    defs.append(marker);
+    graph.append(defs);
+  }
   for (const edge of edges) {
     const source = zonePositions.get(edge.source);
     const target = zonePositions.get(edge.target);
     if (!source || !target) continue;
-    const curve = Math.abs(source.x - target.x) < 100 ? -95 : 0;
+    const curve = Math.abs(source.x - target.x) < 100 ? 82 : 46;
     const path = svg("path", {
       d: curvedPath(source, target, curve),
       class: "latency-edge edge-hit",
+      "marker-end": "url(#zone-edge-arrow)",
     });
     path.addEventListener("pointerdown", stopGraphPan);
     path.addEventListener("click", () => inspect("Zone Link", edge));
@@ -356,7 +376,9 @@ function drawZoneEdges(edges, zonePositions) {
     graph.append(path);
 
     const label = curvePoint(source, target, curve);
-    graph.append(svgText(label.x, label.y - 8, edge.label || "", "edge-label"));
+    const text = svgText(label.x, label.y - 8, edge.label || "", "edge-label");
+    text.setAttribute("font-size", String(clamp(12 / Math.max(zoom, 0.5), 12, 20)));
+    graph.append(text);
   }
 }
 
@@ -476,9 +498,14 @@ function detectGatewayTargets(pods, appEdges) {
   return [];
 }
 
-function drawGatewayTraffic(visiblePods, appEdges, nodePositions, appPositions, width, height) {
-  const gatewayKeys = detectGatewayTargets(visiblePods, appEdges);
+function drawGatewayTraffic(visiblePods, appEdges, nodePositions, appPositions, width, height, gatewayTraffic = []) {
+  const activePods = new Set(gatewayTraffic.filter((item) => Number(item.requestsPerSecond) > 0.05).map((item) => `${item.namespace}/${item.pod}`));
+  const measuredGatewayKeys = visiblePods
+    .filter((pod) => activePods.has(podKey(pod)))
+    .map((pod) => `${pod.namespace}/${pod.app || pod.name}`);
+  const gatewayKeys = gatewayTraffic.length > 0 ? [...new Set(measuredGatewayKeys)] : detectGatewayTargets(visiblePods, appEdges);
   let targetPositions = gatewayKeys.map((key) => appPositions.get(key)).filter(Boolean);
+  if (targetPositions.length === 0 && gatewayTraffic.length > 0) return;
   if (targetPositions.length === 0) targetPositions = [...nodePositions.values()].slice(0, 3);
   if (targetPositions.length === 0) return;
 
@@ -574,19 +601,65 @@ function filterPods(pods) {
   });
 }
 
+function aggregateGatewayTraffic(items) {
+  const byZone = new Map();
+  for (const item of items) {
+    const zone = item.zone || "unassigned";
+    if (!byZone.has(zone)) byZone.set(zone, {zone, requests: 0, requestsPerSecond: 0, gateways: 0, windowSeconds: Number(item.windowSeconds) || 0});
+    const value = byZone.get(zone);
+    value.requests += Number(item.requests) || 0;
+    value.requestsPerSecond += Number(item.requestsPerSecond) || 0;
+    value.gateways += 1;
+  }
+  return byZone;
+}
+
+function renderGatewayTraffic(byZone) {
+  const values = [...byZone.values()].sort((left, right) => left.zone.localeCompare(right.zone));
+  gatewayTrafficEl.hidden = !showGateway || values.length === 0;
+  if (gatewayTrafficEl.hidden) {
+    gatewayTrafficEl.innerHTML = "";
+    return;
+  }
+  gatewayTrafficEl.innerHTML = `<span class="gateway-traffic-title">Gateway traffic</span>${values.map((item) => `
+    <span class="gateway-zone${item.requestsPerSecond > 0.05 ? " is-active" : ""}">
+      <span class="gateway-zone-dot"></span>
+      <strong>${escapeHTML(item.zone)}</strong>
+      <span>${escapeHTML(formatRPS(item.requestsPerSecond))}</span>
+    </span>
+  `).join("")}`;
+}
+
+function renderApplicationTraffic(items) {
+  const values = [...items].sort((left, right) => left.namespace.localeCompare(right.namespace));
+  applicationTrafficEl.hidden = values.length === 0;
+  if (applicationTrafficEl.hidden) {
+    applicationTrafficEl.innerHTML = "";
+    return;
+  }
+  applicationTrafficEl.innerHTML = `<span class="application-traffic-title">Application live</span>${values.map((item) => `
+    <span class="application-traffic-app">
+      <strong>${escapeHTML(item.namespace)}</strong>
+      <span><b>${escapeHTML(formatRPS(item.throughputRequestsPerSecond))}</b> Throughput</span>
+      <span><b>${escapeHTML(formatLatency(item.p95ResponseTimeMilliseconds))}</b> P95 response time</span>
+    </span>
+  `).join("")}`;
+}
+
+
 function aggregateZoneEdges(edges, nodes) {
-  const nodeZones = new Map(nodes.map((node) => [node.name, node.zone || "unassigned"]));
+  const measuredNodes = nodes.some((node) => node.role === "application") ? nodes.filter((node) => node.role === "application") : nodes;
+  const nodeZones = new Map(measuredNodes.map((node) => [node.name, node.zone || "unassigned"]));
   const pairs = new Map();
   for (const edge of edges) {
     const sourceZone = nodeZones.get(edge.source);
     const targetZone = nodeZones.get(edge.target);
     if (!sourceZone || !targetZone || sourceZone === targetZone) continue;
-    const zones = [sourceZone, targetZone].sort((a, b) => a.localeCompare(b));
-    const key = zones.join("::");
+    const key = `${sourceZone}::${targetZone}`;
     if (!pairs.has(key)) {
       pairs.set(key, {
-        source: zones[0],
-        target: zones[1],
+        source: sourceZone,
+        target: targetZone,
         kind: "network",
         values: [],
         bandwidthValues: [],

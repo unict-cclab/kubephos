@@ -19,7 +19,10 @@ import (
 	"kubephos.dev/kubephos/internal/id"
 )
 
-const containerOutputLimit = 1 << 20
+const (
+	commandOutputLimit = 1 << 20
+	pluginOutputLimit  = 16 << 20
+)
 
 type DockerRunner struct {
 	host              string
@@ -159,7 +162,7 @@ func (d *DockerRunner) Run(ctx context.Context, image, command string, payload [
 	)
 	process := exec.CommandContext(ctx, d.binary, arguments...)
 	process.Stdin = bytes.NewReader(payload)
-	stdout := &limitedBuffer{limit: containerOutputLimit}
+	stdout := &limitedBuffer{limit: pluginOutputLimit}
 	process.Stdout = stdout
 	stderr, err := process.StderrPipe()
 	if err != nil {
@@ -176,7 +179,7 @@ func (d *DockerRunner) Run(ctx context.Context, image, command string, payload [
 	defer cancel()
 	_ = exec.CommandContext(cleanupContext, d.binary, append(d.connectionArguments(), "rm", "-f", name)...).Run()
 	if stdout.exceeded {
-		return nil, messages, errors.New("plugin output exceeds 1 MiB")
+		return nil, messages, errors.New("plugin output exceeds 16 MiB")
 	}
 	if processErr != nil {
 		return nil, messages, processErr
@@ -271,7 +274,7 @@ func cachedImageReference(image string) string {
 
 func limitedCommand(ctx context.Context, name string, arguments ...string) ([]byte, error) {
 	command := exec.CommandContext(ctx, name, arguments...)
-	output := &limitedBuffer{limit: containerOutputLimit}
+	output := &limitedBuffer{limit: commandOutputLimit}
 	command.Stdout = output
 	command.Stderr = output
 	err := command.Run()

@@ -21,6 +21,8 @@ import (
 
 	"kubephos.dev/kubephos/internal/domain"
 	kubeconfigutil "kubephos.dev/kubephos/internal/kubeconfig"
+	"kubephos.dev/kubephos/internal/managedcomponents"
+	"kubephos.dev/kubephos/internal/managedregistry"
 	"kubephos.dev/kubephos/internal/plugins"
 	"kubephos.dev/kubephos/internal/pluginssh"
 )
@@ -195,7 +197,7 @@ type commandRunner interface {
 
 func (Plugin) Manifest() plugins.Manifest {
 	return plugins.Manifest{
-		ID: pluginID, Name: "Kubernetes cluster bootstrap", Version: "0.3.1",
+		ID: pluginID, Name: "Kubernetes cluster bootstrap", Version: "0.3.2",
 		Description:     "Builds a managed K3s cluster from a verified machine topology.",
 		Schema:          json.RawMessage(`{"type":"object","additionalProperties":false,"required":["machineSetRef","machineAccessRef","clusterName","controlPlanes"],"properties":{"machineSetRef":{"type":"string","title":"Machine topology","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"MachineSet","x-kubephos-artifact-version":"v1alpha1"},"machineAccessRef":{"type":"string","title":"Machine access","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"MachineAccess","x-kubephos-artifact-version":"v1alpha1"},"clusterName":{"type":"string","title":"Cluster name","pattern":"^[a-z0-9][a-z0-9-]{0,31}$","default":"development"},"controlPlanes":{"type":"integer","title":"Control plane nodes","enum":[1,3],"default":1},"controlPlaneZones":{"type":"array","title":"Control plane zones","minItems":1,"maxItems":12,"items":{"type":"string","pattern":"^[a-z0-9][a-z0-9-]{0,31}$"}},"nodePools":{"type":"array","title":"Node pools","maxItems":12,"items":{"type":"object","additionalProperties":false,"required":["name","role","count","zones"],"properties":{"name":{"type":"string","pattern":"^[a-z0-9][a-z0-9-]{0,31}$"},"role":{"type":"string","enum":["management","application"]},"count":{"type":"integer","minimum":1,"maximum":12},"zones":{"type":"array","minItems":1,"maxItems":12,"items":{"type":"string","pattern":"^[a-z0-9][a-z0-9-]{0,31}$"}}}}},"registryEndpointRef":{"type":"string","title":"Managed registry","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"RegistryEndpoint","x-kubephos-artifact-version":"v1alpha1"},"registryCredentialRef":{"type":"string","title":"Registry pull credential","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"RegistryCredential","x-kubephos-artifact-version":"v1alpha1"}}}`),
 		ArtifactInputs:  []domain.ArtifactContract{{Type: "MachineSet", Version: "v1alpha1"}, {Type: "MachineAccess", Version: "v1alpha1"}, {Type: "RegistryEndpoint", Version: "v1alpha1"}, {Type: "RegistryCredential", Version: "v1alpha1"}},
@@ -514,15 +516,27 @@ func resolveRegistry(step domain.PlanStep, spec Spec) (registryProfile, error) {
 	if endpoint.APIVersion != clusterAPIVersion || endpoint.Kind != "RegistryEndpoint" || endpoint.Spec.Protocol != "oci" || endpoint.Spec.Insecure || endpoint.Spec.Host == "" || endpoint.Spec.URL != "https://"+endpoint.Spec.Host || !strings.Contains(endpoint.Spec.CABundle, "BEGIN CERTIFICATE") || credential.APIVersion != clusterAPIVersion || credential.Kind != "RegistryCredential" || credential.Spec.Server != endpoint.Spec.Host || credential.Spec.Username == "" || credential.Spec.Password == "" {
 		return registryProfile{}, errors.New("managed registry identity, TLS or credential does not satisfy the cluster contract")
 	}
-	if len(endpoint.Spec.Mirrors) == 0 {
-		endpoint.Spec.Mirrors = legacyManagedMirrors(endpoint.Spec.URL)
-	}
+	endpoint.Spec.Mirrors = mergeManagedMirrors(endpoint.Spec.URL, endpoint.Spec.Mirrors)
 	for _, mirror := range endpoint.Spec.Mirrors {
 		if !validRegistrySource(mirror.Source) || mirror.Endpoint != endpoint.Spec.URL || !regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}/$`).MatchString(mirror.RewritePrefix) || !validRegistryProbe(mirror.Probe) {
 			return registryProfile{}, errors.New("managed registry mirror profile is invalid")
 		}
 	}
 	return registryProfile{Endpoint: endpoint, Credential: credential, Enabled: true}, nil
+}
+
+func mergeManagedMirrors(endpoint string, declared []registryMirror) []registryMirror {
+	values := append([]registryMirror(nil), declared...)
+	present := make(map[string]bool, len(values))
+	for _, mirror := range values {
+		present[mirror.Source] = true
+	}
+	for _, mirror := range legacyManagedMirrors(endpoint) {
+		if !present[mirror.Source] {
+			values = append(values, mirror)
+		}
+	}
+	return values
 }
 
 func registryConfiguration(profile registryProfile) ([]byte, error) {
@@ -551,16 +565,10 @@ func registryConfigurationCommand(profile registryProfile) (string, error) {
 }
 
 func legacyManagedMirrors(endpoint string) []registryMirror {
-	values := []struct{ source, project, probe string }{
-		{"docker.io", "dockerhub-proxy", "library/alpine:3.23"},
-		{"registry.k8s.io", "k8s-proxy", "pause:3.10.1"},
-		{"ghcr.io", "ghcr-proxy", "unict-cclab/mon-agent:v0.0.7"},
-		{"gcr.io", "gcr-proxy", "google-containers/pause:3.2"},
-		{"quay.io", "quay-proxy", "prometheus/busybox:latest"},
-	}
+	values := managedregistry.Catalog()
 	mirrors := make([]registryMirror, 0, len(values))
 	for _, value := range values {
-		mirrors = append(mirrors, registryMirror{Source: value.source, Endpoint: endpoint, RewritePrefix: value.project + "/", Probe: value.probe})
+		mirrors = append(mirrors, registryMirror{Source: value.Source, Endpoint: endpoint, RewritePrefix: value.Project + "/", Probe: value.Repository + ":" + value.Reference})
 	}
 	return mirrors
 }
@@ -574,6 +582,15 @@ func validRegistryProbe(value string) bool {
 }
 
 func verifyRegistryProfile(ctx context.Context, runner commandRunner, machines machineSet, access machineAccess, profile registryProfile) error {
+	commands := registryVerificationCommands(profile)
+	command := strings.Join(commands, " && ")
+	if err := runAll(ctx, runner, machines.Spec.Machines, access, func(machine, int) string { return command }); err != nil {
+		return fmt.Errorf("managed registry verification failed: %w", err)
+	}
+	return nil
+}
+
+func registryVerificationCommands(profile registryProfile) []string {
 	commands := []string{
 		"sudo test -s /etc/rancher/k3s/registries.yaml",
 		"sudo test -s /etc/rancher/k3s/kubephos-registry-ca.crt",
@@ -583,11 +600,10 @@ func verifyRegistryProfile(ctx context.Context, runner commandRunner, machines m
 	for _, mirror := range profile.Endpoint.Spec.Mirrors {
 		commands = append(commands, "sudo k3s crictl pull "+shellQuote(mirror.Source+"/"+mirror.Probe)+" >/dev/null")
 	}
-	command := strings.Join(commands, " && ")
-	if err := runAll(ctx, runner, machines.Spec.Machines, access, func(machine, int) string { return command }); err != nil {
-		return fmt.Errorf("managed registry verification failed: %w", err)
+	for _, component := range managedcomponents.Catalog() {
+		commands = append(commands, "sudo k3s crictl pull "+shellQuote(managedcomponents.Image(profile.Endpoint.Spec.Host, component.Name, component.Version))+" >/dev/null")
 	}
-	return nil
+	return commands
 }
 
 func validateMachineArtifacts(machines machineSet, access machineAccess) error {
@@ -752,6 +768,9 @@ func installCommand(role, nodeName, server, token string, first bool) string {
 
 func installCommandWithLabels(role, nodeName, server, token string, first bool, labels map[string]string) string {
 	arguments := role + " --node-name " + shellQuote(nodeName) + " --disable-default-registry-endpoint"
+	if role == "server" {
+		arguments += " --node-taint " + shellQuote("node-role.kubernetes.io/control-plane:NoSchedule")
+	}
 	if first {
 		host, _, _ := net.SplitHostPort(strings.TrimPrefix(server, "https://"))
 		arguments += " --cluster-init --tls-san " + shellQuote(host)

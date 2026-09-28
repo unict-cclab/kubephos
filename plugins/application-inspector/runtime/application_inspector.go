@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -27,6 +28,7 @@ import (
 )
 
 const maxManifestBytes = 10 * 1024 * 1024
+const applicationComponentLabel = "kubephos.dev/component"
 
 type Invocation struct {
 	Input   json.RawMessage            `json:"input"`
@@ -77,11 +79,12 @@ type ManifestSetSpec struct {
 }
 
 type ManifestSource struct {
-	Type       string `json:"type"`
-	Repository string `json:"repository"`
-	Revision   string `json:"revision"`
-	Path       string `json:"path"`
-	Entrypoint string `json:"entrypoint"`
+	Type                  string   `json:"type"`
+	Repository            string   `json:"repository"`
+	Revision              string   `json:"revision"`
+	Path                  string   `json:"path"`
+	Entrypoint            string   `json:"entrypoint"`
+	AdditionalEntrypoints []string `json:"additionalEntrypoints,omitempty"`
 }
 
 type WorkloadTarget struct {
@@ -153,7 +156,7 @@ func (Plugin) Manifest() plugins.Manifest {
 	return plugins.Manifest{
 		ID:          "io.kubephos.applications.inspect",
 		Name:        "Application package materializer",
-		Version:     "0.4.1",
+		Version:     "0.4.3",
 		Description: "Resolves, materializes and verifies a pinned application package and its declared interface.",
 		Schema:      json.RawMessage(`{"type":"object","required":["applicationRef"],"additionalProperties":false,"properties":{"applicationRef":{"type":"string","title":"Application","description":"Immutable application version from the catalog.","format":"kubephos-application-ref"},"values":{"type":"object","title":"Application settings","description":"Validated settings declared by the selected application.","x-kubephos-schema-from-application":"applicationRef"}}}`),
 		ArtifactOutputs: []domain.ArtifactContract{
@@ -225,9 +228,21 @@ func (Plugin) Precheck(ctx context.Context, step domain.PlanStep, log plugins.Lo
 	if err != nil {
 		return domain.HealthReport{Status: domain.HealthUnhealthy, Summary: err.Error(), Checks: map[string]string{"overlays": "invalid"}}, nil
 	}
+	manifest, err = applyStorageClassMappings(manifest, input.Descriptor.Spec.StorageClassMappings)
+	if err != nil {
+		return domain.HealthReport{Status: domain.HealthUnhealthy, Summary: err.Error(), Checks: map[string]string{"storage": "invalid"}}, nil
+	}
+	manifest, err = applyImageMappings(manifest, input.Descriptor.Spec.ImageMappings)
+	if err != nil {
+		return domain.HealthReport{Status: domain.HealthUnhealthy, Summary: err.Error(), Checks: map[string]string{"images": "invalid"}}, nil
+	}
 	manifest, err = materializeManifest(manifest, input.Descriptor)
 	if err != nil {
 		return domain.HealthReport{Status: domain.HealthUnhealthy, Summary: err.Error(), Checks: map[string]string{"manifest": "invalid"}}, nil
+	}
+	manifest, err = applyReplicaSettings(manifest, input.Descriptor, input.Values)
+	if err != nil {
+		return domain.HealthReport{Status: domain.HealthUnhealthy, Summary: err.Error(), Checks: map[string]string{"replicas": "invalid"}}, nil
 	}
 	if _, err := buildLoadScenarios(content.Scripts, input.Descriptor); err != nil {
 		return domain.HealthReport{Status: domain.HealthUnhealthy, Summary: err.Error(), Checks: map[string]string{"loadScenarios": "invalid"}}, nil
@@ -257,7 +272,19 @@ func (Plugin) Execute(ctx context.Context, step domain.PlanStep, log plugins.Log
 	if err != nil {
 		return nil, err
 	}
+	manifest, err = applyStorageClassMappings(manifest, input.Descriptor.Spec.StorageClassMappings)
+	if err != nil {
+		return nil, err
+	}
+	manifest, err = applyImageMappings(manifest, input.Descriptor.Spec.ImageMappings)
+	if err != nil {
+		return nil, err
+	}
 	applicationManifest, err := materializeManifest(manifest, input.Descriptor)
+	if err != nil {
+		return nil, err
+	}
+	applicationManifest, err = applyReplicaSettings(applicationManifest, input.Descriptor, input.Values)
 	if err != nil {
 		return nil, err
 	}
@@ -294,6 +321,7 @@ func (Plugin) Execute(ctx context.Context, step domain.PlanStep, log plugins.Log
 				Source: ManifestSource{
 					Type: input.Descriptor.Spec.Package.Type, Repository: input.Descriptor.Spec.Package.Repository,
 					Revision: input.Descriptor.Spec.Package.Revision, Path: input.Descriptor.Spec.Package.Path, Entrypoint: input.Descriptor.Spec.Package.Entrypoint,
+					AdditionalEntrypoints: input.Descriptor.Spec.Package.AdditionalEntrypoints,
 				},
 			},
 		},
@@ -339,7 +367,7 @@ func (Plugin) Verify(ctx context.Context, step domain.PlanStep, raw json.RawMess
 		result.ManifestSet.Spec.Renderer != input.Descriptor.Spec.Package.Format ||
 		result.ManifestSet.Spec.Source.Type != input.Descriptor.Spec.Package.Type || result.ManifestSet.Spec.Source.Repository != input.Descriptor.Spec.Package.Repository ||
 		result.ManifestSet.Spec.Source.Revision != input.Descriptor.Spec.Package.Revision || result.ManifestSet.Spec.Source.Path != input.Descriptor.Spec.Package.Path ||
-		result.ManifestSet.Spec.Source.Entrypoint != input.Descriptor.Spec.Package.Entrypoint {
+		result.ManifestSet.Spec.Source.Entrypoint != input.Descriptor.Spec.Package.Entrypoint || !reflect.DeepEqual(result.ManifestSet.Spec.Source.AdditionalEntrypoints, input.Descriptor.Spec.Package.AdditionalEntrypoints) {
 		return domain.HealthReport{Status: domain.HealthUnhealthy, Summary: "Materialized manifest identity or digest is invalid", Checks: map[string]string{"manifestSet": "invalid"}}, nil
 	}
 	loadDigest, err := digestJSON(result.LoadScenarioSet.Spec.Scenarios)
@@ -395,6 +423,7 @@ func decodeStep(step domain.PlanStep) (stepInput, error) {
 }
 
 func resolveValues(definition, defaults, supplied map[string]any) (map[string]any, error) {
+	supplied = normalizeReplicaValues(definition, supplied)
 	resolved := cloneObject(defaults)
 	mergeObjects(resolved, supplied)
 	rawDefinition, err := json.Marshal(definition)
@@ -413,6 +442,26 @@ func resolveValues(definition, defaults, supplied map[string]any) (map[string]an
 		return nil, fmt.Errorf("application settings do not satisfy valuesSchema at %s: %s", issues[0].Path, issues[0].Message)
 	}
 	return resolved, nil
+}
+
+func normalizeReplicaValues(definition, supplied map[string]any) map[string]any {
+	properties, _ := definition["properties"].(map[string]any)
+	if _, standardized := properties["initialReplicas"]; !standardized {
+		return supplied
+	}
+	result := cloneObject(supplied)
+	if _, exists := result["initialReplicas"]; !exists {
+		for _, legacy := range []string{"frontendReplicas", "uiReplicas", "replicas"} {
+			if value, found := result[legacy]; found {
+				result["initialReplicas"] = value
+				break
+			}
+		}
+	}
+	delete(result, "frontendReplicas")
+	delete(result, "uiReplicas")
+	delete(result, "replicas")
+	return result
 }
 
 func cloneObject(value map[string]any) map[string]any {
@@ -462,22 +511,31 @@ func fetchPackage(ctx context.Context, descriptor catalog.Descriptor) (packageCo
 			return packageContent{}, fmt.Errorf("git %s failed: %s", arguments[0], boundedMessage(output, err))
 		}
 	}
-	entrypoint := filepath.ToSlash(filepath.Join(source.Path, source.Entrypoint))
-	manifest, err := readGitFile(ctx, directory, entrypoint)
-	if err != nil {
-		return packageContent{}, fmt.Errorf("read package entrypoint: %w", err)
-	}
-	if len(manifest) > maxManifestBytes {
-		return packageContent{}, fmt.Errorf("manifest exceeds %d bytes", maxManifestBytes)
+	entrypoints := append([]string{source.Entrypoint}, source.AdditionalEntrypoints...)
+	manifest := []byte{}
+	for _, current := range entrypoints {
+		entrypoint := filepath.ToSlash(filepath.Join(source.Path, current))
+		value, err := readGitFile(ctx, directory, entrypoint)
+		if err != nil {
+			return packageContent{}, fmt.Errorf("read package entrypoint %s: %w", current, err)
+		}
+		manifest = appendManifestDocument(manifest, value)
+		if len(manifest) > maxManifestBytes {
+			return packageContent{}, fmt.Errorf("manifest exceeds %d bytes", maxManifestBytes)
+		}
 	}
 	scripts := map[string][]byte{}
 	for _, scenario := range descriptor.Spec.Interface.LoadScenarios {
 		if _, exists := scripts[scenario.Script]; exists {
 			continue
 		}
-		script, err := readGitFile(ctx, directory, scenario.Script)
-		if err != nil {
-			return packageContent{}, fmt.Errorf("read load scenario %s: %w", scenario.ID, err)
+		script := []byte(scenario.Content)
+		if len(script) == 0 {
+			var err error
+			script, err = readGitFile(ctx, directory, scenario.Script)
+			if err != nil {
+				return packageContent{}, fmt.Errorf("read load scenario %s: %w", scenario.ID, err)
+			}
 		}
 		if len(script) == 0 || len(script) > 1024*1024 || !utf8.Valid(script) {
 			return packageContent{}, fmt.Errorf("load scenario %s is empty, too large or not UTF-8", scenario.ID)
@@ -563,6 +621,141 @@ func applyOverlays(manifest []byte, overlays []catalog.Overlay, values map[strin
 		}
 	}
 	return result, nil
+}
+
+func applyStorageClassMappings(manifest []byte, mappings []catalog.StorageClassMapping) ([]byte, error) {
+	if len(mappings) == 0 {
+		return manifest, nil
+	}
+	bySource := make(map[string]catalog.StorageClassMapping, len(mappings))
+	claims := make(map[string]int, len(mappings))
+	volumes := make(map[string]int, len(mappings))
+	for _, mapping := range mappings {
+		bySource[mapping.Source] = mapping
+	}
+	result := []byte{}
+	decoder := yaml.NewDecoder(bytes.NewReader(manifest))
+	for {
+		var resource map[string]any
+		err := decoder.Decode(&resource)
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return nil, fmt.Errorf("decode storage resource: %w", err)
+		}
+		if len(resource) == 0 {
+			continue
+		}
+		spec, _ := resource["spec"].(map[string]any)
+		storageClass := strings.TrimSpace(fmt.Sprint(spec["storageClassName"]))
+		mapping, matched := bySource[storageClass]
+		if matched && fmt.Sprint(resource["apiVersion"]) == "v1" {
+			switch fmt.Sprint(resource["kind"]) {
+			case "PersistentVolume":
+				if mapping.RemoveStaticVolumes {
+					volumes[storageClass]++
+					continue
+				}
+			case "PersistentVolumeClaim":
+				spec["storageClassName"] = mapping.Target
+				claims[storageClass]++
+			}
+		}
+		encoded, err := yaml.Marshal(resource)
+		if err != nil {
+			return nil, fmt.Errorf("encode storage resource: %w", err)
+		}
+		result = appendManifestDocument(result, encoded)
+		if len(result) > maxManifestBytes {
+			return nil, fmt.Errorf("storage-mapped manifest exceeds %d bytes", maxManifestBytes)
+		}
+	}
+	for _, mapping := range mappings {
+		if claims[mapping.Source] == 0 {
+			return nil, fmt.Errorf("storage class mapping %s did not match any PersistentVolumeClaim", mapping.Source)
+		}
+		if mapping.RemoveStaticVolumes && volumes[mapping.Source] == 0 {
+			return nil, fmt.Errorf("storage class mapping %s did not match any static PersistentVolume", mapping.Source)
+		}
+	}
+	return result, nil
+}
+
+func applyImageMappings(manifest []byte, mappings []catalog.ImageMapping) ([]byte, error) {
+	if len(mappings) == 0 {
+		return manifest, nil
+	}
+	bySource := make(map[string]string, len(mappings))
+	matches := make(map[string]int, len(mappings))
+	for _, mapping := range mappings {
+		bySource[mapping.Source] = mapping.Target
+	}
+	result := []byte{}
+	decoder := yaml.NewDecoder(bytes.NewReader(manifest))
+	for {
+		var resource map[string]any
+		err := decoder.Decode(&resource)
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return nil, fmt.Errorf("decode image resource: %w", err)
+		}
+		if len(resource) == 0 {
+			continue
+		}
+		replacePodImages(resource, bySource, matches)
+		encoded, err := yaml.Marshal(resource)
+		if err != nil {
+			return nil, fmt.Errorf("encode image resource: %w", err)
+		}
+		result = appendManifestDocument(result, encoded)
+		if len(result) > maxManifestBytes {
+			return nil, fmt.Errorf("image-mapped manifest exceeds %d bytes", maxManifestBytes)
+		}
+	}
+	for _, mapping := range mappings {
+		if matches[mapping.Source] == 0 {
+			return nil, fmt.Errorf("image mapping %s did not match any container", mapping.Source)
+		}
+	}
+	return result, nil
+}
+
+func replacePodImages(resource map[string]any, mappings map[string]string, matches map[string]int) {
+	spec, _ := resource["spec"].(map[string]any)
+	podSpecs := []map[string]any{}
+	if fmt.Sprint(resource["kind"]) == "Pod" {
+		podSpecs = append(podSpecs, spec)
+	}
+	if template, ok := spec["template"].(map[string]any); ok {
+		if podSpec, ok := template["spec"].(map[string]any); ok {
+			podSpecs = append(podSpecs, podSpec)
+		}
+	}
+	if jobTemplate, ok := spec["jobTemplate"].(map[string]any); ok {
+		if jobSpec, ok := jobTemplate["spec"].(map[string]any); ok {
+			if template, ok := jobSpec["template"].(map[string]any); ok {
+				if podSpec, ok := template["spec"].(map[string]any); ok {
+					podSpecs = append(podSpecs, podSpec)
+				}
+			}
+		}
+	}
+	for _, podSpec := range podSpecs {
+		for _, field := range []string{"initContainers", "containers"} {
+			containers, _ := podSpec[field].([]any)
+			for _, value := range containers {
+				container, _ := value.(map[string]any)
+				source := strings.TrimSpace(fmt.Sprint(container["image"]))
+				if target, ok := mappings[source]; ok {
+					container["image"] = target
+					matches[source]++
+				}
+			}
+		}
+	}
 }
 
 func overlayValue(root map[string]any, pointer string) (any, bool) {
@@ -681,8 +874,10 @@ func materializeManifest(manifest []byte, descriptor catalog.Descriptor) ([]byte
 	result := []byte{}
 	resources := map[string]bool{}
 	topologyIndexes := map[string]*int{}
+	componentIDs := map[string]string{}
 	for _, component := range descriptor.Spec.Interface.Components {
-		topologyIndexes[component.Workload.APIVersion+"|"+component.Workload.Kind+"|"+component.Workload.Name] = component.Index
+		key := component.Workload.APIVersion + "|" + component.Workload.Kind + "|" + component.Workload.Name
+		topologyIndexes[key], componentIDs[key] = component.Index, component.ID
 	}
 	decoder := yaml.NewDecoder(bytes.NewReader(manifest))
 	for {
@@ -701,6 +896,9 @@ func materializeManifest(manifest []byte, descriptor catalog.Descriptor) ([]byte
 		if err := document.Decode(&resource); err != nil {
 			return nil, fmt.Errorf("decode Kubernetes resource: %w", err)
 		}
+		if resource.APIVersion == "" && resource.Kind == "" && resource.Metadata.Name == "" {
+			continue
+		}
 		key := resource.APIVersion + "|" + resource.Kind + "|" + resource.Metadata.Name
 		if _, exists := excluded[key]; exists {
 			excluded[key] = true
@@ -709,7 +907,7 @@ func materializeManifest(manifest []byte, descriptor catalog.Descriptor) ([]byte
 		if resource.APIVersion == "" || resource.Kind == "" || resource.Metadata.Name == "" || resources[key] {
 			return nil, fmt.Errorf("application package contains an invalid or duplicate resource %s", key)
 		}
-		encoded, err := encodeApplicationResource(&document, descriptor.Spec.Interface.Group, topologyIndexes[key])
+		encoded, err := encodeApplicationResource(&document, descriptor.Spec.Interface.Group, componentIDs[key], topologyIndexes[key])
 		if err != nil {
 			return nil, fmt.Errorf("encode Kubernetes resource: %w", err)
 		}
@@ -739,11 +937,14 @@ func materializeManifest(manifest []byte, descriptor catalog.Descriptor) ([]byte
 			if err := document.Decode(&resource); err != nil {
 				return nil, fmt.Errorf("decode additional resource %s: %w", additional.ID, err)
 			}
+			if resource.APIVersion == "" && resource.Kind == "" && resource.Metadata.Name == "" {
+				continue
+			}
 			key := resource.APIVersion + "|" + resource.Kind + "|" + resource.Metadata.Name
 			if resource.APIVersion == "" || resource.Kind == "" || resource.Metadata.Name == "" || resources[key] {
 				return nil, fmt.Errorf("additional manifest %s contains an invalid or duplicate resource %s", additional.ID, key)
 			}
-			encoded, err := encodeApplicationResource(&document, descriptor.Spec.Interface.Group, topologyIndexes[key])
+			encoded, err := encodeApplicationResource(&document, descriptor.Spec.Interface.Group, componentIDs[key], topologyIndexes[key])
 			if err != nil {
 				return nil, fmt.Errorf("encode additional resource %s: %w", additional.ID, err)
 			}
@@ -757,7 +958,132 @@ func materializeManifest(manifest []byte, descriptor catalog.Descriptor) ([]byte
 	return result, nil
 }
 
-func encodeApplicationResource(document *yaml.Node, group string, topologyIndex *int) ([]byte, error) {
+func applyReplicaSettings(manifest []byte, descriptor catalog.Descriptor, values map[string]any) ([]byte, error) {
+	defaultValue, enabled := values["initialReplicas"]
+	if !enabled {
+		return manifest, nil
+	}
+	initial, err := replicaValue(defaultValue)
+	if err != nil {
+		return nil, errors.New("initial replicas must be an integer between 1 and 1000")
+	}
+	overrides := map[string]any{}
+	if value, exists := values["replicaOverrides"]; exists {
+		var ok bool
+		overrides, ok = value.(map[string]any)
+		if !ok {
+			return nil, errors.New("replica overrides must be an object keyed by service")
+		}
+	}
+	targets := map[string]int{}
+	for _, component := range descriptor.Spec.Interface.Components {
+		if !contains(component.Traits, "scalable") {
+			continue
+		}
+		replicas := initial
+		if value, exists := overrides[component.ID]; exists {
+			replicas, err = replicaValue(value)
+			if err != nil {
+				return nil, fmt.Errorf("replica override for %s must be an integer between 1 and 1000", component.ID)
+			}
+		}
+		targets[workloadIdentity(component.Workload)] = replicas
+	}
+	for componentID := range overrides {
+		found := false
+		for _, component := range descriptor.Spec.Interface.Components {
+			found = found || component.ID == componentID && contains(component.Traits, "scalable")
+		}
+		if !found {
+			return nil, fmt.Errorf("replica override references unknown scalable service %s", componentID)
+		}
+	}
+	result := []byte{}
+	decoder := yaml.NewDecoder(bytes.NewReader(manifest))
+	for {
+		var document map[string]any
+		err := decoder.Decode(&document)
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return nil, fmt.Errorf("decode application replicas: %w", err)
+		}
+		if len(document) == 0 {
+			continue
+		}
+		metadata, _ := document["metadata"].(map[string]any)
+		key := fmt.Sprint(document["apiVersion"]) + "|" + fmt.Sprint(document["kind"]) + "|" + fmt.Sprint(metadata["name"])
+		if replicas, exists := targets[key]; exists {
+			spec, ok := document["spec"].(map[string]any)
+			if !ok {
+				return nil, fmt.Errorf("scalable workload %s has no spec", metadata["name"])
+			}
+			spec["replicas"] = replicas
+			delete(targets, key)
+		}
+		encoded, err := yaml.Marshal(document)
+		if err != nil {
+			return nil, fmt.Errorf("encode application replicas: %w", err)
+		}
+		result = appendManifestDocument(result, encoded)
+		if len(result) > maxManifestBytes {
+			return nil, fmt.Errorf("application manifest exceeds %d bytes", maxManifestBytes)
+		}
+	}
+	if len(targets) != 0 {
+		return nil, errors.New("one or more scalable workloads are missing from the manifest")
+	}
+	return result, nil
+}
+
+func replicaValue(value any) (int, error) {
+	var replicas int
+	switch current := value.(type) {
+	case int:
+		replicas = current
+	case float64:
+		if current != float64(int(current)) {
+			return 0, errors.New("not an integer")
+		}
+		replicas = int(current)
+	case json.Number:
+		parsed, err := strconv.Atoi(current.String())
+		if err != nil {
+			return 0, err
+		}
+		replicas = parsed
+	default:
+		return 0, errors.New("not an integer")
+	}
+	if replicas < 1 || replicas > 1000 {
+		return 0, errors.New("out of range")
+	}
+	return replicas, nil
+}
+
+func workloadIdentity(workload catalog.Workload) string {
+	return workload.APIVersion + "|" + workload.Kind + "|" + workload.Name
+}
+
+func contains(values []string, expected string) bool {
+	for _, value := range values {
+		if value == expected {
+			return true
+		}
+	}
+	return false
+}
+
+func workloadTraits(values []string, legacyDescheduling bool) []string {
+	traits := append([]string(nil), values...)
+	if legacyDescheduling && contains(traits, "schedulable") && contains(traits, "scalable") && !contains(traits, "stateful") && !contains(traits, "traffic-entrypoint") {
+		traits = append(traits, "deschedulable")
+	}
+	return traits
+}
+
+func encodeApplicationResource(document *yaml.Node, group, componentID string, topologyIndex *int) ([]byte, error) {
 	var resource map[string]any
 	if err := document.Decode(&resource); err != nil {
 		return nil, err
@@ -765,19 +1091,19 @@ func encodeApplicationResource(document *yaml.Node, group string, topologyIndex 
 	if group == "" {
 		return yaml.Marshal(resource)
 	}
-	if err := setApplicationLabels(resource, group, topologyIndex); err != nil {
+	if err := setApplicationLabels(resource, group, componentID, topologyIndex); err != nil {
 		return nil, err
 	}
 	if spec, ok := resource["spec"].(map[string]any); ok {
 		if template, ok := spec["template"].(map[string]any); ok {
-			if err := setApplicationLabels(template, group, topologyIndex); err != nil {
+			if err := setApplicationLabels(template, group, componentID, topologyIndex); err != nil {
 				return nil, err
 			}
 		}
 		if jobTemplate, ok := spec["jobTemplate"].(map[string]any); ok {
 			if jobSpec, ok := jobTemplate["spec"].(map[string]any); ok {
 				if template, ok := jobSpec["template"].(map[string]any); ok {
-					if err := setApplicationLabels(template, group, topologyIndex); err != nil {
+					if err := setApplicationLabels(template, group, componentID, topologyIndex); err != nil {
 						return nil, err
 					}
 				}
@@ -787,7 +1113,7 @@ func encodeApplicationResource(document *yaml.Node, group string, topologyIndex 
 	return yaml.Marshal(resource)
 }
 
-func setApplicationLabels(resource map[string]any, group string, topologyIndex *int) error {
+func setApplicationLabels(resource map[string]any, group, componentID string, topologyIndex *int) error {
 	metadata, ok := resource["metadata"].(map[string]any)
 	if !ok {
 		metadata = map[string]any{}
@@ -805,6 +1131,12 @@ func setApplicationLabels(resource map[string]any, group string, topologyIndex *
 		return fmt.Errorf("resource group label %q conflicts with application group %q", existing, group)
 	}
 	labels["group"] = group
+	if componentID != "" {
+		if existing, exists := labels[applicationComponentLabel]; exists && fmt.Sprint(existing) != componentID {
+			return fmt.Errorf("resource component label %q conflicts with application component %q", existing, componentID)
+		}
+		labels[applicationComponentLabel] = componentID
+	}
 	if topologyIndex != nil {
 		value := strconv.Itoa(*topologyIndex)
 		if existing, exists := labels["index"]; exists && fmt.Sprint(existing) != value {
@@ -899,6 +1231,13 @@ func inspectManifest(manifest []byte, descriptor catalog.Descriptor) ([]Workload
 	}
 	workloads := make([]WorkloadTarget, 0, len(descriptor.Spec.Interface.Components))
 	components := map[string]catalog.Component{}
+	legacyDescheduling := true
+	for _, component := range descriptor.Spec.Interface.Components {
+		if contains(component.Traits, "deschedulable") {
+			legacyDescheduling = false
+			break
+		}
+	}
 	for _, component := range descriptor.Spec.Interface.Components {
 		key := component.Workload.APIVersion + "|" + component.Workload.Kind + "|" + component.Workload.Name
 		resource, exists := resources[key]
@@ -907,6 +1246,9 @@ func inspectManifest(manifest []byte, descriptor catalog.Descriptor) ([]Workload
 		}
 		if resource.Metadata.Labels["group"] != descriptor.Spec.Interface.Group || resource.Spec.Template.Metadata.Labels["group"] != descriptor.Spec.Interface.Group {
 			return nil, nil, fmt.Errorf("declared workload %s does not carry application group %s", component.ID, descriptor.Spec.Interface.Group)
+		}
+		if resource.Metadata.Labels[applicationComponentLabel] != component.ID || resource.Spec.Template.Metadata.Labels[applicationComponentLabel] != component.ID {
+			return nil, nil, fmt.Errorf("declared workload %s does not carry its application component label", component.ID)
 		}
 		if component.Index != nil {
 			expected := strconv.Itoa(*component.Index)
@@ -920,7 +1262,7 @@ func inspectManifest(manifest []byte, descriptor catalog.Descriptor) ([]Workload
 			}
 		}
 		components[component.ID] = component
-		workloads = append(workloads, WorkloadTarget{ID: component.ID, APIVersion: component.Workload.APIVersion, Kind: component.Workload.Kind, Name: component.Workload.Name, Selector: component.Selector, Traits: component.Traits, Index: component.Index, Dependencies: component.Dependencies})
+		workloads = append(workloads, WorkloadTarget{ID: component.ID, APIVersion: component.Workload.APIVersion, Kind: component.Workload.Kind, Name: component.Workload.Name, Selector: component.Selector, Traits: workloadTraits(component.Traits, legacyDescheduling), Index: component.Index, Dependencies: component.Dependencies})
 	}
 	endpoints := make([]ServiceEndpoint, 0, len(descriptor.Spec.Interface.Endpoints))
 	for _, endpoint := range descriptor.Spec.Interface.Endpoints {

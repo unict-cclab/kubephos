@@ -17,10 +17,13 @@ import (
 	"kubephos.dev/kubephos/internal/auth"
 	"kubephos.dev/kubephos/internal/domain"
 	"kubephos.dev/kubephos/internal/id"
+	"kubephos.dev/kubephos/internal/keycloak"
 	"kubephos.dev/kubephos/internal/storage"
 )
 
 const sessionCookie = "kubephos_session"
+const oidcStateCookie = "kubephos_oidc_state"
+const oidcVerifierCookie = "kubephos_oidc_verifier"
 
 type authenticatedUserKey struct{}
 
@@ -42,18 +45,44 @@ func (s *Server) authenticate(next http.Handler) http.Handler {
 			writeError(response, http.StatusForbidden, "csrf_rejected", "The request security token is missing or invalid.")
 			return
 		}
-		if mutating(request.Method) && request.URL.Path != "/api/v1/auth/logout" && session.User.Role == "viewer" {
+		if mutating(request.Method) && request.URL.Path != "/api/v1/auth/logout" && session.User.Role != "admin" && !userMutationAllowed(request.URL.Path) {
 			s.auditAuthenticationRejection(request, http.StatusForbidden)
-			writeError(response, http.StatusForbidden, "permission_denied", "Your role cannot modify this resource.")
+			writeError(response, http.StatusForbidden, "permission_denied", "Administrator access is required.")
 			return
 		}
-		if mutating(request.Method) && (strings.HasPrefix(request.URL.Path, "/api/v1/credentials") || strings.HasPrefix(request.URL.Path, "/api/v1/connections") || strings.HasPrefix(request.URL.Path, "/api/v1/catalog") || strings.HasPrefix(request.URL.Path, "/api/v1/plugins") || strings.HasPrefix(request.URL.Path, "/api/v1/plugin-packages") || strings.HasPrefix(request.URL.Path, "/api/v1/plugin-runtime") || strings.HasSuffix(request.URL.Path, "/access")) && session.User.Role != "admin" {
+		if strings.HasPrefix(request.URL.Path, "/api/v1/users") && session.User.Role != "admin" {
+			s.auditAuthenticationRejection(request, http.StatusForbidden)
+			writeError(response, http.StatusForbidden, "permission_denied", "Administrator access is required.")
+			return
+		}
+		if request.Method == http.MethodGet && session.User.Role != "admin" && adminReadPath(request.URL.Path) {
 			s.auditAuthenticationRejection(request, http.StatusForbidden)
 			writeError(response, http.StatusForbidden, "permission_denied", "Administrator access is required.")
 			return
 		}
 		next.ServeHTTP(response, request)
 	})
+}
+
+func adminReadPath(path string) bool {
+	for _, prefix := range []string{
+		"/api/v1/credentials", "/api/v1/connections", "/api/v1/machine-templates", "/api/v1/infrastructure-services",
+		"/api/v1/infrastructure/resources", "/api/v1/audit", "/api/v1/plugin-imports", "/api/v1/plugin-packages",
+		"/api/v1/plugin-runtime", "/api/v1/terminal-targets", "/api/v1/terminals", "/api/v1/pipelines",
+	} {
+		if strings.HasPrefix(path, prefix) {
+			return true
+		}
+	}
+	return strings.HasSuffix(path, "/kubeconfig") || strings.HasSuffix(path, "/access")
+}
+
+func userMutationAllowed(path string) bool {
+	return strings.HasPrefix(path, "/api/v1/experiment-configurations") ||
+		path == "/api/v1/experiment-instances" ||
+		path == "/api/v1/experiment-suites" ||
+		strings.HasPrefix(path, "/api/v1/experiments") ||
+		strings.HasPrefix(path, "/api/v1/catalog/applications/") && strings.HasSuffix(path, "/resolve")
 }
 
 func (s *Server) auditAuthenticationRejection(request *http.Request, status int) {
@@ -67,7 +96,7 @@ func (s *Server) auditAuthenticationRejection(request *http.Request, status int)
 
 func publicAPI(request *http.Request) bool {
 	switch request.Method + " " + request.URL.Path {
-	case "GET /api/v1/auth/status", "POST /api/v1/auth/setup", "POST /api/v1/auth/login":
+	case "GET /api/v1/auth/status", "POST /api/v1/auth/setup", "GET /api/v1/auth/login", "GET /api/v1/auth/callback":
 		return true
 	default:
 		return false
@@ -79,12 +108,12 @@ func mutating(method string) bool {
 }
 
 func (s *Server) authStatus(response http.ResponseWriter, request *http.Request) {
-	count, err := s.store.UserCount(request.Context())
+	count, err := s.store.IdentityUserCount(request.Context())
 	if err != nil {
 		writeError(response, http.StatusInternalServerError, "database_error", "Could not read authentication status.")
 		return
 	}
-	result := map[string]any{"setupRequired": count == 0, "authenticated": false}
+	result := map[string]any{"setupRequired": count == 0, "authenticated": false, "loginURL": "/api/v1/auth/login"}
 	if count > 0 {
 		if session, err := s.requestSession(request); err == nil {
 			result["authenticated"] = true
@@ -96,7 +125,7 @@ func (s *Server) authStatus(response http.ResponseWriter, request *http.Request)
 }
 
 func (s *Server) authSetup(response http.ResponseWriter, request *http.Request) {
-	count, err := s.store.UserCount(request.Context())
+	count, err := s.store.IdentityUserCount(request.Context())
 	if err != nil {
 		writeError(response, http.StatusInternalServerError, "database_error", "Could not read authentication status.")
 		return
@@ -107,6 +136,7 @@ func (s *Server) authSetup(response http.ResponseWriter, request *http.Request) 
 	}
 	var input struct {
 		Username string `json:"username"`
+		Email    string `json:"email"`
 		Password string `json:"password"`
 	}
 	if err := decodeJSON(request, &input); err != nil {
@@ -114,21 +144,37 @@ func (s *Server) authSetup(response http.ResponseWriter, request *http.Request) 
 		return
 	}
 	input.Username = strings.ToLower(strings.TrimSpace(input.Username))
+	input.Email = strings.ToLower(strings.TrimSpace(input.Email))
 	if !regexp.MustCompile(`^[a-z][a-z0-9._-]{2,39}$`).MatchString(input.Username) {
 		writeError(response, http.StatusUnprocessableEntity, "invalid_username", "Username must contain 3 to 40 lowercase letters, numbers, dots, dashes or underscores.")
 		return
 	}
-	hash, err := auth.HashPassword(input.Password)
+	_, err = auth.HashPassword(input.Password)
 	if err != nil {
 		writeError(response, http.StatusUnprocessableEntity, "invalid_password", err.Error())
 		return
 	}
-	user, err := s.store.CreateInitialUser(request.Context(), domain.User{ID: id.New("usr"), Username: input.Username, PasswordHash: hash, Role: "admin"})
+	if s.identity == nil {
+		writeError(response, http.StatusServiceUnavailable, "identity_unavailable", "Keycloak is not configured.")
+		return
+	}
+	externalID, err := s.identity.CreateUser(request.Context(), input.Username, input.Email, input.Password)
+	if errors.Is(err, keycloak.ErrConflict) {
+		writeError(response, http.StatusConflict, "username_taken", "This username already exists in Keycloak.")
+		return
+	}
+	if err != nil {
+		writeError(response, http.StatusBadGateway, "identity_unavailable", "Could not create the administrator in Keycloak.")
+		return
+	}
+	user, err := s.store.CreateInitialIdentityUser(request.Context(), domain.User{ID: id.New("usr"), Username: input.Username, ExternalID: externalID, Email: input.Email, Role: "admin", Enabled: true})
 	if errors.Is(err, storage.ErrConflict) {
+		_ = s.identity.DeleteUser(request.Context(), externalID)
 		writeError(response, http.StatusConflict, "setup_complete", "Initial setup has already been completed.")
 		return
 	}
 	if err != nil {
+		_ = s.identity.DeleteUser(request.Context(), externalID)
 		writeError(response, http.StatusInternalServerError, "database_error", "Could not create the administrator.")
 		return
 	}
@@ -142,17 +188,45 @@ func (s *Server) authSetup(response http.ResponseWriter, request *http.Request) 
 }
 
 func (s *Server) authLogin(response http.ResponseWriter, request *http.Request) {
-	var input struct {
-		Username string `json:"username"`
-		Password string `json:"password"`
-	}
-	if err := decodeJSON(request, &input); err != nil {
-		writeError(response, http.StatusBadRequest, "invalid_request", err.Error())
+	if s.identity == nil {
+		writeError(response, http.StatusServiceUnavailable, "identity_unavailable", "Keycloak is not configured.")
 		return
 	}
-	user, err := s.store.GetUserByUsername(request.Context(), strings.ToLower(strings.TrimSpace(input.Username)))
-	if err != nil || !auth.VerifyPassword(user.PasswordHash, input.Password) {
-		writeError(response, http.StatusUnauthorized, "invalid_credentials", "Username or password is invalid.")
+	state, err := randomToken(32)
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, "login_error", "Could not start sign in.")
+		return
+	}
+	verifier, err := randomToken(48)
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, "login_error", "Could not start sign in.")
+		return
+	}
+	digest := sha256.Sum256([]byte(verifier))
+	s.setOIDCCookie(response, request, oidcStateCookie, state)
+	s.setOIDCCookie(response, request, oidcVerifierCookie, verifier)
+	http.Redirect(response, request, s.identity.AuthorizationURL(state, base64.RawURLEncoding.EncodeToString(digest[:])), http.StatusFound)
+}
+
+func (s *Server) authCallback(response http.ResponseWriter, request *http.Request) {
+	stateCookie, stateErr := request.Cookie(oidcStateCookie)
+	verifierCookie, verifierErr := request.Cookie(oidcVerifierCookie)
+	state := request.URL.Query().Get("state")
+	code := request.URL.Query().Get("code")
+	s.clearOIDCCookie(response, request, oidcStateCookie)
+	s.clearOIDCCookie(response, request, oidcVerifierCookie)
+	if stateErr != nil || verifierErr != nil || state == "" || code == "" || subtle.ConstantTimeCompare([]byte(state), []byte(stateCookie.Value)) != 1 {
+		writeError(response, http.StatusBadRequest, "invalid_login", "The sign-in response is invalid or expired.")
+		return
+	}
+	identity, err := s.identity.Exchange(request.Context(), code, verifierCookie.Value)
+	if err != nil {
+		writeError(response, http.StatusBadGateway, "identity_unavailable", "Keycloak could not complete sign in.")
+		return
+	}
+	user, err := s.store.GetUserByExternalID(request.Context(), identity.Subject)
+	if err != nil {
+		writeError(response, http.StatusForbidden, "user_not_authorized", "This Keycloak account is not enabled in KubePhos.")
 		return
 	}
 	session, token, err := s.issueSession(request.Context(), user)
@@ -161,7 +235,7 @@ func (s *Server) authLogin(response http.ResponseWriter, request *http.Request) 
 		return
 	}
 	s.setSessionCookie(response, request, token, session.ExpiresAt)
-	writeJSON(response, http.StatusOK, map[string]any{"authenticated": true, "csrfToken": session.CSRFToken, "user": user})
+	http.Redirect(response, request, s.applicationURL, http.StatusFound)
 }
 
 func (s *Server) authLogout(response http.ResponseWriter, request *http.Request) {
@@ -170,7 +244,11 @@ func (s *Server) authLogout(response http.ResponseWriter, request *http.Request)
 		_ = s.store.DeleteSession(request.Context(), tokenHash(cookie.Value))
 	}
 	http.SetCookie(response, &http.Cookie{Name: sessionCookie, Value: "", Path: "/", HttpOnly: true, Secure: request.TLS != nil, SameSite: http.SameSiteStrictMode, MaxAge: -1, Expires: time.Unix(1, 0)})
-	response.WriteHeader(http.StatusNoContent)
+	logoutURL := s.applicationURL
+	if s.identity != nil {
+		logoutURL = s.identity.LogoutURL()
+	}
+	writeJSON(response, http.StatusOK, map[string]any{"logoutURL": logoutURL})
 }
 
 func (s *Server) issueSession(ctx context.Context, user domain.User) (domain.Session, string, error) {
@@ -200,6 +278,14 @@ func (s *Server) requestSession(request *http.Request) (domain.Session, error) {
 
 func (s *Server) setSessionCookie(response http.ResponseWriter, request *http.Request, token string, expiresAt time.Time) {
 	http.SetCookie(response, &http.Cookie{Name: sessionCookie, Value: token, Path: "/", HttpOnly: true, Secure: request.TLS != nil, SameSite: http.SameSiteStrictMode, MaxAge: int(time.Until(expiresAt).Seconds()), Expires: expiresAt})
+}
+
+func (s *Server) setOIDCCookie(response http.ResponseWriter, request *http.Request, name, value string) {
+	http.SetCookie(response, &http.Cookie{Name: name, Value: value, Path: "/api/v1/auth", HttpOnly: true, Secure: request.TLS != nil, SameSite: http.SameSiteLaxMode, MaxAge: 600})
+}
+
+func (s *Server) clearOIDCCookie(response http.ResponseWriter, request *http.Request, name string) {
+	http.SetCookie(response, &http.Cookie{Name: name, Value: "", Path: "/api/v1/auth", HttpOnly: true, Secure: request.TLS != nil, SameSite: http.SameSiteLaxMode, MaxAge: -1, Expires: time.Unix(1, 0)})
 }
 
 func randomToken(size int) (string, error) {

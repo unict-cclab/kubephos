@@ -3,7 +3,7 @@ kind: Plugin
 metadata:
   id: io.kubephos.chaos.network.zones
   name: Inter-zone network injection
-  version: 0.3.0
+  version: 0.3.1
   description: Applies latency, jitter, bandwidth and packet loss to directed links between application zones.
 spec:
   protocol: v1alpha1

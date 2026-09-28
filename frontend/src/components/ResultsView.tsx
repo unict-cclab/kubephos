@@ -5,6 +5,7 @@ import type {Artifact, Experiment, ExperimentFigure, ExperimentTrial, MetricPoin
 import {Dialog} from './Dialog'
 import {DetailBreadcrumb} from './DetailBreadcrumb'
 import {LoadProfilePreview, loadProfileSteps, type LoadProfileStep} from './LoadProfileEditor'
+import {ownerLabel} from './OwnerFilter'
 
 interface Props {
   artifacts: Artifact[]
@@ -14,6 +15,7 @@ interface Props {
   session: Session
   changed: () => Promise<void>
   openOperation: (id: string) => void
+  openPipelineRun?: (id: string) => void
   focusedExperiment?: Experiment
   onBack?: () => void
 }
@@ -40,7 +42,7 @@ const priorityMetrics = ['load.successful_rps', 'load.failure_percentage', 'load
 
 type ResultsTab = 'overview' | 'charts' | 'statistics' | 'downloads'
 
-export function ResultsView({artifacts, experiments, operations, workspaces, session, changed, openOperation, focusedExperiment, onBack}: Props) {
+export function ResultsView({artifacts, experiments, operations, workspaces, session, changed, openOperation, openPipelineRun, focusedExperiment, onBack}: Props) {
   const available = useMemo(() => artifacts.filter(item => !item.sensitive && item.type === 'TimeSeriesDataset' && item.version === 'v1alpha1').sort((left, right) => right.verifiedAt.localeCompare(left.verifiedAt)), [artifacts])
   const focusedArtifactIDs = focusedExperiment?.variants.flatMap(variant => variant.trials.map(trial => trial.resultArtifactId)).filter(Boolean) ?? []
   const selectable = focusedExperiment ? available.filter(item => focusedArtifactIDs.includes(item.id)) : available
@@ -76,6 +78,7 @@ export function ResultsView({artifacts, experiments, operations, workspaces, ses
     if (!focusedExperiment || isTerminalExperiment(focusedExperiment.status)) setStopRequested(false)
   }, [focusedExperiment?.id, focusedExperiment?.status])
 
+  const canAccessExperimentData = !focusedExperiment?.ownerUserId || session.user?.role === 'admin' || focusedExperiment.ownerUserId === session.user?.id
   useEffect(() => {
     if (!printSummaryPending || activeTab !== 'overview') return
     const frame = requestAnimationFrame(() => {setPrintSummaryPending(false); window.print()})
@@ -131,7 +134,7 @@ export function ResultsView({artifacts, experiments, operations, workspaces, ses
   }, [availableKey, selectedKey])
 
   useEffect(() => {
-    if (!focusedExperiment) {
+    if (!focusedExperiment || !canAccessExperimentData) {
       setFigures([])
       return
     }
@@ -140,7 +143,7 @@ export function ResultsView({artifacts, experiments, operations, workspaces, ses
       .then(result => setFigures(result.items))
       .catch(cause => { if (!controller.signal.aborted) setActionError(cause instanceof Error ? cause.message : 'Could not load saved figures.') })
     return () => controller.abort()
-  }, [focusedExperiment?.id])
+  }, [focusedExperiment?.id, canAccessExperimentData])
 
   const toggle = (id: string) => {
     if (!focusedExperiment) setActiveExperiment(null)
@@ -152,12 +155,13 @@ export function ResultsView({artifacts, experiments, operations, workspaces, ses
   const experimentPresentation = new Map<string, {label: string; color?: string}>()
   for (const variant of experiment?.variants ?? []) for (const trial of variant.trials) if (trial.resultArtifactId) experimentPresentation.set(trial.resultArtifactId, {label: `${variant.alias || variant.name} · Run ${trial.position}`, color: variant.color})
   const displayed = loaded.map(item => ({...item, label: experimentPresentation.get(item.artifact.id)?.label ?? datasetLabel(item.artifact, operations, workspaces), color: experimentPresentation.get(item.artifact.id)?.color}))
-  const metrics = [...new Set(displayed.flatMap(item => item.dataset.spec.series.map(series => series.metric)))].filter(metric => !['load.mean_response_time', 'load.p50_response_time', 'load.p99_response_time'].includes(metric)).sort()
+  const metrics = [...new Set(displayed.flatMap(item => item.dataset.spec.series.map(series => series.metric)))].filter(metric => !['load.mean_response_time', 'load.p50_response_time', 'load.p99_response_time'].includes(metric) && !metric.startsWith('application.')).sort()
+  const outcomeMetrics = metrics
   const groups = groupMetrics(metrics)
   const activeMetricGroup = groups.has(metricGroup) ? metricGroup : groups.keys().next().value ?? ''
   const visibleMetrics = groups.get(activeMetricGroup) ?? []
-  const preferredMetrics = priorityMetrics.filter(metric => metrics.includes(metric))
-  const overviewMetrics = [...preferredMetrics, ...metrics.filter(metric => !preferredMetrics.includes(metric))].slice(0, 5)
+  const preferredMetrics = priorityMetrics.filter(metric => outcomeMetrics.includes(metric))
+  const overviewMetrics = preferredMetrics
   const visibleFigures = activeRun ? figures.filter(figure => figure.sourceArtifactIds.includes(activeRun.trial.resultArtifactId)) : figures
   const samples = displayed.reduce((total, item) => total + item.dataset.spec.summary.samples, 0)
   const selectedWorkspaceID = available.find(item => item.id === selected[0])?.workspaceId
@@ -216,11 +220,11 @@ export function ResultsView({artifacts, experiments, operations, workspaces, ses
   const stopLabel = focusedExperiment?.kind === 'suite' ? 'suite' : 'experiment'
   return <>
     {focusedExperiment && onBack && <DetailBreadcrumb parent="Experiments" current={focusedExperiment.name} back={onBack} />}
-    <div className={`results-heading ${focusedExperiment ? 'focused' : ''}`}><div><h2>{focusedExperiment?.name ?? 'Results'}</h2>{focusedExperiment?.description && <p>{focusedExperiment.description}</p>}</div><div className="results-detail-actions">{focusedExperiment && <span className={`status ${focusedExperiment.status}`}>{focusedExperiment.status}</span>}{focusedExperiment && session.user?.role === 'admin' && canStop && <button className="button danger" disabled={stopping || stopRequested} onClick={stopExperiment}>{stopping || stopRequested ? `Stopping ${stopLabel}…` : `Stop ${stopLabel}`}</button>}{focusedExperiment && session.user?.role === 'admin' && <button className="button danger" disabled={deleting || !isTerminalExperiment(focusedExperiment.status)} title={isTerminalExperiment(focusedExperiment.status) ? '' : `Stop this ${stopLabel} before deleting it`} onClick={removeExperiment}>{deleting ? 'Deleting…' : `Delete ${stopLabel}`}</button>}{!focusedExperiment && <div className="results-count" aria-label={`${selectable.length} datasets`}><strong>{selectable.length}</strong><span>datasets</span></div>}</div></div>
+    <div className={`results-heading ${focusedExperiment ? 'focused' : ''}`}><div><h2>{focusedExperiment?.name ?? 'Results'}</h2>{focusedExperiment && <p>Created by {ownerLabel(focusedExperiment)}</p>}</div><div className="results-detail-actions">{focusedExperiment && <span className={`status ${focusedExperiment.status}`}>{focusedExperiment.status}</span>}{focusedExperiment && session.user?.role === 'admin' && canStop && <button className="button danger" disabled={stopping || stopRequested} onClick={stopExperiment}>{stopping || stopRequested ? `Stopping ${stopLabel}…` : `Stop ${stopLabel}`}</button>}{focusedExperiment && session.user?.role === 'admin' && <button className="button danger" disabled={deleting || !isTerminalExperiment(focusedExperiment.status)} title={isTerminalExperiment(focusedExperiment.status) ? '' : `Stop this ${stopLabel} before deleting it`} onClick={removeExperiment}>{deleting ? 'Deleting…' : `Delete ${stopLabel}`}</button>}{!focusedExperiment && <div className="results-count" aria-label={`${selectable.length} datasets`}><strong>{selectable.length}</strong><span>datasets</span></div>}</div></div>
     {actionError && <div className="validation-item error">{actionError}</div>}
     {!focusedExperiment && experiments.length > 0 && <div className="experiment-history"><div className="experiment-history-title"><span><b>1</b><strong>Choose an experiment</strong></span><span>{experiments.length} saved</span></div><div className="experiment-cards">{experiments.map(item => <button key={item.id} className={activeExperiment === item.id ? 'active' : ''} onClick={() => openExperiment(item)}><span className={`status-dot ${item.status}`} /><span><strong>{item.name}</strong><small>{item.status === 'queued' && item.scheduledFor && new Date(item.scheduledFor).getTime() > Date.now() ? `Scheduled ${formatDate(item.scheduledFor)}` : `${item.status} · ${item.variants.length} strategies · ${item.variants.reduce((total, variant) => total + variant.trials.length, 0)} runs`}</small></span><b>›</b></button>)}</div></div>}
     {focusedExperiment && <nav className="experiment-run-tabs" aria-label="Experiment runs"><button className="run-tab summary" aria-current={runTab === 'summary' ? 'page' : undefined} data-active={runTab === 'summary'} onClick={() => {setRunTab('summary'); setActiveTab('overview')}}><span className="run-tab-label">Run summary</span></button>{focusedRuns.map(({variant, trial}) => <button key={trial.id} className={`run-tab ${trial.status}`} aria-current={runTab === trial.id ? 'page' : undefined} data-active={runTab === trial.id} onClick={() => {setRunTab(trial.id); setActiveTab('overview')}}><span className={`status-dot ${trial.status}`} /><span className="run-tab-label">{variant.name} · Run {trial.position}</span></button>)}</nav>}
-    {experiment && (!activeRun ? <>{experiment.status !== 'succeeded' && <ExperimentProgress experiment={experiment} />}{liveRun && <RunLoadProgress name={`${liveRun.variant.name} · Run ${liveRun.trial.position}`} trial={liveRun.trial} configuration={liveRun.variant.configuration} operation={operations.find(item => item.id === liveRun.trial.operationId)} />}</> : <><RunDiagnostics status={activeRun.trial.status} error={activeRun.trial.error} operationId={activeRun.trial.operationId} openOperation={openOperation} /><RunLoadProgress trial={activeRun.trial} configuration={activeRun.variant.configuration} operation={operations.find(item => item.id === activeRun.trial.operationId)} /></>)}
+    {experiment && (!activeRun ? <>{experiment.status !== 'succeeded' && <ExperimentProgress experiment={experiment} />}{liveRun && <RunLoadProgress name={`${liveRun.variant.name} · Run ${liveRun.trial.position}`} trial={liveRun.trial} configuration={liveRun.variant.configuration} operation={operations.find(item => item.id === liveRun.trial.operationId)} />}</> : <><RunDiagnostics status={activeRun.trial.status} error={activeRun.trial.error} pipelineRunId={activeRun.trial.pipelineRunId} operationId={activeRun.trial.operationId} openPipelineRun={canAccessExperimentData ? openPipelineRun : undefined} openOperation={canAccessExperimentData ? openOperation : undefined} /><RunLoadProgress trial={activeRun.trial} configuration={activeRun.variant.configuration} operation={operations.find(item => item.id === activeRun.trial.operationId)} /></>)}
     {!selectable.length || activeRun && !viewSelected.length ? <EmptyResults experiment={experiment} runStatus={activeRun?.trial.status} /> : <div className={`results-layout ${focusedExperiment ? 'focused' : ''}`}>
       {focusedExperiment && !activeRun && selectable.length > 1 ? <details className="results-run-filter"><summary><span><strong>Included runs</strong><small>{selected.length} of {selectable.length}</small></span><b>Change</b></summary><div className="results-run-filter-body"><button type="button" className="text-button" onClick={() => setSelected(selectable.map(item => item.id).slice(0, 20))}>Select all</button><div className="results-run-filter-options">{selectable.map(artifact => <button type="button" className={selected.includes(artifact.id) ? 'active' : ''} aria-pressed={selected.includes(artifact.id)} key={artifact.id} onClick={() => toggle(artifact.id)}><span className="dataset-check">{selected.includes(artifact.id) ? '✓' : ''}</span><strong>{experimentPresentation.get(artifact.id)?.label ?? artifact.name}</strong></button>)}</div></div></details> : !focusedExperiment ? <aside className="dataset-picker" aria-label="Available datasets">
         <div className="dataset-picker-title"><strong>{focusedExperiment ? 'Runs' : 'Select runs'}</strong><span>{selected.length} selected</span></div>
@@ -236,7 +240,7 @@ export function ResultsView({artifacts, experiments, operations, workspaces, ses
       </aside> : null}
       <div className="results-content">
         {notice && <div className="validation-item warning">{notice}</div>}
-        {!viewSelected.length && <div className="results-placeholder"><strong>Select runs</strong><p>Choose which completed runs to include in the summary.</p></div>}
+        {!viewSelected.length && <div className="results-placeholder"><strong>Select runs</strong></div>}
         {loading && <div className="results-placeholder"><span className="results-spinner" /><strong>Loading verified data…</strong></div>}
         {error && <div className="validation-item error">{error}</div>}
         {!loading && !error && loaded.length > 0 && <>
@@ -255,10 +259,10 @@ export function ResultsView({artifacts, experiments, operations, workspaces, ses
             <section className="result-summary"><div className="result-section-heading"><div><h3>Key outcomes</h3></div></div><div className="key-metrics">{overviewMetrics.map(metric => <KeyMetric key={metric} metric={metric} series={aggregateMetric(displayed, metric)} />)}</div></section>
           </>}
           {activeTab === 'charts' && <><div className="metric-groups">{[...groups.keys()].map(group => <button key={group} className={activeMetricGroup === group ? 'active' : ''} onClick={() => setMetricGroup(group)}>{group}<span>{groups.get(group)?.length}</span></button>)}</div><div className="chart-grid">{visibleMetrics.map(metric => <MetricChart key={metric} metric={metric} series={aggregateMetric(displayed, metric)} onSave={focusedExperiment ? saveFigure : undefined} />)}</div></>}
-          {activeTab === 'statistics' && <StatisticsTable datasets={displayed} metrics={metrics} experiment={activeRun ? undefined : experiment} />}
+          {activeTab === 'statistics' && <StatisticsTable datasets={displayed} metrics={outcomeMetrics} experiment={activeRun ? undefined : experiment} />}
           {activeTab === 'downloads' && <section className="results-download-panel">
-            <div><h3>Export results</h3><p>Download each plot as PNG or PDF from the Plots tab. Statistics and complete run data are here.</p></div>
-            <div className="results-export-actions"><button className="button secondary" onClick={() => exportStatisticsCSV(displayed, metrics, activeRun ? undefined : experiment)}>Statistics CSV</button><button className="button secondary" onClick={() => {setPrintSummaryPending(true); setActiveTab('overview')}}>Print summary</button></div>
+            <div><h3>Export results</h3></div>
+            <div className="results-export-actions"><button className="button secondary" onClick={() => exportStatisticsCSV(displayed, outcomeMetrics, activeRun ? undefined : experiment)}>Statistics CSV</button><button className="button secondary" onClick={() => {setPrintSummaryPending(true); setActiveTab('overview')}}>Print summary</button></div>
             {visibleFigures.length > 0 && <div className="saved-figures"><strong>Saved figures</strong><div className="dataset-downloads">{visibleFigures.map(figure => <a key={figure.id} href={`/api/v1/figures/${figure.id}/download`}><span>↓</span><span><strong>{metricTitle(figure.metric)} · {figure.format.toUpperCase()}</strong><small>{figure.sourceArtifactIds.length} runs · {formatDate(figure.createdAt)}</small></span></a>)}</div></div>}
             <div className="results-raw-data"><strong>Complete run data</strong><div className="dataset-downloads">{displayed.map(item => <a key={item.artifact.id} href={`/api/v1/artifacts/${item.artifact.id}/download`}><span>↓</span><span><strong>{item.label}</strong><small>Metric samples</small></span></a>)}</div></div>
           </section>}
@@ -281,11 +285,11 @@ function ExperimentProgress({experiment}: {experiment: Experiment}) {
   </article>
 }
 
-function RunDiagnostics({status, error, operationId, openOperation}: {status: string; error?: string; operationId: string; openOperation: (id: string) => void}) {
+function RunDiagnostics({status, error, pipelineRunId, operationId, openPipelineRun, openOperation}: {status: string; error?: string; pipelineRunId?: string; operationId: string; openPipelineRun?: (id: string) => void; openOperation?: (id: string) => void}) {
   const running = ['running', 'starting', 'prechecking', 'verifying'].includes(status)
   const failed = ['failed', 'canceled'].includes(status)
-  if (!error && !running && !failed) return null
-  return <div className={`run-diagnostics ${failed ? 'failed' : ''}`}><div><strong>{failed ? 'Run needs attention' : 'Run in progress'}</strong>{error && <p>{error}</p>}</div>{operationId && <button className="button secondary compact" onClick={() => openOperation(operationId)}>{running ? 'Live logs' : 'Error logs'}</button>}</div>
+  if (!error && !running && !failed && !(pipelineRunId && openPipelineRun)) return null
+  return <div className={`run-diagnostics ${failed ? 'failed' : ''}`}><div><strong>{failed ? 'Run needs attention' : running ? 'Run in progress' : 'Run completed'}</strong>{error && <p>{error}</p>}</div>{pipelineRunId && openPipelineRun ? <button className="button secondary compact" onClick={() => openPipelineRun(pipelineRunId)}>{running ? 'Live process logs' : 'Process logs'}</button> : operationId && openOperation ? <button className="button secondary compact" onClick={() => openOperation(operationId)}>{running ? 'Live logs' : 'Error logs'}</button> : null}</div>
 }
 
 function RunLoadProgress({trial, configuration, operation, name}: {trial: ExperimentTrial; configuration: Record<string, unknown>; operation?: Operation; name?: string}) {
@@ -337,7 +341,7 @@ function loadStepsFromConfiguration(configuration: Record<string, unknown> | und
   return []
 }
 
-function responseTimeSLO(experiment: Experiment | undefined, artifactID: string): number {
+function responseTimeSLO(experiment: Experiment | undefined, artifactID: string): number | undefined {
   const variant = experiment?.variants.find(item => item.trials.some(trial => trial.resultArtifactId === artifactID))
   const components = Array.isArray(variant?.configuration?.components) ? variant.configuration.components : []
   for (const value of components) {
@@ -348,11 +352,16 @@ function responseTimeSLO(experiment: Experiment | undefined, artifactID: string)
     const objective = settings && typeof settings === 'object' ? Number((settings as Record<string, unknown>).sloMilliseconds) : 0
     if (Number.isFinite(objective) && objective > 0) return objective
   }
-  return 250
+  return undefined
 }
 
-function addDerivedMetrics(dataset: TimeSeriesDataset, sloMilliseconds: number) {
-  dataset.spec.sloMilliseconds ||= sloMilliseconds
+function addDerivedMetrics(dataset: TimeSeriesDataset, configuredSLO?: number) {
+  const datasetSLO = Number(dataset.spec.sloMilliseconds)
+  const sloMilliseconds = Number.isFinite(datasetSLO) && datasetSLO > 0
+    ? datasetSLO
+    : Number.isFinite(configuredSLO) && Number(configuredSLO) > 0 ? Number(configuredSLO) : undefined
+  if (sloMilliseconds === undefined) return
+  dataset.spec.sloMilliseconds = sloMilliseconds
   if (dataset.spec.series.some(series => series.metric === 'load.slo_violation_percentage')) return
   const response = dataset.spec.series.find(series => series.metric === 'load.p95_response_time')
   if (!response) return
@@ -388,7 +397,7 @@ function SaveExperimentDialog({open, close, selected, operations, workspaces, se
       return
     }
     try {
-      await request('/experiments', {method: 'POST', body: JSON.stringify({workspaceId: workspace.id, name: form.get('name'), description: form.get('description'), variants: [...grouped.values()].map(item => ({...item, configuration: {}}))})}, session.csrfToken)
+      await request('/experiments', {method: 'POST', body: JSON.stringify({workspaceId: workspace.id, name: form.get('name'), description: '', variants: [...grouped.values()].map(item => ({...item, configuration: {}}))})}, session.csrfToken)
       close()
       await changed()
     } catch (cause) {
@@ -397,12 +406,10 @@ function SaveExperimentDialog({open, close, selected, operations, workspaces, se
       setPending(false)
     }
   }
-  return <Dialog open={open} onClose={close} title="Save experiment" eyebrow="IMMUTABLE HISTORY">
+  return <Dialog open={open} onClose={close} title="Save experiment">
     <form onSubmit={submit}>
       <label>Name<input name="name" maxLength={120} placeholder="Default vs custom strategy" required autoFocus /></label>
-      <label>Description<textarea name="description" maxLength={500} rows={2} placeholder="What does this comparison test?" /></label>
-      <div className="trial-mapping"><p className="field-description">Use the same variant name on multiple datasets to group repeated trials.</p>{selected.map(artifact => <label key={artifact.id}><span>{operations.find(item => item.id === artifact.operationId)?.title ?? artifact.name}</span><input name={`variant-${artifact.id}`} maxLength={80} defaultValue={operations.find(item => item.id === artifact.operationId)?.title ?? artifact.name} required /></label>)}</div>
-      <div className="validation-callout"><span>✓</span><p><strong>Validated before saving.</strong> Every trial must be verified, successful and owned by {workspace?.name ?? 'one workspace'}.</p></div>
+      <div className="trial-mapping"><span className="field-description">Shared names group repeated runs.</span>{selected.map(artifact => <label key={artifact.id}><span>{operations.find(item => item.id === artifact.operationId)?.title ?? artifact.name}</span><input name={`variant-${artifact.id}`} maxLength={80} defaultValue={operations.find(item => item.id === artifact.operationId)?.title ?? artifact.name} required /></label>)}</div>
       <p className="form-error">{error}</p>
       <div className="modal-actions"><button className="button secondary" type="button" onClick={close}>Cancel</button><button className="button primary" disabled={pending}>{pending ? 'Saving…' : 'Save experiment'}</button></div>
     </form>
@@ -427,7 +434,7 @@ function KeyMetric({metric, series}: {metric: string; series: AggregateSeries[]}
   const low = Math.min(...values.map(item => item.value))
   const high = Math.max(...values.map(item => item.value))
   const slo = series.find(item => item.sloMilliseconds)?.sloMilliseconds
-  const detail = !first ? '' : series.length > 1 ? `Mean range across ${series.length} runs` : metric === 'deployment.ready_replicas' ? `Peak ${formatMetric(first.peak, first.unit)} · final ${formatMetric(first.last, first.unit)}` : metric === 'load.slo_violation_percentage' ? `Windows above${slo ? ` the ${formatMetric(slo, 'milliseconds')}` : ''} SLO` : metric === 'load.p95_response_time' ? `Mean P95 per window${slo ? ` · SLO ${formatMetric(slo, 'milliseconds')}` : ''}` : 'Mean during the run'
+  const detail = !first ? '' : series.length > 1 ? `Mean range across ${series.length} runs` : metric === 'deployment.ready_replicas' ? `Peak ${formatMetric(first.peak, first.unit)} · final ${formatMetric(first.last, first.unit)}` : metric === 'load.slo_violation_percentage' ? `Windows above${slo ? ` the ${formatMetric(slo, 'milliseconds')}` : ''} SLO` : metric === 'load.p95_response_time' ? `Mean P95 per window${slo ? ` · SLO ${formatMetric(slo, 'milliseconds')}` : ''}` : metric === 'load.successful_rps' ? 'Mean successful requests during the run' : 'Mean during the run'
   return <article><span>{metricTitle(metric)}</span><strong>{first ? series.length === 1 ? formatMetric(first.value, first.unit) : `${formatMetric(low, first.unit)}–${formatMetric(high, first.unit)}` : '—'}</strong><small>{detail}</small></article>
 }
 
@@ -449,9 +456,11 @@ function MetricChart({metric, series, onSave}: {metric: string; series: Aggregat
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState('')
   const width = 700
-  const height = 525
   const multiple = series.length > 1
-  const padding = {top: 28, right: 28, bottom: multiple ? 142 : 82, left: 112}
+  const legendRows = multiple ? Math.ceil(series.length / 2) : 0
+  const plotBottom = 383
+  const height = plotBottom + (multiple ? 102 + legendRows * 25 : 82)
+  const padding = {top: 28, right: 28, bottom: height - plotBottom, left: 112}
   const allPoints = series.flatMap(item => item.points)
   const timestamps = allPoints.map(point => new Date(point.timestamp).getTime())
   const values = allPoints.map(point => point.value)
@@ -461,7 +470,6 @@ function MetricChart({metric, series, onSave}: {metric: string; series: Aggregat
   const unit = series[0]?.unit ?? ''
   const xAxis = niceAxis(maxX)
   const yAxis = niceAxis(maxY, unit === 'replicas' || unit === 'count')
-  const plotBottom = height - padding.bottom
   const plotRight = width - padding.right
   const x = (value: number) => padding.left + (value / xAxis.upper) * (plotRight - padding.left)
   const y = (value: number) => plotBottom - (value / yAxis.upper) * (plotBottom - padding.top)
@@ -489,20 +497,20 @@ function MetricChart({metric, series, onSave}: {metric: string; series: Aggregat
       {sloMilliseconds !== undefined && <g><line x1={padding.left} x2={plotRight} y1={y(sloMilliseconds)} y2={y(sloMilliseconds)} stroke="#b42318" strokeWidth="2" strokeDasharray="8 6" /><text x={plotRight - 5} y={y(sloMilliseconds) - 8} textAnchor="end" className="legend-label slo-label">SLO {formatMetric(sloMilliseconds, 'milliseconds')}</text></g>}
       <text x={(padding.left + plotRight) / 2} y={plotBottom + 58} textAnchor="middle" className="axis-label">Time (min)</text>
       <text x="27" y={(padding.top + plotBottom) / 2} textAnchor="middle" className="axis-label" transform={`rotate(-90 27 ${(padding.top + plotBottom) / 2})`}>{metricAxisLabel(metric, unit)}</text>
-      {series.map((item, index) => { const color = item.color ?? colors[index % colors.length]; return <g key={item.artifactID}><path d={paperChartPath(item.points, x, y)} fill="none" stroke={color} strokeWidth="2.5" strokeDasharray={dashPatterns[Math.floor(index / colors.length) % dashPatterns.length]} strokeLinejoin="round" />{item.points.filter((_, pointIndex) => pointIndex % Math.max(1, Math.floor(item.points.length / 12)) === 0).map((point, pointIndex) => <ChartMarker key={pointIndex} shape={index % 7} x={x(new Date(point.timestamp).getTime() / 60000)} y={y(point.value)} color={color} />)}</g>})}
+      {series.map((item, index) => { const color = item.color ?? colors[index % colors.length]; return <g key={`${item.artifactID}-${item.label}-${index}`}><path d={paperChartPath(item.points, x, y)} fill="none" stroke={color} strokeWidth="2.5" strokeDasharray={dashPatterns[Math.floor(index / colors.length) % dashPatterns.length]} strokeLinejoin="round" />{item.points.filter((_, pointIndex) => pointIndex % Math.max(1, Math.floor(item.points.length / 12)) === 0).map((point, pointIndex) => <ChartMarker key={pointIndex} shape={index % 7} x={x(new Date(point.timestamp).getTime() / 60000)} y={y(point.value)} color={color} />)}</g>})}
       {multiple && series.map((item, index) => {
         const column = index % 2
         const row = Math.floor(index / 2)
         const legendX = padding.left + column * 280
         const legendY = plotBottom + 86 + row * 25
         const color = item.color ?? colors[index % colors.length]
-        return <g key={`legend-${item.artifactID}`}><line x1={legendX} y1={legendY} x2={legendX + 35} y2={legendY} stroke={color} strokeWidth="2.5" strokeDasharray={dashPatterns[Math.floor(index / colors.length) % dashPatterns.length]} /><ChartMarker shape={index % 7} x={legendX + 17} y={legendY} color={color} /><text x={legendX + 45} y={legendY + 5} className="legend-label">{compactLabel(item.label)}</text></g>
+        return <g key={`legend-${item.artifactID}-${item.label}-${index}`}><line x1={legendX} y1={legendY} x2={legendX + 35} y2={legendY} stroke={color} strokeWidth="2.5" strokeDasharray={dashPatterns[Math.floor(index / colors.length) % dashPatterns.length]} /><ChartMarker shape={index % 7} x={legendX + 17} y={legendY} color={color} /><text x={legendX + 45} y={legendY + 5} className="legend-label">{compactLabel(item.label)}</text></g>
       })}
     </svg></div>
     <div className="chart-legend">{series.map((item, index) => {
       const values = item.points.map(point => point.value)
       const mean = values.reduce((sum, value) => sum + value, 0) / Math.max(1, values.length)
-      return <div key={item.artifactID}><span style={{background: item.color ?? colors[index % colors.length]}} /><strong>{item.label}</strong><small>mean {formatMetric(mean, item.unit)} · last {formatMetric(values.at(-1) ?? 0, item.unit)}</small></div>
+      return <div key={`${item.artifactID}-${item.label}-${index}`}><span style={{background: item.color ?? colors[index % colors.length]}} /><strong>{item.label}</strong><small>mean {formatMetric(mean, item.unit)} · last {formatMetric(values.at(-1) ?? 0, item.unit)}</small></div>
     })}</div>
   </article>
 }
@@ -748,11 +756,14 @@ export function svgToPDF(source: SVGSVGElement): Uint8Array {
     if (tag === 'text') {
       const x = sx(number(Number(element.getAttribute('x'))))
       const y = sy(number(Number(element.getAttribute('y'))))
-      const size = sx(element.classList.contains('axis-label') ? 20 : element.classList.contains('legend-label') ? 15 : 17)
+      const declaredSize = number(Number(inherited(element, 'font-size')))
+      const logicalSize = declaredSize > 0 ? declaredSize : element.classList.contains('axis-label') ? 20 : element.classList.contains('legend-label') ? 15 : 17
+      const size = sx(logicalSize)
       const value = pdfText(element.textContent ?? '')
       const estimate = value.length * size * .5
       const anchor = element.getAttribute('text-anchor')
       const offset = anchor === 'middle' ? estimate / 2 : anchor === 'end' ? estimate : 0
+      commands.push(`${pdfColor(inherited(element, 'fill') || '#111111')} rg`)
       if ((element.getAttribute('transform') ?? '').startsWith('rotate(')) commands.push(`BT /F1 ${size.toFixed(3)} Tf 0 1 -1 0 ${(x + size * .3).toFixed(3)} ${(y - estimate / 2).toFixed(3)} Tm (${value}) Tj ET`)
       else commands.push(`BT /F1 ${size.toFixed(3)} Tf 1 0 0 1 ${(x - offset).toFixed(3)} ${y.toFixed(3)} Tm (${value}) Tj ET`)
       continue
@@ -946,12 +957,13 @@ function formatAxisValue(value: number, unit: string): string {
 function metricAxisLabel(metric: string, unit: string): string {
   const labels: Record<string, string> = {
     'load.configured_rps': 'Input rate (req/s)',
-    'load.successful_rps': 'Throughput (req/s)',
+    'load.successful_rps': 'Successful input requests (req/s)',
     'load.failed_rps': 'Failed requests (req/s)',
     'load.failure_percentage': 'Failed requests (%)',
     'load.p95_response_time': 'P95 response time (ms)',
     'load.slo_violation_percentage': 'SLO violation windows (%)',
-    'application.request_rps': 'Service throughput (req/s)',
+    'application.request_rps': 'Internal service calls (req/s)',
+    'application.p95_response_time': 'P95 internal response time (ms)',
     'cpu.cores': 'CPU usage (cores)',
     'memory.working_set': 'Working set (MiB)',
     'pod.restarts': 'Restart count',
@@ -990,12 +1002,13 @@ function metricTitle(metric: string): string {
 function metricAxisLabelName(metric: string): string | undefined {
   return ({
     'load.configured_rps': 'Configured input rate',
-    'load.successful_rps': 'Request throughput',
+    'load.successful_rps': 'Throughput',
     'load.failed_rps': 'Failed request rate',
     'load.failure_percentage': 'Failure percentage',
     'load.p95_response_time': 'P95 response time',
     'load.slo_violation_percentage': 'SLO violation windows',
-    'application.request_rps': 'Throughput by service',
+    'application.request_rps': 'Throughput per service',
+    'application.p95_response_time': 'Response time per service',
     'cpu.cores': 'CPU usage',
     'memory.working_set': 'Memory working set',
     'pod.restarts': 'Pod restarts',

@@ -22,7 +22,8 @@ describe('experiment configuration actions', () => {
     fireEvent.click(screen.getByRole('button', {name: 'View Simple load details'}))
     expect(screen.getByRole('button', {name: 'Run experiment'})).toBeInTheDocument()
     expect(screen.getByText('Input load')).toBeInTheDocument()
-    expect(screen.getByText('Setup')).toBeInTheDocument()
+    expect(screen.queryByText('Setup')).not.toBeInTheDocument()
+    expect(screen.getByText('Geographic phases')).toBeInTheDocument()
     expect(screen.queryByText('All entered data')).not.toBeInTheDocument()
     expect(screen.queryByText('Exact saved configuration')).not.toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', {name: 'Run experiment'}))
@@ -39,7 +40,7 @@ describe('experiment configuration actions', () => {
     expect(screen.getByRole('textbox', {name: 'Name'})).toHaveValue('Simple load')
     expect(screen.getByRole('button', {name: 'Validate and update'})).toBeInTheDocument()
     expect(view.container.querySelector('dialog[open]')).not.toBeInTheDocument()
-    expect(screen.getByText('Changes apply only to experiments created after this update.')).toBeInTheDocument()
+    expect(screen.queryByText('Changes apply only to experiments created after this update.')).not.toBeInTheDocument()
   })
 
   it('opens the complete saved configuration in read-only mode', () => {
@@ -52,6 +53,6 @@ describe('experiment configuration actions', () => {
     expect(screen.getByRole('textbox', {name: 'Name'})).toBeDisabled()
     expect(screen.queryByRole('button', {name: 'Validate and update'})).not.toBeInTheDocument()
     expect(view.container.querySelector('dialog[open]')).not.toBeInTheDocument()
-    expect(screen.getByText('Complete saved configuration in read-only mode.')).toBeInTheDocument()
+    expect(screen.queryByText('Complete saved configuration in read-only mode.')).not.toBeInTheDocument()
   })
 })

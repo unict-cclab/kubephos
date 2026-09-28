@@ -34,6 +34,7 @@ describe('aggregateMetric', () => {
     const value = {...loaded('strategy', [[1, 2]]), color: '#345678'}
     expect(aggregateMetric([value], 'cpu.cores')[0].color).toBe('#345678')
   })
+
 })
 
 describe('experimentProgress', () => {
@@ -48,11 +49,12 @@ describe('experimentProgress', () => {
 
 describe('focused experiment results', () => {
   it('shows planned runs and a contextual empty state while runs are active', () => {
-    const experiment = {id: 'exp_01', name: 'Scheduler comparison', description: '', status: 'running', resultType: 'TimeSeriesDataset', resultVersion: 'v1alpha1', variants: [{id: 'variant_01', name: 'Baseline', configuration: {components: [{capability: 'load.kubernetes', configuration: {steps: [{type: 'constant', durationSeconds: 60, rps: 20}]}}]}, trials: [{id: 'trial_01', position: 1, status: 'running', resultArtifactId: '', operationId: 'op_load'}, {id: 'trial_02', position: 2, status: 'queued', resultArtifactId: '', operationId: ''}]}]} as unknown as Experiment
+    const experiment = {id: 'exp_01', ownerUserId: 'user_a', ownerUsername: 'alice', name: 'Scheduler comparison', description: '', status: 'running', resultType: 'TimeSeriesDataset', resultVersion: 'v1alpha1', variants: [{id: 'variant_01', name: 'Baseline', configuration: {components: [{capability: 'load.kubernetes', configuration: {steps: [{type: 'constant', durationSeconds: 60, rps: 20}]}}]}, trials: [{id: 'trial_01', position: 1, status: 'running', resultArtifactId: '', operationId: 'op_load'}, {id: 'trial_02', position: 2, status: 'queued', resultArtifactId: '', operationId: ''}]}]} as unknown as Experiment
     const operation = {id: 'op_load', pluginId: 'io.kubephos.load.kubernetes.session', status: 'running', createdAt: new Date().toISOString()} as Operation
-    render(<ResultsView artifacts={[]} experiments={[experiment]} operations={[operation]} workspaces={[]} session={{authenticated: true} as Session} changed={async () => {}} openOperation={() => {}} focusedExperiment={experiment} />)
+    render(<ResultsView artifacts={[]} experiments={[experiment]} operations={[operation]} workspaces={[]} session={{authenticated: true, user: {id: 'user_a', username: 'alice', role: 'user'}} as Session} changed={async () => {}} openOperation={() => {}} focusedExperiment={experiment} />)
     expect(screen.getByLabelText('0 of 2 runs finished')).toBeInTheDocument()
     expect(screen.getByText('Runs in progress')).toBeInTheDocument()
+    expect(screen.getByText('Created by alice')).toBeInTheDocument()
     expect(screen.getByText('Results and plots appear here as runs finish.')).toBeInTheDocument()
     expect(screen.getByText('Baseline · Run 1', {selector: '.run-load-progress-head strong'})).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', {name: 'Baseline · Run 1'}))
@@ -117,6 +119,44 @@ describe('focused experiment results', () => {
     expect((await screen.findAllByText('50.00%')).length).toBeGreaterThan(0)
     expect(screen.getByText('Peak 4 · final 4')).toBeInTheDocument()
     expect(screen.getByText(/SLO 250\.0 ms/)).toBeInTheDocument()
+  })
+
+  it('omits the SLO target and violation plot when no objective is configured', async () => {
+    const result = loaded('without_slo', [[1, 2]])
+    result.dataset.spec.series = [
+      {metric: 'load.p95_response_time', unit: 'milliseconds', aggregation: 'mean', labels: {}, points: [{timestamp: '2026-09-09T09:59:45Z', value: 200}, {timestamp: '2026-09-09T10:00:00Z', value: 300}]},
+      {metric: 'deployment.ready_replicas', unit: 'replicas', aggregation: 'sum', labels: {deployment: 'frontend'}, points: [{timestamp: '2026-09-09T09:59:45Z', value: 2}, {timestamp: '2026-09-09T10:00:00Z', value: 4}]}
+    ]
+    vi.mocked(request).mockImplementation(async path => path.endsWith('/figures') ? {items: []} as never : result.dataset as never)
+    const experiment = {id: 'exp_without_slo', name: 'Run without SLO', status: 'succeeded', variants: [{id: 'variant_without_slo', name: 'Default', configuration: {components: [{capability: 'metrics.timeseries.collect', configuration: {}}]}, trials: [{id: 'trial_without_slo', position: 1, status: 'succeeded', resultArtifactId: result.artifact.id, operationId: 'op_without_slo'}]}]} as unknown as Experiment
+    render(<ResultsView artifacts={[result.artifact]} experiments={[experiment]} operations={[]} workspaces={[]} session={{authenticated: true} as Session} changed={async () => {}} openOperation={() => {}} focusedExperiment={experiment} />)
+    expect(await screen.findByText('Key outcomes')).toBeInTheDocument()
+    expect(screen.queryByText('SLO violation windows')).not.toBeInTheDocument()
+    expect(screen.queryByText(/SLO \d/)).not.toBeInTheDocument()
+  })
+
+  it('keeps successful Throughput in the summary and omits per-service plots', async () => {
+    const result = loaded('throughput_summary', [[2, 4], [8, 6]])
+    result.dataset.spec.series[0].metric = 'load.successful_rps'
+    result.dataset.spec.series[0].unit = 'requests_per_second'
+    result.dataset.spec.series[1].metric = 'load.failed_rps'
+    result.dataset.spec.series[1].unit = 'requests_per_second'
+    result.dataset.spec.series.push(
+      {metric: 'application.request_rps', unit: 'requests_per_second', aggregation: 'sum', labels: {destination_workload: 's0'}, points: result.dataset.spec.series[0].points},
+      {metric: 'application.p95_response_time', unit: 'milliseconds', aggregation: 'mean', labels: {destination_workload: 's0'}, points: result.dataset.spec.series[0].points},
+      {metric: 'cpu.cores', unit: 'cores', aggregation: 'sum', labels: {pod: 's0'}, points: result.dataset.spec.series[0].points}
+    )
+    vi.mocked(request).mockImplementation(async path => path.endsWith('/figures') ? {items: []} as never : result.dataset as never)
+    const experiment = {id: 'exp_throughput', name: 'Throughput run', status: 'succeeded', variants: [{id: 'variant_throughput', name: 'Default', configuration: {components: []}, trials: [{id: 'trial_throughput', position: 1, status: 'succeeded', resultArtifactId: result.artifact.id, operationId: 'op_throughput'}]}]} as unknown as Experiment
+    render(<ResultsView artifacts={[result.artifact]} experiments={[experiment]} operations={[]} workspaces={[]} session={{authenticated: true} as Session} changed={async () => {}} openOperation={() => {}} focusedExperiment={experiment} />)
+
+    expect(await screen.findByText('Throughput', {selector: '.key-metrics span'})).toBeInTheDocument()
+    expect(screen.getByText('3.00 req/s', {selector: '.key-metrics strong'})).toBeInTheDocument()
+    expect(screen.queryByText('CPU usage', {selector: '.key-metrics span'})).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', {name: 'Plots'}))
+    expect(screen.queryByRole('button', {name: /Application/})).not.toBeInTheDocument()
+    expect(screen.queryByText('Throughput per service')).not.toBeInTheDocument()
+    expect(screen.queryByText('Response time per service')).not.toBeInTheDocument()
   })
 })
 

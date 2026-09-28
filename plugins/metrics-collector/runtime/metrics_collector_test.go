@@ -37,7 +37,7 @@ func TestCollectorPrecheckExecuteAndVerify(t *testing.T) {
 	if err := json.Unmarshal(raw, &value); err != nil {
 		t.Fatal(err)
 	}
-	if value.Dataset.Spec.Summary.Metrics != 14 || value.Dataset.Spec.Summary.Series != 14 || value.Dataset.Spec.Summary.Samples != 31 {
+	if value.Dataset.Spec.Summary.Metrics != 15 || value.Dataset.Spec.Summary.Series != 15 || value.Dataset.Spec.Summary.Samples != 33 {
 		t.Fatalf("unexpected dataset summary %#v", value.Dataset.Spec.Summary)
 	}
 	if value.Dataset.Spec.SLOMilliseconds != 250 {
@@ -75,7 +75,7 @@ func TestDecodeMatrixRejectsUnorderedSamples(t *testing.T) {
 
 func testStep(t *testing.T) domain.PlanStep {
 	t.Helper()
-	spec := Spec{ClusterConnectionRef: "art_cluster", ApplicationDeploymentRef: "art_deployment", ObservabilityCapabilityRef: "art_observability", LoadSessionRef: "art_load", Window: "5m", Resolution: "15s"}
+	spec := Spec{ClusterConnectionRef: "art_cluster", ApplicationDeploymentRef: "art_deployment", ObservabilityCapabilityRef: "art_observability", LoadSessionRef: "art_load", Window: "5m", Resolution: "15s", SLOMilliseconds: 250}
 	raw, _ := json.Marshal(spec)
 	plan, err := (Plugin{}).Plan(context.Background(), raw)
 	if err != nil {
@@ -84,6 +84,42 @@ func testStep(t *testing.T) domain.PlanStep {
 	step := plan.Steps[0]
 	step.ResolvedInputs = testArtifacts()
 	return step
+}
+
+func TestCollectorOmitsSLOMetricsWhenObjectiveIsNotConfigured(t *testing.T) {
+	now := time.Date(2026, 9, 10, 10, 0, 0, 0, time.UTC)
+	runner := &fakeRunner{now: now}
+	plugin := Plugin{Runner: runner, Clock: func() time.Time { return now }}
+	step := testStep(t)
+	var spec Spec
+	if err := json.Unmarshal(step.Input, &spec); err != nil {
+		t.Fatal(err)
+	}
+	spec.SLOMilliseconds = 0
+	step.Input, _ = json.Marshal(spec)
+	raw, err := plugin.Execute(context.Background(), step, discardLog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	health, err := plugin.Verify(context.Background(), step, raw, discardLog)
+	if err != nil || health.Status != domain.HealthHealthy {
+		t.Fatalf("verify failed %#v %v", health, err)
+	}
+	var value result
+	if err := json.Unmarshal(raw, &value); err != nil {
+		t.Fatal(err)
+	}
+	if value.Dataset.Spec.SLOMilliseconds != 0 || value.Dataset.Spec.Summary.Metrics != 14 {
+		t.Fatalf("unexpected dataset without SLO %#v", value.Dataset.Spec)
+	}
+	for _, series := range value.Dataset.Spec.Series {
+		if series.Metric == "load.slo_violation_percentage" {
+			t.Fatal("dataset unexpectedly contains SLO violation metrics")
+		}
+	}
+	if strings.Contains(string(raw), `"sloMilliseconds"`) {
+		t.Fatal("disabled SLO should be omitted from the dataset contract")
+	}
 }
 
 func testArtifacts() map[string]domain.ResolvedArtifact {
@@ -135,6 +171,29 @@ func TestLoadMetricsUseTheSourceProxy(t *testing.T) {
 	for _, definition := range definitions[:4] {
 		if !strings.Contains(definition.Query, `reporter="source"`) || !strings.Contains(definition.Query, `source_workload_namespace="experiment"`) || !strings.Contains(definition.Query, `source_workload=~"^(?:gateway)$"`) {
 			t.Fatalf("load query must identify the load driver at the source proxy: %s", definition.Query)
+		}
+	}
+}
+
+func TestApplicationMetricsRemainSeparatedByDestinationWorkload(t *testing.T) {
+	definitions := metricDefinitions("experiment", "^(?:gateway)$")
+	for _, definition := range definitions[4:6] {
+		if !strings.Contains(definition.Query, `reporter="destination"`) || !strings.Contains(definition.Query, `destination_workload_namespace="experiment"`) || !strings.Contains(definition.Query, "destination_workload") {
+			t.Fatalf("application query must retain the destination workload label: %s", definition.Query)
+		}
+	}
+}
+
+func TestExternalDeploymentOmitsDestinationApplicationMetrics(t *testing.T) {
+	var deployment applicationDeployment
+	deployment.Spec.External = true
+	definitions := deploymentMetricDefinitions(deployment)
+	if len(definitions) == 0 {
+		t.Fatal("expected load-driver metrics for an external destination")
+	}
+	for _, definition := range definitions {
+		if strings.HasPrefix(definition.ID, "application.") {
+			t.Fatalf("external destination unexpectedly includes per-service metric %q", definition.ID)
 		}
 	}
 }

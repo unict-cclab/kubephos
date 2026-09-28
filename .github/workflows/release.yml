@@ -45,3 +45,39 @@ jobs:
             VERSION=${{ github.ref_name }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+
+  build-and-push-components:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      matrix:
+        include:
+          - name: cluster-lens
+            version: v1.2.5
+            context: components/cluster-lens
+          - name: mon-agent
+            version: v0.0.8
+            context: components/mon-agent
+          - name: mentat
+            version: v0.3.5
+            context: components/mentat
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6.0.3
+
+      - name: Log in to the container registry
+        uses: docker/login-action@v4.2.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push managed component
+        uses: docker/build-push-action@v7.2.0
+        with:
+          context: ${{ matrix.context }}
+          push: true
+          tags: ${{ env.REGISTRY }}/${{ github.repository_owner }}/kubephos-${{ matrix.name }}:${{ matrix.version }}

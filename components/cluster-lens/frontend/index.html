@@ -32,7 +32,7 @@
           <details class="layer-menu">
             <summary>Layers</summary>
             <div class="layer-options">
-              <label><input id="showGateway" type="checkbox" /> Gateway traffic</label>
+              <label><input id="showGateway" type="checkbox" checked /> Gateway traffic</label>
               <label><input id="showPodLines" type="checkbox" /> Pod connections</label>
             </div>
           </details>
@@ -46,7 +46,7 @@
 
       <section class="workspace">
         <div class="graph-wrap">
-          <div class="graph-info"><div id="stats" class="stats"></div><p id="warnings" class="warnings" hidden></p></div>
+          <div class="graph-info"><div id="stats" class="stats"></div><div id="applicationTraffic" class="application-traffic" hidden></div><div id="gatewayTraffic" class="gateway-traffic" hidden></div><p id="warnings" class="warnings" hidden></p></div>
           <svg id="graph" role="img" aria-label="Cluster topology"></svg>
           <div id="graphEmpty" class="graph-empty" hidden>No nodes match this view.</div>
           <div class="graph-hint">Drag to pan · Scroll to zoom · Select a node or pod</div>
@@ -57,7 +57,7 @@
             <button id="legendTab" type="button" role="tab" aria-selected="false" aria-controls="legendPanel">Legend</button>
           </div>
           <section id="selectionPanel" role="tabpanel" aria-labelledby="selectionTab">
-            <div id="selection" class="selection-empty"><span class="selection-empty-icon" aria-hidden="true"><svg viewBox="0 0 32 32" fill="none"><circle cx="16" cy="6" r="3" /><circle cx="6" cy="25" r="3" /><circle cx="26" cy="25" r="3" /><path d="m15 9-7 13m9-13 7 13M9 25h14" /></svg></span><strong>Explore the topology</strong><p class="muted">Select a node, pod, or link to inspect its metrics.</p></div>
+            <div id="selection" class="selection-empty"><span class="selection-empty-icon" aria-hidden="true"><svg viewBox="0 0 32 32" fill="none"><circle cx="16" cy="6" r="3" /><circle cx="6" cy="25" r="3" /><circle cx="26" cy="25" r="3" /><path d="m15 9-7 13m9-13 7 13M9 25h14" /></svg></span><strong>Nothing selected</strong><span class="muted">Select a node, pod, or link</span></div>
           </section>
           <section id="legendPanel" role="tabpanel" aria-labelledby="legendTab" hidden>
             <div id="legend" class="legend"></div>

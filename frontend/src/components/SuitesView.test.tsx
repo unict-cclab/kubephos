@@ -35,4 +35,17 @@ describe('suite presentation', () => {
       {configurationId: 'cfg_1', alias: 'Custom scheduler', color: '#123456'}
     ])
   })
+
+  it('filters suites by creator', () => {
+    const experiments = [
+      {id: 'suite_a', kind: 'suite', name: 'Alice suite', ownerUserId: 'user_a', ownerUsername: 'alice', status: 'succeeded', variants: []},
+      {id: 'suite_b', kind: 'suite', name: 'Bruno suite', ownerUserId: 'user_b', ownerUsername: 'bruno', status: 'succeeded', variants: []}
+    ] as never[]
+    render(<SuitesView configurations={configurations} applications={[application]} experiments={experiments} clusters={[cluster]} session={{authenticated: true} as Session} isAdmin={false} changed={async () => {}} navigate={() => {}} />)
+
+    expect(screen.getByRole('heading', {name: 'Alice suite'})).toBeInTheDocument()
+    fireEvent.change(screen.getByRole('combobox', {name: 'Filter by user'}), {target: {value: 'user_b'}})
+    expect(screen.queryByRole('heading', {name: 'Alice suite'})).not.toBeInTheDocument()
+    expect(screen.getByRole('heading', {name: 'Bruno suite'})).toBeInTheDocument()
+  })
 })

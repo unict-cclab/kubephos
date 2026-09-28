@@ -201,11 +201,30 @@ func TestChartReleaseIsPinned(t *testing.T) {
 	}
 }
 
+func TestNodeResourceAnnotationsAreRequiredForEveryNode(t *testing.T) {
+	runner := &fakeRunner{nodeAnnotationsMissing: true}
+	err := verifyNodeResourceAnnotations(context.Background(), runner, "kubeconfig")
+	if err == nil || !strings.Contains(err.Error(), "memory-usage") {
+		t.Fatalf("expected missing node annotation, received %v", err)
+	}
+}
+
+func TestMonAgentUsesManagedRegistry(t *testing.T) {
+	manifest, err := monAgentManifest("marker", serviceEndpoint{ServiceName: "prometheus", Port: 9090}, "registry.example.test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	expected := "registry.example.test/kubephos-dev/mon-agent:" + monAgentVersion
+	if !strings.Contains(string(manifest), expected) || strings.Contains(string(manifest), "ghcr.io/unict-cclab/mon-agent") {
+		t.Fatalf("managed mon-agent image is invalid: %s", manifest)
+	}
+}
+
 func testArtifacts() map[string]domain.ResolvedArtifact {
 	cert := base64.StdEncoding.EncodeToString([]byte("certificate"))
 	key := base64.StdEncoding.EncodeToString([]byte("private-key"))
 	kubeconfig := "apiVersion: v1\nkind: Config\ncurrent-context: managed\nclusters:\n- name: managed\n  cluster:\n    server: https://10.10.0.10:6443\ncontexts:\n- name: managed\n  context:\n    cluster: managed\n    user: admin\nusers:\n- name: admin\n  user:\n    client-certificate-data: " + cert + "\n    client-key-data: " + key + "\n"
-	cluster, _ := json.Marshal(map[string]any{"apiVersion": artifactAPI, "kind": "ClusterConnection", "metadata": map[string]string{"name": "development", "version": "v1.36.0+k3s1"}, "spec": map[string]string{"distribution": "k3s", "server": "https://10.10.0.10:6443", "kubeconfig": kubeconfig}})
+	cluster, _ := json.Marshal(map[string]any{"apiVersion": artifactAPI, "kind": "ClusterConnection", "metadata": map[string]string{"name": "development", "version": "v1.36.0+k3s1"}, "spec": map[string]string{"distribution": "k3s", "server": "https://10.10.0.10:6443", "kubeconfig": kubeconfig, "registryHost": "registry.internal"}})
 	storage := json.RawMessage(`{"apiVersion":"artifacts.kubephos.dev/v1alpha1","kind":"StorageClassCapability","metadata":{"name":"shared-storage","version":"v4.13.4"},"spec":{"clusterServer":"https://10.10.0.10:6443","provisioner":"nfs.csi.k8s.io","directoryPermissions":"0777","expansion":true}}`)
 	return map[string]domain.ResolvedArtifact{"cluster-connection": {Value: cluster}, "storage-class-capability": {Value: storage}}
 }
@@ -228,10 +247,11 @@ func (function roundTripFunc) RoundTrip(request *http.Request) (*http.Response, 
 }
 
 type fakeRunner struct {
-	installed     bool
-	rbacInstalled bool
-	marker        string
-	crdMarker     *string
+	installed              bool
+	rbacInstalled          bool
+	marker                 string
+	crdMarker              *string
+	nodeAnnotationsMissing bool
 }
 
 func (runner *fakeRunner) Kubectl(_ context.Context, _ string, stdin []byte, args ...string) (string, error) {
@@ -277,6 +297,14 @@ func (runner *fakeRunner) Kubectl(_ context.Context, _ string, stdin []byte, arg
 	}
 	if command == "get pods -n "+namespace+" -o json" {
 		return readyPods(), nil
+	}
+	if command == "get nodes -o json" {
+		annotations := map[string]string{"cpu-usage": "100", "memory-usage": "1024", "disk-throughput": "50", "network-throughput": "75"}
+		if runner.nodeAnnotationsMissing {
+			delete(annotations, "memory-usage")
+		}
+		value, _ := json.Marshal(map[string]any{"items": []any{map[string]any{"metadata": map[string]any{"name": "node-a", "annotations": annotations}}}})
+		return string(value), nil
 	}
 	if strings.HasPrefix(command, "get pvc -n "+namespace) {
 		return "Bound\nBound\n", nil

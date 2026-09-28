@@ -8,7 +8,7 @@ export interface DetailRoute {
 
 export function hashView(hash: string): View {
   const view = hash.replace(/^#/, '').split('/')[0] as View
-  return ['overview', 'workspaces', 'pipelines', 'operations', 'results', 'catalog', 'plugins', 'infrastructure', 'kubernetes', 'experiments', 'suites', 'advanced'].includes(view) ? view : 'overview'
+  return ['overview', 'workspaces', 'pipelines', 'operations', 'results', 'catalog', 'plugins', 'infrastructure', 'kubernetes', 'experiments', 'suites', 'advanced', 'users'].includes(view) ? view : 'overview'
 }
 
 export function parseDetailRoute(hash: string, view: View): DetailRoute | null {

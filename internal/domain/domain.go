@@ -101,6 +101,8 @@ type PipelineRun struct {
 	PipelineID        string             `json:"pipelineId"`
 	WorkspaceID       string             `json:"workspaceId"`
 	ClusterResourceID string             `json:"clusterResourceId,omitempty"`
+	OwnerUserID       string             `json:"ownerUserId,omitempty"`
+	IsolationMode     string             `json:"isolationMode,omitempty"`
 	Name              string             `json:"name"`
 	Status            string             `json:"status"`
 	PipelineHash      string             `json:"pipelineHash"`
@@ -142,6 +144,8 @@ type Experiment struct {
 	ID              string              `json:"id"`
 	WorkspaceID     string              `json:"workspaceId"`
 	ConfigurationID string              `json:"configurationId,omitempty"`
+	OwnerUserID     string              `json:"ownerUserId,omitempty"`
+	OwnerUsername   string              `json:"ownerUsername,omitempty"`
 	Kind            string              `json:"kind"`
 	Name            string              `json:"name"`
 	Description     string              `json:"description"`
@@ -198,6 +202,8 @@ type ExperimentConfiguration struct {
 	ID                string           `json:"id"`
 	WorkspaceID       string           `json:"workspaceId"`
 	ClusterResourceID string           `json:"clusterResourceId"`
+	OwnerUserID       string           `json:"ownerUserId,omitempty"`
+	OwnerUsername     string           `json:"ownerUsername,omitempty"`
 	Name              string           `json:"name"`
 	Description       string           `json:"description"`
 	ApplicationRef    string           `json:"applicationRef"`
@@ -220,6 +226,7 @@ type Credential struct {
 type ProviderConnection struct {
 	ID            string          `json:"id"`
 	Name          string          `json:"name"`
+	Description   string          `json:"description"`
 	Provider      string          `json:"provider"`
 	PluginID      string          `json:"pluginId"`
 	Configuration json.RawMessage `json:"-"`
@@ -277,7 +284,7 @@ type CatalogApplication struct {
 type CatalogStrategy struct {
 	ID                   string          `json:"id"`
 	WorkspaceID          string          `json:"workspaceId"`
-	HarborResourceID     string          `json:"harborResourceId"`
+	HarborResourceID     string          `json:"harborResourceId,omitempty"`
 	Name                 string          `json:"name"`
 	Kind                 string          `json:"kind"`
 	SourceImage          string          `json:"sourceImage"`
@@ -285,7 +292,7 @@ type CatalogStrategy struct {
 	MirroredImage        string          `json:"mirroredImage,omitempty"`
 	MirroredDigest       string          `json:"mirroredDigest,omitempty"`
 	DefaultConfiguration json.RawMessage `json:"defaultConfiguration"`
-	OperationID          string          `json:"operationId"`
+	OperationID          string          `json:"operationId,omitempty"`
 	ArtifactID           string          `json:"artifactId,omitempty"`
 	Status               string          `json:"status"`
 	Error                string          `json:"error,omitempty"`
@@ -342,9 +349,19 @@ type User struct {
 	ID           string    `json:"id"`
 	Username     string    `json:"username"`
 	PasswordHash string    `json:"-"`
+	ExternalID   string    `json:"-"`
+	Email        string    `json:"email,omitempty"`
 	Role         string    `json:"role"`
+	Enabled      bool      `json:"enabled"`
 	CreatedAt    time.Time `json:"createdAt"`
 	UpdatedAt    time.Time `json:"updatedAt"`
+}
+
+type ClusterUserAssignment struct {
+	UserID            string    `json:"userId"`
+	ClusterResourceID string    `json:"clusterResourceId"`
+	AssignedBy        string    `json:"assignedBy"`
+	CreatedAt         time.Time `json:"createdAt"`
 }
 
 type Session struct {
@@ -518,6 +535,14 @@ type LogEntry struct {
 	Source      string    `json:"source"`
 	Message     string    `json:"message"`
 	CreatedAt   time.Time `json:"createdAt"`
+}
+
+type PipelineRunLogEntry struct {
+	LogEntry
+	StageID       string `json:"stageId"`
+	StageTitle    string `json:"stageTitle"`
+	StagePosition int    `json:"stagePosition"`
+	Phase         string `json:"phase"`
 }
 
 type Artifact struct {

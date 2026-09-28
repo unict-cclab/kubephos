@@ -17,6 +17,7 @@ import (
 	"kubephos.dev/kubephos/internal/artifacts"
 	"kubephos.dev/kubephos/internal/config"
 	"kubephos.dev/kubephos/internal/domain"
+	"kubephos.dev/kubephos/internal/managedcomponents"
 	"kubephos.dev/kubephos/internal/secrets"
 	"kubephos.dev/kubephos/internal/storage"
 )
@@ -43,11 +44,22 @@ func releaseMaintenance(configValue config.Config) error {
 	if len(os.Args) >= 3 && os.Args[2] == "cluster-lens-rollout" {
 		return releaseClusterLensRollout(configValue)
 	}
-	if len(os.Args) != 6 || os.Args[2] != "cluster-lens" {
-		return errors.New("usage: kubephos release cluster-lens <harbor-resource-id> <docker-archive.tar> <version-tag>")
+	if len(os.Args) >= 3 && os.Args[2] == "component-rollout" {
+		return releaseManagedComponentRollout(configValue)
 	}
-	harborID, archivePath, versionTag := os.Args[3], os.Args[4], os.Args[5]
-	if !strings.HasPrefix(harborID, "svc_") || !strings.HasPrefix(versionTag, "v") || strings.ContainsAny(versionTag, "/ :@") {
+	if len(os.Args) >= 3 && os.Args[2] == "harbor-profile-sync" {
+		return releaseHarborProfileSync(configValue)
+	}
+	componentName := managedcomponents.ClusterLensName
+	var harborID, archivePath, versionTag string
+	if len(os.Args) == 6 && os.Args[2] == "cluster-lens" {
+		harborID, archivePath, versionTag = os.Args[3], os.Args[4], os.Args[5]
+	} else if len(os.Args) == 7 && os.Args[2] == "component" {
+		harborID, componentName, archivePath, versionTag = os.Args[3], os.Args[4], os.Args[5], os.Args[6]
+	} else {
+		return errors.New("usage: kubephos release component <harbor-resource-id> <cluster-lens|mon-agent|mentat> <docker-archive.tar> <version-tag>")
+	}
+	if !strings.HasPrefix(harborID, "svc_") || !managedComponentVersion(componentName, versionTag) {
 		return errors.New("release target or version tag is invalid")
 	}
 	archive, err := os.Stat(archivePath)
@@ -105,12 +117,12 @@ func releaseMaintenance(configValue config.Config) error {
 	if err := os.WriteFile(authenticationPath, authentication, 0600); err != nil {
 		return err
 	}
-	image := endpoint.Spec.Host + "/kubephos-dev/cluster-lens:" + versionTag
+	image := managedcomponents.Image(endpoint.Spec.Host, componentName, versionTag)
 	digestPath := filepath.Join(temporary, "digest")
 	command := exec.CommandContext(ctx, "skopeo", "copy", "--dest-authfile", authenticationPath, "--dest-cert-dir", temporary, "--digestfile", digestPath, "docker-archive:"+archivePath, "docker://"+image)
 	output, err := command.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("publish Cluster Lens: %w: %s", err, strings.TrimSpace(string(output)))
+		return fmt.Errorf("publish managed component %s: %w: %s", componentName, err, strings.TrimSpace(string(output)))
 	}
 	digest, err := os.ReadFile(digestPath)
 	if err != nil || !strings.HasPrefix(strings.TrimSpace(string(digest)), "sha256:") {
@@ -127,6 +139,15 @@ func releaseMaintenance(configValue config.Config) error {
 	}
 	fmt.Printf("PASS %s@%s\n", image, strings.TrimSpace(string(digest)))
 	return nil
+}
+
+func managedComponentVersion(name, version string) bool {
+	for _, component := range managedcomponents.Catalog() {
+		if component.Name == name && component.Version == version {
+			return true
+		}
+	}
+	return false
 }
 
 func readReleaseArtifact(ctx context.Context, client *artifacts.Client, vault *secrets.Vault, artifact domain.Artifact) ([]byte, error) {

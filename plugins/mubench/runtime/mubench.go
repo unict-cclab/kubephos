@@ -12,7 +12,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"unicode"
 
 	"gopkg.in/yaml.v3"
 
@@ -23,12 +22,9 @@ import (
 )
 
 const (
-	factoryID           = "io.kubephos.applications.mubench.generate"
 	materializerID      = "io.kubephos.applications.mubench"
-	factoryVersion      = "0.1.3"
-	materializerVersion = "0.1.2"
+	materializerVersion = "0.2.0"
 	sourceRevision      = "176c8f14f2740414436078d5dcd969d38dd4acd4"
-	serviceImage        = "docker.io/msvcbench/microservice@sha256:26f486c7e546100c509501809aa4a36b283d3a2e45be09f56b059c6fe531f776"
 	locustImage         = "locustio/locust:2.42.6"
 )
 
@@ -39,22 +35,7 @@ type Invocation struct {
 	Catalog map[string]json.RawMessage `json:"catalog"`
 }
 
-type FactoryPlugin struct{}
-
 type MaterializerPlugin struct{}
-
-type FactorySpec struct {
-	Name            string `json:"name"`
-	ServiceCount    int    `json:"serviceCount"`
-	Topology        string `json:"topology"`
-	Replicas        int    `json:"replicas"`
-	Workers         int    `json:"workers"`
-	Threads         int    `json:"threads"`
-	WorkloadProfile string `json:"workloadProfile"`
-	ResponseSizeKB  int    `json:"responseSizeKB"`
-	CPURequest      string `json:"cpuRequest"`
-	MemoryRequest   string `json:"memoryRequest"`
-}
 
 type materializerSpec struct {
 	ApplicationRef string         `json:"applicationRef"`
@@ -71,10 +52,6 @@ type generatorConfig struct {
 	ServiceCount int    `json:"serviceCount"`
 	Topology     string `json:"topology"`
 	ServiceImage string `json:"serviceImage"`
-}
-
-type factoryResult struct {
-	Descriptor catalog.Descriptor `json:"descriptor"`
 }
 
 type materializerResult struct {
@@ -160,105 +137,15 @@ type loadScenario struct {
 	ScriptDigest   string `json:"scriptDigest"`
 }
 
-func (FactoryPlugin) Manifest() plugins.Manifest {
-	return plugins.Manifest{
-		ID: factoryID, Name: "muBench application generator", Version: factoryVersion,
-		Description:     "Creates reproducible muBench applications with source-aware traffic ingress.",
-		Schema:          json.RawMessage(`{"type":"object","required":["name","serviceCount","topology","replicas","workers","threads","workloadProfile","responseSizeKB","cpuRequest","memoryRequest"],"additionalProperties":false,"properties":{"name":{"type":"string","title":"Application name","default":"muBench application","minLength":1,"maxLength":80},"serviceCount":{"type":"integer","title":"Services","default":6,"minimum":2,"maximum":100},"topology":{"type":"string","title":"Request topology","default":"chain","enum":["chain","fan-out","tree"]},"replicas":{"type":"integer","title":"Initial replicas","default":1,"minimum":1,"maximum":20},"workers":{"type":"integer","title":"Workers per service","default":2,"minimum":1,"maximum":32},"threads":{"type":"integer","title":"Threads per worker","default":4,"minimum":1,"maximum":64},"workloadProfile":{"type":"string","title":"Work per request","default":"balanced","enum":["light","balanced","heavy"]},"responseSizeKB":{"type":"integer","title":"Average response size (KB)","default":10,"minimum":1,"maximum":10240},"cpuRequest":{"type":"string","title":"CPU request","default":"250m","minLength":1,"maxLength":16},"memoryRequest":{"type":"string","title":"Memory request","default":"256Mi","minLength":1,"maxLength":16}}}`),
-		ArtifactOutputs: []domain.ArtifactContract{{Type: "CatalogApplicationDescriptor", Version: "v1alpha1"}},
-		Capabilities:    []string{"catalog.application.generate"},
-	}
-}
-
 func (MaterializerPlugin) Manifest() plugins.Manifest {
 	return plugins.Manifest{
 		ID: materializerID, Name: "muBench application materializer", Version: materializerVersion,
-		Description:     "Materializes a generated muBench catalog application into the standard application artifacts.",
+		Description:     "Materializes configurable muBench application resources into standard artifacts.",
 		Schema:          json.RawMessage(`{"type":"object","required":["applicationRef"],"additionalProperties":false,"properties":{"applicationRef":{"type":"string","title":"Application","format":"kubephos-application-ref"},"values":{"type":"object","title":"Application settings","x-kubephos-schema-from-application":"applicationRef"}}}`),
 		ArtifactOutputs: []domain.ArtifactContract{{Type: "ManifestSet", Version: "v1alpha1"}, {Type: "WorkloadTargets", Version: "v1alpha1"}, {Type: "ServiceEndpoints", Version: "v1alpha1"}, {Type: "LoadScenarioSet", Version: "v1alpha1"}},
 		Capabilities:    []string{"applications.materialize"},
 		Permissions:     []string{"catalog.read:applications"},
 	}
-}
-
-func (FactoryPlugin) Validate(ctx context.Context, invocation Invocation) domain.ValidationReport {
-	if err := ctx.Err(); err != nil {
-		return invalid(err.Error())
-	}
-	var spec FactorySpec
-	if err := json.Unmarshal(invocation.Input, &spec); err != nil {
-		return invalid("Configuration must be valid JSON.")
-	}
-	if err := validateFactorySpec(spec); err != nil {
-		return invalid(err.Error())
-	}
-	return valid(fmt.Sprintf("The generator will create %d services using a %s topology.", spec.ServiceCount, spec.Topology))
-}
-
-func (FactoryPlugin) Plan(ctx context.Context, invocation Invocation) (domain.Plan, error) {
-	if err := ctx.Err(); err != nil {
-		return domain.Plan{}, err
-	}
-	var spec FactorySpec
-	if err := json.Unmarshal(invocation.Input, &spec); err != nil {
-		return domain.Plan{}, err
-	}
-	if err := validateFactorySpec(spec); err != nil {
-		return domain.Plan{}, err
-	}
-	raw, _ := json.Marshal(spec)
-	return domain.Plan{PluginID: factoryID, Steps: []domain.PlanStep{{ID: "generate-application", Name: "Generate reproducible muBench application", Input: raw, Outputs: []domain.ArtifactOutput{{Name: "application-descriptor", Type: "CatalogApplicationDescriptor", Version: "v1alpha1", MediaType: "application/json", Source: "/descriptor"}}}}}, nil
-}
-
-func (FactoryPlugin) Precheck(ctx context.Context, step domain.PlanStep, _ plugins.Logger) (domain.HealthReport, error) {
-	var spec FactorySpec
-	if err := json.Unmarshal(step.Input, &spec); err != nil {
-		return domain.HealthReport{}, err
-	}
-	if err := validateFactorySpec(spec); err != nil {
-		return unhealthy(err.Error()), nil
-	}
-	return healthy("Generation settings are complete and reproducible"), nil
-}
-
-func (FactoryPlugin) Execute(ctx context.Context, step domain.PlanStep, log plugins.Logger) (json.RawMessage, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	var spec FactorySpec
-	if err := json.Unmarshal(step.Input, &spec); err != nil {
-		return nil, err
-	}
-	descriptor, err := generateDescriptor(spec)
-	if err != nil {
-		return nil, err
-	}
-	if err := log("info", fmt.Sprintf("Generated %d muBench services with immutable source and image references", spec.ServiceCount)); err != nil {
-		return nil, err
-	}
-	return json.Marshal(factoryResult{Descriptor: descriptor})
-}
-
-func (FactoryPlugin) Verify(ctx context.Context, _ domain.PlanStep, raw json.RawMessage, _ plugins.Logger) (domain.HealthReport, error) {
-	if err := ctx.Err(); err != nil {
-		return domain.HealthReport{}, err
-	}
-	var result factoryResult
-	if err := json.Unmarshal(raw, &result); err != nil {
-		return unhealthy("Generated descriptor is invalid"), nil
-	}
-	descriptor, err := json.Marshal(result.Descriptor)
-	if err != nil {
-		return domain.HealthReport{}, err
-	}
-	if _, err := catalog.Parse(descriptor, "imported"); err != nil {
-		return unhealthy(err.Error()), nil
-	}
-	return healthy("Generated application contract is valid"), nil
-}
-
-func (FactoryPlugin) Cleanup(context.Context, domain.PlanStep, json.RawMessage, plugins.Logger) error {
-	return nil
 }
 
 func (MaterializerPlugin) Validate(ctx context.Context, invocation Invocation) domain.ValidationReport {
@@ -347,52 +234,6 @@ func (MaterializerPlugin) Cleanup(context.Context, domain.PlanStep, json.RawMess
 	return nil
 }
 
-func generateDescriptor(spec FactorySpec) (catalog.Descriptor, error) {
-	if err := validateFactorySpec(spec); err != nil {
-		return catalog.Descriptor{}, err
-	}
-	fingerprintInput, _ := json.Marshal(struct {
-		FactoryVersion string      `json:"factoryVersion"`
-		SourceRevision string      `json:"sourceRevision"`
-		ServiceImage   string      `json:"serviceImage"`
-		Spec           FactorySpec `json:"spec"`
-	}{FactoryVersion: factoryVersion, SourceRevision: sourceRevision, ServiceImage: serviceImage, Spec: spec})
-	fingerprint := sha256.Sum256(fingerprintInput)
-	short := hex.EncodeToString(fingerprint[:])[:10]
-	slug := slugify(spec.Name)
-	components := make([]catalog.Component, 0, spec.ServiceCount+1)
-	for index := 0; index < spec.ServiceCount; index++ {
-		name := fmt.Sprintf("s%d", index)
-		dependencies := make([]string, 0)
-		for _, child := range graphChildren(index, spec.ServiceCount, spec.Topology) {
-			dependencies = append(dependencies, fmt.Sprintf("s%d", child))
-		}
-		components = append(components, catalog.Component{ID: name, Workload: catalog.Workload{APIVersion: "apps/v1", Kind: "Deployment", Name: name}, Selector: map[string]string{"app": name}, Traits: []string{"scalable", "schedulable"}, Index: intPointer(graphIndex(index, spec.Topology)), Dependencies: dependencies})
-	}
-	components = append(components, catalog.Component{ID: "node-proxy", Workload: catalog.Workload{APIVersion: "apps/v1", Kind: "DaemonSet", Name: "node-proxy"}, Selector: map[string]string{"app": "node-proxy"}, Traits: []string{"traffic-entrypoint"}, Index: intPointer(0), Dependencies: []string{"s0"}})
-	valuesSchema := map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{
-		"replicas":        map[string]any{"type": "integer", "title": "Initial replicas", "minimum": 1, "maximum": 20},
-		"workers":         map[string]any{"type": "integer", "title": "Workers per service", "minimum": 1, "maximum": 32},
-		"threads":         map[string]any{"type": "integer", "title": "Threads per worker", "minimum": 1, "maximum": 64},
-		"workloadProfile": map[string]any{"type": "string", "title": "Work per request", "enum": []any{"light", "balanced", "heavy"}},
-		"responseSizeKB":  map[string]any{"type": "integer", "title": "Average response size (KB)", "minimum": 1, "maximum": 10240},
-		"cpuRequest":      map[string]any{"type": "string", "title": "CPU request", "minLength": 1, "maxLength": 16},
-		"memoryRequest":   map[string]any{"type": "string", "title": "Memory request", "minLength": 1, "maxLength": 16},
-	}}
-	return catalog.Descriptor{
-		APIVersion: "catalog.kubephos.dev/v1alpha1", Kind: "Application",
-		Metadata: catalog.Metadata{ID: "dev.kubephos.mubench." + slug, Name: spec.Name, Version: sourceRevision[:8] + "-" + short, Description: fmt.Sprintf("Generated muBench application with %d services and a %s request topology.", spec.ServiceCount, spec.Topology)},
-		Spec: catalog.Spec{
-			Package:            catalog.Package{Type: "git", Format: "plain-yaml", Repository: "https://github.com/mSvcBench/muBench.git", Revision: sourceRevision, Path: ".", Entrypoint: "generated.yaml"},
-			Materializer:       materializerID,
-			MaterializerConfig: map[string]any{"serviceCount": spec.ServiceCount, "topology": spec.Topology, "serviceImage": serviceImage},
-			Interface:          catalog.Interface{Group: "mubench-" + short[:8], Components: components, Endpoints: []catalog.Endpoint{{ID: "entry-http", Component: "s0", Service: "s0", Port: 80, Protocol: "http", Path: "/api/v1"}, {ID: "node-proxy-http", Component: "node-proxy", Service: "node-proxy", Port: 80, Protocol: "http", Path: "/"}}, LoadScenarios: []catalog.LoadScenario{{ID: "default-journey", Engine: "locust", Script: "generated/locustfile.py", RuntimeImage: locustImage, TargetEndpoint: "node-proxy-http"}}},
-			ValuesSchema:       valuesSchema,
-			Defaults:           map[string]any{"replicas": spec.Replicas, "workers": spec.Workers, "threads": spec.Threads, "workloadProfile": spec.WorkloadProfile, "responseSizeKB": spec.ResponseSizeKB, "cpuRequest": spec.CPURequest, "memoryRequest": spec.MemoryRequest},
-		},
-	}, nil
-}
-
 func resolveMaterializer(invocation Invocation) (materializerSpec, catalog.Descriptor, generatorConfig, error) {
 	var spec materializerSpec
 	if err := json.Unmarshal(invocation.Input, &spec); err != nil {
@@ -406,12 +247,16 @@ func resolveMaterializer(invocation Invocation) (materializerSpec, catalog.Descr
 	if err := json.Unmarshal(raw, &descriptor); err != nil || descriptor.Spec.Materializer != materializerID {
 		return spec, descriptor, generatorConfig{}, errors.New("catalog application is not a muBench generated application")
 	}
-	configRaw, _ := json.Marshal(descriptor.Spec.MaterializerConfig)
-	var config generatorConfig
-	if err := json.Unmarshal(configRaw, &config); err != nil || config.ServiceCount < 2 || config.ServiceImage == "" {
-		return spec, descriptor, config, errors.New("muBench generator metadata is invalid")
-	}
 	values := clone(descriptor.Spec.Defaults)
+	properties, _ := descriptor.Spec.ValuesSchema["properties"].(map[string]any)
+	if _, standardized := properties["initialReplicas"]; standardized {
+		if _, exists := spec.Values["initialReplicas"]; !exists {
+			if legacy, found := spec.Values["replicas"]; found {
+				spec.Values["initialReplicas"] = legacy
+			}
+		}
+		delete(spec.Values, "replicas")
+	}
 	for key, value := range spec.Values {
 		values[key] = value
 	}
@@ -420,12 +265,32 @@ func resolveMaterializer(invocation Invocation) (materializerSpec, catalog.Descr
 	issues, err := schema.Validate(definition, valueRaw)
 	if err != nil || len(issues) != 0 {
 		if err != nil {
-			return spec, descriptor, config, err
+			return spec, descriptor, generatorConfig{}, err
 		}
-		return spec, descriptor, config, fmt.Errorf("application setting %s is invalid: %s", issues[0].Path, issues[0].Message)
+		return spec, descriptor, generatorConfig{}, fmt.Errorf("application setting %s is invalid: %s", issues[0].Path, issues[0].Message)
 	}
 	if !quantityPattern.MatchString(fmt.Sprint(values["cpuRequest"])) || !quantityPattern.MatchString(fmt.Sprint(values["memoryRequest"])) {
-		return spec, descriptor, config, errors.New("CPU and memory requests must be Kubernetes quantities")
+		return spec, descriptor, generatorConfig{}, errors.New("CPU and memory requests must be Kubernetes quantities")
+	}
+	if _, err := serviceReplicas(values, "s0"); err != nil {
+		return spec, descriptor, generatorConfig{}, err
+	}
+	if overrides, ok := values["replicaOverrides"].(map[string]any); ok {
+		serviceCount, _ := integerValue(values["serviceCount"])
+		for name := range overrides {
+			index, valid := strings.CutPrefix(name, "s")
+			position, conversionErr := strconv.Atoi(index)
+			if !valid || conversionErr != nil || position < 0 || position >= serviceCount {
+				return spec, descriptor, generatorConfig{}, fmt.Errorf("replica override references unknown service %s", name)
+			}
+			if _, err := serviceReplicas(values, name); err != nil {
+				return spec, descriptor, generatorConfig{}, err
+			}
+		}
+	}
+	config, err := materializerConfiguration(descriptor, values)
+	if err != nil {
+		return spec, descriptor, config, err
 	}
 	spec.Values = values
 	return spec, descriptor, config, nil
@@ -439,27 +304,70 @@ func decodeMaterializerStep(step domain.PlanStep) (materializerInput, generatorC
 	if input.ApplicationRef == "" || input.Descriptor.Spec.Materializer != materializerID {
 		return input, generatorConfig{}, errors.New("materializer step is incomplete")
 	}
-	raw, _ := json.Marshal(input.Descriptor.Spec.MaterializerConfig)
-	var config generatorConfig
-	if err := json.Unmarshal(raw, &config); err != nil {
+	config, err := materializerConfiguration(input.Descriptor, input.Values)
+	if err != nil {
 		return input, config, err
 	}
 	return input, config, nil
 }
 
+func materializerConfiguration(descriptor catalog.Descriptor, values map[string]any) (generatorConfig, error) {
+	topology := values["topology"]
+	if topology == nil {
+		topology = descriptor.Spec.MaterializerConfig["topology"]
+	}
+	serviceCountValue := values["serviceCount"]
+	if serviceCountValue == nil {
+		serviceCountValue = descriptor.Spec.MaterializerConfig["serviceCount"]
+	}
+	config := generatorConfig{ServiceImage: fmt.Sprint(descriptor.Spec.MaterializerConfig["serviceImage"]), Topology: fmt.Sprint(topology)}
+	serviceCount, err := integerValue(serviceCountValue)
+	if err != nil {
+		return config, errors.New("service count must be an integer")
+	}
+	config.ServiceCount = serviceCount
+	if config.ServiceCount < 2 || config.ServiceCount > 100 || config.ServiceImage == "" || config.Topology != "chain" && config.Topology != "fan-out" && config.Topology != "tree" {
+		return config, errors.New("muBench application settings are invalid")
+	}
+	return config, nil
+}
+
+func integerValue(value any) (int, error) {
+	switch number := value.(type) {
+	case int:
+		return number, nil
+	case float64:
+		if number == float64(int(number)) {
+			return int(number), nil
+		}
+	case json.Number:
+		parsed, err := strconv.Atoi(number.String())
+		if err == nil {
+			return parsed, nil
+		}
+	}
+	return 0, errors.New("value is not an integer")
+}
+
 func materialize(input materializerInput, config generatorConfig) (materializerResult, []byte, []loadScenario, error) {
-	topologyIndexes := map[string]*int{}
-	for _, component := range input.Descriptor.Spec.Interface.Components {
-		topologyIndexes[component.ID] = component.Index
+	topologyIndexes := map[string]*int{"node-proxy": intPointer(0)}
+	for index := 0; index < config.ServiceCount; index++ {
+		topologyIndexes[fmt.Sprintf("s%d", index)] = intPointer(graphIndex(index, config.Topology))
 	}
 	manifest, err := manifests(input.Descriptor.Spec.Interface.Group, config, input.Values, topologyIndexes)
 	if err != nil {
 		return materializerResult{}, nil, nil, err
 	}
-	workloads := make([]workloadTarget, 0, len(input.Descriptor.Spec.Interface.Components))
-	for _, component := range input.Descriptor.Spec.Interface.Components {
-		workloads = append(workloads, workloadTarget{ID: component.ID, APIVersion: component.Workload.APIVersion, Kind: component.Workload.Kind, Name: component.Workload.Name, Selector: component.Selector, Traits: component.Traits, Index: component.Index, Dependencies: component.Dependencies})
+	workloads := make([]workloadTarget, 0, config.ServiceCount+1)
+	for index := 0; index < config.ServiceCount; index++ {
+		name := fmt.Sprintf("s%d", index)
+		dependencies := make([]string, 0)
+		for _, child := range graphChildren(index, config.ServiceCount, config.Topology) {
+			dependencies = append(dependencies, fmt.Sprintf("s%d", child))
+		}
+		workloads = append(workloads, workloadTarget{ID: name, APIVersion: "apps/v1", Kind: "Deployment", Name: name, Selector: map[string]string{"app": name}, Traits: []string{"scalable", "schedulable", "deschedulable"}, Index: topologyIndexes[name], Dependencies: dependencies})
 	}
+	workloads = append(workloads, workloadTarget{ID: "node-proxy", APIVersion: "apps/v1", Kind: "DaemonSet", Name: "node-proxy", Selector: map[string]string{"app": "node-proxy"}, Traits: []string{"traffic-entrypoint"}, Index: topologyIndexes["node-proxy"], Dependencies: []string{"s0"}})
 	endpoints := make([]serviceEndpoint, 0, len(input.Descriptor.Spec.Interface.Endpoints))
 	for _, endpoint := range input.Descriptor.Spec.Interface.Endpoints {
 		endpoints = append(endpoints, serviceEndpoint{ID: endpoint.ID, Component: endpoint.Component, Service: endpoint.Service, Port: endpoint.Port, Protocol: endpoint.Protocol, Path: endpoint.Path})
@@ -527,7 +435,8 @@ func manifests(group string, config generatorConfig, values map[string]any, topo
 }
 
 func serviceDocuments(name, group, image string, values map[string]any, topologyIndex *int) []any {
-	labels := map[string]any{"app": name, "group": group, "app.kubernetes.io/name": name, "app.kubernetes.io/part-of": group}
+	replicas, _ := serviceReplicas(values, name)
+	labels := map[string]any{"app": name, "group": group, "app.kubernetes.io/name": name, "app.kubernetes.io/part-of": group, "kubephos.dev/component": name}
 	if topologyIndex != nil {
 		labels["index"] = strconv.Itoa(*topologyIndex)
 	}
@@ -560,7 +469,7 @@ func serviceDocuments(name, group, image string, values map[string]any, topology
 	deployment := map[string]any{
 		"apiVersion": "apps/v1", "kind": "Deployment", "metadata": map[string]any{"name": name, "labels": labels},
 		"spec": map[string]any{
-			"replicas": values["replicas"], "selector": map[string]any{"matchLabels": map[string]any{"app": name}},
+			"replicas": replicas, "selector": map[string]any{"matchLabels": map[string]any{"app": name}},
 			"template": map[string]any{"metadata": map[string]any{"labels": labels, "annotations": map[string]any{"prometheus.io/scrape": "true", "prometheus.io/port": "8080"}}, "spec": podSpec},
 		},
 	}
@@ -571,8 +480,25 @@ func serviceDocuments(name, group, image string, values map[string]any, topology
 	return []any{deployment, service}
 }
 
+func serviceReplicas(values map[string]any, name string) (int, error) {
+	value := values["initialReplicas"]
+	if value == nil {
+		value = values["replicas"]
+	}
+	if overrides, ok := values["replicaOverrides"].(map[string]any); ok {
+		if override, exists := overrides[name]; exists {
+			value = override
+		}
+	}
+	replicas, err := integerValue(value)
+	if err != nil || replicas < 1 || replicas > 1000 {
+		return 0, fmt.Errorf("replicas for %s must be an integer between 1 and 1000", name)
+	}
+	return replicas, nil
+}
+
 func nodeProxyDocuments(group string, topologyIndex *int) []any {
-	labels := map[string]any{"app": "node-proxy", "group": group, "app.kubernetes.io/name": "node-proxy", "app.kubernetes.io/part-of": group}
+	labels := map[string]any{"app": "node-proxy", "group": group, "app.kubernetes.io/name": "node-proxy", "app.kubernetes.io/part-of": group, "kubephos.dev/component": "node-proxy"}
 	if topologyIndex != nil {
 		labels["index"] = strconv.Itoa(*topologyIndex)
 	}
@@ -628,50 +554,6 @@ func graphIndex(index int, topology string) int {
 
 func intPointer(value int) *int {
 	return &value
-}
-
-func validateFactorySpec(spec FactorySpec) error {
-	if strings.TrimSpace(spec.Name) != spec.Name || len([]rune(spec.Name)) < 1 || len([]rune(spec.Name)) > 80 {
-		return errors.New("Application name must contain between 1 and 80 characters.")
-	}
-	if spec.ServiceCount < 2 || spec.ServiceCount > 100 {
-		return errors.New("Choose between 2 and 100 services.")
-	}
-	if spec.Topology != "chain" && spec.Topology != "fan-out" && spec.Topology != "tree" {
-		return errors.New("Choose a supported request topology.")
-	}
-	if spec.Replicas < 1 || spec.Replicas > 20 || spec.Workers < 1 || spec.Workers > 32 || spec.Threads < 1 || spec.Threads > 64 || spec.ResponseSizeKB < 1 || spec.ResponseSizeKB > 10240 {
-		return errors.New("One or more generation values are outside the supported range.")
-	}
-	if spec.WorkloadProfile != "light" && spec.WorkloadProfile != "balanced" && spec.WorkloadProfile != "heavy" {
-		return errors.New("Choose a supported work profile.")
-	}
-	if !quantityPattern.MatchString(spec.CPURequest) || !quantityPattern.MatchString(spec.MemoryRequest) {
-		return errors.New("CPU and memory requests must be Kubernetes quantities.")
-	}
-	return nil
-}
-
-func slugify(value string) string {
-	var result strings.Builder
-	lastDash := false
-	for _, character := range strings.ToLower(value) {
-		if unicode.IsLetter(character) || unicode.IsDigit(character) {
-			result.WriteRune(character)
-			lastDash = false
-		} else if !lastDash && result.Len() != 0 {
-			result.WriteByte('-')
-			lastDash = true
-		}
-	}
-	slug := strings.Trim(result.String(), "-")
-	if len(slug) > 48 {
-		slug = strings.Trim(slug[:48], "-")
-	}
-	if len(slug) < 3 {
-		slug = "application"
-	}
-	return slug
 }
 
 func clone(value map[string]any) map[string]any {

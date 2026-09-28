@@ -43,7 +43,7 @@ type Spec struct {
 	LoadSessionRef             string `json:"loadSessionRef"`
 	Window                     string `json:"window"`
 	Resolution                 string `json:"resolution"`
-	SLOMilliseconds            int    `json:"sloMilliseconds"`
+	SLOMilliseconds            int    `json:"sloMilliseconds,omitempty"`
 }
 
 type clusterConnection struct {
@@ -70,6 +70,7 @@ type applicationDeployment struct {
 	} `json:"metadata"`
 	Spec struct {
 		ApplicationRef string `json:"applicationRef"`
+		External       bool   `json:"external,omitempty"`
 		ClusterServer  string `json:"clusterServer"`
 		Namespace      string `json:"namespace"`
 		Workloads      []struct {
@@ -162,7 +163,7 @@ type datasetSpec struct {
 	Start           time.Time      `json:"start"`
 	End             time.Time      `json:"end"`
 	StepSeconds     int            `json:"stepSeconds"`
-	SLOMilliseconds int            `json:"sloMilliseconds"`
+	SLOMilliseconds int            `json:"sloMilliseconds,omitempty"`
 	Source          datasetSource  `json:"source"`
 	Series          []metricSeries `json:"series"`
 	Summary         datasetSummary `json:"summary"`
@@ -216,9 +217,9 @@ type commandRunner interface {
 
 func (Plugin) Manifest() plugins.Manifest {
 	return plugins.Manifest{
-		ID: pluginID, Name: "Kubernetes metrics collector", Version: "0.3.2",
+		ID: pluginID, Name: "Kubernetes metrics collector", Version: "0.3.4",
 		Description:     "Collects a normalized workload dataset through a compatible metrics capability.",
-		Schema:          json.RawMessage(`{"type":"object","additionalProperties":false,"required":["clusterConnectionRef","applicationDeploymentRef","observabilityCapabilityRef","loadSessionRef","window","resolution"],"properties":{"clusterConnectionRef":{"type":"string","title":"Kubernetes cluster","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ClusterConnection","x-kubephos-artifact-version":"v1alpha1"},"applicationDeploymentRef":{"type":"string","title":"Application deployment","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ApplicationDeployment","x-kubephos-artifact-version":"v1alpha1"},"observabilityCapabilityRef":{"type":"string","title":"Metrics service","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ObservabilityCapability","x-kubephos-artifact-version":"v1alpha1"},"loadSessionRef":{"type":"string","title":"Completed load session","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"LoadSession","x-kubephos-artifact-version":"v1alpha1"},"window":{"type":"string","title":"Maximum fallback lookback","enum":["5m","15m","30m","1h"],"default":"15m"},"resolution":{"type":"string","title":"Data resolution","enum":["5s","15s","30s","1m"],"default":"15s"},"sloMilliseconds":{"type":"integer","title":"Response time SLO (ms)","description":"A time window violates the SLO when its P95 response time exceeds this value.","minimum":1,"maximum":600000,"default":250}}}`),
+		Schema:          json.RawMessage(`{"type":"object","additionalProperties":false,"required":["clusterConnectionRef","applicationDeploymentRef","observabilityCapabilityRef","loadSessionRef","window","resolution"],"properties":{"clusterConnectionRef":{"type":"string","title":"Kubernetes cluster","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ClusterConnection","x-kubephos-artifact-version":"v1alpha1"},"applicationDeploymentRef":{"type":"string","title":"Application deployment","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ApplicationDeployment","x-kubephos-artifact-version":"v1alpha1"},"observabilityCapabilityRef":{"type":"string","title":"Metrics service","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ObservabilityCapability","x-kubephos-artifact-version":"v1alpha1"},"loadSessionRef":{"type":"string","title":"Completed load session","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"LoadSession","x-kubephos-artifact-version":"v1alpha1"},"window":{"type":"string","title":"Metrics fallback window","x-kubephos-hidden":true,"enum":["5m","15m","30m","1h"],"default":"15m"},"resolution":{"type":"string","title":"Data resolution","enum":["5s","15s","30s","1m"],"default":"15s"},"sloMilliseconds":{"type":"integer","title":"Response time SLO (optional, ms)","description":"Leave empty to omit the SLO target line and violation metrics.","minimum":1,"maximum":600000}}}`),
 		ArtifactInputs:  []domain.ArtifactContract{{Type: "ClusterConnection", Version: "v1alpha1"}, {Type: "ApplicationDeployment", Version: "v1alpha1"}, {Type: "ObservabilityCapability", Version: "v1alpha1"}, {Type: "LoadSession", Version: "v1alpha1"}},
 		ArtifactOutputs: []domain.ArtifactContract{{Type: "TimeSeriesDataset", Version: "v1alpha1"}},
 		Capabilities:    []string{"metrics.timeseries.collect", "metrics.timeseries.preflight"},
@@ -253,7 +254,7 @@ func (Plugin) Validate(ctx context.Context, invocation Invocation) domain.Valida
 		return invalid(report, "resolution", "Select a supported data resolution.")
 	}
 	if spec.SLOMilliseconds < 0 || spec.SLOMilliseconds > 600000 {
-		return invalid(report, "sloMilliseconds", "Response time SLO must be between 1 and 600000 milliseconds.")
+		return invalid(report, "sloMilliseconds", "When set, the response time SLO must be between 1 and 600000 milliseconds.")
 	}
 	report.Issues = append(report.Issues, domain.ValidationIssue{Level: "info", Message: "KubePhos will revalidate the cluster, application scope and metrics API before collecting the dataset."})
 	return report
@@ -272,9 +273,6 @@ func (Plugin) Plan(ctx context.Context, raw json.RawMessage) (domain.Plan, error
 	}
 	if _, ok := resolutions()[spec.Resolution]; !ok {
 		return domain.Plan{}, errors.New("unsupported data resolution")
-	}
-	if spec.SLOMilliseconds == 0 {
-		spec.SLOMilliseconds = 250
 	}
 	input, err := json.Marshal(spec)
 	if err != nil {
@@ -343,7 +341,7 @@ func (plugin Plugin) Execute(ctx context.Context, step domain.PlanStep, log plug
 		return nil, err
 	}
 	start, end := metricWindow(load, plugin.now().UTC(), windows()[spec.Window])
-	definitions := metricDefinitions(deployment.Spec.Namespace, trafficEntryPointMatcher(deployment))
+	definitions := deploymentMetricDefinitions(deployment)
 	type queryResult struct {
 		definition metricDefinition
 		series     []metricSeries
@@ -382,10 +380,12 @@ func (plugin Plugin) Execute(ctx context.Context, step domain.PlanStep, log plug
 		}
 		allSeries = append(allSeries, collected.series...)
 	}
-	for _, series := range allSeries {
-		if series.Metric == "load.p95_response_time" {
-			allSeries = append(allSeries, sloViolationSeries(series, spec.SLOMilliseconds))
-			break
+	if spec.SLOMilliseconds > 0 {
+		for _, series := range allSeries {
+			if series.Metric == "load.p95_response_time" {
+				allSeries = append(allSeries, sloViolationSeries(series, spec.SLOMilliseconds))
+				break
+			}
 		}
 	}
 	sort.Slice(allSeries, func(i, j int) bool {
@@ -398,13 +398,17 @@ func (plugin Plugin) Execute(ctx context.Context, step domain.PlanStep, log plug
 	for _, series := range allSeries {
 		samples += len(series.Points)
 	}
+	metricCount := len(definitions) + 1
+	if spec.SLOMilliseconds > 0 {
+		metricCount++
+	}
 	dataset := timeSeriesDataset{
 		APIVersion: artifactAPI, Kind: "TimeSeriesDataset", Metadata: datasetMetadata{Name: deployment.Spec.Namespace + "/workload-overview", Version: "v1alpha1"},
 		Spec: datasetSpec{
 			ApplicationRef: deployment.Spec.ApplicationRef, ClusterServer: cluster.Spec.Server, Namespace: deployment.Spec.Namespace,
 			Start: start, End: end, StepSeconds: int(resolution.Seconds()), SLOMilliseconds: spec.SLOMilliseconds,
 			Source: datasetSource{Kind: capability.Spec.MetricsAPI, Version: capability.Metadata.Version, Profile: "kubephos-experiment-evidence/v2"},
-			Series: allSeries, Summary: datasetSummary{Metrics: len(definitions) + 2, Series: len(allSeries), Samples: samples},
+			Series: allSeries, Summary: datasetSummary{Metrics: metricCount, Series: len(allSeries), Samples: samples},
 		},
 	}
 	return json.Marshal(result{Dataset: dataset})
@@ -655,6 +659,7 @@ func metricDefinitions(namespace, trafficEntryPoints string) []metricDefinition 
 		{ID: "load.failure_percentage", Unit: "percent", Aggregation: "mean", Query: `100 * (sum(rate(istio_requests_total{reporter="source",source_workload_namespace=` + selector + `,source_workload=~` + entrypoints + `}[1m])) - sum(rate(istio_requests_total{reporter="source",source_workload_namespace=` + selector + `,source_workload=~` + entrypoints + `,response_code=~"2..|3.."}[1m]))) / clamp_min(sum(rate(istio_requests_total{reporter="source",source_workload_namespace=` + selector + `,source_workload=~` + entrypoints + `}[1m])), 0.000001)`},
 		{ID: "load.p95_response_time", Unit: "milliseconds", Aggregation: "mean", Query: `histogram_quantile(0.95, sum by (le) (rate(istio_request_duration_milliseconds_bucket{reporter="source",source_workload_namespace=` + selector + `,source_workload=~` + entrypoints + `}[1m])))`},
 		{ID: "application.request_rps", Unit: "requests_per_second", Aggregation: "sum", Query: `sum by (destination_workload) (rate(istio_requests_total{reporter="destination",destination_workload_namespace=` + selector + `}[1m]))`},
+		{ID: "application.p95_response_time", Unit: "milliseconds", Aggregation: "mean", Query: `histogram_quantile(0.95, sum by (destination_workload, le) (rate(istio_request_duration_milliseconds_bucket{reporter="destination",destination_workload_namespace=` + selector + `}[1m])))`},
 		{ID: "cpu.cores", Unit: "cores", Aggregation: "sum", Query: `sum by (pod) (rate(container_cpu_usage_seconds_total{namespace=` + selector + `,container!="",container!="POD"}[1m]))`},
 		{ID: "memory.working_set", Unit: "bytes", Aggregation: "sum", Query: `sum by (pod) (container_memory_working_set_bytes{namespace=` + selector + `,container!="",container!="POD"})`},
 		{ID: "pod.restarts", Unit: "count", Aggregation: "sum", Query: `sum by (pod) (kube_pod_container_status_restarts_total{namespace=` + selector + `})`},
@@ -663,6 +668,21 @@ func metricDefinitions(namespace, trafficEntryPoints string) []metricDefinition 
 		{ID: "network.packet_loss", Unit: "percent", Aggregation: "mean", Query: `100 * avg_over_time(node_packet_loss_ratio[1m])`},
 		{ID: "network.bandwidth", Unit: "bytes_per_second", Aggregation: "mean", Query: `node_bandwidth_bytes_per_second`},
 	}
+}
+
+func deploymentMetricDefinitions(deployment applicationDeployment) []metricDefinition {
+	definitions := metricDefinitions(deployment.Spec.Namespace, trafficEntryPointMatcher(deployment))
+	if !deployment.Spec.External {
+		return definitions
+	}
+	filtered := make([]metricDefinition, 0, len(definitions)-2)
+	for _, definition := range definitions {
+		if strings.HasPrefix(definition.ID, "application.") {
+			continue
+		}
+		filtered = append(filtered, definition)
+	}
+	return filtered
 }
 
 func sloViolationSeries(responseTime metricSeries, sloMilliseconds int) metricSeries {
@@ -761,11 +781,14 @@ func validateDataset(dataset timeSeriesDataset, spec Spec, cluster clusterConnec
 	if !dataset.Spec.End.After(dataset.Spec.Start) || dataset.Spec.End.Sub(dataset.Spec.Start) > 24*time.Hour+10*time.Minute || dataset.Spec.StepSeconds != int(resolution.Seconds()) {
 		return errors.New("dataset time window or resolution is invalid")
 	}
-	if dataset.Spec.SLOMilliseconds != spec.SLOMilliseconds || dataset.Spec.SLOMilliseconds < 1 {
+	if dataset.Spec.SLOMilliseconds != spec.SLOMilliseconds || dataset.Spec.SLOMilliseconds < 0 {
 		return errors.New("dataset response time objective is invalid")
 	}
-	expected := map[string]bool{"load.configured_rps": false, "load.slo_violation_percentage": false}
-	for _, definition := range metricDefinitions(deployment.Spec.Namespace, trafficEntryPointMatcher(deployment)) {
+	expected := map[string]bool{"load.configured_rps": false}
+	if spec.SLOMilliseconds > 0 {
+		expected["load.slo_violation_percentage"] = false
+	}
+	for _, definition := range deploymentMetricDefinitions(deployment) {
 		expected[definition.ID] = false
 	}
 	samples := 0

@@ -131,6 +131,42 @@ func TestValidateRejectsForwardReference(t *testing.T) {
 	}
 }
 
+func TestValidatePreservesEarlierStageValidationFailure(t *testing.T) {
+	producer := runtimeInvalidWorkflowPlugin{workflowPlugin{
+		manifest: plugins.Manifest{ID: "producer", Name: "Producer", Version: "1", Schema: json.RawMessage(`{"type":"object"}`), ArtifactOutputs: []domain.ArtifactContract{{Type: "LoadSession", Version: "v1"}}},
+		plan: domain.Plan{PluginID: "producer", Steps: []domain.PlanStep{{
+			ID: "produce", Name: "Produce", Outputs: []domain.ArtifactOutput{{Name: "load-session", Type: "LoadSession", Version: "v1", MediaType: "application/json", Source: "/result"}},
+		}}},
+	}}
+	consumer := workflowPlugin{
+		manifest: plugins.Manifest{ID: "consumer", Name: "Consumer", Version: "1", Schema: json.RawMessage(`{"type":"object","required":["loadSession"],"properties":{"loadSession":{"type":"string"}}}`), ArtifactInputs: []domain.ArtifactContract{{Type: "LoadSession", Version: "v1"}}, ArtifactOutputs: []domain.ArtifactContract{{Type: "Dataset", Version: "v1"}}},
+		plan: domain.Plan{PluginID: "consumer", Steps: []domain.PlanStep{{
+			ID: "consume", Name: "Consume", ArtifactInputs: []domain.ArtifactInput{{Name: "loadSession", Type: "LoadSession", Version: "v1"}}, Outputs: []domain.ArtifactOutput{{Name: "dataset", Type: "Dataset", Version: "v1", MediaType: "application/json", Source: "/result"}},
+		}}},
+	}
+	result, err := Validate(context.Background(), plugins.NewRegistry(producer, consumer), domain.PipelineDefinition{
+		Stages: []domain.PipelineStage{
+			{ID: "load", PluginID: "producer", Title: "Run load", Spec: json.RawMessage(`{}`)},
+			{ID: "metrics", PluginID: "consumer", Title: "Collect metrics", Spec: json.RawMessage(`{"loadSession":""}`), Bindings: []domain.PipelineBinding{{Path: "/loadSession", FromStage: "load", FromOutput: "load-session"}}},
+		},
+		Result: domain.PipelineOutput{Stage: "metrics", Output: "dataset"},
+	})
+	if err != nil {
+		t.Fatalf("expected validation report instead of cascading binding error, got %v", err)
+	}
+	if result.Validation.Valid {
+		t.Fatal("expected invalid pipeline")
+	}
+	messages := make([]string, 0, len(result.Validation.Issues))
+	for _, issue := range result.Validation.Issues {
+		messages = append(messages, issue.Message)
+	}
+	joined := strings.Join(messages, " ")
+	if !strings.Contains(joined, "target already exists") || !strings.Contains(joined, "earlier stage load did not validate") {
+		t.Fatalf("expected root and dependency errors, got %#v", result.Validation.Issues)
+	}
+}
+
 func TestValidateDeferredBuildsBindingsBeforeRuntimeReplacementChecks(t *testing.T) {
 	producer := runtimeInvalidWorkflowPlugin{workflowPlugin{
 		manifest: plugins.Manifest{ID: "producer", Name: "Producer", Version: "1", Schema: json.RawMessage(`{"type":"object"}`), ArtifactOutputs: []domain.ArtifactContract{{Type: "Cluster", Version: "v1"}}},

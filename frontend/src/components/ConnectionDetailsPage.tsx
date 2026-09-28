@@ -1,27 +1,59 @@
 import {useEffect, useState} from 'react'
 import {request} from '../api'
 import {formatDate} from '../lib'
-import type {Connection, Credential} from '../types'
+import type {Connection, Session} from '../types'
 import {DetailBreadcrumb} from './DetailBreadcrumb'
-import {InputData} from './InputData'
 
 interface ConnectionDetails extends Connection {
-  configuration: Record<string, unknown>
+  configuration: {endpoint?: string; verifyTLS?: boolean; tokenId?: string; tokenSecret?: string}
 }
 
-export function ConnectionDetailsPage({connection, credentials, close}: {connection: Connection; credentials: Credential[]; close: () => void}) {
+export function ConnectionDetailsPage({connection, session, close}: {connection: Connection; session: Session; close: () => void}) {
   const [details, setDetails] = useState<ConnectionDetails | null>(null)
   const [error, setError] = useState('')
+  const [secret, setSecret] = useState('')
+  const [visible, setVisible] = useState(false)
+  const [pending, setPending] = useState(false)
   useEffect(() => {
     let cancelled = false
     setDetails(null)
     setError('')
+    setSecret('')
+    setVisible(false)
     request<ConnectionDetails>(`/connections/${encodeURIComponent(connection.id)}`).then(value => {if (!cancelled) setDetails(value)}).catch(cause => {if (!cancelled) setError(cause instanceof Error ? cause.message : 'Could not load connection details.')})
     return () => {cancelled = true}
   }, [connection.id])
-  const references = Object.fromEntries(credentials.map(item => [item.id, item.name]))
-  return <div className="detail-page"><DetailBreadcrumb parent="Infrastructure" current={connection.name} back={close} /><div className="detail-page-heading"><div><h2>{connection.name}</h2><p>Proxmox connection</p></div><span className="status-pill ready">Ready</span></div><article className="detail-page-card">
-    <div className="details-summary"><div><span>Provider</span><strong>{connection.provider}</strong></div><div><span>Created</span><strong>{formatDate(connection.createdAt)}</strong></div><div><span>Updated</span><strong>{formatDate(connection.updatedAt)}</strong></div></div>
-    <section className="details-section"><div className="details-heading"><strong>Connection settings</strong></div>{details ? <InputData value={details.configuration} references={references} /> : error ? <p className="managed-error">{error}</p> : <p className="details-copy">Loading…</p>}</section>
+  const reveal = async () => {
+    if (visible) {
+      setVisible(false)
+      return
+    }
+    if (secret) {
+      setVisible(true)
+      return
+    }
+    setPending(true)
+    setError('')
+    try {
+      const result = await request<{tokenSecret: string}>(`/connections/${encodeURIComponent(connection.id)}/secret`, {method: 'POST', body: '{}'}, session.csrfToken)
+      setSecret(result.tokenSecret)
+      setVisible(true)
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Could not reveal token secret.')
+    } finally {
+      setPending(false)
+    }
+  }
+  return <div className="detail-page"><DetailBreadcrumb parent="Infrastructure" current={connection.name} back={close} /><div className="detail-page-heading"><div><h2>{connection.name}</h2></div></div><article className="detail-page-card simple-resource-detail">
+    {details ? <dl className="simple-detail-grid">
+      <div><dt>Name</dt><dd>{details.name}</dd></div>
+      <div><dt>Endpoint</dt><dd>{details.configuration.endpoint || '—'}</dd></div>
+      <div><dt>Verify TLS</dt><dd>{details.configuration.verifyTLS ? 'Yes' : 'No'}</dd></div>
+      <div><dt>Token ID</dt><dd>{details.configuration.tokenId || '—'}</dd></div>
+      <div className="simple-secret-field"><dt>Token secret</dt><dd><input aria-label="Token secret" type={visible ? 'text' : 'password'} value={visible ? secret : details.configuration.tokenSecret ?? '••••••••'} readOnly />{session.user?.role === 'admin' && <button type="button" disabled={pending} onClick={() => void reveal()}>{pending ? 'Loading…' : visible ? 'Hide' : 'Show'}</button>}</dd></div>
+      <div><dt>Created</dt><dd>{formatDate(details.createdAt)}</dd></div>
+      <div><dt>Updated</dt><dd>{formatDate(details.updatedAt)}</dd></div>
+    </dl> : error ? <p className="managed-error">{error}</p> : <p className="details-copy">Loading…</p>}
+    {details && error && <p className="managed-error">{error}</p>}
   </article></div>
 }

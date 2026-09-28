@@ -15,6 +15,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"unicode/utf8"
 
 	"gopkg.in/yaml.v3"
 
@@ -48,25 +49,28 @@ type Metadata struct {
 }
 
 type Spec struct {
-	Package             Package              `json:"package" yaml:"package"`
-	Materializer        string               `json:"materializer,omitempty" yaml:"materializer,omitempty"`
-	MaterializerConfig  map[string]any       `json:"materializerConfig,omitempty" yaml:"materializerConfig,omitempty"`
-	Interface           Interface            `json:"interface" yaml:"interface"`
-	ValuesSchema        map[string]any       `json:"valuesSchema" yaml:"valuesSchema"`
-	Defaults            map[string]any       `json:"defaults" yaml:"defaults"`
-	AdditionalManifests []AdditionalManifest `json:"additionalManifests,omitempty" yaml:"additionalManifests,omitempty"`
-	ExcludeResources    []Workload           `json:"excludeResources,omitempty" yaml:"excludeResources,omitempty"`
-	Overlays            []Overlay            `json:"overlays,omitempty" yaml:"overlays,omitempty"`
+	Package              Package               `json:"package" yaml:"package"`
+	Materializer         string                `json:"materializer,omitempty" yaml:"materializer,omitempty"`
+	MaterializerConfig   map[string]any        `json:"materializerConfig,omitempty" yaml:"materializerConfig,omitempty"`
+	Interface            Interface             `json:"interface" yaml:"interface"`
+	ValuesSchema         map[string]any        `json:"valuesSchema" yaml:"valuesSchema"`
+	Defaults             map[string]any        `json:"defaults" yaml:"defaults"`
+	AdditionalManifests  []AdditionalManifest  `json:"additionalManifests,omitempty" yaml:"additionalManifests,omitempty"`
+	ExcludeResources     []Workload            `json:"excludeResources,omitempty" yaml:"excludeResources,omitempty"`
+	StorageClassMappings []StorageClassMapping `json:"storageClassMappings,omitempty" yaml:"storageClassMappings,omitempty"`
+	ImageMappings        []ImageMapping        `json:"imageMappings,omitempty" yaml:"imageMappings,omitempty"`
+	Overlays             []Overlay             `json:"overlays,omitempty" yaml:"overlays,omitempty"`
 }
 
 type Package struct {
-	Type       string `json:"type" yaml:"type"`
-	Format     string `json:"format" yaml:"format"`
-	Repository string `json:"repository,omitempty" yaml:"repository,omitempty"`
-	Revision   string `json:"revision,omitempty" yaml:"revision,omitempty"`
-	Path       string `json:"path,omitempty" yaml:"path,omitempty"`
-	Reference  string `json:"reference,omitempty" yaml:"reference,omitempty"`
-	Entrypoint string `json:"entrypoint,omitempty" yaml:"entrypoint,omitempty"`
+	Type                  string   `json:"type" yaml:"type"`
+	Format                string   `json:"format" yaml:"format"`
+	Repository            string   `json:"repository,omitempty" yaml:"repository,omitempty"`
+	Revision              string   `json:"revision,omitempty" yaml:"revision,omitempty"`
+	Path                  string   `json:"path,omitempty" yaml:"path,omitempty"`
+	Reference             string   `json:"reference,omitempty" yaml:"reference,omitempty"`
+	Entrypoint            string   `json:"entrypoint,omitempty" yaml:"entrypoint,omitempty"`
+	AdditionalEntrypoints []string `json:"additionalEntrypoints,omitempty" yaml:"additionalEntrypoints,omitempty"`
 }
 
 type Interface struct {
@@ -104,6 +108,7 @@ type LoadScenario struct {
 	ID             string `json:"id" yaml:"id"`
 	Engine         string `json:"engine" yaml:"engine"`
 	Script         string `json:"script" yaml:"script"`
+	Content        string `json:"content,omitempty" yaml:"content,omitempty"`
 	RuntimeImage   string `json:"runtimeImage" yaml:"runtimeImage"`
 	TargetEndpoint string `json:"targetEndpoint" yaml:"targetEndpoint"`
 }
@@ -111,6 +116,17 @@ type LoadScenario struct {
 type AdditionalManifest struct {
 	ID      string `json:"id" yaml:"id"`
 	Content string `json:"content" yaml:"content"`
+}
+
+type StorageClassMapping struct {
+	Source              string `json:"source" yaml:"source"`
+	Target              string `json:"target" yaml:"target"`
+	RemoveStaticVolumes bool   `json:"removeStaticVolumes,omitempty" yaml:"removeStaticVolumes,omitempty"`
+}
+
+type ImageMapping struct {
+	Source string `json:"source" yaml:"source"`
+	Target string `json:"target" yaml:"target"`
 }
 
 type Overlay struct {
@@ -174,7 +190,7 @@ func Parse(raw []byte, origin string) (domain.CatalogApplication, error) {
 	if len(raw) == 0 || len(raw) > maxDescriptorBytes {
 		return domain.CatalogApplication{}, fmt.Errorf("descriptor must contain between 1 and %d bytes", maxDescriptorBytes)
 	}
-	if origin != "built-in" && origin != "imported" {
+	if origin != "built-in" && origin != "imported" && origin != "generated" {
 		return domain.CatalogApplication{}, errors.New("invalid catalog origin")
 	}
 	var descriptor Descriptor
@@ -314,6 +330,9 @@ func validate(descriptor Descriptor, origin string) error {
 		if !safePackagePath(scenario.Script) || !strings.HasSuffix(strings.ToLower(scenario.Script), ".py") {
 			return fmt.Errorf("%s.script must be a relative Python file", path)
 		}
+		if scenario.Content != "" && (len(scenario.Content) > 1024*1024 || !utf8.ValidString(scenario.Content)) {
+			return fmt.Errorf("%s.content is too large or not UTF-8", path)
+		}
 		if strings.TrimSpace(scenario.RuntimeImage) == "" || strings.ContainsAny(scenario.RuntimeImage, "\n\r ") {
 			return fmt.Errorf("%s.runtimeImage is invalid", path)
 		}
@@ -339,6 +358,22 @@ func validate(descriptor Descriptor, origin string) error {
 			return fmt.Errorf("%s is invalid or duplicated", path)
 		}
 		excluded[workloadKey(resource)] = true
+	}
+	storageClasses := map[string]bool{}
+	for position, mapping := range descriptor.Spec.StorageClassMappings {
+		path := fmt.Sprintf("spec.storageClassMappings[%d]", position)
+		if !namePattern.MatchString(mapping.Source) || !namePattern.MatchString(mapping.Target) || mapping.Source == mapping.Target || storageClasses[mapping.Source] {
+			return fmt.Errorf("%s is invalid or duplicates a source storage class", path)
+		}
+		storageClasses[mapping.Source] = true
+	}
+	images := map[string]bool{}
+	for position, mapping := range descriptor.Spec.ImageMappings {
+		path := fmt.Sprintf("spec.imageMappings[%d]", position)
+		if !validImage(mapping.Source) || !validPinnedImage(mapping.Target) || mapping.Source == mapping.Target || images[mapping.Source] {
+			return fmt.Errorf("%s is invalid or duplicates a source image", path)
+		}
+		images[mapping.Source] = true
 	}
 	if descriptor.Spec.ValuesSchema == nil || descriptor.Spec.ValuesSchema["type"] != "object" {
 		return errors.New("spec.valuesSchema must be an object schema")
@@ -474,6 +509,20 @@ func safePackagePath(value string) bool {
 	return cleaned != "." && cleaned == strings.TrimSpace(value) && !strings.HasPrefix(cleaned, "/") && !strings.HasPrefix(cleaned, "../")
 }
 
+func validImage(value string) bool {
+	return strings.TrimSpace(value) != "" && len(value) <= 512 && !strings.ContainsAny(value, "\n\r \t")
+}
+
+func validPinnedImage(value string) bool {
+	if !validImage(value) {
+		return false
+	}
+	if strings.Contains(value, "@sha256:") {
+		return digestReference.MatchString(value)
+	}
+	return strings.LastIndex(value, ":") > strings.LastIndex(value, "/")
+}
+
 func workloadKey(value Workload) string {
 	return value.APIVersion + "|" + value.Kind + "|" + value.Name
 }
@@ -533,6 +582,16 @@ func validatePackage(value Package, origin string) error {
 		if !safeRelativePath(value.Entrypoint, false) {
 			return errors.New("spec.package.entrypoint must be a safe relative path")
 		}
+		seenEntrypoints := map[string]bool{value.Entrypoint: true}
+		if len(value.AdditionalEntrypoints) > 63 {
+			return errors.New("spec.package.additionalEntrypoints cannot contain more than 63 files")
+		}
+		for _, entrypoint := range value.AdditionalEntrypoints {
+			if !safeRelativePath(entrypoint, false) || seenEntrypoints[entrypoint] {
+				return errors.New("spec.package.additionalEntrypoints contains an invalid or duplicated path")
+			}
+			seenEntrypoints[entrypoint] = true
+		}
 		if value.Reference != "" {
 			return errors.New("git packages cannot define reference")
 		}
@@ -546,6 +605,9 @@ func validatePackage(value Package, origin string) error {
 		if value.Repository != "" || value.Revision != "" || value.Path != "" {
 			return errors.New("oci packages cannot define repository, revision or path")
 		}
+		if len(value.AdditionalEntrypoints) != 0 {
+			return errors.New("oci packages cannot define additionalEntrypoints")
+		}
 	case "embedded":
 		if origin != "built-in" {
 			return errors.New("imported applications cannot use embedded packages")
@@ -555,6 +617,9 @@ func validatePackage(value Package, origin string) error {
 		}
 		if value.Repository != "" || value.Revision != "" || value.Path != "" || value.Reference != "" {
 			return errors.New("embedded packages cannot define repository, revision, path or reference")
+		}
+		if len(value.AdditionalEntrypoints) != 0 {
+			return errors.New("embedded packages cannot define additionalEntrypoints")
 		}
 	default:
 		return errors.New("spec.package.type must be git, oci or embedded")

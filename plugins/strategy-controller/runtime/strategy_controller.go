@@ -11,17 +11,22 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"sort"
 	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
 
 	"kubephos.dev/kubephos/internal/domain"
+	"kubephos.dev/kubephos/internal/managedregistry"
 	"kubephos.dev/kubephos/internal/plugins"
 )
 
 const artifactAPI = "artifacts.kubephos.dev/v1alpha1"
 const ownershipKey = "kubephos.dev/strategy-ownership"
+const applicationOwnershipKey = "kubephos.dev/ownership-marker"
+const applicationComponentLabel = "kubephos.dev/component"
+const applicationNamespaceLabel = "kubephos.dev/application"
 
 type Plugin struct {
 	Kind   string
@@ -54,8 +59,9 @@ type autoscalerSettings struct {
 
 type stepInput struct {
 	Spec
-	Name   string `json:"name"`
-	Marker string `json:"marker"`
+	Name      string `json:"name"`
+	Namespace string `json:"namespace,omitempty"`
+	Marker    string `json:"marker"`
 }
 
 type clusterConnection struct {
@@ -83,10 +89,11 @@ type applicationDeployment struct {
 		OwnershipMarker string `json:"ownershipMarker"`
 	} `json:"metadata"`
 	Spec struct {
-		ApplicationRef string           `json:"applicationRef"`
-		ClusterServer  string           `json:"clusterServer"`
-		Namespace      string           `json:"namespace"`
-		Workloads      []workloadTarget `json:"workloads"`
+		ApplicationRef   string           `json:"applicationRef"`
+		ClusterServer    string           `json:"clusterServer"`
+		Namespace        string           `json:"namespace"`
+		ControlNamespace string           `json:"controlNamespace,omitempty"`
+		Workloads        []workloadTarget `json:"workloads"`
 	} `json:"spec"`
 }
 
@@ -125,7 +132,7 @@ type commandRunner interface {
 
 func (plugin Plugin) Manifest() plugins.Manifest {
 	if plugin.Kind == "descheduler" {
-		return plugins.Manifest{ID: "io.kubephos.descheduler.kubernetes.managed", Name: "Managed descheduler", Version: "0.1.0", Description: "Runs a catalogued descheduler image with a validated policy against selected application workloads.", Schema: json.RawMessage(`{"type":"object","additionalProperties":false,"required":["clusterConnectionRef","applicationDeploymentRef","targetBindingRef","image","configFile","intervalSeconds"],"properties":{"clusterConnectionRef":{"type":"string","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ClusterConnection","x-kubephos-artifact-version":"v1alpha1"},"applicationDeploymentRef":{"type":"string","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ApplicationDeployment","x-kubephos-artifact-version":"v1alpha1"},"targetBindingRef":{"type":"string","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"TargetBinding","x-kubephos-artifact-version":"v1alpha1"},"image":{"type":"string","format":"kubephos-strategy-image"},"configFile":{"type":"string","title":"Descheduler policy","description":"Complete DeschedulerPolicy YAML.","x-kubephos-multiline":true,"minLength":1,"maxLength":131072},"intervalSeconds":{"type":"integer","title":"Descheduling interval in seconds","minimum":10,"maximum":86400,"default":60}}}`), ArtifactInputs: contracts(), ArtifactOutputs: []domain.ArtifactContract{{Type: "StrategyDeployment", Version: "v1alpha1"}}, Targeting: &plugins.Targeting{RequiredTrait: "schedulable"}, Capabilities: []string{"descheduler.kubernetes.install", "descheduler.kubernetes.preflight", "descheduler.kubernetes.cleanup", "lifecycle.cleanup"}, Permissions: []string{"cluster.admin"}}
+		return plugins.Manifest{ID: "io.kubephos.descheduler.kubernetes.managed", Name: "Managed descheduler", Version: "0.2.0", Description: "Runs a catalogued descheduler image in the experiment control namespace with a validated policy against selected application workloads.", Schema: json.RawMessage(`{"type":"object","additionalProperties":false,"required":["clusterConnectionRef","applicationDeploymentRef","targetBindingRef","image","configFile","intervalSeconds"],"properties":{"clusterConnectionRef":{"type":"string","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ClusterConnection","x-kubephos-artifact-version":"v1alpha1"},"applicationDeploymentRef":{"type":"string","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ApplicationDeployment","x-kubephos-artifact-version":"v1alpha1"},"targetBindingRef":{"type":"string","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"TargetBinding","x-kubephos-artifact-version":"v1alpha1"},"image":{"type":"string","format":"kubephos-strategy-image"},"configFile":{"type":"string","title":"Descheduler policy","description":"Complete DeschedulerPolicy YAML.","x-kubephos-multiline":true,"minLength":1,"maxLength":131072},"intervalSeconds":{"type":"integer","title":"Descheduling interval in seconds","minimum":10,"maximum":86400,"default":60}}}`), ArtifactInputs: contracts(), ArtifactOutputs: []domain.ArtifactContract{{Type: "StrategyDeployment", Version: "v1alpha1"}}, Targeting: &plugins.Targeting{RequiredTrait: "deschedulable"}, Capabilities: []string{"descheduler.kubernetes.install", "descheduler.kubernetes.preflight", "descheduler.kubernetes.cleanup", "lifecycle.cleanup"}, Permissions: []string{"cluster.admin"}}
 	}
 	return plugins.Manifest{ID: "io.kubephos.autoscaler.kubernetes.cpa", Name: "Custom Pod Autoscaler", Version: "0.2.0", Description: "Creates one isolated CustomPodAutoscaler for every selected scalable workload.", Schema: json.RawMessage(`{"type":"object","additionalProperties":false,"required":["clusterConnectionRef","applicationDeploymentRef","targetBindingRef","image","intervalSeconds","minReplicas","maxReplicas","parameters","targetOverrides"],"properties":{"clusterConnectionRef":{"type":"string","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ClusterConnection","x-kubephos-artifact-version":"v1alpha1"},"applicationDeploymentRef":{"type":"string","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ApplicationDeployment","x-kubephos-artifact-version":"v1alpha1"},"targetBindingRef":{"type":"string","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"TargetBinding","x-kubephos-artifact-version":"v1alpha1"},"image":{"type":"string","format":"kubephos-strategy-image"},"intervalSeconds":{"type":"integer","title":"Evaluation interval in seconds","minimum":5,"maximum":3600,"default":15},"minReplicas":{"type":"integer","title":"Minimum replicas","minimum":1,"maximum":1000,"default":1},"maxReplicas":{"type":"integer","title":"Maximum replicas","minimum":1,"maximum":1000,"default":10},"parameters":{"type":"string","title":"Autoscaler parameters","description":"JSON object passed unchanged to the autoscaler image for every selected workload.","x-kubephos-multiline":true,"minLength":2,"maxLength":131072,"default":"{}"},"targetOverrides":{"type":"string","title":"Per-microservice overrides","description":"JSON object keyed by application component ID.","minLength":2,"maxLength":524288,"default":"{}"}}}`), ArtifactInputs: contracts(), ArtifactOutputs: []domain.ArtifactContract{{Type: "StrategyDeployment", Version: "v1alpha1"}}, Targeting: &plugins.Targeting{RequiredTrait: "scalable"}, Capabilities: []string{"autoscaler.kubernetes.install", "autoscaler.kubernetes.preflight", "autoscaler.kubernetes.cleanup", "lifecycle.cleanup"}, Permissions: []string{"cluster.admin"}}
 }
@@ -148,15 +155,14 @@ func (plugin Plugin) Validate(ctx context.Context, invocation Invocation) domain
 			return invalid(report, path, "Select a verified artifact.")
 		}
 	}
-	if !validImage(spec.Image) {
-		return invalid(report, "image", "Select a verified image mirrored into Harbor.")
+	if !managedregistry.ValidProxyImage(spec.Image) {
+		return invalid(report, "image", "Select a public image from a registry configured through the managed Harbor proxy.")
 	}
 	if plugin.Kind == "descheduler" {
 		if spec.IntervalSeconds < 10 || spec.IntervalSeconds > 86400 {
 			return invalid(report, "intervalSeconds", "Interval must be between 10 seconds and one day.")
 		}
-		var policy map[string]any
-		if len(spec.ConfigFile) > 131072 || yaml.Unmarshal([]byte(spec.ConfigFile), &policy) != nil || policy["kind"] != "DeschedulerPolicy" {
+		if _, err := scopedDeschedulerPolicy(spec.ConfigFile, "validation", []workloadTarget{{ID: "validation"}}); err != nil {
 			return invalid(report, "configFile", "Provide a valid DeschedulerPolicy YAML document up to 128 KiB.")
 		}
 	} else {
@@ -188,12 +194,18 @@ func (plugin Plugin) Plan(ctx context.Context, raw json.RawMessage) (domain.Plan
 	if err := json.Unmarshal(raw, &spec); err != nil {
 		return domain.Plan{}, err
 	}
-	marker := make([]byte, 8)
-	if _, err := rand.Read(marker); err != nil {
-		return domain.Plan{}, err
+	var inputValue stepInput
+	if plugin.Kind == "descheduler" {
+		marker := domain.RuntimeExecutionIDToken
+		inputValue = stepInput{Spec: spec, Name: "kubephos-descheduler-" + marker, Namespace: "kubephos-control-" + marker, Marker: marker}
+	} else {
+		marker := make([]byte, 8)
+		if _, err := rand.Read(marker); err != nil {
+			return domain.Plan{}, err
+		}
+		inputValue = stepInput{Spec: spec, Name: "kubephos-" + plugin.Kind + "-" + hex.EncodeToString(marker)[:10], Marker: hex.EncodeToString(marker)}
 	}
-	name := "kubephos-" + plugin.Kind + "-" + hex.EncodeToString(marker)[:10]
-	input, _ := json.Marshal(stepInput{Spec: spec, Name: name, Marker: hex.EncodeToString(marker)})
+	input, _ := json.Marshal(inputValue)
 	return domain.Plan{PluginID: plugin.Manifest().ID, Steps: []domain.PlanStep{{ID: "install-" + plugin.Kind, Name: "Install and verify " + plugin.Kind, Input: input, Mutating: true, ArtifactInputs: []domain.ArtifactInput{{Name: "cluster-connection", Type: "ClusterConnection", Version: "v1alpha1", ArtifactID: spec.ClusterConnectionRef}, {Name: "application-deployment", Type: "ApplicationDeployment", Version: "v1alpha1", ArtifactID: spec.ApplicationDeploymentRef}, {Name: "target-binding", Type: "TargetBinding", Version: "v1alpha1", ArtifactID: spec.TargetBindingRef}}, Outputs: []domain.ArtifactOutput{{Name: "strategy-deployment", Type: "StrategyDeployment", Version: "v1alpha1", MediaType: "application/json", Source: "/strategyDeployment"}}}}}, nil
 }
 
@@ -205,6 +217,15 @@ func (plugin Plugin) Precheck(ctx context.Context, step domain.PlanStep, log plu
 	runner := plugin.runner()
 	if _, err := runner.Run(ctx, cluster.Spec.Kubeconfig, nil, "get", "--raw=/readyz"); err != nil {
 		return unhealthy("Kubernetes API is not ready: "+err.Error(), "api", "unhealthy"), nil
+	}
+	if plugin.Kind == "descheduler" {
+		if application.Spec.ControlNamespace == "" || application.Spec.ControlNamespace != input.Namespace {
+			return unhealthy("The application deployment does not declare the expected experiment control namespace", "controlNamespace", "invalid"), nil
+		}
+		owned, ownershipErr := namespaceOwnership(ctx, runner, cluster.Spec.Kubeconfig, input.Namespace, application.Metadata.OwnershipMarker, applicationOwnershipKey)
+		if ownershipErr != nil || !owned {
+			return unhealthy("The shared experiment control namespace failed ownership verification", "controlNamespace", "unowned"), nil
+		}
 	}
 	if step.Cleanup {
 		if err := plugin.validateCleanupOwnership(ctx, cluster, application, binding, input); err != nil {
@@ -221,7 +242,18 @@ func (plugin Plugin) Precheck(ctx context.Context, step domain.PlanStep, log plu
 	if err != nil {
 		return unhealthy(err.Error(), "configuration", "invalid"), nil
 	}
-	if _, err := runner.Run(ctx, cluster.Spec.Kubeconfig, manifest, "apply", "--dry-run=server", "-f", "-"); err != nil {
+	if plugin.Kind == "descheduler" {
+		foundation, err := deschedulerAdmissionManifest(manifest)
+		if err != nil {
+			return unhealthy(err.Error(), "configuration", "invalid"), nil
+		}
+		if _, err := runner.Run(ctx, cluster.Spec.Kubeconfig, foundation, "apply", "--dry-run=server", "-f", "-"); err != nil {
+			return unhealthy("Descheduler RBAC failed server-side admission: "+err.Error(), "admission", "rejected"), nil
+		}
+		if _, err := runner.Run(ctx, cluster.Spec.Kubeconfig, manifest, "apply", "--dry-run=client", "--validate=true", "-f", "-"); err != nil {
+			return unhealthy("Descheduler component manifests failed schema validation: "+err.Error(), "schema", "rejected"), nil
+		}
+	} else if _, err := runner.Run(ctx, cluster.Spec.Kubeconfig, manifest, "apply", "--dry-run=server", "-f", "-"); err != nil {
 		return unhealthy("Kubernetes rejected the generated resources: "+err.Error(), "admission", "rejected"), nil
 	}
 	_ = log("info", fmt.Sprintf("Validated %s image and %d selected application targets", plugin.Kind, len(binding.Spec.Targets)))
@@ -241,8 +273,18 @@ func (plugin Plugin) Execute(ctx context.Context, step domain.PlanStep, log plug
 		return nil, err
 	}
 	if plugin.Kind == "descheduler" {
-		if _, err := plugin.runner().Run(ctx, cluster.Spec.Kubeconfig, nil, "rollout", "status", "deployment/descheduler", "-n", input.Name, "--timeout=5m"); err != nil {
-			return nil, err
+		if _, err := plugin.runner().Run(ctx, cluster.Spec.Kubeconfig, nil, "rollout", "status", "deployment/descheduler", "-n", input.Namespace, "--timeout=5m"); err != nil {
+			diagnostics := [][]string{
+				{"get", "pods", "-n", input.Namespace, "-o", "wide"},
+				{"describe", "deployment/descheduler", "-n", input.Namespace},
+				{"logs", "deployment/descheduler", "-n", input.Namespace, "--tail=100"},
+			}
+			for _, args := range diagnostics {
+				if value, diagnosticErr := plugin.runner().Run(ctx, cluster.Spec.Kubeconfig, nil, args...); diagnosticErr == nil && strings.TrimSpace(value) != "" {
+					_ = log("error", strings.Join(args, " ")+"\n"+value)
+				}
+			}
+			return nil, fmt.Errorf("descheduler rollout failed: %w", err)
 		}
 	} else if err := plugin.verifyAutoscalers(ctx, cluster, application, binding, input); err != nil {
 		return nil, err
@@ -258,6 +300,9 @@ func (plugin Plugin) Execute(ctx context.Context, step domain.PlanStep, log plug
 	value.StrategyDeployment.Spec.StrategyKind = plugin.Kind
 	value.StrategyDeployment.Spec.ClusterServer = cluster.Spec.Server
 	value.StrategyDeployment.Spec.Namespace = application.Spec.Namespace
+	if plugin.Kind == "descheduler" {
+		value.StrategyDeployment.Spec.Namespace = input.Namespace
+	}
 	value.StrategyDeployment.Spec.Image = input.Image
 	value.StrategyDeployment.Spec.Targets = targets
 	return json.Marshal(value)
@@ -279,7 +324,7 @@ func (plugin Plugin) Verify(ctx context.Context, step domain.PlanStep, raw json.
 		return unhealthy("Strategy result artifact is invalid", "artifact", "invalid"), nil
 	}
 	if plugin.Kind == "descheduler" {
-		if _, err := plugin.runner().Run(ctx, cluster.Spec.Kubeconfig, nil, "rollout", "status", "deployment/descheduler", "-n", input.Name, "--timeout=60s"); err != nil {
+		if _, err := plugin.runner().Run(ctx, cluster.Spec.Kubeconfig, nil, "rollout", "status", "deployment/descheduler", "-n", input.Namespace, "--timeout=60s"); err != nil {
 			return unhealthy(err.Error(), "runtime", "unhealthy"), nil
 		}
 	} else if err := plugin.verifyAutoscalers(ctx, cluster, application, binding, input); err != nil {
@@ -290,15 +335,14 @@ func (plugin Plugin) Verify(ctx context.Context, step domain.PlanStep, raw json.
 
 func (plugin Plugin) validateCleanupOwnership(ctx context.Context, cluster clusterConnection, application applicationDeployment, binding targetBinding, input stepInput) error {
 	if plugin.Kind == "descheduler" {
-		value, err := plugin.runner().Run(ctx, cluster.Spec.Kubeconfig, nil, "get", "namespace", input.Name, "-o", "json")
-		if err != nil && isNotFound(err) {
-			return nil
-		}
-		if err != nil {
-			return err
-		}
-		if !strings.Contains(value, input.Marker) {
-			return errors.New("descheduler namespace is not owned by this run")
+		for _, args := range deschedulerResources(input) {
+			value, err := plugin.runner().Run(ctx, cluster.Spec.Kubeconfig, nil, append(args, "--ignore-not-found", "-o", "jsonpath={.metadata.annotations.kubephos\\.dev/strategy-ownership}")...)
+			if err != nil {
+				return err
+			}
+			if strings.TrimSpace(value) != "" && strings.TrimSpace(value) != input.Marker {
+				return fmt.Errorf("Kubernetes resource %s is not owned by this operation", strings.Join(args[1:], "/"))
+			}
 		}
 		return nil
 	}
@@ -319,19 +363,14 @@ func (plugin Plugin) validateCleanupOwnership(ctx context.Context, cluster clust
 
 func (plugin Plugin) verifyCleanup(ctx context.Context, cluster clusterConnection, application applicationDeployment, binding targetBinding, input stepInput) error {
 	if plugin.Kind == "descheduler" {
-		_, err := plugin.runner().Run(ctx, cluster.Spec.Kubeconfig, nil, "get", "namespace", input.Name)
-		if err == nil {
-			return errors.New("descheduler namespace still exists")
-		}
-		if !isNotFound(err) {
-			return err
-		}
-		_, err = plugin.runner().Run(ctx, cluster.Spec.Kubeconfig, nil, "get", "clusterrolebinding", input.Name)
-		if err == nil {
-			return errors.New("descheduler cluster role binding still exists")
-		}
-		if !isNotFound(err) {
-			return err
+		for _, args := range deschedulerResources(input) {
+			value, err := plugin.runner().Run(ctx, cluster.Spec.Kubeconfig, nil, append(args, "--ignore-not-found", "-o", "name")...)
+			if err != nil {
+				return err
+			}
+			if strings.TrimSpace(value) != "" {
+				return fmt.Errorf("Kubernetes resource %s remains after cleanup", strings.Join(args[1:], "/"))
+			}
 		}
 		return nil
 	}
@@ -362,22 +401,187 @@ func (plugin Plugin) Cleanup(ctx context.Context, step domain.PlanStep, _ json.R
 
 func (plugin Plugin) manifest(input stepInput, application applicationDeployment, binding targetBinding) ([]byte, error) {
 	if plugin.Kind == "descheduler" {
-		return deschedulerManifest(input), nil
+		return deschedulerManifest(input, application, binding)
 	}
 	return autoscalerManifest(input, application, binding)
 }
 
-func deschedulerManifest(input stepInput) []byte {
+func deschedulerAdmissionManifest(manifest []byte) ([]byte, error) {
+	objects := []map[string]any{}
+	for _, document := range strings.Split(string(manifest), "\n---\n") {
+		object := map[string]any{}
+		if err := json.Unmarshal([]byte(document), &object); err != nil {
+			return nil, err
+		}
+		kind := fmt.Sprint(object["kind"])
+		if kind == "ClusterRoleBinding" {
+			objects = append(objects, object)
+		}
+	}
+	if len(objects) != 1 {
+		return nil, errors.New("descheduler admission manifest is incomplete")
+	}
+	return marshalDocuments(objects), nil
+}
+
+func scopedDeschedulerPolicy(raw, namespace string, targets []workloadTarget) (string, error) {
+	if len(raw) > 131072 {
+		return "", errors.New("descheduler policy exceeds 128 KiB")
+	}
+	policy := map[string]any{}
+	if err := yaml.Unmarshal([]byte(raw), &policy); err != nil || policy["apiVersion"] != "descheduler/v1alpha2" || policy["kind"] != "DeschedulerPolicy" {
+		return "", errors.New("descheduler policy must be a descheduler/v1alpha2 DeschedulerPolicy")
+	}
+	profiles, ok := policy["profiles"].([]any)
+	if !ok || len(profiles) == 0 {
+		return "", errors.New("descheduler policy must contain at least one profile")
+	}
+	componentIDs := make([]string, 0, len(targets))
+	seen := map[string]bool{}
+	for _, target := range targets {
+		if target.ID == "" || seen[target.ID] {
+			return "", errors.New("descheduler targets must have unique component IDs")
+		}
+		seen[target.ID] = true
+		componentIDs = append(componentIDs, target.ID)
+	}
+	if namespace == "" || len(componentIDs) == 0 {
+		return "", errors.New("descheduler policy scope is empty")
+	}
+	sort.Strings(componentIDs)
+	for index, item := range profiles {
+		profile, ok := item.(map[string]any)
+		if !ok {
+			return "", fmt.Errorf("descheduler profile %d must be an object", index+1)
+		}
+		configs := []any{}
+		if rawConfigs := profile["pluginConfig"]; rawConfigs != nil {
+			var valid bool
+			configs, valid = rawConfigs.([]any)
+			if !valid {
+				return "", fmt.Errorf("descheduler profile %d pluginConfig must be an array", index+1)
+			}
+		}
+		var evictor map[string]any
+		for _, rawConfig := range configs {
+			config, valid := rawConfig.(map[string]any)
+			if !valid {
+				return "", fmt.Errorf("descheduler profile %d contains an invalid plugin configuration", index+1)
+			}
+			if fmt.Sprint(config["name"]) == "DefaultEvictor" {
+				evictor = config
+				break
+			}
+		}
+		if evictor == nil {
+			evictor = map[string]any{"name": "DefaultEvictor"}
+			configs = append(configs, evictor)
+		}
+		args := map[string]any{}
+		if rawArgs := evictor["args"]; rawArgs != nil {
+			var valid bool
+			args, valid = rawArgs.(map[string]any)
+			if !valid {
+				return "", fmt.Errorf("descheduler profile %d DefaultEvictor args must be an object", index+1)
+			}
+		}
+		labelSelector, err := constrainedSelector(args["labelSelector"], applicationComponentLabel, componentIDs, false)
+		if err != nil {
+			return "", fmt.Errorf("descheduler profile %d label selector: %w", index+1, err)
+		}
+		namespaceSelector, err := constrainedSelector(args["namespaceLabelSelector"], applicationNamespaceLabel, []string{namespace}, true)
+		if err != nil {
+			return "", fmt.Errorf("descheduler profile %d namespace selector: %w", index+1, err)
+		}
+		args["labelSelector"] = labelSelector
+		args["namespaceLabelSelector"] = namespaceSelector
+		evictor["args"] = args
+		profile["pluginConfig"] = configs
+		profiles[index] = profile
+	}
+	policy["profiles"] = profiles
+	value, err := yaml.Marshal(policy)
+	if err != nil {
+		return "", err
+	}
+	return string(value), nil
+}
+
+func constrainedSelector(raw any, key string, values []string, matchLabel bool) (map[string]any, error) {
+	selector := map[string]any{}
+	if raw != nil {
+		var ok bool
+		selector, ok = raw.(map[string]any)
+		if !ok {
+			return nil, errors.New("selector must be an object")
+		}
+	}
+	matchLabels := map[string]any{}
+	if rawLabels := selector["matchLabels"]; rawLabels != nil {
+		var ok bool
+		matchLabels, ok = rawLabels.(map[string]any)
+		if !ok {
+			return nil, errors.New("matchLabels must be an object")
+		}
+	}
+	delete(matchLabels, key)
+	expressions := []any{}
+	if rawExpressions := selector["matchExpressions"]; rawExpressions != nil {
+		items, ok := rawExpressions.([]any)
+		if !ok {
+			return nil, errors.New("matchExpressions must be an array")
+		}
+		for _, item := range items {
+			expression, ok := item.(map[string]any)
+			if !ok {
+				return nil, errors.New("matchExpressions entries must be objects")
+			}
+			if fmt.Sprint(expression["key"]) != key {
+				expressions = append(expressions, expression)
+			}
+		}
+	}
+	if matchLabel {
+		matchLabels[key] = values[0]
+	} else {
+		expressions = append(expressions, map[string]any{"key": key, "operator": "In", "values": values})
+	}
+	if len(matchLabels) > 0 {
+		selector["matchLabels"] = matchLabels
+	} else {
+		delete(selector, "matchLabels")
+	}
+	if len(expressions) > 0 {
+		selector["matchExpressions"] = expressions
+	} else {
+		delete(selector, "matchExpressions")
+	}
+	return selector, nil
+}
+
+func deschedulerManifest(input stepInput, application applicationDeployment, binding targetBinding) ([]byte, error) {
+	policy, err := scopedDeschedulerPolicy(input.ConfigFile, application.Spec.Namespace, binding.Spec.Targets)
+	if err != nil {
+		return nil, err
+	}
 	labels := map[string]string{"app.kubernetes.io/name": "kubephos-descheduler", "app.kubernetes.io/managed-by": "kubephos"}
 	annotations := map[string]string{ownershipKey: input.Marker}
 	objects := []map[string]any{
-		{"apiVersion": "v1", "kind": "Namespace", "metadata": map[string]any{"name": input.Name, "labels": labels, "annotations": annotations}},
-		{"apiVersion": "v1", "kind": "ServiceAccount", "metadata": map[string]any{"name": "descheduler", "namespace": input.Name, "labels": labels, "annotations": annotations}},
-		{"apiVersion": "rbac.authorization.k8s.io/v1", "kind": "ClusterRoleBinding", "metadata": map[string]any{"name": input.Name, "labels": labels, "annotations": annotations}, "subjects": []map[string]string{{"kind": "ServiceAccount", "name": "descheduler", "namespace": input.Name}}, "roleRef": map[string]string{"apiGroup": "rbac.authorization.k8s.io", "kind": "ClusterRole", "name": "cluster-admin"}},
-		{"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]any{"name": "policy", "namespace": input.Name, "labels": labels, "annotations": annotations}, "data": map[string]string{"policy.yaml": input.ConfigFile}},
-		{"apiVersion": "apps/v1", "kind": "Deployment", "metadata": map[string]any{"name": "descheduler", "namespace": input.Name, "labels": labels, "annotations": annotations}, "spec": map[string]any{"replicas": 1, "selector": map[string]any{"matchLabels": map[string]string{"app.kubernetes.io/name": "kubephos-descheduler"}}, "template": map[string]any{"metadata": map[string]any{"labels": labels, "annotations": annotations}, "spec": map[string]any{"serviceAccountName": "descheduler", "nodeSelector": map[string]string{"kubephos.dev/role": "management"}, "containers": []map[string]any{{"name": "descheduler", "image": input.Image, "imagePullPolicy": "IfNotPresent", "args": []string{"--policy-config-file=/policy-dir/policy.yaml", "--descheduling-interval=" + fmt.Sprint(input.IntervalSeconds) + "s"}, "volumeMounts": []map[string]any{{"name": "policy", "mountPath": "/policy-dir", "readOnly": true}}, "resources": map[string]any{"requests": map[string]string{"cpu": "50m", "memory": "64Mi"}, "limits": map[string]string{"cpu": "500m", "memory": "256Mi"}}, "securityContext": map[string]any{"allowPrivilegeEscalation": false, "readOnlyRootFilesystem": true}}}, "volumes": []map[string]any{{"name": "policy", "configMap": map[string]string{"name": "policy"}}}}}}},
+		{"apiVersion": "v1", "kind": "ServiceAccount", "metadata": map[string]any{"name": "descheduler", "namespace": input.Namespace, "labels": labels, "annotations": annotations}},
+		{"apiVersion": "rbac.authorization.k8s.io/v1", "kind": "ClusterRoleBinding", "metadata": map[string]any{"name": input.Name, "labels": labels, "annotations": annotations}, "subjects": []map[string]string{{"kind": "ServiceAccount", "name": "descheduler", "namespace": input.Namespace}}, "roleRef": map[string]string{"apiGroup": "rbac.authorization.k8s.io", "kind": "ClusterRole", "name": "cluster-admin"}},
+		{"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]any{"name": "policy", "namespace": input.Namespace, "labels": labels, "annotations": annotations}, "data": map[string]string{"policy.yaml": policy}},
+		{"apiVersion": "apps/v1", "kind": "Deployment", "metadata": map[string]any{"name": "descheduler", "namespace": input.Namespace, "labels": labels, "annotations": annotations}, "spec": map[string]any{"replicas": 1, "selector": map[string]any{"matchLabels": map[string]string{"app.kubernetes.io/name": "kubephos-descheduler"}}, "template": map[string]any{"metadata": map[string]any{"labels": labels, "annotations": annotations}, "spec": map[string]any{"serviceAccountName": "descheduler", "nodeSelector": map[string]string{"kubephos.dev/role": "management"}, "containers": []map[string]any{{"name": "descheduler", "image": input.Image, "imagePullPolicy": "IfNotPresent", "command": []string{"/bin/descheduler"}, "args": []string{"--policy-config-file=/policy-dir/policy.yaml", "--descheduling-interval=" + fmt.Sprint(input.IntervalSeconds) + "s"}, "volumeMounts": []map[string]any{{"name": "policy", "mountPath": "/policy-dir", "readOnly": true}}, "resources": map[string]any{"requests": map[string]string{"cpu": "50m", "memory": "64Mi"}, "limits": map[string]string{"cpu": "500m", "memory": "256Mi"}}, "securityContext": map[string]any{"allowPrivilegeEscalation": false, "readOnlyRootFilesystem": true}}}, "volumes": []map[string]any{{"name": "policy", "configMap": map[string]string{"name": "policy"}}}}}}},
 	}
-	return marshalDocuments(objects)
+	return marshalDocuments(objects), nil
+}
+
+func deschedulerResources(input stepInput) [][]string {
+	return [][]string{
+		{"get", "deployment", "descheduler", "-n", input.Namespace},
+		{"get", "serviceaccount", "descheduler", "-n", input.Namespace},
+		{"get", "configmap", "policy", "-n", input.Namespace},
+		{"get", "clusterrolebinding", input.Name},
+	}
 }
 
 func autoscalerManifest(input stepInput, application applicationDeployment, binding targetBinding) ([]byte, error) {
@@ -394,7 +598,12 @@ func autoscalerManifest(input stepInput, application applicationDeployment, bind
 			return nil, fmt.Errorf("autoscaler override target %s is not selected", target)
 		}
 	}
-	objects := []map[string]any{}
+	labels := map[string]string{"app.kubernetes.io/name": "kubephos-autoscaler", "app.kubernetes.io/managed-by": "kubephos"}
+	annotations := map[string]string{ownershipKey: input.Marker}
+	objects := []map[string]any{
+		{"apiVersion": "v1", "kind": "ServiceAccount", "metadata": map[string]any{"name": input.Name, "namespace": application.Spec.Namespace, "labels": labels, "annotations": annotations}},
+		{"apiVersion": "rbac.authorization.k8s.io/v1", "kind": "ClusterRoleBinding", "metadata": map[string]any{"name": input.Name, "labels": labels, "annotations": annotations}, "subjects": []map[string]string{{"kind": "ServiceAccount", "name": input.Name, "namespace": application.Spec.Namespace}}, "roleRef": map[string]string{"apiGroup": "rbac.authorization.k8s.io", "kind": "ClusterRole", "name": "cluster-admin"}},
+	}
 	for _, target := range binding.Spec.Targets {
 		settings := autoscalerSettings{IntervalSeconds: input.IntervalSeconds, MinReplicas: input.MinReplicas, MaxReplicas: input.MaxReplicas, Parameters: input.Parameters}
 		if override, ok := overrides[target.ID]; ok {
@@ -407,7 +616,7 @@ func autoscalerManifest(input stepInput, application applicationDeployment, bind
 		name := resourceName(input.Name, target.ID)
 		metadata := map[string]any{"name": name, "namespace": application.Spec.Namespace, "labels": map[string]string{"app.kubernetes.io/managed-by": "kubephos", "kubephos.dev/application-component": target.ID}, "annotations": map[string]string{ownershipKey: input.Marker}}
 		container := map[string]any{"name": "custom-pod-autoscaler", "image": input.Image, "imagePullPolicy": "IfNotPresent", "volumeMounts": []map[string]any{{"name": "configuration", "mountPath": "/etc/custom-pod-autoscaler", "readOnly": true}}, "resources": map[string]any{"requests": map[string]string{"cpu": "25m", "memory": "64Mi"}, "limits": map[string]string{"cpu": "500m", "memory": "256Mi"}}}
-		podSpec := map[string]any{"nodeSelector": map[string]string{"kubephos.dev/role": "management"}, "containers": []map[string]any{container}, "volumes": []map[string]any{{"name": "configuration", "configMap": map[string]string{"name": name}}}}
+		podSpec := map[string]any{"serviceAccountName": input.Name, "nodeSelector": map[string]string{"kubephos.dev/role": "management"}, "containers": []map[string]any{container}, "volumes": []map[string]any{{"name": "configuration", "configMap": map[string]string{"name": name}}}}
 		autoscalerSpec := map[string]any{"scaleTargetRef": map[string]string{"apiVersion": target.APIVersion, "kind": target.Kind, "name": target.Name}, "config": []map[string]string{{"name": "interval", "value": fmt.Sprint(settings.IntervalSeconds * 1000)}, {"name": "minReplicas", "value": fmt.Sprint(settings.MinReplicas)}, {"name": "maxReplicas", "value": fmt.Sprint(settings.MaxReplicas)}}, "template": map[string]any{"metadata": map[string]any{"annotations": map[string]string{ownershipKey: input.Marker}}, "spec": podSpec}}
 		objects = append(objects,
 			map[string]any{"apiVersion": "v1", "kind": "ConfigMap", "metadata": metadata, "data": map[string]string{"config.json": string(configuration)}},
@@ -487,7 +696,7 @@ func resolve(step domain.PlanStep) (stepInput, clusterConnection, applicationDep
 }
 
 func validateArtifacts(kind string, cluster clusterConnection, application applicationDeployment, binding targetBinding) error {
-	trait := "schedulable"
+	trait := "deschedulable"
 	if kind == "autoscaler" {
 		trait = "scalable"
 	}
@@ -520,21 +729,17 @@ func resourceName(prefix, target string) string {
 	return strings.TrimRight(value, "-")
 }
 
-func validImage(value string) bool {
-	parts := strings.Split(value, "@sha256:")
-	if len(parts) != 2 || parts[0] == "" || len(parts[1]) != 64 || strings.ContainsAny(value, " \t\r\n") {
-		return false
-	}
-	_, err := hex.DecodeString(parts[1])
-	return err == nil
+func imageVersion(value string) string {
+	return managedregistry.ProxyImageVersion(value)
 }
 
-func imageVersion(value string) string {
-	parts := strings.Split(value, "@sha256:")
-	if len(parts) == 2 && len(parts[1]) >= 12 {
-		return parts[1][:12]
+func namespaceOwnership(ctx context.Context, runner commandRunner, kubeconfig, namespace, marker, key string) (bool, error) {
+	jsonPath := "jsonpath={.metadata.annotations." + strings.ReplaceAll(key, ".", "\\.") + "}"
+	value, err := runner.Run(ctx, kubeconfig, nil, "get", "namespace", namespace, "--ignore-not-found", "-o", jsonPath)
+	if err != nil {
+		return false, err
 	}
-	return "unknown"
+	return strings.TrimSpace(value) == marker, nil
 }
 
 func contains(values []string, expected string) bool {
@@ -570,12 +775,29 @@ func (plugin Plugin) runner() commandRunner {
 type kubectlRunner struct{}
 
 func (kubectlRunner) Run(ctx context.Context, kubeconfig string, stdin []byte, args ...string) (string, error) {
-	command := exec.CommandContext(ctx, "kubectl", args...)
-	command.Env = append(os.Environ(), "KUBECONFIG="+kubeconfig)
-	command.Stdin = bytes.NewReader(stdin)
-	output, err := command.CombinedOutput()
+	directory, err := os.MkdirTemp("", "kubephos-cluster-*")
 	if err != nil {
-		return string(output), fmt.Errorf("kubectl %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(string(output)))
+		return "", err
 	}
-	return string(output), nil
+	defer os.RemoveAll(directory)
+	path := directory + "/kubeconfig"
+	if err := os.WriteFile(path, []byte(kubeconfig), 0600); err != nil {
+		return "", err
+	}
+	command := exec.CommandContext(ctx, "kubectl", append([]string{"--kubeconfig", path}, args...)...)
+	if stdin != nil {
+		command.Stdin = bytes.NewReader(stdin)
+	}
+	output, err := command.CombinedOutput()
+	message := strings.TrimSpace(string(output))
+	if err != nil {
+		if message == "" {
+			message = err.Error()
+		}
+		if len(message) > 2000 {
+			message = message[:2000]
+		}
+		return "", fmt.Errorf("kubectl %s: %s", strings.Join(args, " "), message)
+	}
+	return message, nil
 }

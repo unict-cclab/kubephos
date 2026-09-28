@@ -14,7 +14,7 @@ import (
 	"kubephos.dev/kubephos/internal/domain"
 )
 
-const testSchedulerImage = "harbor.example.test/kubephos/scheduler@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+const testSchedulerImage = "ghcr.io/unict-cclab/kube-scheduler:v0.1.0"
 
 func TestSecondarySchedulerLifecycle(t *testing.T) {
 	runner := &fakeRunner{}
@@ -54,6 +54,9 @@ func TestSecondarySchedulerLifecycle(t *testing.T) {
 	}
 	if decoded.SchedulerDeployment.Spec.Image != testSchedulerImage || decoded.SchedulerDeployment.Spec.Targets[0].ID != "frontend" {
 		t.Fatalf("unexpected result %#v", decoded)
+	}
+	if !strings.HasPrefix(decoded.SchedulerDeployment.Spec.Namespace, "kubephos-control-") {
+		t.Fatalf("scheduler was not deployed in the shared control namespace: %#v", decoded.SchedulerDeployment.Spec)
 	}
 	step.Cleanup = true
 	health, err = plugin.Precheck(context.Background(), step, discardLog)
@@ -154,8 +157,11 @@ func TestSchedulerManifestUsesManagedTaggedImage(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(value)
-	if !strings.Contains(text, testSchedulerImage) || strings.Contains(text, ":latest") || !strings.Contains(text, "system:kube-scheduler") || !strings.Contains(text, "system:volume-scheduler") || !strings.Contains(text, "--config=/etc/kubephos/scheduler.yaml") {
+	if !strings.Contains(text, testSchedulerImage) || strings.Contains(text, ":latest") || !strings.Contains(text, "cluster-admin") || !strings.Contains(text, "system:volume-scheduler") || !strings.Contains(text, "--config=/etc/kubephos/scheduler.yaml") {
 		t.Fatalf("unexpected scheduler manifest %s", text)
+	}
+	if !strings.Contains(text, "kubeconfig: /etc/kubephos/kubeconfig") || !strings.Contains(text, "tokenFile: /var/run/secrets/kubernetes.io/serviceaccount/token") || !strings.Contains(text, "server: https://kubernetes.default.svc") {
+		t.Fatalf("scheduler manifest is missing in-cluster authentication %s", text)
 	}
 	if !strings.Contains(text, "schedulerName: kubephos-test") || strings.Contains(text, "schedulerName: kubephos-managed") {
 		t.Fatalf("scheduler name was not isolated in generated configuration %s", text)
@@ -199,7 +205,7 @@ func testArtifacts() map[string]domain.ResolvedArtifact {
 	kubeconfig := "apiVersion: v1\nkind: Config\ncurrent-context: managed\nclusters:\n- name: managed\n  cluster:\n    server: https://10.10.0.10:6443\ncontexts:\n- name: managed\n  context:\n    cluster: managed\n    user: admin\nusers:\n- name: admin\n  user:\n    client-certificate-data: " + certificate + "\n    client-key-data: " + key + "\n"
 	cluster, _ := json.Marshal(map[string]any{"apiVersion": artifactAPI, "kind": "ClusterConnection", "metadata": map[string]string{"name": "development", "version": "v1.36.0+k3s1"}, "spec": map[string]string{"distribution": "k3s", "server": "https://10.10.0.10:6443", "kubeconfig": kubeconfig}})
 	target := workloadTarget{ID: "frontend", APIVersion: "apps/v1", Kind: "Deployment", Name: "frontend", Selector: map[string]string{"app": "frontend"}, Traits: []string{"scalable", "schedulable"}}
-	application, _ := json.Marshal(map[string]any{"apiVersion": artifactAPI, "kind": "ApplicationDeployment", "metadata": map[string]string{"name": "kubephos-app-one", "version": "v1alpha1", "ownershipMarker": "application-marker"}, "spec": map[string]any{"applicationRef": "app:dev.example.app@1.0.0", "clusterServer": "https://10.10.0.10:6443", "namespace": "kubephos-app-one", "manifestDigest": "sha256:" + strings.Repeat("a", 64), "workloads": []workloadTarget{target}}})
+	application, _ := json.Marshal(map[string]any{"apiVersion": artifactAPI, "kind": "ApplicationDeployment", "metadata": map[string]string{"name": "kubephos-app-one", "version": "v1alpha1", "ownershipMarker": "application-marker"}, "spec": map[string]any{"applicationRef": "app:dev.example.app@1.0.0", "clusterServer": "https://10.10.0.10:6443", "namespace": "kubephos-app-one", "controlNamespace": "kubephos-control-" + domain.RuntimeExecutionIDToken, "manifestDigest": "sha256:" + strings.Repeat("a", 64), "workloads": []workloadTarget{target}}})
 	targets, _ := json.Marshal([]workloadTarget{target})
 	digest := sha256.Sum256(targets)
 	binding, _ := json.Marshal(map[string]any{"apiVersion": artifactAPI, "kind": "TargetBinding", "metadata": map[string]string{"name": "workload-targets-schedulable", "version": "v1alpha1"}, "spec": map[string]any{"sourceArtifactId": "art_workloads", "sourceDigest": "sha256:" + hex.EncodeToString(digest[:]), "requiredTrait": "schedulable", "includeComponentIds": []string{"frontend"}, "excludeComponentIds": []string{}, "targets": []workloadTarget{target}}})
@@ -234,13 +240,16 @@ func (runner *fakeRunner) Run(_ context.Context, _ string, stdin []byte, args ..
 	if strings.HasPrefix(command, "get namespace kubephos-app-one") && strings.Contains(command, "jsonpath=") {
 		return "application-marker", nil
 	}
+	if strings.HasPrefix(command, "get namespace kubephos-control-") && strings.Contains(command, "ownership-marker") {
+		return "application-marker", nil
+	}
 	if strings.HasPrefix(command, "get deployment/frontend ") && strings.HasSuffix(command, "-o json") {
 		return runner.workloadJSON(), nil
 	}
 	if strings.HasPrefix(command, "apply --dry-run=server") || strings.HasPrefix(command, "apply --dry-run=client") || strings.Contains(command, "patch deployment/frontend") && strings.Contains(command, "--dry-run=server") {
 		return "accepted", nil
 	}
-	if strings.HasPrefix(command, "get namespace kubephos-") || strings.HasPrefix(command, "get clusterrolebinding kubephos-") || strings.HasPrefix(command, "get rolebinding kubephos-") {
+	if strings.HasPrefix(command, "get serviceaccount scheduler ") || strings.HasPrefix(command, "get configmap scheduler-config ") || strings.HasPrefix(command, "get deployment scheduler ") || strings.HasPrefix(command, "get clusterrolebinding kubephos-") || strings.HasPrefix(command, "get rolebinding kubephos-") {
 		if !runner.installed {
 			return "", nil
 		}
@@ -251,20 +260,23 @@ func (runner *fakeRunner) Run(_ context.Context, _ string, stdin []byte, args ..
 	}
 	if command == "apply -f -" {
 		runner.installed = true
-		var namespace struct {
+		var resource struct {
 			Kind     string `json:"kind"`
 			Metadata struct {
 				Name        string            `json:"name"`
+				Labels      map[string]string `json:"labels"`
 				Annotations map[string]string `json:"annotations"`
 			} `json:"metadata"`
 		}
-		first := strings.Split(string(stdin), "\n---\n")[0]
-		if err := json.Unmarshal([]byte(first), &namespace); err != nil {
-			return "", err
-		}
-		if namespace.Kind == "Namespace" {
-			runner.schedulerName = namespace.Metadata.Name
-			runner.marker = namespace.Metadata.Annotations[ownershipKey]
+		for _, document := range strings.Split(string(stdin), "\n---\n") {
+			if err := json.Unmarshal([]byte(document), &resource); err != nil {
+				return "", err
+			}
+			if value := resource.Metadata.Labels["app.kubernetes.io/instance"]; value != "" {
+				runner.schedulerName = value
+				runner.marker = resource.Metadata.Annotations[ownershipKey]
+				break
+			}
 		}
 		return "created", nil
 	}

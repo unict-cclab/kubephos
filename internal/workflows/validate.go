@@ -139,7 +139,26 @@ func validate(ctx context.Context, registry *plugins.Registry, definition domain
 	resolution := domain.PipelineResolution{Stages: make([]domain.ResolvedPipelineStage, 0, len(normalized.Stages))}
 	issues := []domain.ValidationIssue{}
 	outputs := map[string]map[string]domain.ArtifactContract{}
+	visited := map[string]bool{}
 	for position, stage := range normalized.Stages {
+		blocked := false
+		for _, binding := range stage.Bindings {
+			if visited[binding.FromStage] {
+				if _, ok := outputs[binding.FromStage]; !ok {
+					blocked = true
+					issues = append(issues, domain.ValidationIssue{
+						Level:   "error",
+						Path:    "stages." + stage.ID,
+						Message: "Cannot validate this stage because the earlier stage " + binding.FromStage + " did not validate.",
+					})
+					break
+				}
+			}
+		}
+		visited[stage.ID] = true
+		if blocked {
+			continue
+		}
 		plugin, err := registry.Get(stage.PluginID)
 		if err != nil {
 			return Result{}, fmt.Errorf("stage %q: %w", stage.ID, err)

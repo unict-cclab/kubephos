@@ -85,6 +85,20 @@ spec:
 	}
 }
 
+func TestPluginOutputLimitSupportsMetricsDatasets(t *testing.T) {
+	if pluginOutputLimit != 16*commandOutputLimit {
+		t.Fatalf("plugin output limit = %d, command output limit = %d", pluginOutputLimit, commandOutputLimit)
+	}
+	buffer := &limitedBuffer{limit: pluginOutputLimit}
+	payload := make([]byte, commandOutputLimit+1)
+	if _, err := buffer.Write(payload); err != nil {
+		t.Fatal(err)
+	}
+	if buffer.exceeded || len(buffer.Bytes()) != len(payload) {
+		t.Fatalf("metrics-sized payload was truncated: bytes=%d exceeded=%t", len(buffer.Bytes()), buffer.exceeded)
+	}
+}
+
 func TestValidatePackageRejectsIdentityMismatch(t *testing.T) {
 	directory := t.TempDir()
 	executable := filepath.Join(directory, "example-plugin")

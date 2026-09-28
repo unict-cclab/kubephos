@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -115,6 +116,8 @@ type serviceEndpoint struct {
 	Port      int    `json:"port"`
 	Protocol  string `json:"protocol"`
 	Path      string `json:"path,omitempty"`
+	URL       string `json:"url,omitempty"`
+	External  bool   `json:"external,omitempty"`
 }
 
 type loadProfileSet struct {
@@ -130,13 +133,14 @@ type loadProfileSet struct {
 }
 
 type loadProfile struct {
-	ID             string         `json:"id"`
-	Engine         string         `json:"engine"`
-	TargetEndpoint string         `json:"targetEndpoint"`
-	RuntimeImage   string         `json:"runtimeImage"`
-	Script         string         `json:"script"`
-	ScriptDigest   string         `json:"scriptDigest"`
-	Workload       workloadTarget `json:"-"`
+	ID             string            `json:"id"`
+	Engine         string            `json:"engine"`
+	TargetEndpoint string            `json:"targetEndpoint"`
+	RuntimeImage   string            `json:"runtimeImage"`
+	Script         string            `json:"script"`
+	ScriptDigest   string            `json:"scriptDigest"`
+	Parameters     map[string]string `json:"parameters,omitempty"`
+	Workload       workloadTarget    `json:"-"`
 }
 
 type workloadTarget struct {
@@ -248,8 +252,8 @@ type commandRunner interface {
 
 func (Plugin) Manifest() plugins.Manifest {
 	return plugins.Manifest{
-		ID: pluginID, Name: "Interactive Kubernetes load session", Version: "0.6.1",
-		Description:     "Runs an ordered RPS and geographic timeline using the immutable Locust journey declared by an application.",
+		ID: pluginID, Name: "Interactive Kubernetes load session", Version: "0.7.0",
+		Description:     "Runs an ordered RPS timeline using a verified Locust journey against a catalog application or external HTTP destination.",
 		Schema:          json.RawMessage(`{"type":"object","additionalProperties":false,"required":["clusterConnectionRef","applicationDeploymentRef","loadScenarioSetRef","scenarioId","action","replicas","maxUsers","spawnRate"],"properties":{"clusterConnectionRef":{"type":"string","title":"Kubernetes cluster","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ClusterConnection","x-kubephos-artifact-version":"v1alpha1"},"applicationDeploymentRef":{"type":"string","title":"Application deployment","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ApplicationDeployment","x-kubephos-artifact-version":"v1alpha1"},"loadScenarioSetRef":{"type":"string","title":"Load scenarios","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"LoadScenarioSet","x-kubephos-artifact-version":"v1alpha1"},"scenarioId":{"type":"string","title":"Load scenario","description":"User behavior implemented by the Locust file supplied by the selected application.","minLength":1,"maxLength":63,"default":"storefront-journey"},"action":{"type":"string","title":"Action","x-kubephos-primary-action":true,"enum":["start","stop","resume"],"default":"start"},"interactive":{"type":"boolean","title":"Interactive session","default":false},"replicas":{"type":"integer","title":"Load workers","minimum":1,"maximum":100,"default":1},"maxUsers":{"type":"integer","title":"Maximum concurrent users per worker","minimum":1,"maximum":100000,"default":1000},"spawnRate":{"type":"number","title":"Users started per second","minimum":0.1,"maximum":100000,"default":10},"steps":{"type":"array","title":"Temporal workload timeline","maxItems":100,"items":{"type":"object"}},"geographicSteps":{"type":"array","title":"Geographic traffic timeline","maxItems":100,"items":{"type":"object"}}}}`),
 		ArtifactInputs:  []domain.ArtifactContract{{Type: "ClusterConnection", Version: "v1alpha1"}, {Type: "ApplicationDeployment", Version: "v1alpha1"}, {Type: "LoadScenarioSet", Version: "v1alpha1"}},
 		ArtifactOutputs: []domain.ArtifactContract{{Type: "LoadSession", Version: "v1alpha1"}},
@@ -405,7 +409,7 @@ func (plugin Plugin) Precheck(ctx context.Context, step domain.PlanStep, log plu
 			return unhealthy("Only a stopped load workload owned by this application can be resumed", "loadSession", "invalid-transition"), nil
 		}
 	}
-	if spec.Action != "stop" {
+	if spec.Action != "stop" && !endpoint.External {
 		addresses, err := runner.Run(ctx, cluster.Spec.Kubeconfig, nil, "get", "endpoints", endpoint.Service, "-n", deployment.Spec.Namespace, "-o", "jsonpath={.subsets[*].addresses[*].ip}")
 		if err != nil || strings.TrimSpace(addresses) == "" {
 			return unhealthy("The declared load target has no ready backend", "targetEndpoint", "unhealthy"), nil
@@ -560,9 +564,11 @@ func (plugin Plugin) Verify(ctx context.Context, step domain.PlanStep, raw json.
 		if err := waitForReady(ctx, runner, cluster.Spec.Kubeconfig, deployment.Spec.Namespace, profile, expectedReplicas, log); err != nil {
 			return unhealthy(err.Error(), "loadSession", "unhealthy"), nil
 		}
-		addresses, err := runner.Run(ctx, cluster.Spec.Kubeconfig, nil, "get", "endpoints", endpoint.Service, "-n", deployment.Spec.Namespace, "-o", "jsonpath={.subsets[*].addresses[*].ip}")
-		if err != nil || strings.TrimSpace(addresses) == "" {
-			return unhealthy("Load target became unavailable", "targetEndpoint", "unhealthy"), nil
+		if !endpoint.External {
+			addresses, err := runner.Run(ctx, cluster.Spec.Kubeconfig, nil, "get", "endpoints", endpoint.Service, "-n", deployment.Spec.Namespace, "-o", "jsonpath={.subsets[*].addresses[*].ip}")
+			if err != nil || strings.TrimSpace(addresses) == "" {
+				return unhealthy("Load target became unavailable", "targetEndpoint", "unhealthy"), nil
+			}
 		}
 	} else if err := waitForStopped(ctx, runner, cluster.Spec.Kubeconfig, deployment.Spec.Namespace, profile, log); err != nil {
 		return unhealthy(err.Error(), "loadSession", "unhealthy"), nil
@@ -683,6 +689,22 @@ func validateArtifacts(cluster clusterConnection, deployment applicationDeployme
 	}
 	if profile.ID == "" || profile.Engine != "locust" || profile.TargetEndpoint != endpoint.ID || profile.RuntimeImage == "" || strings.ContainsAny(profile.RuntimeImage, "\n\r ") || profile.Script == "" || profile.Workload.ID != profile.ID || profile.Workload.APIVersion == "" || profile.Workload.Kind == "" || profile.Workload.Name == "" || len(profile.Workload.Selector) == 0 {
 		return errors.New("load scenario interface is invalid")
+	}
+	seenParameters := map[string]bool{}
+	for name, value := range profile.Parameters {
+		key := strings.ToUpper(name)
+		if !regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,63}$`).MatchString(name) || len(value) > 4096 || seenParameters[key] {
+			return errors.New("load scenario parameters are invalid")
+		}
+		seenParameters[key] = true
+	}
+	if endpoint.External {
+		target, err := url.Parse(endpoint.URL)
+		if err != nil || (target.Scheme != "http" && target.Scheme != "https") || target.Host == "" || target.User != nil || target.Fragment != "" || endpoint.Protocol != target.Scheme {
+			return errors.New("external load endpoint is invalid")
+		}
+	} else if endpoint.Service == "" || endpoint.Port < 1 || endpoint.Port > 65535 || (endpoint.Protocol != "http" && endpoint.Protocol != "https") {
+		return errors.New("application load endpoint is invalid")
 	}
 	scriptDigest := sha256.Sum256([]byte(profile.Script))
 	if profile.ScriptDigest != "sha256:"+hex.EncodeToString(scriptDigest[:]) {
@@ -1056,6 +1078,12 @@ func scenarioWorkload(scenarioID string) workloadTarget {
 }
 
 func resolveLoadTargets(ctx context.Context, runner commandRunner, kubeconfig, namespace string, endpoint serviceEndpoint, spec Spec) ([]loadTarget, error) {
+	if endpoint.External {
+		if len(spec.GeographicSteps) != 0 {
+			return nil, errors.New("geographic traffic distribution is unavailable for a single external destination")
+		}
+		return []loadTarget{{URL: endpoint.URL, Weight: 1}}, nil
+	}
 	path := endpoint.Path
 	if path == "" {
 		path = "/"
@@ -1179,6 +1207,28 @@ func loadManifest(profile loadProfile, marker string, spec Spec, targets []loadT
 	if err != nil {
 		return nil, err
 	}
+	parametersValue, err := json.Marshal(profile.Parameters)
+	if err != nil {
+		return nil, err
+	}
+	environment := []any{
+		map[string]any{"name": "KUBEPHOS_TARGETS", "value": string(targetValue)},
+		map[string]any{"name": "KUBEPHOS_MAX_USERS", "value": fmt.Sprint(spec.MaxUsers)},
+		map[string]any{"name": "KUBEPHOS_SPAWN_RATE", "value": fmt.Sprint(spec.SpawnRate)},
+		map[string]any{"name": "KUBEPHOS_STEPS", "value": string(stepsValue)},
+		map[string]any{"name": "KUBEPHOS_GEOGRAPHIC_STEPS", "value": string(geographicValue)},
+		map[string]any{"name": "KUBEPHOS_PARAMETERS", "value": string(parametersValue)},
+	}
+	parameterNames := make([]string, 0, len(profile.Parameters))
+	for name := range profile.Parameters {
+		parameterNames = append(parameterNames, name)
+	}
+	sort.Slice(parameterNames, func(left, right int) bool {
+		return strings.ToUpper(parameterNames[left]) < strings.ToUpper(parameterNames[right])
+	})
+	for _, name := range parameterNames {
+		environment = append(environment, map[string]any{"name": "KUBEPHOS_PARAM_" + strings.ToUpper(name), "value": profile.Parameters[name]})
+	}
 	configMap := map[string]any{
 		"apiVersion": "v1",
 		"kind":       "ConfigMap",
@@ -1198,15 +1248,9 @@ func loadManifest(profile loadProfile, marker string, spec Spec, targets []loadT
 					"nodeSelector": map[string]any{"kubephos.dev/role": "management"},
 					"containers": []any{map[string]any{
 						"name": "locust", "image": profile.RuntimeImage, "imagePullPolicy": "IfNotPresent",
-						"command": []any{"locust"},
-						"args":    []any{"-f", "/scenario/locustfile.py", "--headless", "--host", targets[0].URL, "--users", fmt.Sprint(spec.MaxUsers), "--spawn-rate", fmt.Sprint(spec.SpawnRate)},
-						"env": []any{
-							map[string]any{"name": "KUBEPHOS_TARGETS", "value": string(targetValue)},
-							map[string]any{"name": "KUBEPHOS_MAX_USERS", "value": fmt.Sprint(spec.MaxUsers)},
-							map[string]any{"name": "KUBEPHOS_SPAWN_RATE", "value": fmt.Sprint(spec.SpawnRate)},
-							map[string]any{"name": "KUBEPHOS_STEPS", "value": string(stepsValue)},
-							map[string]any{"name": "KUBEPHOS_GEOGRAPHIC_STEPS", "value": string(geographicValue)},
-						},
+						"command":      []any{"locust"},
+						"args":         []any{"-f", "/scenario/locustfile.py", "--headless", "--host", targets[0].URL, "--users", fmt.Sprint(spec.MaxUsers), "--spawn-rate", fmt.Sprint(spec.SpawnRate)},
+						"env":          environment,
 						"volumeMounts": []any{map[string]any{"name": "scenario", "mountPath": "/scenario", "readOnly": true}},
 						"resources":    map[string]any{"requests": map[string]any{"cpu": "100m", "memory": "128Mi"}, "limits": map[string]any{"cpu": "1", "memory": "512Mi"}},
 					}},

@@ -1,8 +1,11 @@
 import {fireEvent, render, screen} from '@testing-library/react'
 import {createElement} from 'react'
-import {describe, expect, it, vi} from 'vitest'
+import {afterEach, describe, expect, it, vi} from 'vitest'
+import {request} from '../api'
 import type {ManagedResource, Pipeline, PipelineRun, Session} from '../types'
 import {ResourceDetailsPage} from './ResourceDetailsDialog'
+
+vi.mock('../api', () => ({request: vi.fn()}))
 
 const resource: ManagedResource = {
   id: 'cluster_01',
@@ -24,17 +27,33 @@ const resource: ManagedResource = {
 }
 
 describe('resource detail', () => {
+  afterEach(() => vi.clearAllMocks())
+
+  it('shows only form values for infrastructure resources', () => {
+    const template = {...resource, id: 'template_01', name: 'Ubuntu template', kind: 'machine-template', connectionId: 'connection_01', spec: {node: 'pve-1', vmid: 9000, datastore: 'local-lvm', sourceImage: 'ubuntu-24.04'}}
+    render(createElement(ResourceDetailsPage, {resource: template, close: () => {}, connections: [{id: 'connection_01', name: 'Lab Proxmox', provider: 'proxmox', pluginId: 'proxmox', createdAt: '', updatedAt: ''}], workspaces: [], resources: [template], runs: [], session: {authenticated: true} as Session, openOperation: () => {}}))
+
+    expect(screen.getByText('Lab Proxmox')).toBeInTheDocument()
+    expect(screen.getByText('pve-1')).toBeInTheDocument()
+    expect(screen.getByText('9000')).toBeInTheDocument()
+    expect(screen.queryByRole('button', {name: 'Overview'})).not.toBeInTheDocument()
+    expect(screen.queryByText('Dependencies')).not.toBeInTheDocument()
+    expect(screen.queryByText('Environment')).not.toBeInTheDocument()
+  })
+
   it('separates dashboards, access, activity and configuration', () => {
     render(createElement(ResourceDetailsPage, {resource, close: () => {}, connections: [], workspaces: [], resources: [resource], runs: [], session: {authenticated: true} as Session, openOperation: () => {}}))
 
     expect(screen.getByRole('link', {name: /Grafana/})).toBeInTheDocument()
+    expect(screen.getByRole('link', {name: /Headlamp/})).toHaveAttribute('href', 'http://192.0.2.10:30003')
     expect(screen.getByText('Topology')).toBeInTheDocument()
     expect(screen.queryByText('Entered data')).not.toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', {name: 'Access'}))
     expect(screen.queryByRole('link', {name: /Grafana/})).not.toBeInTheDocument()
-    expect(screen.getByText('Administrator access required.')).toBeInTheDocument()
+    expect(screen.getByText('Administrator access required')).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', {name: 'Activity'}))
-    expect(screen.getByText('No issues')).toBeInTheDocument()
+    expect(screen.getByText('Status')).toBeInTheDocument()
+    expect(screen.queryByText('No issues')).not.toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', {name: 'Configuration'}))
     expect(screen.getByText('Cluster settings')).toBeInTheDocument()
     expect(screen.getByText('Control plane')).toBeInTheDocument()
@@ -54,6 +73,17 @@ describe('resource detail', () => {
     expect(screen.getByRole('link', {name: 'Download kubeconfig'})).toHaveAttribute('href', `/api/v1/kubernetes-clusters/${resource.id}/kubeconfig`)
   })
 
+  it('renders credential-free access returned as null without crashing', async () => {
+    vi.mocked(request).mockResolvedValueOnce({items: [{name: 'Prometheus', url: 'http://192.0.2.10:32090', service: 'prometheus', credentials: null}]})
+    render(createElement(ResourceDetailsPage, {resource, close: () => {}, connections: [], workspaces: [], resources: [resource], runs: [], session: {authenticated: true, csrfToken: 'csrf', user: {id: 'admin', username: 'admin', role: 'admin'}} as Session, openOperation: () => {}}))
+
+    fireEvent.click(screen.getByRole('button', {name: 'Access'}))
+    fireEvent.click(screen.getByRole('button', {name: 'Reveal access'}))
+
+    expect(await screen.findByText('No login required')).toBeInTheDocument()
+    expect(screen.getByRole('link', {name: 'Open'})).toHaveAttribute('href', 'http://192.0.2.10:32090')
+  })
+
   it('opens provisioning on the interactive lifecycle graph', () => {
     const provisioning = {...resource, status: 'provisioning', pipelineRunId: 'run_01'}
     const run: PipelineRun = {id: 'run_01', pipelineId: 'pipeline_01', workspaceId: resource.workspaceId, name: 'Provision', status: 'running', pipelineHash: 'hash', resultType: 'Cluster', resultVersion: '1', cancelRequested: false, createdAt: resource.createdAt, stages: [
@@ -61,13 +91,13 @@ describe('resource detail', () => {
       {id: 'stage_02', runId: 'run_01', position: 2, stageId: 'install', pluginId: 'p2', title: 'Install Kubernetes', status: 'running', operationId: 'op_02'}
     ]}
     const pipeline: Pipeline = {id: 'pipeline_01', workspaceId: resource.workspaceId, name: 'Provision', description: '', definition: {stages: [{id: 'prepare', pluginId: 'p1', title: 'Prepare VM', spec: {}}, {id: 'install', pluginId: 'p2', title: 'Install Kubernetes', spec: {}, bindings: [{path: 'cluster', fromStage: 'prepare'}]}], result: {stage: 'install'}}, resolution: {stages: [], result: {type: 'Cluster', version: '1'}}, validation: {valid: true, issues: []}, hash: 'hash', createdAt: resource.createdAt, updatedAt: resource.updatedAt}
-    const openOperation = vi.fn()
-    render(createElement(ResourceDetailsPage, {resource: provisioning, close: () => {}, connections: [], workspaces: [], resources: [provisioning], runs: [run], pipelines: [pipeline], session: {authenticated: true} as Session, openOperation}))
+    const openPipelineRun = vi.fn()
+    render(createElement(ResourceDetailsPage, {resource: provisioning, close: () => {}, connections: [], workspaces: [], resources: [provisioning], runs: [run], pipelines: [pipeline], session: {authenticated: true} as Session, openOperation: () => {}, openPipelineRun}))
 
     expect(screen.getByRole('button', {name: 'Activity'})).toHaveAttribute('aria-current', 'page')
     expect(screen.getByText('Step 2 of 2')).toBeInTheDocument()
-    expect(screen.getByText('Depends on Prepare VM')).toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', {name: 'Open step logs'}))
-    expect(openOperation).toHaveBeenCalledWith('op_02')
+    expect(screen.queryByText('Depends on Prepare VM')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', {name: 'Open logs'}))
+    expect(openPipelineRun).toHaveBeenCalledWith('run_01')
   })
 })

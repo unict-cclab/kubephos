@@ -27,12 +27,10 @@ export function WorkspaceFlowDialog({open, workspace, plugins, artifacts, operat
   const available = items.filter(item => item.state === 'available').length
   const active = items.filter(item => item.state === 'active').length
   const produced = new Set(items.flatMap(item => item.outputs.map(output => `${output.type}/${output.version}`))).size
-  return <Dialog open={open} onClose={close} title={workspace?.name ?? 'Workspace'} eyebrow="GUIDED WORKSPACE" className="flow-modal">
+  return <Dialog open={open} onClose={close} title={workspace?.name ?? 'Workspace'} className="flow-modal">
     <div className="flow-intro">
-      <p>{workspace?.description || 'Compose the environment from compatible capabilities.'}</p>
       <div className="flow-stats"><FlowStat value={available} label="available now" /><FlowStat value={active} label="in progress" /><FlowStat value={produced} label="output types" /></div>
     </div>
-    <div className="flow-explainer"><span>↳</span><p>The sequence is derived from versioned artifact contracts. A capability unlocks only when every required input is available in this workspace.</p></div>
     <div className="flow-list">{items.length ? items.map(item => <FlowRow key={item.plugin.id} item={item} configure={configure} />) : <div className="empty-state"><div><strong>No composable capabilities</strong>Install a plugin that declares typed inputs or outputs.</div></div>}</div>
   </Dialog>
 }
@@ -50,7 +48,6 @@ function FlowRow({item, configure}: {item: FlowItem; configure: (pluginID: strin
     <div className="flow-node"><span /></div>
     <div className="flow-copy">
       <div className="flow-title"><h3>{item.plugin.name}</h3><Status value={status} /></div>
-      <p>{item.plugin.description}</p>
       <div className="contract-line"><span>IN</span>{inputText}</div>
       <div className="contract-line"><span>OUT</span>{outputText}</div>
       {!!item.missing.length && <small>Waiting for {item.missing.map(contractName).join(', ')}</small>}

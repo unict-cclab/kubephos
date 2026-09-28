@@ -14,8 +14,10 @@ It can also be used as a development environment: create a cluster, export its k
 - Use a versioned application catalog without adding application-specific logic to the core.
 - Import scheduler, descheduler, and autoscaler images and mirror them through Harbor.
 - Define temporal and geographic load profiles with an input preview.
+- Run reusable Locust workload configurations against external HTTP or HTTPS destinations without deploying a catalog application.
 - Configure zonal network injection and experiment monitoring.
 - Run experiments and comparison suites in background workers.
+- Create users, assign Kubernetes clusters, and isolate configurations and experiments by owner.
 - Repeat runs sequentially and calculate aggregate statistics.
 - Inspect live progress, logs, metrics, application topology, and cluster topology.
 - Export plots and application graphs as publication-quality PNG or PDF files.
@@ -63,9 +65,13 @@ KUBEPHOS_IMAGE=ghcr.io/unict-cclab/kubephos
 KUBEPHOS_VERSION=latest
 KUBEPHOS_PORT=8080
 KUBEPHOS_BIND_ADDRESS=0.0.0.0
+KUBEPHOS_URL=http://SERVER_IP:8080
 KUBEPHOS_WORKER_CONCURRENCY=4
 KUBEPHOS_WORKER_POLL_INTERVAL=500ms
 POSTGRES_PASSWORD=replace-with-a-strong-password
+KUBEPHOS_KEYCLOAK_CLIENT_SECRET=replace-with-a-strong-secret
+KUBEPHOS_KEYCLOAK_MANAGEMENT_CLIENT_SECRET=replace-with-another-strong-secret
+KUBEPHOS_KEYCLOAK_ADMIN_PASSWORD=replace-with-a-strong-password
 ```
 
 Use a release tag such as `v1.0.0` instead of `latest` when a fixed deployment version is required.
@@ -98,6 +104,12 @@ From the web interface:
 7. Run the configuration and choose the number of sequential runs.
 8. Open **Experiments** to follow progress and inspect results.
 
+### External destination experiment
+
+In **Configurations**, select **External destination** instead of a catalog application. Provide the HTTP or HTTPS base URL, the Locust runtime image, a Locust file template, optional string parameters, and the temporal workload pattern. Each parameter is exposed to the Locust process both in the `KUBEPHOS_PARAMETERS` JSON object and as a deterministic `KUBEPHOS_PARAM_<NAME>` environment variable.
+
+Each run creates an isolated, service-mesh-enabled namespace containing only the load driver. KubePhos does not deploy or modify the external application. Results include the configured throughput and telemetry observed from the load-driver sidecar; per-service application metrics are omitted because the external destination does not expose a verified Kubernetes workload topology.
+
 ## Update
 
 Set `KUBEPHOS_VERSION` in `/opt/kubephos/.env`, then run:
@@ -129,6 +141,7 @@ PostgreSQL data, SeaweedFS objects, credentials, and migration state are stored 
 - **Worker**: executes validated operations and experiments in the background.
 - **PostgreSQL**: stores configuration, lifecycle state, logs, and experiment history.
 - **SeaweedFS**: stores manifests, results, plots, and other artifacts.
+- **Keycloak**: provides authentication under `/auth`.
 - **Plugins**: provide infrastructure, application, strategy, load, monitoring, and lifecycle capabilities.
 
 The application and worker use the same versioned KubePhos image. PostgreSQL and SeaweedFS use tagged images defined in `compose.yaml`.
@@ -159,7 +172,7 @@ make down
 
 ## Release
 
-Pushing a `v*` Git tag starts the release workflow. The workflow builds the KubePhos image and publishes the release tag and `latest` to GitHub Container Registry.
+Pushing a `v*` Git tag publishes KubePhos and its managed component images. New Harbor installations copy the managed components into the local registry automatically.
 
 ```bash
 git tag v1.0.0

@@ -9,39 +9,26 @@ import (
 	"kubephos.dev/kubephos/internal/domain"
 )
 
-func (s *Store) CreateCatalogStrategy(ctx context.Context, strategy domain.CatalogStrategy, operation domain.Operation) (domain.CatalogStrategy, error) {
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		return domain.CatalogStrategy{}, err
-	}
-	defer tx.Rollback(ctx)
-	operation.Status = domain.OperationQueued
-	if err := insertOperation(ctx, tx, &operation); err != nil {
-		return domain.CatalogStrategy{}, err
-	}
-	err = tx.QueryRow(ctx, `
-		INSERT INTO strategy_catalog (id, workspace_id, harbor_resource_id, name, kind, source_image, default_configuration, operation_id)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+func (s *Store) CreateCatalogStrategy(ctx context.Context, strategy domain.CatalogStrategy) (domain.CatalogStrategy, error) {
+	err := s.pool.QueryRow(ctx, `
+		INSERT INTO strategy_catalog (id, workspace_id, name, kind, source_image, default_configuration)
+		VALUES ($1, $2, $3, $4, $5, $6)
 		RETURNING created_at, updated_at
-	`, strategy.ID, strategy.WorkspaceID, strategy.HarborResourceID, strategy.Name, strategy.Kind, strategy.SourceImage, strategy.DefaultConfiguration, operation.ID).Scan(&strategy.CreatedAt, &strategy.UpdatedAt)
+	`, strategy.ID, strategy.WorkspaceID, strategy.Name, strategy.Kind, strategy.SourceImage, strategy.DefaultConfiguration).Scan(&strategy.CreatedAt, &strategy.UpdatedAt)
 	if err != nil {
 		return domain.CatalogStrategy{}, err
 	}
-	if err := tx.Commit(ctx); err != nil {
-		return domain.CatalogStrategy{}, err
-	}
-	strategy.OperationID = operation.ID
-	strategy.Status = domain.OperationQueued
+	strategy.Status = domain.OperationSucceeded
 	return strategy, nil
 }
 
 func (s *Store) ListCatalogStrategies(ctx context.Context) ([]domain.CatalogStrategy, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT strategy.id, strategy.workspace_id, strategy.harbor_resource_id, strategy.name, strategy.kind,
-		       strategy.source_image, strategy.default_configuration, strategy.operation_id,
-		       COALESCE(artifact.id, ''), operation.status, operation.error, strategy.created_at, strategy.updated_at
+		SELECT strategy.id, strategy.workspace_id, COALESCE(strategy.harbor_resource_id, ''), strategy.name, strategy.kind,
+		       strategy.source_image, strategy.default_configuration, COALESCE(strategy.operation_id, ''),
+		       COALESCE(artifact.id, ''), COALESCE(operation.status, 'succeeded'), COALESCE(operation.error, ''), strategy.created_at, strategy.updated_at
 		FROM strategy_catalog strategy
-		JOIN operations operation ON operation.id = strategy.operation_id
+		LEFT JOIN operations operation ON operation.id = strategy.operation_id
 		LEFT JOIN LATERAL (
 			SELECT id FROM artifacts
 			WHERE operation_id = operation.id AND output_name = 'strategy-image' AND verified_at IS NOT NULL
@@ -66,11 +53,11 @@ func (s *Store) ListCatalogStrategies(ctx context.Context) ([]domain.CatalogStra
 
 func (s *Store) GetCatalogStrategy(ctx context.Context, strategyID string) (domain.CatalogStrategy, error) {
 	strategy, err := scanCatalogStrategy(s.pool.QueryRow(ctx, `
-		SELECT strategy.id, strategy.workspace_id, strategy.harbor_resource_id, strategy.name, strategy.kind,
-		       strategy.source_image, strategy.default_configuration, strategy.operation_id,
-		       COALESCE(artifact.id, ''), operation.status, operation.error, strategy.created_at, strategy.updated_at
+		SELECT strategy.id, strategy.workspace_id, COALESCE(strategy.harbor_resource_id, ''), strategy.name, strategy.kind,
+		       strategy.source_image, strategy.default_configuration, COALESCE(strategy.operation_id, ''),
+		       COALESCE(artifact.id, ''), COALESCE(operation.status, 'succeeded'), COALESCE(operation.error, ''), strategy.created_at, strategy.updated_at
 		FROM strategy_catalog strategy
-		JOIN operations operation ON operation.id = strategy.operation_id
+		LEFT JOIN operations operation ON operation.id = strategy.operation_id
 		LEFT JOIN LATERAL (
 			SELECT id FROM artifacts
 			WHERE operation_id = operation.id AND output_name = 'strategy-image' AND verified_at IS NOT NULL
@@ -92,8 +79,8 @@ func (s *Store) DeleteCatalogStrategy(ctx context.Context, strategyID string) er
 	defer tx.Rollback(ctx)
 	var status string
 	err = tx.QueryRow(ctx, `
-		SELECT operation.status FROM strategy_catalog strategy
-		JOIN operations operation ON operation.id = strategy.operation_id
+		SELECT COALESCE(operation.status, 'succeeded') FROM strategy_catalog strategy
+		LEFT JOIN operations operation ON operation.id = strategy.operation_id
 		WHERE strategy.id = $1 FOR UPDATE OF strategy
 	`, strategyID).Scan(&status)
 	if errors.Is(err, pgx.ErrNoRows) {

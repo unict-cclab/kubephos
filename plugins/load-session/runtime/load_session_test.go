@@ -73,13 +73,13 @@ func TestLoadSessionRejectsInvalidTransition(t *testing.T) {
 }
 
 func TestLoadManifestBuildsGenericLocustRuntime(t *testing.T) {
-	profile := loadProfile{ID: "journey", Engine: "locust", RuntimeImage: "example.test/locust:1.0.0", Script: "from locust import HttpUser\n", Workload: scenarioWorkload("journey")}
+	profile := loadProfile{ID: "journey", Engine: "locust", RuntimeImage: "example.test/locust:1.0.0", Script: "from locust import HttpUser\n", Parameters: map[string]string{"tenant": "demo", "api_version": "v2"}, Workload: scenarioWorkload("journey")}
 	manifest, err := loadManifest(profile, "owner", Spec{MaxUsers: 25, SpawnRate: 5, Steps: []LoadStep{{Type: "constant", DurationSeconds: 60, RPS: 20}}}, []loadTarget{{URL: "http://node-proxy:80/", Weight: 1}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	value := string(manifest)
-	for _, expected := range []string{"kind: ConfigMap", "kind: Deployment", "from locust import HttpUser", "--host", "http://node-proxy:80/", "kubephos.dev/role: management", "example.test/locust:1.0.0", "return 0, spawn_rate", "del name, value"} {
+	for _, expected := range []string{"kind: ConfigMap", "kind: Deployment", "from locust import HttpUser", "--host", "http://node-proxy:80/", "kubephos.dev/role: management", "example.test/locust:1.0.0", "return 0, spawn_rate", "del name, value", "KUBEPHOS_PARAMETERS", "KUBEPHOS_PARAM_TENANT", "KUBEPHOS_PARAM_API_VERSION"} {
 		if !strings.Contains(value, expected) {
 			t.Fatalf("generated runtime is missing %q:\n%s", expected, value)
 		}
@@ -87,6 +87,28 @@ func TestLoadManifestBuildsGenericLocustRuntime(t *testing.T) {
 	if strings.Contains(locustWrapper, "\t") {
 		t.Fatal("Locust wrapper must use consistent Python indentation")
 	}
+}
+
+func TestResolveExternalLoadTargetWithoutKubernetesLookup(t *testing.T) {
+	runner := rejectingRunner{}
+	endpoint := serviceEndpoint{Protocol: "https", URL: "https://api.example.test/v1", External: true}
+	targets, err := resolveLoadTargets(context.Background(), runner, "config", "experiment", endpoint, Spec{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(targets) != 1 || targets[0].URL != endpoint.URL || targets[0].Weight != 1 {
+		t.Fatalf("unexpected external target %#v", targets)
+	}
+	_, err = resolveLoadTargets(context.Background(), runner, "config", "experiment", endpoint, Spec{GeographicSteps: []GeographicStep{{Type: "constant", DurationSeconds: 10, Weights: map[string]float64{"zone-a": 1}}}})
+	if err == nil {
+		t.Fatal("expected geographic workload to be rejected for an external destination")
+	}
+}
+
+type rejectingRunner struct{}
+
+func (rejectingRunner) Run(context.Context, string, []byte, ...string) (string, error) {
+	return "", errors.New("Kubernetes lookup was not expected")
 }
 
 func TestResolveLoadTargetsUsesNodeProxyAndZoneWeights(t *testing.T) {

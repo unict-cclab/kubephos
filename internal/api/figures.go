@@ -52,6 +52,9 @@ func validateFigure(value []byte, format string) error {
 
 func (s *Server) saveExperimentFigure(response http.ResponseWriter, request *http.Request) {
 	experimentID := request.PathValue("id")
+	if !s.authorizeExperiment(response, request, experimentID) {
+		return
+	}
 	metric := strings.TrimSpace(request.URL.Query().Get("metric"))
 	format := strings.ToLower(strings.TrimSpace(request.URL.Query().Get("format")))
 	mediaType := figureMediaType(format)
@@ -121,6 +124,9 @@ func (s *Server) saveExperimentFigure(response http.ResponseWriter, request *htt
 
 func (s *Server) listExperimentFigures(response http.ResponseWriter, request *http.Request) {
 	experimentID := request.PathValue("id")
+	if !s.authorizeExperiment(response, request, experimentID) {
+		return
+	}
 	if _, err := s.store.EligibleExperimentFigureSources(request.Context(), experimentID); errors.Is(err, storage.ErrNotFound) {
 		writeError(response, http.StatusNotFound, "not_found", "Experiment not found.")
 		return
@@ -144,6 +150,9 @@ func (s *Server) downloadExperimentFigure(response http.ResponseWriter, request 
 	}
 	if err != nil {
 		writeError(response, http.StatusInternalServerError, "database_error", "Could not read the figure metadata.")
+		return
+	}
+	if !s.authorizeExperiment(response, request, figure.ExperimentID) {
 		return
 	}
 	value, err := s.artifacts.ReadVerified(request.Context(), figure.StorageKey, figure.Digest, figure.SizeBytes)

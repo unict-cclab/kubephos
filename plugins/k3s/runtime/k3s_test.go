@@ -15,6 +15,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"kubephos.dev/kubephos/internal/domain"
+	"kubephos.dev/kubephos/internal/managedcomponents"
 )
 
 func TestPlanUsesExternalArtifactsAndProtectsKubeconfig(t *testing.T) {
@@ -120,7 +121,7 @@ func TestRegistryConfigurationRoutesManagedUpstreamsThroughDeclaredMirrors(t *te
 	profile := registryProfile{Endpoint: registryEndpoint{}, Credential: registryCredential{}}
 	profile.Endpoint.Spec.Host = "registry.internal"
 	profile.Endpoint.Spec.URL = "https://registry.internal"
-	profile.Endpoint.Spec.Mirrors = []registryMirror{{Source: "docker.io", Endpoint: profile.Endpoint.Spec.URL, RewritePrefix: "dockerhub-proxy/", Probe: "library/alpine:3.23"}, {Source: "ghcr.io", Endpoint: profile.Endpoint.Spec.URL, RewritePrefix: "ghcr-proxy/", Probe: "unict-cclab/mon-agent:v0.0.7"}}
+	profile.Endpoint.Spec.Mirrors = []registryMirror{{Source: "docker.io", Endpoint: profile.Endpoint.Spec.URL, RewritePrefix: "dockerhub-proxy/", Probe: "library/alpine:3.23"}, {Source: "ghcr.io", Endpoint: profile.Endpoint.Spec.URL, RewritePrefix: "ghcr-proxy/", Probe: "chaos-mesh/chaos-daemon:v2.8.3"}}
 	profile.Credential.Spec.Username = "robot"
 	profile.Credential.Spec.Password = "secret"
 	raw, err := registryConfiguration(profile)
@@ -137,8 +138,29 @@ func TestRegistryConfigurationRoutesManagedUpstreamsThroughDeclaredMirrors(t *te
 
 func TestLegacyManagedRegistryReceivesProxyProfile(t *testing.T) {
 	mirrors := legacyManagedMirrors("https://registry.internal")
-	if len(mirrors) != 5 || mirrors[0].Source != "docker.io" || mirrors[0].RewritePrefix != "dockerhub-proxy/" || mirrors[0].Probe != "library/alpine:3.23" || mirrors[4].Source != "quay.io" {
+	if len(mirrors) != 6 || mirrors[0].Source != "docker.io" || mirrors[0].RewritePrefix != "dockerhub-proxy/" || mirrors[0].Probe != "library/alpine:3.23" || mirrors[5].Source != "registry.istio.io" {
 		t.Fatalf("unexpected legacy mirror profile %#v", mirrors)
+	}
+}
+
+func TestManagedRegistryAddsNewRequiredMirrors(t *testing.T) {
+	declared := []registryMirror{{Source: "docker.io", Endpoint: "https://registry.internal", RewritePrefix: "dockerhub-proxy/", Probe: "library/alpine:3.23"}}
+	values := mergeManagedMirrors("https://registry.internal", declared)
+	if len(values) != 6 || values[0].Source != "docker.io" || values[5].Source != "registry.istio.io" {
+		t.Fatalf("required mirrors were not merged: %#v", values)
+	}
+}
+
+func TestRegistryVerificationPullsEveryManagedComponent(t *testing.T) {
+	profile := registryProfile{}
+	profile.Endpoint.Spec.Host = "registry.internal"
+	profile.Endpoint.Spec.URL = "https://registry.internal"
+	commands := strings.Join(registryVerificationCommands(profile), "\n")
+	for _, component := range managedcomponents.Catalog() {
+		expected := managedcomponents.Image(profile.Endpoint.Spec.Host, component.Name, component.Version)
+		if !strings.Contains(commands, expected) {
+			t.Fatalf("managed component pull %q is missing", expected)
+		}
 	}
 }
 
@@ -146,6 +168,17 @@ func TestInstallDisablesDirectRegistryFallback(t *testing.T) {
 	command := installCommand("server", "node-1", "https://192.0.2.1:6443", "token", true)
 	if !strings.Contains(command, "--disable-default-registry-endpoint") {
 		t.Fatalf("registry fallback remains enabled: %s", command)
+	}
+}
+
+func TestInstallTaintsControlPlane(t *testing.T) {
+	server := installCommand("server", "node-1", "https://192.0.2.1:6443", "token", true)
+	if !strings.Contains(server, "--node-taint 'node-role.kubernetes.io/control-plane:NoSchedule'") {
+		t.Fatalf("control plane taint is missing: %s", server)
+	}
+	agent := installCommand("agent", "node-2", "https://192.0.2.1:6443", "token", false)
+	if strings.Contains(agent, "--node-taint") {
+		t.Fatalf("worker received a control plane taint: %s", agent)
 	}
 }
 

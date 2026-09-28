@@ -67,6 +67,52 @@ func TestApplicationDeploymentLifecycle(t *testing.T) {
 	}
 }
 
+func TestPreparedApplicationCreatesAndCleansSharedControlNamespace(t *testing.T) {
+	runner := &fakeRunner{}
+	plugin := Plugin{Runner: runner, StabilityChecks: 1}
+	spec := json.RawMessage(`{"clusterConnectionRef":"art_cluster","manifestSetRef":"art_manifests","workloadTargetsRef":"art_workloads","serviceEndpointsRef":"art_endpoints","mode":"prepare","controlNamespace":true}`)
+	plan, err := plugin.Plan(context.Background(), spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	step := plan.Steps[0]
+	step.ResolvedInputs = testArtifacts()
+	health, err := plugin.Precheck(context.Background(), step, discardLog)
+	if err != nil || health.Status != domain.HealthHealthy {
+		t.Fatalf("precheck failed %#v %v", health, err)
+	}
+	value, err := plugin.Execute(context.Background(), step, discardLog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded result
+	if err := json.Unmarshal(value, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(decoded.ApplicationDeployment.Spec.ControlNamespace, "kubephos-control-") || !runner.installed || !runner.controlInstalled {
+		t.Fatalf("shared control namespace was not prepared: result=%#v runner=%#v", decoded, runner)
+	}
+	health, err = plugin.Verify(context.Background(), step, value, discardLog)
+	if err != nil || health.Status != domain.HealthHealthy {
+		t.Fatalf("verify failed %#v %v", health, err)
+	}
+
+	// The deploy-stage cleanup runs earlier in reverse pipeline order and may
+	// already have removed the application namespace.
+	runner.installed = false
+	step.Cleanup = true
+	if err := plugin.Cleanup(context.Background(), step, value, discardLog); err != nil {
+		t.Fatal(err)
+	}
+	if runner.controlInstalled {
+		t.Fatal("shared control namespace remains after prepare-stage cleanup")
+	}
+	health, err = plugin.Verify(context.Background(), step, nil, discardLog)
+	if err != nil || health.Status != domain.HealthHealthy {
+		t.Fatalf("cleanup verify failed %#v %v", health, err)
+	}
+}
+
 func TestValidationRejectsMissingAndDuplicateReferences(t *testing.T) {
 	values := []json.RawMessage{
 		json.RawMessage(`{}`),
@@ -91,6 +137,40 @@ func TestManifestIsolationRejectsNamespaceAndClusterScope(t *testing.T) {
 		if err := validateManifestIsolation([]byte(value), clusterScoped); err == nil {
 			t.Fatalf("expected isolation rejection for %s", value)
 		}
+	}
+}
+
+func TestPodDisruptionBudgetsProtectEachDeschedulableWorkload(t *testing.T) {
+	manifest := "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: checkout\n"
+	workloads := []workloadTarget{
+		{ID: "checkout", APIVersion: "apps/v1", Kind: "Deployment", Name: "checkout", Selector: map[string]string{"app": "checkout", "version": "v1"}, Traits: []string{"deschedulable"}},
+		{ID: "gateway", APIVersion: "apps/v1", Kind: "Deployment", Name: "gateway", Selector: map[string]string{"app": "gateway"}, Traits: []string{"traffic-entrypoint"}},
+	}
+
+	result, err := addPodDisruptionBudgets(manifest, workloads, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resources, err := decodeManifestResources(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resources) != 2 {
+		t.Fatalf("resources = %d, want deployment and one PDB", len(resources))
+	}
+	pdb := resources[1]
+	if pdb["apiVersion"] != "policy/v1" || pdb["kind"] != "PodDisruptionBudget" {
+		t.Fatalf("unexpected PDB identity %#v", pdb)
+	}
+	metadata := pdb["metadata"].(map[string]any)
+	spec := pdb["spec"].(map[string]any)
+	selector := spec["selector"].(map[string]any)["matchLabels"].(map[string]any)
+	if metadata["name"] != "kubephos-checkout" || spec["minAvailable"] != 2 || selector["app"] != "checkout" || selector["version"] != "v1" {
+		t.Fatalf("unexpected PDB %#v", pdb)
+	}
+	withoutPDB, err := addPodDisruptionBudgets(manifest, workloads, 0)
+	if err != nil || withoutPDB != manifest {
+		t.Fatalf("disabled PDB generation changed the manifest: %v", err)
 	}
 }
 
@@ -230,6 +310,8 @@ func discardLog(string, string) error { return nil }
 type fakeRunner struct {
 	installed        bool
 	marker           string
+	controlInstalled bool
+	controlMarker    string
 	readyWaits       int
 	failReadyAt      int
 	applicationNodes bool
@@ -245,6 +327,12 @@ func (runner *fakeRunner) Run(_ context.Context, _ string, stdin []byte, args ..
 		return "yes\n", nil
 	}
 	if strings.HasPrefix(command, "get namespace ") && strings.Contains(command, "jsonpath=") {
+		if strings.Contains(command, "kubephos-control-") {
+			if !runner.controlInstalled {
+				return "", nil
+			}
+			return runner.controlMarker, nil
+		}
 		if !runner.installed {
 			return "", nil
 		}
@@ -257,14 +345,20 @@ func (runner *fakeRunner) Run(_ context.Context, _ string, stdin []byte, args ..
 		return "accepted", nil
 	}
 	if command == "apply -f -" && strings.Contains(string(stdin), `"Namespace"`) {
-		runner.installed = true
 		var namespace struct {
 			Metadata struct {
+				Name        string            `json:"name"`
 				Annotations map[string]string `json:"annotations"`
 			} `json:"metadata"`
 		}
 		_ = json.Unmarshal(stdin, &namespace)
-		runner.marker = namespace.Metadata.Annotations[ownershipKey]
+		if strings.HasPrefix(namespace.Metadata.Name, "kubephos-control-") {
+			runner.controlInstalled = true
+			runner.controlMarker = namespace.Metadata.Annotations[ownershipKey]
+		} else {
+			runner.installed = true
+			runner.marker = namespace.Metadata.Annotations[ownershipKey]
+		}
 		return "created", nil
 	}
 	if strings.HasPrefix(command, "apply --namespace ") {
@@ -308,10 +402,20 @@ func (runner *fakeRunner) Run(_ context.Context, _ string, stdin []byte, args ..
 		return "healthy", nil
 	}
 	if strings.HasPrefix(command, "delete namespace ") {
-		runner.installed = false
+		if strings.Contains(command, "kubephos-control-") {
+			runner.controlInstalled = false
+		} else {
+			runner.installed = false
+		}
 		return "deleted", nil
 	}
 	if strings.HasPrefix(command, "get namespace ") {
+		if strings.Contains(command, "kubephos-control-") {
+			if runner.controlInstalled {
+				return "present", nil
+			}
+			return "", nil
+		}
 		if runner.installed {
 			return "present", nil
 		}

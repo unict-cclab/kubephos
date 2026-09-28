@@ -25,7 +25,7 @@ export function Dialog({open, title, eyebrow, onClose, footer, className = '', c
   }}>
     <div className="modal-content">
       <div className="modal-header">
-        <div>{eyebrow && <p className="eyebrow">{eyebrow}</p>}<h2>{title}</h2></div>
+        <div>{eyebrow && <span className="eyebrow">{eyebrow}</span>}<h2>{title}</h2></div>
         {onClose && <button className="icon-button" type="button" onClick={onClose} aria-label="Close">×</button>}
       </div>
       {children}

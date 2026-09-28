@@ -3,11 +3,14 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -15,6 +18,7 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -22,19 +26,22 @@ import (
 )
 
 const (
-	defaultAddr      = "127.0.0.1:8088"
-	defaultRefresh   = 2 * time.Second
-	defaultStaticDir = "../frontend"
+	defaultAddr          = "127.0.0.1:8088"
+	defaultRefresh       = 2 * time.Second
+	defaultStaticDir     = "../frontend"
+	defaultPrometheusURL = "http://kubephos-observability-kub-prometheus.kubephos-observability.svc:9090"
 )
 
 type snapshot struct {
-	GeneratedAt time.Time  `json:"generatedAt"`
-	Context     string     `json:"context"`
-	Nodes       []nodeView `json:"nodes"`
-	NodeEdges   []edgeView `json:"nodeEdges"`
-	Pods        []podView  `json:"pods"`
-	AppEdges    []edgeView `json:"appEdges"`
-	Warnings    []string   `json:"warnings,omitempty"`
+	GeneratedAt        time.Time                `json:"generatedAt"`
+	Context            string                   `json:"context"`
+	Nodes              []nodeView               `json:"nodes"`
+	NodeEdges          []edgeView               `json:"nodeEdges"`
+	Pods               []podView                `json:"pods"`
+	AppEdges           []edgeView               `json:"appEdges"`
+	GatewayTraffic     []gatewayTrafficView     `json:"gatewayTraffic,omitempty"`
+	ApplicationTraffic []applicationTrafficView `json:"applicationTraffic,omitempty"`
+	Warnings           []string                 `json:"warnings,omitempty"`
 }
 
 type nodeView struct {
@@ -44,8 +51,8 @@ type nodeView struct {
 	Annotations map[string]string `json:"annotations,omitempty"`
 	Ready       bool              `json:"ready"`
 	Role        string            `json:"role,omitempty"`
-	CPU         float64           `json:"cpu,omitempty"`
-	Memory      float64           `json:"memory,omitempty"`
+	CPU         *float64          `json:"cpu,omitempty"`
+	Memory      *float64          `json:"memory,omitempty"`
 	Disk        float64           `json:"disk,omitempty"`
 	Network     float64           `json:"network,omitempty"`
 }
@@ -75,11 +82,61 @@ type edgeView struct {
 	Label      string   `json:"label,omitempty"`
 }
 
+type gatewayTrafficView struct {
+	Namespace         string  `json:"namespace"`
+	Pod               string  `json:"pod"`
+	Node              string  `json:"node"`
+	Zone              string  `json:"zone"`
+	Requests          int     `json:"requests"`
+	RequestsPerSecond float64 `json:"requestsPerSecond"`
+	WindowSeconds     int64   `json:"windowSeconds"`
+}
+
+type applicationTrafficView struct {
+	Namespace                   string  `json:"namespace"`
+	ThroughputRequestsPerSecond float64 `json:"throughputRequestsPerSecond"`
+	P95ResponseTimeMilliseconds float64 `json:"p95ResponseTimeMilliseconds"`
+	WindowSeconds               int64   `json:"windowSeconds"`
+}
+
+type gatewayTarget struct {
+	Namespace string
+	Workload  string
+	Pod       string
+	Node      string
+	Zone      string
+}
+
 type server struct {
-	staticDir string
-	refresh   time.Duration
-	kube      kubernetes.Interface
-	context   string
+	staticDir     string
+	refresh       time.Duration
+	kube          kubernetes.Interface
+	metrics       nodeMetricSource
+	context       string
+	prometheusURL string
+	httpClient    *http.Client
+}
+
+type nodeUsage struct {
+	CPU    float64
+	Memory float64
+}
+
+type nodeMetricSource interface {
+	List(context.Context) (map[string]nodeUsage, error)
+}
+
+type apiNodeMetricSource struct {
+	client rest.Interface
+}
+
+type nodeMetricList struct {
+	Items []struct {
+		Metadata struct {
+			Name string `json:"name"`
+		} `json:"metadata"`
+		Usage map[string]string `json:"usage"`
+	} `json:"items"`
 }
 
 func main() {
@@ -99,7 +156,7 @@ func main() {
 		log.Fatalf("kubernetes client: %v", err)
 	}
 
-	s := &server{staticDir: staticDir, refresh: refresh, kube: kube, context: contextName}
+	s := &server{staticDir: staticDir, refresh: refresh, kube: kube, metrics: apiNodeMetricSource{client: kube.CoreV1().RESTClient()}, context: contextName, prometheusURL: envOr("CLUSTER_LENS_PROMETHEUS_URL", defaultPrometheusURL), httpClient: &http.Client{Timeout: 5 * time.Second}}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/snapshot", s.snapshot)
 	mux.HandleFunc("/api/config", s.config)
@@ -165,17 +222,37 @@ func (s *server) buildSnapshot(ctx context.Context) (snapshot, error) {
 	}
 
 	snap := snapshot{
-		GeneratedAt: time.Now(),
-		Context:     s.context,
-		Nodes:       make([]nodeView, 0, len(nodes.Items)),
-		NodeEdges:   make([]edgeView, 0),
-		Pods:        make([]podView, 0, len(pods.Items)),
-		AppEdges:    make([]edgeView, 0),
-		Warnings:    warnings,
+		GeneratedAt:        time.Now(),
+		Context:            s.context,
+		Nodes:              make([]nodeView, 0, len(nodes.Items)),
+		NodeEdges:          make([]edgeView, 0),
+		Pods:               make([]podView, 0, len(pods.Items)),
+		AppEdges:           make([]edgeView, 0),
+		GatewayTraffic:     make([]gatewayTrafficView, 0),
+		ApplicationTraffic: make([]applicationTrafficView, 0),
+		Warnings:           warnings,
+	}
+	nodeMetrics := map[string]nodeUsage{}
+	if s.metrics != nil {
+		nodeMetrics, err = s.metrics.List(ctx)
+		if err != nil {
+			warnings = append(warnings, fmt.Sprintf("node resource metrics: %v", err))
+			nodeMetrics = map[string]nodeUsage{}
+		}
+		snap.Warnings = warnings
 	}
 
+	nodeZones := map[string]string{}
+
 	for _, node := range nodes.Items {
+		nodeZones[node.Name] = node.Labels["topology.kubernetes.io/zone"]
 		annotations := node.Annotations
+		cpu := parseFloatPointer(annotations["cpu-usage"])
+		memory := parseFloatPointer(annotations["memory-usage"])
+		if usage, exists := nodeMetrics[node.Name]; exists {
+			cpu = floatPointer(usage.CPU)
+			memory = floatPointer(usage.Memory)
+		}
 		view := nodeView{
 			Name:        node.Name,
 			Zone:        node.Labels["topology.kubernetes.io/zone"],
@@ -183,14 +260,16 @@ func (s *server) buildSnapshot(ctx context.Context) (snapshot, error) {
 			Annotations: selectedNodeAnnotations(annotations),
 			Ready:       nodeReady(node),
 			Role:        nodeRole(node.Labels),
-			CPU:         parseFloat(annotations["cpu-usage"]),
-			Memory:      parseFloat(annotations["memory-usage"]),
+			CPU:         cpu,
+			Memory:      memory,
 			Disk:        parseFloat(annotationValue(annotations, "disk-throughput", "disk-bandwidth")),
 			Network:     parseFloat(annotationValue(annotations, "network-throughput", "network-bandwidth")),
 		}
 		snap.Nodes = append(snap.Nodes, view)
 		appendNodeEdges(&snap, node.Name, annotations)
 	}
+
+	gatewayTargets := map[string]gatewayTarget{}
 
 	for _, pod := range pods.Items {
 		if pod.Spec.NodeName == "" {
@@ -211,6 +290,9 @@ func (s *server) buildSnapshot(ctx context.Context) (snapshot, error) {
 		sort.Strings(containers)
 
 		labels := pod.Labels
+		if labels["kubephos.dev/traffic-entrypoint"] != "" {
+			gatewayTargets[key(pod.Namespace, owner)] = gatewayTarget{Namespace: pod.Namespace, Workload: owner, Pod: pod.Name, Node: pod.Spec.NodeName, Zone: nodeZones[pod.Spec.NodeName]}
+		}
 		snap.Pods = append(snap.Pods, podView{
 			Namespace:  pod.Namespace,
 			Name:       pod.Name,
@@ -227,6 +309,21 @@ func (s *server) buildSnapshot(ctx context.Context) (snapshot, error) {
 		})
 	}
 
+	if len(gatewayTargets) > 0 {
+		traffic, trafficErr := s.readGatewayTraffic(ctx, gatewayTargets)
+		if trafficErr != nil {
+			warnings = append(warnings, fmt.Sprintf("gateway traffic: %v", trafficErr))
+		} else {
+			snap.GatewayTraffic = traffic
+		}
+		applicationTraffic, applicationTrafficErr := s.readApplicationTraffic(ctx, gatewayTargets)
+		if applicationTrafficErr != nil {
+			warnings = append(warnings, fmt.Sprintf("application traffic: %v", applicationTrafficErr))
+		} else {
+			snap.ApplicationTraffic = applicationTraffic
+		}
+	}
+
 	sort.Slice(snap.Nodes, func(i, j int) bool { return snap.Nodes[i].Name < snap.Nodes[j].Name })
 	sort.Slice(snap.NodeEdges, func(i, j int) bool {
 		if snap.NodeEdges[i].Source == snap.NodeEdges[j].Source {
@@ -237,9 +334,192 @@ func (s *server) buildSnapshot(ctx context.Context) (snapshot, error) {
 	sort.Slice(snap.Pods, func(i, j int) bool {
 		return key(snap.Pods[i].Namespace, snap.Pods[i].Name) < key(snap.Pods[j].Namespace, snap.Pods[j].Name)
 	})
+	sort.Slice(snap.GatewayTraffic, func(i, j int) bool {
+		if snap.GatewayTraffic[i].Zone == snap.GatewayTraffic[j].Zone {
+			return snap.GatewayTraffic[i].Pod < snap.GatewayTraffic[j].Pod
+		}
+		return snap.GatewayTraffic[i].Zone < snap.GatewayTraffic[j].Zone
+	})
+	sort.Slice(snap.ApplicationTraffic, func(i, j int) bool {
+		return snap.ApplicationTraffic[i].Namespace < snap.ApplicationTraffic[j].Namespace
+	})
 
 	snap.AppEdges = dedupeEdges(snap.AppEdges)
+	snap.Warnings = warnings
 	return snap, nil
+}
+
+func (s *server) readApplicationTraffic(ctx context.Context, targets map[string]gatewayTarget) ([]applicationTrafficView, error) {
+	namespaces := map[string]bool{}
+	workloads := map[string]bool{}
+	for _, target := range targets {
+		if target.Namespace != "" && target.Workload != "" {
+			namespaces[target.Namespace] = true
+			workloads[target.Workload] = true
+		}
+	}
+	if len(namespaces) == 0 || len(workloads) == 0 {
+		return []applicationTrafficView{}, nil
+	}
+	namespaceSelector := prometheusRegex(namespaces)
+	workloadSelector := prometheusRegex(workloads)
+	throughputQuery := `sum by (source_workload_namespace) (rate(istio_requests_total{reporter="source",source_workload_namespace=~` + strconv.Quote(namespaceSelector) + `,source_workload=~` + strconv.Quote(workloadSelector) + `,response_code=~"2..|3.."}[1m]))`
+	responseTimeQuery := `histogram_quantile(0.95, sum by (source_workload_namespace,le) (rate(istio_request_duration_milliseconds_bucket{reporter="source",source_workload_namespace=~` + strconv.Quote(namespaceSelector) + `,source_workload=~` + strconv.Quote(workloadSelector) + `}[1m])))`
+	throughput, err := s.readPrometheusValues(ctx, throughputQuery, "source_workload_namespace")
+	if err != nil {
+		return nil, err
+	}
+	responseTimes, err := s.readPrometheusValues(ctx, responseTimeQuery, "source_workload_namespace")
+	if err != nil {
+		return nil, err
+	}
+	values := make([]applicationTrafficView, 0, len(namespaces))
+	for namespace := range namespaces {
+		values = append(values, applicationTrafficView{
+			Namespace:                   namespace,
+			ThroughputRequestsPerSecond: throughput[namespace],
+			P95ResponseTimeMilliseconds: responseTimes[namespace],
+			WindowSeconds:               60,
+		})
+	}
+	return values, nil
+}
+
+func prometheusRegex(values map[string]bool) string {
+	items := make([]string, 0, len(values))
+	for value := range values {
+		items = append(items, regexp.QuoteMeta(value))
+	}
+	sort.Strings(items)
+	return "^(" + strings.Join(items, "|") + ")$"
+}
+
+func (s *server) readPrometheusValues(ctx context.Context, promQL, label string) (map[string]float64, error) {
+	endpoint, err := url.Parse(s.prometheusURL)
+	if err != nil {
+		return nil, err
+	}
+	endpoint.Path = strings.TrimSuffix(endpoint.Path, "/") + "/api/v1/query"
+	query := endpoint.Query()
+	query.Set("query", promQL)
+	endpoint.RawQuery = query.Encode()
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+	client := s.httpClient
+	if client == nil {
+		client = &http.Client{Timeout: 5 * time.Second}
+	}
+	response, err := client.Do(request)
+	if err != nil {
+		return nil, err
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("Prometheus returned %s", response.Status)
+	}
+	var payload struct {
+		Status string `json:"status"`
+		Data   struct {
+			Result []struct {
+				Metric map[string]string `json:"metric"`
+				Value  []json.RawMessage `json:"value"`
+			} `json:"result"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&payload); err != nil {
+		return nil, err
+	}
+	if payload.Status != "success" {
+		return nil, errors.New("Prometheus query failed")
+	}
+	values := map[string]float64{}
+	for _, result := range payload.Data.Result {
+		if len(result.Value) < 2 || result.Metric[label] == "" {
+			continue
+		}
+		var raw string
+		if json.Unmarshal(result.Value[1], &raw) != nil {
+			continue
+		}
+		value, err := strconv.ParseFloat(raw, 64)
+		if err == nil && value >= 0 {
+			values[result.Metric[label]] = value
+		}
+	}
+	return values, nil
+}
+
+func (s *server) readGatewayTraffic(ctx context.Context, targets map[string]gatewayTarget) ([]gatewayTrafficView, error) {
+	endpoint, err := url.Parse(s.prometheusURL)
+	if err != nil {
+		return nil, err
+	}
+	endpoint.Path = strings.TrimSuffix(endpoint.Path, "/") + "/api/v1/query"
+	query := endpoint.Query()
+	query.Set("query", "sum by (destination_workload,destination_workload_namespace) (rate(istio_requests_total[1m]))")
+	endpoint.RawQuery = query.Encode()
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+	client := s.httpClient
+	if client == nil {
+		client = &http.Client{Timeout: 5 * time.Second}
+	}
+	response, err := client.Do(request)
+	if err != nil {
+		return nil, err
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("Prometheus returned %s", response.Status)
+	}
+	var payload struct {
+		Status string `json:"status"`
+		Data   struct {
+			Result []struct {
+				Metric map[string]string `json:"metric"`
+				Value  []json.RawMessage `json:"value"`
+			} `json:"result"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&payload); err != nil {
+		return nil, err
+	}
+	if payload.Status != "success" {
+		return nil, errors.New("Prometheus query failed")
+	}
+	rates := map[string]float64{}
+	for _, result := range payload.Data.Result {
+		if len(result.Value) < 2 {
+			continue
+		}
+		var raw string
+		if err := json.Unmarshal(result.Value[1], &raw); err != nil {
+			continue
+		}
+		rate, err := strconv.ParseFloat(raw, 64)
+		if err != nil || rate < 0 {
+			continue
+		}
+		rates[key(result.Metric["destination_workload_namespace"], result.Metric["destination_workload"])] = rate
+	}
+	values := make([]gatewayTrafficView, 0, len(targets))
+	for targetKey, target := range targets {
+		rate := rates[targetKey]
+		values = append(values, gatewayTrafficView{
+			Namespace:         target.Namespace,
+			Pod:               target.Pod,
+			Node:              target.Node,
+			Zone:              target.Zone,
+			Requests:          int(rate*60 + 0.5),
+			RequestsPerSecond: rate,
+			WindowSeconds:     60,
+		})
+	}
+	return values, nil
 }
 
 func appendAppEdges(snap *snapshot, deployment appsv1.Deployment) {
@@ -298,6 +578,9 @@ func nodeReady(node corev1.Node) bool {
 func nodeRole(labels map[string]string) string {
 	if labels["node-role.kubernetes.io/control-plane"] == "true" {
 		return "control-plane"
+	}
+	if labels["kubephos.dev/role"] != "" {
+		return labels["kubephos.dev/role"]
 	}
 	if labels["nodepool"] != "" {
 		return labels["nodepool"]
@@ -365,6 +648,42 @@ func appendNodeEdges(snap *snapshot, source string, annotations map[string]strin
 
 func floatPointer(value float64) *float64 {
 	return &value
+}
+
+func parseFloatPointer(raw string) *float64 {
+	value, err := strconv.ParseFloat(strings.TrimSpace(raw), 64)
+	if err != nil {
+		return nil
+	}
+	return &value
+}
+
+func (source apiNodeMetricSource) List(ctx context.Context) (map[string]nodeUsage, error) {
+	if source.client == nil {
+		return nil, errors.New("Kubernetes Metrics API client is unavailable")
+	}
+	raw, err := source.client.Get().AbsPath("/apis/metrics.k8s.io/v1beta1/nodes").DoRaw(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return parseNodeMetrics(raw)
+}
+
+func parseNodeMetrics(raw []byte) (map[string]nodeUsage, error) {
+	var list nodeMetricList
+	if err := json.Unmarshal(raw, &list); err != nil {
+		return nil, err
+	}
+	result := make(map[string]nodeUsage, len(list.Items))
+	for _, item := range list.Items {
+		cpu, cpuErr := resource.ParseQuantity(item.Usage["cpu"])
+		memory, memoryErr := resource.ParseQuantity(item.Usage["memory"])
+		if item.Metadata.Name == "" || cpuErr != nil || memoryErr != nil {
+			continue
+		}
+		result[item.Metadata.Name] = nodeUsage{CPU: float64(cpu.MilliValue()), Memory: float64(memory.Value())}
+	}
+	return result, nil
 }
 
 func annotationValue(annotations map[string]string, name, legacyName string) string {

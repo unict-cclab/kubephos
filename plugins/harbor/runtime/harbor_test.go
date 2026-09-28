@@ -21,6 +21,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"kubephos.dev/kubephos/internal/domain"
+	"kubephos.dev/kubephos/internal/managedcomponents"
 )
 
 func TestManagedRegistryLifecycle(t *testing.T) {
@@ -173,11 +174,24 @@ func TestInstallerIsVersionedAndDigestVerified(t *testing.T) {
 		t.Fatal("installer command does not validate the compose runtime")
 	}
 	for _, proxy := range proxyTargets {
-		if !strings.Contains(command, proxy.Project) || !strings.Contains(command, proxy.Upstream) || !strings.Contains(command, proxy.Source+"-upstream") {
+		if !strings.Contains(command, proxy.Project) {
 			t.Fatalf("installer command does not configure %s", proxy.Source)
 		}
+		if len(proxy.StaticRepositories) == 0 && (!strings.Contains(command, proxy.Upstream) || !strings.Contains(command, proxy.Source+"-upstream")) {
+			t.Fatalf("installer command does not configure upstream %s", proxy.Source)
+		}
+		for _, repository := range proxy.StaticRepositories {
+			if !strings.Contains(command, proxy.Source+"/"+repository+":"+proxy.Reference) || !strings.Contains(command, proxy.Project+"/"+repository+":"+proxy.Reference) {
+				t.Fatalf("installer command does not seed managed mirror %s/%s", proxy.Source, repository)
+			}
+		}
 	}
-	if !strings.Contains(command, "apt-get install -y ca-certificates curl docker.io docker-compose-v2 jq openssl") {
+	for _, component := range managedcomponents.Catalog() {
+		if !strings.Contains(command, component.SourceImage) || !strings.Contains(command, development+"/"+component.Name+":"+component.Version) {
+			t.Fatalf("installer command does not seed managed component %s", component.Name)
+		}
+	}
+	if !strings.Contains(command, "apt-get install -y ca-certificates curl docker.io docker-compose-v2 jq openssl skopeo") {
 		t.Fatal("installer command does not install the proxy profile JSON dependency")
 	}
 	if !strings.Contains(command, serviceFile) || !strings.Contains(command, "systemctl enable --now "+serviceName) || !strings.Contains(command, "After=network-online.target docker.service") {

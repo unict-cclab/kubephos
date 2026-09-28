@@ -5,6 +5,13 @@ import type {Application, JsonSchema} from '../types'
 import {SchemaFields} from './SchemaFields'
 
 describe('SchemaFields', () => {
+  it('keeps hidden defaults in the submitted form without showing a control', () => {
+    const schema: JsonSchema = {type: 'object', required: ['window'], properties: {window: {type: 'string', title: 'Metrics fallback window', default: '15m', 'x-kubephos-hidden': true}}}
+    const {container} = render(<form><SchemaFields schema={schema} applications={[]} artifacts={[]} connections={[]} credentials={[]} /></form>)
+    expect(screen.queryByText('Metrics fallback window')).not.toBeInTheDocument()
+    expect(container.querySelector('input[name="schema.window"]')).toHaveValue('15m')
+  })
+
   it('renders catalog references without application-specific fields', () => {
     render(<form><SchemaFields
       schema={{type: 'object', required: ['applicationRef'], properties: {applicationRef: {type: 'string', format: 'kubephos-application-ref', title: 'Application'}}}}
@@ -61,6 +68,19 @@ describe('SchemaFields', () => {
     expect(screen.getByRole('spinbutton', {name: 'Replicas'})).toHaveValue(4)
   })
 
+  it('keeps a saved select value visible when the current catalog no longer offers it', () => {
+    render(<form><SchemaFields
+      schema={{type: 'object', properties: {policy: {type: 'string', title: 'Policy', enum: ['default', 'balanced']}}}}
+      values={{policy: 'legacy-policy'}}
+      applications={[]}
+      artifacts={[]}
+      connections={[]}
+      credentials={[]}
+    /></form>)
+    expect(screen.getByRole('combobox', {name: 'Policy'})).toHaveValue('legacy-policy')
+    expect(screen.getByRole('option', {name: 'legacy-policy · saved value'})).toBeInTheDocument()
+  })
+
   it('accepts whole and decimal values for number fields with a decimal minimum', () => {
     render(<form><SchemaFields
       schema={{type: 'object', required: ['spawnRate'], properties: {spawnRate: {type: 'number', title: 'Users started per second', minimum: 0.1, maximum: 100000, default: 10}}}}
@@ -75,6 +95,15 @@ describe('SchemaFields', () => {
     expect(field).toBeValid()
     fireEvent.change(field, {target: {value: '0.5'}})
     expect(field).toBeValid()
+  })
+
+  it('leaves an optional numeric objective empty and omits it from submitted values', () => {
+    const schema: JsonSchema = {type: 'object', properties: {sloMilliseconds: {type: 'integer', title: 'Response time SLO (optional, ms)', description: 'Leave empty to disable SLO plots.', minimum: 1}}}
+    const {container} = render(<form><SchemaFields schema={schema} applications={[]} artifacts={[]} connections={[]} credentials={[]} /></form>)
+    const field = screen.getByRole('spinbutton', {name: 'Response time SLO (optional, ms)'})
+    expect(field).toHaveValue(null)
+    expect(screen.getByText('Leave empty to disable SLO plots.')).toBeInTheDocument()
+    expect(readSchemaValues(container.querySelector('form')!, schema, 'schema', [])).toEqual({})
   })
 
   it('renders multiline strings declared by a plugin', () => {
@@ -121,5 +150,19 @@ describe('SchemaFields', () => {
     fireEvent.change(replicas, {target: {value: '4'}})
     const form = container.querySelector('form')!
     expect(readSchemaValues(form, schema, 'schema', applications)).toEqual({applicationRef: applications[0].reference, values: {replicas: 4}})
+  })
+
+  it('merges saved dynamic application settings with catalog defaults', () => {
+    const schema: JsonSchema = {type: 'object', required: ['applicationRef'], properties: {
+      applicationRef: {type: 'string', format: 'kubephos-application-ref', title: 'Application'},
+      values: {type: 'object', title: 'Application settings', 'x-kubephos-schema-from-application': 'applicationRef'},
+    }}
+    const applications: Application[] = [{
+      id: 'dev.example.app', reference: 'app:dev.example.app@1.0.0', name: 'Example', version: '1.0.0', description: '', origin: 'imported', digest: 'sha256:test',
+      descriptor: {spec: {valuesSchema: {type: 'object', properties: {replicas: {type: 'integer', title: 'Initial replicas'}, workers: {type: 'integer', title: 'Workers'}}}, defaults: {replicas: 2, workers: 3}}},
+    }]
+    render(<form><SchemaFields schema={schema} values={{applicationRef: applications[0].reference, values: {replicas: 7}}} applications={applications} artifacts={[]} connections={[]} credentials={[]} /></form>)
+    expect(screen.getByRole('spinbutton', {name: 'Initial replicas'})).toHaveValue(7)
+    expect(screen.getByRole('spinbutton', {name: 'Workers'})).toHaveValue(3)
   })
 })

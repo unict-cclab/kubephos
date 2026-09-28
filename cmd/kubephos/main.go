@@ -19,6 +19,7 @@ import (
 	"kubephos.dev/kubephos/internal/catalog"
 	"kubephos.dev/kubephos/internal/config"
 	"kubephos.dev/kubephos/internal/engine"
+	"kubephos.dev/kubephos/internal/keycloak"
 	"kubephos.dev/kubephos/internal/pluginimports"
 	"kubephos.dev/kubephos/internal/pluginruntime"
 	"kubephos.dev/kubephos/internal/plugins"
@@ -133,7 +134,12 @@ func serve(configValue config.Config) error {
 		slog.Error("load installed plugins", "error", err)
 	}
 	go watchInstalledPlugins(ctx, store, registry, loader)
-	handler, err := api.NewServer(store, registry, artifactStore, vault, runtime, loader, version, configValue.WebDirectory)
+	identity := keycloak.New(keycloak.Config{
+		InternalURL: configValue.KeycloakInternalURL, PublicURL: configValue.KeycloakPublicURL, ApplicationURL: configValue.PublicURL,
+		Realm: configValue.KeycloakRealm, ClientID: configValue.KeycloakClientID, ClientSecret: configValue.KeycloakClientSecret,
+		ManagementClientID: configValue.KeycloakManagementClientID, ManagementClientSecret: configValue.KeycloakManagementClientSecret,
+	})
+	handler, err := api.NewServer(store, registry, artifactStore, vault, runtime, loader, identity, configValue.PublicURL, version, configValue.WebDirectory)
 	if err != nil {
 		return err
 	}

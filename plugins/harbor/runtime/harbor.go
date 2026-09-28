@@ -18,6 +18,8 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"kubephos.dev/kubephos/internal/domain"
+	"kubephos.dev/kubephos/internal/managedcomponents"
+	"kubephos.dev/kubephos/internal/managedregistry"
 	"kubephos.dev/kubephos/internal/plugins"
 	"kubephos.dev/kubephos/internal/pluginssh"
 )
@@ -41,24 +43,7 @@ const (
 	caMarker        = "KUBEPHOS_CA="
 )
 
-type proxyTarget struct {
-	Project    string
-	Upstream   string
-	Type       string
-	Source     string
-	Repository string
-	Reference  string
-}
-
-var proxyTargets = []proxyTarget{
-	{Project: "dockerhub-proxy", Upstream: "https://registry-1.docker.io", Type: "docker-hub", Source: "docker.io", Repository: "library/alpine", Reference: "3.23"},
-	{Project: "k8s-proxy", Upstream: "https://registry.k8s.io", Type: "docker-registry", Source: "registry.k8s.io", Repository: "pause", Reference: "3.10.1"},
-	{Project: "ghcr-proxy", Upstream: "https://ghcr.io", Type: "github-ghcr", Source: "ghcr.io", Repository: "unict-cclab/mon-agent", Reference: monAgentProbeVersion},
-	{Project: "gcr-proxy", Upstream: "https://gcr.io", Type: "docker-registry", Source: "gcr.io", Repository: "google-containers/pause", Reference: "3.2"},
-	{Project: "quay-proxy", Upstream: "https://quay.io", Type: "docker-registry", Source: "quay.io", Repository: "prometheus/busybox", Reference: "latest"},
-}
-
-const monAgentProbeVersion = "v0.0.7"
+var proxyTargets = managedregistry.Catalog()
 
 type Plugin struct {
 	Runner commandRunner
@@ -178,7 +163,7 @@ type commandRunner interface {
 
 func (Plugin) Manifest() plugins.Manifest {
 	return plugins.Manifest{
-		ID: pluginID, Name: "Managed OCI registry", Version: "0.3.0",
+		ID: pluginID, Name: "Managed OCI registry", Version: "0.3.1",
 		Description:     "Installs and validates a managed OCI registry on one dedicated machine.",
 		Schema:          json.RawMessage(`{"type":"object","additionalProperties":false,"required":["machineSetRef","machineAccessRef","registryName"],"properties":{"machineSetRef":{"type":"string","title":"Registry machine","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"MachineSet","x-kubephos-artifact-version":"v1alpha1"},"machineAccessRef":{"type":"string","title":"Machine access","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"MachineAccess","x-kubephos-artifact-version":"v1alpha1"},"registryName":{"type":"string","title":"Registry name","pattern":"^[a-z0-9][a-z0-9-]{0,31}$","default":"managed-registry"}}}`),
 		ArtifactInputs:  []domain.ArtifactContract{{Type: "MachineSet", Version: "v1alpha1"}, {Type: "MachineAccess", Version: "v1alpha1"}},
@@ -498,7 +483,7 @@ func installCommand(marker, address, adminPassword, databasePassword, robotSecre
 	}
 	parts := []string{
 		"sudo apt-get update -q",
-		"sudo DEBIAN_FRONTEND=noninteractive apt-get install -y ca-certificates curl docker.io docker-compose-v2 jq openssl",
+		"sudo DEBIAN_FRONTEND=noninteractive apt-get install -y ca-certificates curl docker.io docker-compose-v2 jq openssl skopeo",
 		"sudo systemctl enable --now docker",
 		"sudo docker compose version >/dev/null",
 		"sudo install -d -m 0755 /var/lib/kubephos",
@@ -516,6 +501,8 @@ func installCommand(marker, address, adminPassword, databasePassword, robotSecre
 		"sudo chmod 0644 " + tlsPath + "/ca.crt " + tlsPath + "/server.crt",
 		"test -r " + tlsPath + "/ca.crt",
 		"openssl verify -CAfile " + tlsPath + "/ca.crt " + tlsPath + "/server.crt >/dev/null",
+		"sudo cp " + tlsPath + "/ca.crt /usr/local/share/ca-certificates/kubephos-harbor.crt",
+		"sudo update-ca-certificates >/dev/null",
 		"sudo cp " + installPath + "/harbor.yml.tmpl " + installPath + "/harbor.yml",
 	}
 	for _, edit := range configurationEdits {
@@ -532,6 +519,7 @@ func installCommand(marker, address, adminPassword, databasePassword, robotSecre
 		"test \"$(curl --cacert "+tlsPath+"/ca.crt -sS -o /tmp/kubephos-releases.json -w '%{http_code}' -u "+shellQuote("admin:"+adminPassword)+" -H 'Content-Type: application/json' -d "+shellQuote(releasesRequest)+" https://"+address+"/api/v2.0/projects)\" = 201",
 	)
 	parts = append(parts, proxyInstallCommands(address, adminPassword)...)
+	parts = append(parts, managedComponentCopyCommands(address, adminPassword)...)
 	parts = append(parts,
 		"printf '\\n"+robotMarker+"'",
 		"curl --cacert "+tlsPath+"/ca.crt -fsS -u "+shellQuote("admin:"+adminPassword)+" -H 'Content-Type: application/json' -d "+shellQuote(string(robotRequest))+" https://"+address+"/api/v2.0/robots",
@@ -541,10 +529,29 @@ func installCommand(marker, address, adminPassword, databasePassword, robotSecre
 	return strings.Join(parts, " && ")
 }
 
+func managedComponentCopyCommands(address, adminPassword string) []string {
+	commands := make([]string, 0, len(managedcomponents.Catalog()))
+	for _, component := range managedcomponents.Catalog() {
+		target := managedcomponents.Image(address, component.Name, component.Version)
+		commands = append(commands, "skopeo copy --retry-times 3 --dest-creds "+shellQuote("admin:"+adminPassword)+" "+shellQuote("docker://"+component.SourceImage)+" "+shellQuote("docker://"+target))
+	}
+	return commands
+}
+
 func proxyInstallCommands(address, adminPassword string) []string {
 	baseURL := "https://" + address + "/api/v2.0"
 	commands := make([]string, 0, len(proxyTargets)*4)
 	for _, proxy := range proxyTargets {
+		if len(proxy.StaticRepositories) > 0 {
+			projectRequest, _ := json.Marshal(map[string]any{"project_name": proxy.Project, "public": true, "metadata": map[string]string{"public": "true"}})
+			commands = append(commands, "proxy_status=$(curl --cacert "+tlsPath+"/ca.crt -sS -o /tmp/kubephos-static-project.json -w '%{http_code}' -u "+shellQuote("admin:"+adminPassword)+" -H 'Content-Type: application/json' -d "+shellQuote(string(projectRequest))+" "+shellQuote(baseURL+"/projects")+"); { test \"$proxy_status\" = 201 || test \"$proxy_status\" = 409; }")
+			for _, repository := range proxy.StaticRepositories {
+				source := "docker://" + proxy.Source + "/" + repository + ":" + proxy.Reference
+				target := "docker://" + address + "/" + proxy.Project + "/" + repository + ":" + proxy.Reference
+				commands = append(commands, "skopeo copy --retry-times 3 --dest-creds "+shellQuote("admin:"+adminPassword)+" "+shellQuote(source)+" "+shellQuote(target))
+			}
+			continue
+		}
 		registryName := proxy.Source + "-upstream"
 		registryRequest, _ := json.Marshal(map[string]string{"name": registryName, "url": proxy.Upstream, "type": proxy.Type})
 		commands = append(commands,
@@ -577,6 +584,19 @@ func readinessCommand(marker, address, adminPassword, robotName, robotSecret str
 		{"the registry robot cannot obtain a scoped token", curl + " -u " + shellQuote(robotName+":"+robotSecret) + " '" + baseURL + "/service/token?service=harbor-registry&scope=repository%3A" + development + "%2Fkubephos-probe%3Apull%2Cpush' | grep -Fq '\"token\"'"},
 	}
 	for _, proxy := range proxyTargets {
+		if len(proxy.StaticRepositories) > 0 {
+			checks = append(checks, struct {
+				name    string
+				command string
+			}{"the " + proxy.Source + " managed mirror project is unavailable", curl + " -u " + shellQuote("admin:"+adminPassword) + " " + shellQuote(baseURL+"/api/v2.0/projects?name="+proxy.Project) + " | jq -e " + shellQuote("any(.[]; .name == \""+proxy.Project+"\" and (.registry_id // 0) == 0)") + " >/dev/null"})
+			for _, repository := range proxy.StaticRepositories {
+				checks = append(checks, struct {
+					name    string
+					command string
+				}{"the managed " + proxy.Source + "/" + repository + " image is unavailable", curl + " -u " + shellQuote("admin:"+adminPassword) + " -H 'Accept: application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json' " + shellQuote(baseURL+"/v2/"+proxy.Project+"/"+repository+"/manifests/"+proxy.Reference) + " >/dev/null"})
+			}
+			continue
+		}
 		registryName := proxy.Source + "-upstream"
 		checks = append(checks,
 			struct {
@@ -592,6 +612,13 @@ func readinessCommand(marker, address, adminPassword, robotName, robotSecret str
 				command string
 			}{"the " + proxy.Source + " proxy pull failed", curl + " -u " + shellQuote("admin:"+adminPassword) + " -H 'Accept: application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json' " + shellQuote(baseURL+"/v2/"+proxy.Project+"/"+proxy.Repository+"/manifests/"+proxy.Reference) + " >/dev/null"},
 		)
+	}
+	for _, component := range managedcomponents.Catalog() {
+		manifestURL := baseURL + "/v2/" + development + "/" + component.Name + "/manifests/" + component.Version
+		checks = append(checks, struct {
+			name    string
+			command string
+		}{"the managed " + component.Name + " image is unavailable", curl + " -u " + shellQuote("admin:"+adminPassword) + " -H 'Accept: application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json' " + shellQuote(manifestURL) + " >/dev/null"})
 	}
 	return guardedCommands(checks)
 }

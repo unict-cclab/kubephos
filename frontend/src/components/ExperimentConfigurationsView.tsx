@@ -1,9 +1,10 @@
-import {useEffect, useMemo, useState, type FormEvent} from 'react'
+import {useEffect, useMemo, useRef, useState, type FormEvent} from 'react'
 import {request} from '../api'
 import {formatDate, readSchemaValues} from '../lib'
-import type {Application, Artifact, CatalogStrategy, Experiment, ExperimentConfiguration, JsonSchema, ManagedResource, Operation, Plugin, Session, Workspace} from '../types'
+import type {Application, ApplicationComponent, Artifact, CatalogStrategy, Experiment, ExperimentConfiguration, JsonSchema, ManagedResource, Operation, Plugin, Session, Workspace} from '../types'
 import {Dialog} from './Dialog'
 import {AutoscalerTargetEditor} from './AutoscalerTargetEditor'
+import {StrategyTargetEditor} from './StrategyTargetEditor'
 import {LoadProfileEditor, LoadProfilePreview, loadProfileSteps, type LoadProfileStep} from './LoadProfileEditor'
 import {NetworkInjectionEditor} from './NetworkInjectionEditor'
 import {SchemaFields} from './SchemaFields'
@@ -13,6 +14,10 @@ import {useDetailRoute} from '../detailRoute'
 import {InputData} from './InputData'
 import {SectionIcon} from './SectionIcon'
 import {ResourceAction} from './ResourceAction'
+import {ExperimentInstanceDialog} from './ExperimentInstanceDialog'
+import {ApplicationTopologyGraph} from './ApplicationTopologyGraph'
+import {InitialReplicaEditor} from './InitialReplicaEditor'
+import {OwnerFilter, ownerLabel} from './OwnerFilter'
 
 interface Props {
   items: ExperimentConfiguration[]
@@ -32,6 +37,20 @@ interface Props {
 }
 
 type ComponentDraft = {key: number; pluginId: string; capability: string; strategyId?: string; configuration?: Record<string, unknown>; targets?: {include: string[]; exclude: string[]}}
+type ApplicationTopologyPreview = {workloadTargets: Array<{id: string; apiVersion: string; kind: string; name: string; traits?: string[]; index?: number; dependencies?: string[]}>}
+type DestinationMode = 'application' | 'external'
+
+const defaultExternalLocustScript = `from locust import HttpUser, task
+
+class ExternalUser(HttpUser):
+    @task
+    def request(self):
+        self.client.get("/")
+`
+
+function previewComponents(preview: ApplicationTopologyPreview): ApplicationComponent[] {
+	return preview.workloadTargets.map(target => ({id: target.id, traits: target.traits, workload: {apiVersion: target.apiVersion, kind: target.kind, name: target.name}, index: target.index, dependencies: target.dependencies}))
+}
 
 export function ExperimentConfigurationsView(props: Props) {
   const [creating, setCreating] = useState(false)
@@ -40,7 +59,8 @@ export function ExperimentConfigurationsView(props: Props) {
   const [running, setRunning] = useState<ExperimentConfiguration | null>(null)
   const detail = useDetailRoute('experiments')
   const [error, setError] = useState('')
-  const ready = props.clusters.some(item => item.status === 'ready') && props.applications.length > 0
+  const [owner, setOwner] = useState('')
+	const ready = props.clusters.some(item => item.status === 'ready')
   const clone = async (item: ExperimentConfiguration) => {
     const name = window.prompt('Name for the cloned configuration', `${item.name} copy`)
     if (!name) return
@@ -64,56 +84,90 @@ export function ExperimentConfigurationsView(props: Props) {
   }
   const selectedExperiment = detail.route?.kind === 'instance' ? props.experiments.find(item => item.id === detail.route?.id) : undefined
   const selectedConfiguration = detail.route?.kind === 'configuration' ? props.items.find(item => item.id === detail.route?.id) : undefined
+  const visibleItems = props.items.filter(item => !owner || item.ownerUserId === owner)
   if (selectedExperiment) return <ResultsView artifacts={props.artifacts ?? []} experiments={props.experiments} operations={props.operations ?? []} workspaces={props.workspaces} session={props.session} changed={props.changed} openOperation={props.openOperation} focusedExperiment={selectedExperiment} onBack={detail.close} />
   if (selectedConfiguration && viewing) return <ExperimentConfigurationDialog {...props} item={selectedConfiguration} readOnly open close={() => setViewing(false)} />
   if (selectedConfiguration && editing) return <ExperimentConfigurationDialog {...props} item={selectedConfiguration} open close={() => setEditing(false)} />
-  if (selectedConfiguration) return <><ExperimentConfigurationDetailsPage item={selectedConfiguration} clusters={props.clusters} applications={props.applications} plugins={props.plugins} close={detail.close} canRun={props.isAdmin} run={() => setRunning(selectedConfiguration)} view={() => setViewing(true)} edit={() => setEditing(true)} clone={() => void clone(selectedConfiguration)} />{error && <p className="form-error page-error">{error}</p>}<ExperimentInstanceDialog item={running} close={() => setRunning(null)} session={props.session} changed={props.changed} onCreated={props.openExperiment ?? (() => {})} /></>
+  if (selectedConfiguration) return <><ExperimentConfigurationDetailsPage item={selectedConfiguration} clusters={props.clusters} applications={props.applications} session={props.session} close={detail.close} canRun={props.isAdmin} canClone={props.isAdmin || !selectedConfiguration.ownerUserId || selectedConfiguration.ownerUserId === props.session.user?.id} run={() => setRunning(selectedConfiguration)} view={() => setViewing(true)} edit={() => setEditing(true)} clone={() => void clone(selectedConfiguration)} />{error && <p className="form-error page-error">{error}</p>}<ExperimentInstanceDialog open={Boolean(running)} configurations={running ? [running] : []} initialConfigurationId={running?.id} lockConfiguration close={() => setRunning(null)} session={props.session} changed={props.changed} onCreated={props.openExperiment ?? (() => {})} /></>
   return <>
-    <div className="section-heading"><div><SectionIcon kind="configurations" /><h2>Configurations</h2><p className="section-copy">{props.items.length} reusable setups</p></div>{props.isAdmin && <ResourceAction action="create" label="New configuration" disabled={!ready} onClick={() => setCreating(true)} />}</div>
+    <div className="section-heading"><div><SectionIcon kind="configurations" /><h2>Configurations</h2></div><div className="section-heading-actions"><OwnerFilter items={props.items} value={owner} onChange={setOwner} />{props.isAdmin && <ResourceAction action="create" label="New configuration" disabled={!ready} onClick={() => setCreating(true)} />}</div></div>
     {error && <p className="form-error page-error">{error}</p>}
-    <div className="managed-grid experiment-config-grid">{props.items.length ? props.items.map(item => {
-      const cluster = props.clusters.find(clusterItem => clusterItem.id === item.clusterResourceId)
-      const application = props.applications.find(applicationItem => applicationItem.reference === item.applicationRef)
-      const components = item.definition.components ?? []
+    <div className="managed-grid experiment-config-grid">{visibleItems.length ? visibleItems.map(item => {
       const instances = props.experiments.filter(experiment => experiment.configurationId === item.id)
       return <article className="managed-card experiment-config-card" key={item.id}>
-        <div className="managed-card-head"><span className="feature-icon">▶</span><Status value={item.validation.valid ? 'validated' : 'invalid'} /></div>
-        <h3>{item.name}</h3><p>{cluster?.name ?? 'Unavailable'} · {application?.name ?? item.applicationRef}</p>
-        <div className="config-card-meta"><span>{instances.length} experiments</span><span>Updated {formatDate(item.updatedAt)}</span></div>
+        <h3>{item.name}</h3>
+        <div className="config-card-meta"><span>{instances.length} {instances.length === 1 ? 'experiment' : 'experiments'}</span><span>Created by {ownerLabel(item)}</span></div>
         <div className="managed-actions"><ResourceAction action="view" label={`View ${item.name} details`} onClick={() => detail.open('configuration', item.id)} />{props.isAdmin && <ResourceAction action="delete" label={`Delete ${item.name}`} onClick={() => void remove(item)} />}</div>
       </article>
-    }) : <div className="empty-state"><div><strong>No experiment configuration</strong>Create one from a ready cluster and application.</div></div>}</div>
+    }) : <div className="empty-state"><div><strong>No experiment configuration</strong>Create one from a ready cluster, then choose a catalog application or an external destination.</div></div>}</div>
     <ExperimentConfigurationDialog {...props} open={creating} close={() => setCreating(false)} />
-    <ExperimentInstanceDialog item={running} close={() => setRunning(null)} session={props.session} changed={props.changed} onCreated={props.openExperiment ?? (() => {})} />
+    <ExperimentInstanceDialog open={Boolean(running)} configurations={running ? [running] : []} initialConfigurationId={running?.id} lockConfiguration close={() => setRunning(null)} session={props.session} changed={props.changed} onCreated={props.openExperiment ?? (() => {})} />
   </>
 }
 
-function ExperimentConfigurationDetailsPage({item, clusters, applications, plugins, close, canRun, run, view, edit, clone}: {item: ExperimentConfiguration; clusters: ManagedResource[]; applications: Application[]; plugins: Plugin[]; close: () => void; canRun: boolean; run: () => void; view: () => void; edit: () => void; clone: () => void}) {
+function ExperimentConfigurationDetailsPage({item, clusters, applications, session, close, canRun, canClone, run, view, edit, clone}: {item: ExperimentConfiguration; clusters: ManagedResource[]; applications: Application[]; session: Session; close: () => void; canRun: boolean; canClone: boolean; run: () => void; view: () => void; edit: () => void; clone: () => void}) {
   const cluster = clusters.find(value => value.id === item.clusterResourceId)
+  const external = item.definition.destinationMode === 'external'
+  const externalDestination = item.definition.externalDestination
   const application = applications.find(value => value.reference === item.applicationRef)
   const components = item.definition.components ?? []
   const load = components.find(component => component.capability.startsWith('load.'))
   const steps = loadProfileSteps(load?.configuration.steps)
   const geographic = Array.isArray(load?.configuration.geographicSteps) ? load.configuration.geographicSteps : []
-  return <div className="detail-page"><DetailBreadcrumb parent="Configurations" current={item.name} back={close} /><div className="detail-page-heading"><div><h2>{item.name}</h2>{item.description && <p>{item.description}</p>}</div><div className="detail-page-actions">{canRun && <button className="button primary" disabled={!item.validation.valid} onClick={run}>Run experiment</button>}<button className="button secondary" onClick={view}>View configuration</button>{canRun && <button className="button secondary" onClick={edit}>Edit configuration</button>}<button className="button secondary" onClick={clone}>Clone configuration</button><Status value={item.validation.valid ? 'validated' : 'invalid'} /></div></div><article className="detail-page-card">
+  const applicationSettings = {...(application?.descriptor.spec?.defaults ?? {}), ...(item.definition.applicationValues ?? {})}
+  return <div className="detail-page"><DetailBreadcrumb parent="Configurations" current={item.name} back={close} /><div className="detail-page-heading"><h2>{item.name}</h2><div className="detail-page-actions">{canRun && <button className="button primary" disabled={!item.validation.valid} onClick={run}>Run experiment</button>}<button className="button secondary" onClick={view}>View configuration</button>{canRun && <button className="button secondary" onClick={edit}>Edit configuration</button>}{canClone && <button className="button secondary" onClick={clone}>Clone configuration</button>}</div></div><article className="detail-page-card">
     <div className="details-summary">
       <div><span>Cluster</span><strong>{cluster?.name ?? item.clusterResourceId}</strong></div>
-      <div><span>Application</span><strong>{application?.name ?? item.applicationRef}</strong></div>
-      <div><span>Validation</span><strong>{item.validation.valid ? 'Validated' : 'Invalid'}</strong></div>
+      <div><span>Created by</span><strong>{ownerLabel(item)}</strong></div>
+      <div><span>{external ? 'Destination' : 'Application'}</span><strong>{external ? externalDestination?.targetUrl ?? 'External' : application?.name ?? item.applicationRef}</strong></div>
       <div><span>Load phases</span><strong>{steps.length}</strong></div>
+      <div><span>Geographic phases</span><strong>{geographic.length}</strong></div>
       <div><span>Created</span><strong>{formatDate(item.createdAt)}</strong></div>
       <div><span>Updated</span><strong>{formatDate(item.updatedAt)}</strong></div>
     </div>
-    {item.description && <section className="details-section"><div className="details-heading"><strong>Description</strong></div><p className="details-copy">{item.description}</p></section>}
-    <section className="details-section"><div className="details-heading"><strong>Input load</strong><span>{steps.length} load phase{steps.length === 1 ? '' : 's'} · {geographic.length} zone phase{geographic.length === 1 ? '' : 's'}</span></div>{steps.length ? <><LoadProfilePreview steps={steps} /><div className="configuration-phase-list"><details><summary>Load phases</summary>{steps.map((step, index) => <div key={index} className="configuration-phase"><strong>Phase {index + 1}</strong><InputData value={loadPhaseFields(step)} /></div>)}</details>{geographic.length > 0 && <details><summary>Traffic by zone</summary>{geographic.map((phase, index) => <div key={index} className="configuration-phase"><strong>Phase {index + 1}</strong><InputData value={geographicPhaseFields(phase)} /></div>)}</details>}</div></> : <p className="details-copy">No input load is configured.</p>}</section>
-    <section className="details-section"><div className="details-heading"><strong>Setup</strong></div><div className="configuration-component-list">{components.map(component => {
-      const plugin = plugins.find(value => value.id === component.pluginId)
-      const targets = component.targets?.include?.length ? component.targets.include.join(', ') : `All compatible${component.targets?.exclude?.length ? ` except ${component.targets.exclude.join(', ')}` : ''}`
-      const settings = Object.fromEntries(Object.entries(component.configuration ?? {}).filter(([name]) => !['steps', 'geographicSteps'].includes(name)))
-      return <details key={component.id}><summary><span><strong>{componentTitle(component.capability)}</strong><small>{plugin?.name ?? 'Installed component'}</small></span><span>{targets}</span></summary>{Object.keys(settings).length ? <InputData value={settings} /> : <p className="details-copy">Default settings</p>}</details>
-    })}</div></section>
-    {!!Object.keys(item.definition.applicationValues ?? {}).length && <section className="details-section"><div className="details-heading"><strong>Application settings</strong></div><InputData value={item.definition.applicationValues} /></section>}
+    {!external && <ConfigurationApplicationTopology application={application} values={applicationSettings} session={session} />}
+    {external && externalDestination && <details className="technical-disclosure" open><summary><strong>External destination</strong></summary><div><InputData value={{targetUrl: externalDestination.targetUrl, runtimeImage: externalDestination.runtimeImage, parameters: externalDestination.parameters ?? {}, locustTemplate: externalDestination.script}} /></div></details>}
+    <section className="details-section"><div className="details-heading"><strong>Input load</strong></div>{steps.length ? <><div className="configuration-phase-list"><details><summary>Load phases</summary>{steps.map((step, index) => <div key={index} className="configuration-phase"><strong>Phase {index + 1}</strong><InputData value={loadPhaseFields(step)} /></div>)}</details>{geographic.length > 0 && <details><summary>Traffic by zone</summary>{geographic.map((phase, index) => <div key={index} className="configuration-phase"><strong>Phase {index + 1}</strong><InputData value={geographicPhaseFields(phase)} /></div>)}</details>}</div><LoadProfilePreview steps={steps} /></> : <span className="empty-inline">No input load</span>}</section>
+    {!external && !!Object.keys(applicationSettings).length && <details className="technical-disclosure" open><summary><strong>Application settings</strong></summary><div><InputData value={applicationSettings} /></div></details>}
   </article></div>
+}
+
+function ConfigurationApplicationTopology({application, values, session}: {application?: Application; values: Record<string, unknown>; session: Session}) {
+	const dynamic = application?.descriptor.spec?.valuesSchema?.['x-kubephos-dynamic-topology'] === true
+	const [components, setComponents] = useState<ApplicationComponent[]>(dynamic ? [] : application?.descriptor.spec?.interface?.components ?? [])
+	const [pending, setPending] = useState(dynamic)
+	const [error, setError] = useState('')
+	const valuesKey = JSON.stringify(values)
+	useEffect(() => {
+		if (!application) {
+			setComponents([])
+			setPending(false)
+			setError('')
+			return
+		}
+		if (!dynamic) {
+			setComponents(application.descriptor.spec?.interface?.components ?? [])
+			setPending(false)
+			setError('')
+			return
+		}
+		let current = true
+		setComponents([])
+		setPending(true)
+		setError('')
+		request<ApplicationTopologyPreview>(`/catalog/applications/${encodeURIComponent(application.id)}/${encodeURIComponent(application.version)}/resolve`, {method: 'POST', body: valuesKey}, session.csrfToken).then(preview => {
+			if (current) setComponents(previewComponents(preview))
+		}).catch(cause => {
+			if (current) setError(message(cause))
+		}).finally(() => {
+			if (current) setPending(false)
+		})
+		return () => { current = false }
+	}, [application?.reference, dynamic, session.csrfToken, valuesKey])
+	if (!application) return null
+	if (pending) return <section className="details-section application-topology-state" role="status"><div className="details-heading"><strong>Application topology</strong></div><span>Preparing topology…</span></section>
+	if (error) return <section className="details-section application-topology-state invalid" role="status"><div className="details-heading"><strong>Application topology</strong></div><span>{error}</span></section>
+	return <ApplicationTopologyGraph components={components} />
 }
 
 function loadPhaseFields(step: LoadProfileStep): Record<string, unknown> {
@@ -133,22 +187,38 @@ function record(value: unknown): Record<string, unknown> {
 }
 
 export function ExperimentConfigurationDialog({open, close, clusters, workspaces, applications, plugins, strategies, session, changed, item, readOnly = false}: Props & {open: boolean; close: () => void; item?: ExperimentConfiguration; readOnly?: boolean}) {
+	const formRef = useRef<HTMLFormElement>(null)
+	const topologyTimer = useRef<number | undefined>(undefined)
+	const topologyRequest = useRef(0)
+	const availableApplications = applications.filter((application, index, items) => application.reference === item?.applicationRef || application.origin !== 'generated' && items.findIndex(candidate => candidate.id === application.id && candidate.origin !== 'generated') === index)
   const compatiblePlugins = useMemo(() => experimentPlugins(plugins), [plugins])
   const advancedPlugins = compatiblePlugins.filter(item => primaryCapabilities(item).some(capability => !['load.', 'metrics.', 'monitoring.', 'chaos.'].some(prefix => capability.startsWith(prefix))))
   const initialComponents = () => (item?.definition.components ?? []).map((component, index) => ({key: index + 1, pluginId: component.pluginId, capability: component.capability, strategyId: component.strategyId, configuration: component.configuration ?? {}, targets: component.targets ?? {include: [], exclude: []}}))
   const [workspaceId, setWorkspaceId] = useState(item?.workspaceId ?? workspaces[0]?.id ?? '')
   const availableClusters = clusters.filter(cluster => cluster.workspaceId === workspaceId && (cluster.status === 'ready' || cluster.id === item?.clusterResourceId))
   const [clusterResourceId, setClusterResourceId] = useState(item?.clusterResourceId ?? '')
-  const [applicationRef, setApplicationRef] = useState(item?.applicationRef ?? applications[0]?.reference ?? '')
+	const [applicationRef, setApplicationRef] = useState(item?.applicationRef ?? availableApplications[0]?.reference ?? '')
+  const [destinationMode, setDestinationMode] = useState<DestinationMode>(item?.definition.destinationMode === 'external' ? 'external' : 'application')
+  const [externalTargetUrl, setExternalTargetUrl] = useState(item?.definition.externalDestination?.targetUrl ?? '')
+  const [externalRuntimeImage, setExternalRuntimeImage] = useState(item?.definition.externalDestination?.runtimeImage ?? 'locustio/locust:2.42.6')
+  const [externalScript, setExternalScript] = useState(item?.definition.externalDestination?.script ?? defaultExternalLocustScript)
+  const [externalParameters, setExternalParameters] = useState(JSON.stringify(item?.definition.externalDestination?.parameters ?? {}, null, 2))
   const savedLoad = item?.definition.components?.find(component => component.capability.startsWith('load.'))
   const [loadScenarioId, setLoadScenarioId] = useState(typeof savedLoad?.configuration.scenarioId === 'string' ? savedLoad.configuration.scenarioId : applications[0]?.descriptor.spec?.interface?.loadScenarios?.[0]?.id ?? '')
   const [components, setComponents] = useState<ComponentDraft[]>(initialComponents)
   const [sequence, setSequence] = useState((item?.definition.components?.length ?? 0) + 1)
   const [pending, setPending] = useState(false)
   const [error, setError] = useState('')
-  const application = applications.find(item => item.reference === applicationRef)
+	const [resolvedComponents, setResolvedComponents] = useState<ApplicationComponent[] | null>(null)
+	const [topologyPending, setTopologyPending] = useState(false)
+	const [topologyError, setTopologyError] = useState('')
+	const application = availableApplications.find(item => item.reference === applicationRef)
+	const dynamicTopology = destinationMode === 'application' && application?.descriptor.spec?.valuesSchema?.['x-kubephos-dynamic-topology'] === true
+	const effectiveApplicationComponents = dynamicTopology ? resolvedComponents ?? application?.descriptor.spec?.interface?.components ?? [] : application?.descriptor.spec?.interface?.components ?? []
+  const applicationValues = {...(application?.descriptor.spec?.defaults ?? {}), ...(item?.definition.applicationValues ?? {})}
+  const configurableReplicas = Boolean(application?.descriptor.spec?.valuesSchema?.properties?.initialReplicas)
   const selectedCluster = clusters.find(item => item.id === clusterResourceId)
-  const zones = applicationZones(selectedCluster)
+  const zones = destinationMode === 'external' ? [] : applicationZones(selectedCluster)
   const loadComponent = components.find(item => item.capability.startsWith('load.'))
   const metricsComponent = components.find(item => item.capability.startsWith('metrics.'))
   const networkComponent = components.find(item => item.capability.startsWith('chaos.'))
@@ -157,6 +227,34 @@ export function ExperimentConfigurationDialog({open, close, clusters, workspaces
   const monAgentPlugin = compatiblePlugins.find(item => primaryCapabilities(item).some(capability => capability.startsWith('monitoring.')))
   const managedNetworkAvailable = typeof selectedCluster?.spec?.managedProfile === 'string' && selectedCluster.spec.managedProfile.length > 0
   const advancedComponents = components.filter(item => !['load.', 'metrics.', 'monitoring.', 'chaos.'].some(prefix => item.capability.startsWith(prefix)))
+	const changeDestinationMode = (mode: DestinationMode) => {
+		setDestinationMode(mode)
+		if (mode === 'external') {
+			setComponents(items => items.filter(component => component.capability.startsWith('load.') || component.capability.startsWith('metrics.')))
+			setLoadScenarioId('external-load')
+		}
+	}
+	const resolveApplicationTopology = (form: HTMLFormElement) => {
+		if (!application || !dynamicTopology) return
+		if (topologyTimer.current !== undefined) window.clearTimeout(topologyTimer.current)
+		const requestID = ++topologyRequest.current
+		setTopologyPending(true)
+		setTopologyError('')
+		topologyTimer.current = window.setTimeout(async () => {
+			try {
+				const values = readSchemaValues(form, application.descriptor.spec?.valuesSchema ?? emptySchema, 'applicationValues', availableApplications)
+				const preview = await request<ApplicationTopologyPreview>(`/catalog/applications/${encodeURIComponent(application.id)}/${encodeURIComponent(application.version)}/resolve`, {method: 'POST', body: JSON.stringify(values)}, session.csrfToken)
+				if (requestID !== topologyRequest.current) return
+				setResolvedComponents(previewComponents(preview))
+			} catch (cause) {
+				if (requestID !== topologyRequest.current) return
+				setResolvedComponents(null)
+				setTopologyError(message(cause))
+			} finally {
+				if (requestID === topologyRequest.current) setTopologyPending(false)
+			}
+		}, 300)
+	}
   useEffect(() => {
 	if (!open) return
 	if (item) {
@@ -164,6 +262,11 @@ export function ExperimentConfigurationDialog({open, close, clusters, workspaces
 	  setWorkspaceId(item.workspaceId)
 	  setClusterResourceId(item.clusterResourceId)
 	  setApplicationRef(item.applicationRef)
+	  setDestinationMode(item.definition.destinationMode === 'external' ? 'external' : 'application')
+	  setExternalTargetUrl(item.definition.externalDestination?.targetUrl ?? '')
+	  setExternalRuntimeImage(item.definition.externalDestination?.runtimeImage ?? 'locustio/locust:2.42.6')
+	  setExternalScript(item.definition.externalDestination?.script ?? defaultExternalLocustScript)
+	  setExternalParameters(JSON.stringify(item.definition.externalDestination?.parameters ?? {}, null, 2))
 	  setComponents(drafts)
 	  setSequence(drafts.length + 1)
 	  const load = drafts.find(component => component.capability.startsWith('load.'))
@@ -171,7 +274,12 @@ export function ExperimentConfigurationDialog({open, close, clusters, workspaces
 	  return
 	}
 	setWorkspaceId(workspaces[0]?.id ?? '')
-	setApplicationRef(applications[0]?.reference ?? '')
+	setDestinationMode('application')
+	setApplicationRef(availableApplications[0]?.reference ?? '')
+	setExternalTargetUrl('')
+	setExternalRuntimeImage('locustio/locust:2.42.6')
+	setExternalScript(defaultExternalLocustScript)
+	setExternalParameters('{}')
 	setClusterResourceId('')
 	setComponents([])
 	setSequence(1)
@@ -179,13 +287,38 @@ export function ExperimentConfigurationDialog({open, close, clusters, workspaces
   useEffect(() => {
 	if (!open || item) return
 	setWorkspaceId(current => workspaces.some(workspace => workspace.id === current) ? current : workspaces[0]?.id ?? '')
-	setApplicationRef(current => applications.some(application => application.reference === current) ? current : applications[0]?.reference ?? '')
+	setApplicationRef(current => availableApplications.some(application => application.reference === current) ? current : availableApplications[0]?.reference ?? '')
   }, [open, item, workspaces, applications])
   useEffect(() => {
 	if (!open) return
+	if (destinationMode === 'external') {
+		setLoadScenarioId('external-load')
+		return
+	}
 	const scenarios = application?.descriptor.spec?.interface?.loadScenarios ?? []
 	setLoadScenarioId(current => scenarios.some(item => item.id === current) ? current : scenarios[0]?.id ?? '')
-  }, [open, applicationRef, application])
+	}, [open, applicationRef, application, destinationMode])
+	useEffect(() => {
+		if (!open) return
+		setResolvedComponents(null)
+		setTopologyError('')
+		if (!dynamicTopology) {
+			setTopologyPending(false)
+			return
+		}
+		if (!item) {
+			setTopologyPending(false)
+			return
+		}
+		const timer = window.setTimeout(() => {
+			if (formRef.current) resolveApplicationTopology(formRef.current)
+		}, 0)
+		return () => window.clearTimeout(timer)
+	}, [open, applicationRef, item?.id])
+	useEffect(() => () => {
+		if (topologyTimer.current !== undefined) window.clearTimeout(topologyTimer.current)
+		topologyRequest.current++
+	}, [])
   useEffect(() => {
 	if (!open) return
 	setClusterResourceId(current => availableClusters.some(item => item.id === current) ? current : availableClusters[0]?.id ?? '')
@@ -251,21 +384,32 @@ export function ExperimentConfigurationDialog({open, close, clusters, workspaces
     const form = event.currentTarget
     const values = new FormData(form)
     try {
+	  let externalParameterValues: Record<string, string> = {}
+	  if (destinationMode === 'external') {
+		const parsed: unknown = JSON.parse(externalParameters || '{}')
+		if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed) || Object.values(parsed).some(value => typeof value !== 'string')) throw new Error('Locust parameters must be a JSON object containing string values.')
+		externalParameterValues = parsed as Record<string, string>
+	  }
+	  const submittedComponents = destinationMode === 'external' ? components.filter(component => component.capability.startsWith('load.') || component.capability.startsWith('metrics.')) : components
       await request(item ? `/experiment-configurations/${item.id}` : '/experiment-configurations', {method: item ? 'PUT' : 'POST', body: JSON.stringify({
         workspaceId,
         clusterResourceId,
         name: values.get('name'),
-        description: values.get('description'),
-        applicationRef,
+        description: '',
+		applicationRef: destinationMode === 'application' ? applicationRef : '',
         updatedAt: item?.updatedAt,
         definition: {
-          applicationValues: readSchemaValues(form, application?.descriptor.spec?.valuesSchema ?? emptySchema, 'applicationValues', applications),
-          components: components.map((component, index) => {
+		  destinationMode,
+		  externalDestination: destinationMode === 'external' ? {targetUrl: externalTargetUrl, runtimeImage: externalRuntimeImage, script: externalScript, parameters: externalParameterValues} : undefined,
+		  applicationValues: destinationMode === 'application' ? readSchemaValues(form, application?.descriptor.spec?.valuesSchema ?? emptySchema, 'applicationValues', availableApplications) : {},
+          podDisruptionBudgetMinAvailable: destinationMode === 'application' ? Number(values.get('podDisruptionBudgetMinAvailable')) : 0,
+          components: submittedComponents.map((component, index) => {
             const plugin = compatiblePlugins.find(item => item.id === component.pluginId)!
             const configuration = readSchemaValues(form, configurableSchema(plugin.schema), `component-${component.key}`, applications)
 			if (component.capability.startsWith('load.')) configuration.action = 'start'
 			if (component.capability.startsWith('load.')) configuration.interactive = false
-			if (component.capability.startsWith('load.')) configuration.scenarioId = loadScenarioId
+			if (component.capability.startsWith('load.')) configuration.scenarioId = destinationMode === 'external' ? 'external-load' : loadScenarioId
+			if (destinationMode === 'external' && component.capability.startsWith('load.')) delete configuration.geographicSteps
             return {id: `component-${index + 1}`, strategyId: component.strategyId, pluginId: component.pluginId, capability: component.capability, configuration, targets: {include: split(values.get(`include-${component.key}`)), exclude: split(values.get(`exclude-${component.key}`))}}
           })
         }
@@ -279,88 +423,84 @@ export function ExperimentConfigurationDialog({open, close, clusters, workspaces
       setPending(false)
     }
   }
-  const form = <form onSubmit={submit} className={readOnly ? 'configuration-readonly-form' : undefined}>
+	  const form = <form ref={formRef} onSubmit={submit} onChange={event => {
+		const target = event.nativeEvent.target as HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement
+		if (target.name.startsWith('applicationValues.')) resolveApplicationTopology(event.currentTarget)
+	  }} className={readOnly ? 'configuration-readonly-form' : undefined}>
       <fieldset className="configuration-form-fields" disabled={readOnly}>
-      <div className="form-section"><strong>1. Cluster</strong><p>Select a ready Kubernetes cluster. Its health is checked again before every run and every step.</p></div>
+      <div className="form-section"><strong>1. Cluster</strong></div>
       {workspaces.length > 1 ? <label>Environment<select value={workspaceId} onChange={event => setWorkspaceId(event.target.value)} required>{workspaces.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label> : <input type="hidden" value={workspaceId} readOnly />}
       <label>Kubernetes cluster<select name="clusterResourceId" value={clusterResourceId} onChange={event => setClusterResourceId(event.target.value)} required disabled={!availableClusters.length}>{availableClusters.length ? availableClusters.map(item => <option key={item.id} value={item.id}>{item.name}</option>) : <option value="">No ready cluster in this environment</option>}</select></label>
       <label>Name<input name="name" maxLength={120} placeholder="Scheduler baseline" defaultValue={item?.name} required autoFocus /></label>
-      <label>Description<textarea name="description" rows={2} maxLength={1000} placeholder="What this configuration is intended to measure" defaultValue={item?.description} /></label>
-      <div className="form-section"><strong>2. Application</strong><p>Select the application and change only the values exposed by its catalog contract.</p></div>
-      <label>Application<select value={applicationRef} onChange={event => setApplicationRef(event.target.value)} required>{applications.map(item => <option key={item.reference} value={item.reference}>{item.name} · {item.version}</option>)}</select></label>
-      {application && <SchemaFields schema={application.descriptor.spec?.valuesSchema ?? emptySchema} prefix="applicationValues" values={item?.definition.applicationValues ?? application.descriptor.spec?.defaults ?? {}} applications={applications} artifacts={[]} connections={[]} credentials={[]} />}
-      <div className="form-section pool-section"><div><strong>3. Network between zones</strong><p>{networkComponent ? 'Traffic crossing application zones will use this network profile.' : !managedNetworkAvailable ? 'This cluster predates the managed network runtime.' : zones.length < 2 ? 'This cluster has fewer than two application zones.' : 'No network conditions will be injected.'}</p></div><label className="checkbox-field"><input type="checkbox" checked={Boolean(networkComponent)} disabled={!networkPlugin || !managedNetworkAvailable || zones.length < 2} onChange={event => setNetworkEnabled(event.target.checked)} /><span>Enable injection</span></label></div>
-      {networkComponent && networkPlugin && <section className="experiment-component"><NetworkInjectionEditor key={`${item?.id ?? 'new'}-${networkComponent.key}`} prefix={`component-${networkComponent.key}`} zones={zones} values={networkComponent.configuration} /></section>}
-      <div className="form-section"><strong>4. Monitoring</strong><p>Choose the query window and resolution used to collect the run results.</p></div>
+      <div className="form-section"><strong>2. Destination</strong></div>
+      <label>Destination type<select aria-label="Destination type" value={destinationMode} onChange={event => changeDestinationMode(event.target.value as DestinationMode)}><option value="application">Catalog application</option><option value="external">External destination</option></select></label>
+      {destinationMode === 'application' ? <>
+        <label>Application<select value={applicationRef} onChange={event => setApplicationRef(event.target.value)} required disabled={!availableApplications.length}>{availableApplications.length ? availableApplications.map(item => <option key={item.reference} value={item.reference}>{item.name} · {item.version}</option>) : <option value="">No catalog application available</option>}</select></label>
+        {application && <SchemaFields schema={applicationSettingsSchema(application.descriptor.spec?.valuesSchema ?? emptySchema)} prefix="applicationValues" values={applicationValues} applications={availableApplications} artifacts={[]} connections={[]} credentials={[]} />}
+	    {application && configurableReplicas && <InitialReplicaEditor prefix="applicationValues" components={effectiveApplicationComponents} values={applicationValues} resetKey={`${item?.id ?? 'new'}-${applicationRef}`} />}
+	    {application && <label>Minimum available replicas<input type="number" name="podDisruptionBudgetMinAvailable" min={1} max={20} step={1} defaultValue={item?.definition.podDisruptionBudgetMinAvailable ?? 1} required /><span className="field-description">PDB minAvailable for every deschedulable workload.</span></label>}
+	    {dynamicTopology && <div className={`topology-resolution ${topologyError ? 'invalid' : topologyPending ? 'running' : 'ready'}`} role="status">{topologyError || (topologyPending ? 'Checking application topology…' : `${effectiveApplicationComponents.filter(component => component.traits?.includes('scalable')).length} configurable services`)}</div>}
+        {application && !topologyError && <ApplicationTopologyGraph components={effectiveApplicationComponents} />}
+      </> : <section className="experiment-component external-destination-editor">
+        <label>External endpoint<input type="url" value={externalTargetUrl} onChange={event => setExternalTargetUrl(event.target.value)} placeholder="https://api.example.com" maxLength={2048} required /><span className="field-description">Base HTTP or HTTPS URL used as the Locust host.</span></label>
+        <label>Locust runtime image<input value={externalRuntimeImage} onChange={event => setExternalRuntimeImage(event.target.value)} maxLength={512} required /></label>
+        <label>Locust file template<textarea value={externalScript} onChange={event => setExternalScript(event.target.value)} rows={14} maxLength={262144} spellCheck={false} required /></label>
+        <label>Locust parameters (JSON)<textarea value={externalParameters} onChange={event => setExternalParameters(event.target.value)} rows={5} spellCheck={false} placeholder={'{"tenant":"demo"}'} /><span className="field-description">String values are exposed as KUBEPHOS_PARAMETERS and KUBEPHOS_PARAM_&lt;NAME&gt; environment variables.</span></label>
+      </section>}
+      {destinationMode === 'application' && <><div className="form-section pool-section"><strong>3. Network between zones</strong><label className="checkbox-field"><input type="checkbox" checked={Boolean(networkComponent)} disabled={!networkPlugin || !managedNetworkAvailable || zones.length < 2} onChange={event => setNetworkEnabled(event.target.checked)} /><span>Enable injection</span></label></div>
+      {networkComponent && networkPlugin && <section className="experiment-component"><NetworkInjectionEditor key={`${item?.id ?? 'new'}-${networkComponent.key}`} prefix={`component-${networkComponent.key}`} zones={zones} values={networkComponent.configuration} /></section>}</>}
+      <div className="form-section"><strong>{destinationMode === 'external' ? '3. Monitoring' : '4. Monitoring'}</strong></div>
       {metricsComponent && (() => {const plugin = compatiblePlugins.find(item => item.id === metricsComponent.pluginId)!; return <section className="experiment-component"><SchemaFields schema={experimentSchema(plugin.schema, metricsComponent.capability)} prefix={`component-${metricsComponent.key}`} values={metricsComponent.configuration ?? {}} applications={applications} artifacts={[]} connections={[]} credentials={[]} /></section>})()}
-      <label className="checkbox-field"><input type="checkbox" checked={Boolean(monAgentComponent)} disabled={!monAgentPlugin || !managedNetworkAvailable} onChange={event => setMonAgentEnabled(event.target.checked)} /><span>Customize mon-agent for this experiment</span></label>
-      {monAgentComponent && monAgentPlugin && <section className="experiment-component"><SchemaFields schema={experimentSchema(monAgentPlugin.schema, monAgentComponent.capability)} prefix={`component-${monAgentComponent.key}`} values={monAgentComponent.configuration ?? {}} applications={applications} artifacts={[]} connections={[]} credentials={[]} /></section>}
-      <div className="form-section"><strong>5. Load profile</strong><p>Define the traffic intensity, temporal pattern and distribution across application zones.</p></div>
-      {(application?.descriptor.spec?.interface?.loadScenarios?.length ?? 0) > 1 && <label>Load scenario<select value={loadScenarioId} onChange={event => setLoadScenarioId(event.target.value)} required>{application?.descriptor.spec?.interface?.loadScenarios?.map(item => <option key={item.id} value={item.id}>{item.id} · {item.engine ?? 'load'}</option>)}</select></label>}
-      {(application?.descriptor.spec?.interface?.loadScenarios?.length ?? 0) === 1 && <p className="field-hint">Scenario: {loadScenarioId} · selected automatically from the application contract.</p>}
+      {destinationMode === 'application' && <><label className="checkbox-field"><input type="checkbox" checked={Boolean(monAgentComponent)} disabled={!monAgentPlugin || !managedNetworkAvailable} onChange={event => setMonAgentEnabled(event.target.checked)} /><span>Customize mon-agent for this experiment</span></label>
+      {monAgentComponent && monAgentPlugin && <section className="experiment-component"><SchemaFields schema={experimentSchema(monAgentPlugin.schema, monAgentComponent.capability)} prefix={`component-${monAgentComponent.key}`} values={monAgentComponent.configuration ?? {}} applications={applications} artifacts={[]} connections={[]} credentials={[]} /></section>}</>}
+      <div className="form-section"><strong>{destinationMode === 'external' ? '4. Load profile' : '5. Load profile'}</strong></div>
+      {destinationMode === 'application' && (application?.descriptor.spec?.interface?.loadScenarios?.length ?? 0) > 1 && <label>Load scenario<select value={loadScenarioId} onChange={event => setLoadScenarioId(event.target.value)} required>{application?.descriptor.spec?.interface?.loadScenarios?.map(item => <option key={item.id} value={item.id}>{item.id} · {item.engine ?? 'load'}</option>)}</select></label>}
       {loadComponent && (() => {const plugin = compatiblePlugins.find(item => item.id === loadComponent.pluginId)!; return <section className="experiment-component"><SchemaFields schema={experimentSchema(plugin.schema, loadComponent.capability)} prefix={`component-${loadComponent.key}`} values={loadComponent.configuration ?? {}} applications={applications} artifacts={[]} connections={[]} credentials={[]} /><LoadProfileEditor key={`${item?.id ?? 'new'}-${loadComponent.key}`} prefix={`component-${loadComponent.key}`} zones={zones} values={loadComponent.configuration} /></section>})()}
-      <div className="form-section"><strong>6. Scheduling and scaling</strong><p>Optional. Add only what this experiment needs.</p></div>
+      {destinationMode === 'application' && <><div className="form-section"><strong>6. Scheduling and scaling</strong></div>
       <div className="component-add-options">{advancedPlugins.filter(plugin => !components.some(component => component.pluginId === plugin.id)).map(plugin => <button className="button secondary compact" type="button" key={plugin.id} disabled={components.length >= 15} onClick={() => addAdvancedComponent(plugin.id)}>+ {componentTitle(primaryCapabilities(plugin)[0] ?? '')}</button>)}</div>
       <div className="experiment-component-list">{advancedComponents.map(component => {
         const plugin = compatiblePlugins.find(item => item.id === component.pluginId) ?? compatiblePlugins[0]
-        const componentIds = application?.descriptor.spec?.interface?.components?.map(item => item.id).join(', ') ?? ''
         const strategyKind = ['scheduler', 'descheduler', 'autoscaler'].find(kind => component.capability.startsWith(`${kind}.`))
-        const readyStrategies = strategyKind ? strategies.filter(item => item.workspaceId === workspaceId && item.kind === strategyKind && item.status === 'succeeded') : []
+        const readyStrategies = strategyKind ? strategies.filter(item => item.workspaceId === workspaceId && item.kind === strategyKind && (item.status === 'succeeded' || item.id === component.strategyId)) : []
         const selectedStrategy = readyStrategies.find(item => item.id === component.strategyId)
+        const missingStrategy = component.strategyId && !selectedStrategy ? component.strategyId : ''
         return <section className="experiment-component" key={component.key}>
 		  <div className="experiment-component-head"><strong>{componentTitle(component.capability)}</strong><button type="button" className="icon-button" aria-label="Remove component" onClick={() => setComponents(items => items.filter(item => item.key !== component.key))}>×</button></div>
-          {strategyKind && <label>{componentTitle(component.capability)} image<select value={component.strategyId ?? ''} required onChange={event => setComponents(items => items.map(item => item.key === component.key ? {...item, strategyId: event.target.value} : item))}><option value="">Select a ready {strategyKind}</option>{readyStrategies.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>}
+          {strategyKind && <label>{componentTitle(component.capability)} image<select value={component.strategyId ?? ''} required onChange={event => setComponents(items => items.map(item => item.key === component.key ? {...item, strategyId: event.target.value} : item))}><option value="">Select a ready {strategyKind}</option>{missingStrategy && <option value={missingStrategy} disabled>{missingStrategy} · unavailable</option>}{readyStrategies.map(item => <option key={item.id} value={item.id} disabled={item.status !== 'succeeded'}>{item.name}{item.status === 'succeeded' ? '' : ` · ${item.status}`}</option>)}</select></label>}
           {plugin && <SchemaFields key={`${plugin.id}-${component.strategyId ?? ''}`} schema={experimentSchema(plugin.schema, component.capability)} prefix={`component-${component.key}`} values={{...(selectedStrategy?.defaultConfiguration ?? {}), ...(component.configuration ?? {})}} applications={applications} artifacts={[]} connections={[]} credentials={[]} />}
-          {strategyKind === 'autoscaler' && <AutoscalerTargetEditor prefix={`component-${component.key}`} components={application?.descriptor.spec?.interface?.components ?? []} defaults={selectedStrategy?.defaultConfiguration ?? {}} resetKey={`${item?.id ?? 'new'}-${applicationRef}-${component.strategyId ?? ''}`} excluded={component.targets?.exclude ?? []} targetOverrides={record(component.configuration?.targetOverrides)} />}
-          {strategyKind !== 'autoscaler' && <details className="advanced-fields"><summary>Apply to services</summary><p>Leave both fields empty to use all services. Available: {componentIds || 'services in the application'}.</p><div className="field-row"><label>Only these services<input name={`include-${component.key}`} placeholder="frontend, checkoutservice" defaultValue={component.targets?.include?.join(', ')} /></label><label>Exclude services<input name={`exclude-${component.key}`} placeholder="emailservice" defaultValue={component.targets?.exclude?.join(', ')} /></label></div></details>}
+	          {strategyKind === 'autoscaler' && <AutoscalerTargetEditor prefix={`component-${component.key}`} components={effectiveApplicationComponents} defaults={selectedStrategy?.defaultConfiguration ?? {}} resetKey={`${item?.id ?? 'new'}-${applicationRef}-${component.strategyId ?? ''}-${effectiveApplicationComponents.map(item => item.id).join(':')}`} excluded={component.targets?.exclude ?? []} targetOverrides={record(component.configuration?.targetOverrides)} />}
+          {(strategyKind === 'scheduler' || strategyKind === 'descheduler') && <StrategyTargetEditor componentKey={component.key} components={effectiveApplicationComponents} trait={strategyKind === 'descheduler' ? 'deschedulable' : 'schedulable'} resetKey={`${item?.id ?? 'new'}-${applicationRef}-${component.strategyId ?? ''}-${effectiveApplicationComponents.map(item => item.id).join(':')}`} included={component.targets?.include ?? []} excluded={component.targets?.exclude ?? []} />}
         </section>
-      })}</div>
-      <div className="validation-callout"><span>✓</span><p>Cluster, application, network, monitoring, load and optional components are validated now and checked again before every run.</p></div>
+      })}</div></>}
       </fieldset>
-      {!readOnly && <><p className="form-error">{error}</p><div className="modal-actions"><button className="button secondary" type="button" onClick={close}>Cancel</button><button className="button primary" disabled={pending || !workspaceId || !clusterResourceId || !application}>{pending ? 'Validating…' : item ? 'Validate and update' : 'Validate and save'}</button></div></>}
+	  {!readOnly && <><p className="form-error">{error}</p><div className="modal-actions"><button className="button secondary" type="button" onClick={close}>Cancel</button><button className="button primary" disabled={pending || topologyPending || Boolean(topologyError) || !workspaceId || !clusterResourceId || destinationMode === 'application' && !application || destinationMode === 'external' && (!externalTargetUrl || !externalRuntimeImage || !externalScript)}>{pending ? 'Validating…' : item ? 'Validate and update' : 'Validate and save'}</button></div></>}
     </form>
-  if (item) return <div className={`detail-page configuration-edit-page${readOnly ? ' configuration-view-page' : ''}`}><DetailBreadcrumb parent="Configurations" current={`${readOnly ? 'View' : 'Edit'} ${item.name}`} back={close} /><div className="detail-page-heading"><div><h2>{readOnly ? 'View configuration' : 'Edit configuration'}</h2><p>{readOnly ? 'Complete saved configuration in read-only mode.' : 'Changes apply only to experiments created after this update.'}</p></div></div><article className="detail-page-card">{form}</article></div>
-  return <Dialog open={open} onClose={close} title="Create experiment configuration" eyebrow="VALIDATE BEFORE RUN" className="template-modal experiment-modal">{form}</Dialog>
-}
-
-function ExperimentInstanceDialog({item, close, session, changed, onCreated}: {item: ExperimentConfiguration | null; close: () => void; session: Session; changed: () => Promise<void>; onCreated: (id: string) => void}) {
-  const [pending, setPending] = useState(false)
-  const [error, setError] = useState('')
-  const submit = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault()
-    if (!item) return
-    const values = new FormData(event.currentTarget)
-    const scheduled = String(values.get('scheduledFor') ?? '')
-    setPending(true)
-    setError('')
-    try {
-      const created = await request<Experiment>('/experiment-instances', {method: 'POST', body: JSON.stringify({configurationId: item.id, name: values.get('name'), runs: Number(values.get('runs')), scheduledFor: scheduled ? new Date(scheduled).toISOString() : undefined})}, session.csrfToken)
-      close()
-      await changed()
-      onCreated(created.id)
-    } catch (cause) {
-      setError(message(cause))
-    } finally {
-      setPending(false)
-    }
-  }
-  return <Dialog open={Boolean(item)} onClose={close} title="Run experiment" className="template-modal">
-    <form onSubmit={submit}>
-      <div className="form-section"><strong>{item?.name}</strong><p>Runs execute in sequence with a reset between them.</p></div>
-      <label>Instance name<input name="name" maxLength={120} defaultValue={item ? `${item.name} run` : ''} required autoFocus /></label>
-      <div className="field-row"><label>Number of runs<input name="runs" type="number" min={1} max={20} defaultValue={3} required /></label><label>Start later (optional)<input name="scheduledFor" type="datetime-local" /></label></div>
-      <div className="validation-callout"><span>✓</span><p>The configuration is validated again before starting.</p></div>
-      <p className="form-error">{error}</p>
-      <div className="modal-actions"><button className="button secondary" type="button" onClick={close}>Cancel</button><button className="button primary" disabled={pending}>{pending ? 'Validating…' : 'Validate and run'}</button></div>
-    </form>
-  </Dialog>
+  if (item) return <div className={`detail-page configuration-edit-page${readOnly ? ' configuration-view-page' : ''}`}><DetailBreadcrumb parent="Configurations" current={`${readOnly ? 'View' : 'Edit'} ${item.name}`} back={close} /><div className="detail-page-heading"><div><h2>{readOnly ? 'View configuration' : 'Edit configuration'}</h2></div></div><article className="detail-page-card">{form}</article></div>
+  return <Dialog open={open} onClose={close} title="Create experiment configuration" className="template-modal experiment-modal">{form}</Dialog>
 }
 
 const emptySchema: JsonSchema = {type: 'object', properties: {}}
 
+function schemaDefaults(schema: JsonSchema): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(schema.properties ?? {}).flatMap(([name, property]) => {
+    if (property.default !== undefined) return [[name, property.default]]
+    if (property.type === 'object' && property.properties) {
+      const nested = schemaDefaults({type: 'object', properties: property.properties})
+      if (Object.keys(nested).length) return [[name, nested]]
+    }
+    return []
+  }))
+}
+
 export function configurableSchema(schema: JsonSchema): JsonSchema {
   const properties = Object.fromEntries(Object.entries(schema.properties ?? {}).filter(([, property]) => property.format !== 'kubephos-artifact-ref' && property.format !== 'kubephos-application-ref' && property.format !== 'kubephos-strategy-image'))
   return {type: 'object', properties, required: (schema.required ?? []).filter(name => name in properties)}
+}
+
+function applicationSettingsSchema(schema: JsonSchema): JsonSchema {
+  const hidden = new Set(['initialReplicas', 'replicaOverrides'])
+  const properties = Object.fromEntries(Object.entries(schema.properties ?? {}).filter(([name]) => !hidden.has(name)))
+  return {...schema, properties, required: (schema.required ?? []).filter(name => !hidden.has(name))}
 }
 
 function experimentSchema(schema: JsonSchema, capability: string): JsonSchema {

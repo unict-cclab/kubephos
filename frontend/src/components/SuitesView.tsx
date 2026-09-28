@@ -7,6 +7,7 @@ import type {Application, Experiment, ExperimentConfiguration, ManagedResource, 
 import {Dialog} from './Dialog'
 import {NumericInput} from './NumericInput'
 
+import {OwnerFilter, ownerLabel} from './OwnerFilter'
 const suiteColors = ['#1f77b4', '#d55e00', '#009e73', '#cc79a7', '#e69f00', '#56b4e9', '#000000', '#7f7f7f']
 
 interface Props {
@@ -23,7 +24,8 @@ interface Props {
 export function SuitesView(props: Props) {
   const [creating, setCreating] = useState(false)
   const [error, setError] = useState('')
-  const suites = props.experiments.filter(item => item.kind === 'suite')
+  const [owner, setOwner] = useState('')
+  const suites = props.experiments.filter(item => item.kind === 'suite' && (!owner || item.ownerUserId === owner))
   const remove = async (suite: Experiment) => {
     if (!window.confirm(`Delete suite ${suite.name}? Runs, logs and collected results will be retained.`)) return
     setError('')
@@ -35,12 +37,12 @@ export function SuitesView(props: Props) {
     }
   }
   return <>
-    <div className="section-heading"><div><SectionIcon kind="suites" /><h2>Suites</h2><p className="section-copy">{suites.length} comparisons</p></div>{props.isAdmin && <ResourceAction action="create" label="New suite" disabled={props.configurations.length < 2} onClick={() => setCreating(true)} />}</div>
+    <div className="section-heading"><div><SectionIcon kind="suites" /><h2>Suites</h2></div><div className="section-heading-actions"><OwnerFilter items={props.experiments.filter(item => item.kind === 'suite')} value={owner} onChange={setOwner} />{props.isAdmin && <ResourceAction action="create" label="New suite" disabled={props.configurations.length < 2} onClick={() => setCreating(true)} />}</div></div>
     {error && <p className="form-error page-error">{error}</p>}
     <div className="managed-grid">{suites.length ? suites.map(suite => {
       const completed = suite.variants.flatMap(item => item.trials).filter(item => ['succeeded', 'failed', 'canceled'].includes(item.status)).length
       const total = suite.variants.reduce((sum, item) => sum + item.trials.length, 0)
-      return <article className="managed-card" key={suite.id}><div className="managed-card-head"><span className="feature-icon">⇄</span><span className={`status ${suite.status}`}>{suite.status}</span></div><h3>{suite.name}</h3><p>{suite.variants.length} strategies · {completed}/{total} runs</p><div className="trait-list">{suite.variants.map(item => <span key={item.id}>{item.name}</span>)}</div><div className="managed-actions"><ResourceAction action="view" label={`View ${suite.name} details`} onClick={() => props.navigate(suite.id)} />{props.isAdmin && <ResourceAction action="delete" label={`Delete ${suite.name}`} disabled={!isTerminalExperiment(suite.status)} onClick={() => void remove(suite)} />}</div></article>
+      return <article className="managed-card" key={suite.id}><div className="managed-card-head"><span className="feature-icon">⇄</span><span className={`status ${suite.status}`}>{suite.status}</span></div><h3>{suite.name}</h3><p>{suite.variants.length} strategies · {completed}/{total} runs · Created by {ownerLabel(suite)}</p><div className="trait-list">{suite.variants.map(item => <span key={item.id}>{item.name}</span>)}</div><div className="managed-actions"><ResourceAction action="view" label={`View ${suite.name} details`} onClick={() => props.navigate(suite.id)} />{props.isAdmin && <ResourceAction action="delete" label={`Delete ${suite.name}`} disabled={!isTerminalExperiment(suite.status)} onClick={() => void remove(suite)} />}</div></article>
     }) : <div className="empty-state"><div><strong>No experiment suite</strong>Select at least two configurations using the same cluster and application.</div></div>}</div>
     <SuiteDialog open={creating} close={() => setCreating(false)} {...props} />
   </>
@@ -71,7 +73,7 @@ function SuiteDialog({open, close, configurations, applications, clusters, sessi
     setPending(true)
     setError('')
     try {
-      const created = await request<Experiment>('/experiment-suites', {method: 'POST', body: JSON.stringify({name: values.get('name'), description: values.get('description'), variants: selected.map(configurationId => ({configurationId, alias: presentation[configurationId]?.alias, color: presentation[configurationId]?.color})), runs, scheduledFor: scheduled ? new Date(scheduled).toISOString() : undefined})}, session.csrfToken)
+      const created = await request<Experiment>('/experiment-suites', {method: 'POST', body: JSON.stringify({name: values.get('name'), description: '', variants: selected.map(configurationId => ({configurationId, alias: presentation[configurationId]?.alias, color: presentation[configurationId]?.color})), runs, scheduledFor: scheduled ? new Date(scheduled).toISOString() : undefined})}, session.csrfToken)
       setSelected([])
       setPresentation({})
       close()
@@ -83,10 +85,9 @@ function SuiteDialog({open, close, configurations, applications, clusters, sessi
       setPending(false)
     }
   }
-  return <Dialog open={open} onClose={close} title="Create experiment suite" eyebrow="COMPARE STRATEGIES" className="template-modal experiment-modal"><form onSubmit={submit}>
+  return <Dialog open={open} onClose={close} title="Create experiment suite" className="template-modal experiment-modal"><form onSubmit={submit}>
     <label>Name<input name="name" maxLength={120} placeholder="Default vs custom scheduler" required autoFocus /></label>
-    <label>Description<textarea name="description" rows={2} maxLength={1000} placeholder="What this suite compares" /></label>
-    <div className="form-section"><strong>Strategies</strong><p>Select two to eight configurations using the same cluster and application. Every run is executed sequentially.</p></div>
+    <div className="form-section"><strong>Strategies</strong></div>
     <div className="suite-configuration-list">{configurations.map(item => {
       const cluster = clusters.find(clusterItem => clusterItem.id === item.clusterResourceId)
       const isSelected = selected.includes(item.id)
@@ -94,7 +95,6 @@ function SuiteDialog({open, close, configurations, applications, clusters, sessi
     })}</div>
     <div className="field-row"><label>Runs per strategy<NumericInput name="runs" min={1} max={20} value={runs} onValueChange={setRuns} required /></label><label>Start later (optional)<input type="datetime-local" name="scheduledFor" /></label></div>
     {selected.length > 0 && <p className="field-hint">{runs} per strategy × {selected.length} strategies = {runs * selected.length} sequential runs.</p>}
-    <div className="validation-callout"><span>✓</span><p>Every setup and its dependencies are checked before the suite starts.</p></div>
     <p className="form-error">{error}</p><div className="modal-actions"><button className="button secondary" type="button" onClick={close}>Cancel</button><button className="button primary" disabled={pending || selected.length < 2}>{pending ? 'Validating…' : 'Validate and run'}</button></div>
   </form></Dialog>
 }
