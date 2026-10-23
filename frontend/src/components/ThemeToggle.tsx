@@ -21,7 +21,7 @@ export function ThemeToggle() {
       window.localStorage.setItem('kubephos-theme', theme)
     } catch {}
     const themeColor = document.querySelector<HTMLMetaElement>('meta[name="theme-color"]')
-    if (themeColor) themeColor.content = theme === 'dark' ? '#11161d' : '#f6f7f9'
+    if (themeColor) themeColor.content = theme === 'dark' ? '#0a0a0a' : '#ededed'
   }, [theme])
   const dark = theme === 'dark'
   return <button type="button" className="theme-toggle" aria-label={dark ? 'Use light mode' : 'Use dark mode'} title={dark ? 'Light mode' : 'Dark mode'} aria-pressed={dark} onClick={() => setTheme(value => value === 'dark' ? 'light' : 'dark')}>{dark

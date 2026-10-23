@@ -15,6 +15,8 @@ describe('execution progress graph', () => {
 
     expect(screen.getByText('Step 2 of 3')).toBeInTheDocument()
     expect(screen.getByRole('button', {name: '2. Install platform: Running'})).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByRole('button', {name: '2. Install platform: Running'})).toHaveAttribute('aria-current', 'step')
+    expect(screen.getByRole('progressbar', {name: 'Provisioning completed steps'})).toHaveAttribute('aria-valuenow', '1')
     expect(screen.queryByText('Depends on Prepare cluster')).not.toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', {name: 'Open logs'}))
     expect(openOperation).toHaveBeenCalledWith('op_install')
@@ -61,5 +63,13 @@ describe('execution progress graph', () => {
     ]
 
     expect(highLevelExecutionNodes(nodes).map(node => node.title)).toEqual(['Prepare external workload', 'Run workload', 'Collect results'])
+  })
+
+  it('distinguishes cancellation from failure and selects the stopped step', () => {
+    render(createElement(ExecutionProgressGraph, {nodes: [{id: 'prepare', title: 'Prepare', status: 'succeeded'}, {id: 'load', title: 'Run workload', status: 'canceled'}, {id: 'metrics', title: 'Collect results', status: 'pending'}], label: 'Stopped experiment'}))
+    const stopped = screen.getByRole('button', {name: '2. Run workload: Canceled'})
+    expect(stopped).toHaveClass('canceled', 'selected')
+    expect(stopped).not.toHaveClass('failed')
+    expect(screen.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '1')
   })
 })

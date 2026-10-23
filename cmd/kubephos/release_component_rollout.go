@@ -154,9 +154,9 @@ func releaseManagedComponentRollout(configValue config.Config) error {
 func managedRolloutDefinition(name string) (managedRolloutSpec, bool) {
 	switch name {
 	case managedcomponents.MonAgentName:
-		return managedRolloutSpec{Name: name, Version: managedcomponents.MonAgentVersion, Resource: "deployment/kubephos-mon-agent", Namespace: "kubephos-observability", Container: "kubephos-mon-agent", LegacyImages: []string{"ghcr.io/unict-cclab/mon-agent:v0.0.7"}, HealthTimeout: 3 * time.Minute}, true
+		return managedRolloutSpec{Name: name, Version: managedcomponents.MonAgentVersion, Resource: "deployment/kubephos-mon-agent", Namespace: "kubephos-observability", Container: "kubephos-mon-agent", LegacyImages: []string{"ghcr.io/unict-cclab/kubephos-mon-agent:v0.0.9", "ghcr.io/unict-cclab/kubephos-mon-agent:v0.0.8", "ghcr.io/unict-cclab/mon-agent:v0.0.7"}, HealthTimeout: 3 * time.Minute}, true
 	case managedcomponents.MentatName:
-		return managedRolloutSpec{Name: name, Version: managedcomponents.MentatVersion, Resource: "daemonset/mentat", Namespace: "kubephos-observability", Container: "mentat", LegacyImages: []string{"ghcr.io/unict-cclab/mentat:v0.3.3", "ghcr.io/unict-cclab/kubephos-mentat:v0.3.4"}, HealthTimeout: 3 * time.Minute}, true
+		return managedRolloutSpec{Name: name, Version: managedcomponents.MentatVersion, Resource: "daemonset/mentat", Namespace: "kubephos-observability", Container: "mentat", LegacyImages: []string{"ghcr.io/unict-cclab/kubephos-mentat:v0.3.7", "ghcr.io/unict-cclab/kubephos-mentat:v0.3.6", "ghcr.io/unict-cclab/kubephos-mentat:v0.3.5", "ghcr.io/unict-cclab/mentat:v0.3.3", "ghcr.io/unict-cclab/kubephos-mentat:v0.3.4"}, HealthTimeout: 3 * time.Minute}, true
 	default:
 		return managedRolloutSpec{}, false
 	}

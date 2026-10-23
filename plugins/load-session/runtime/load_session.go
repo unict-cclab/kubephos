@@ -1,25 +1,22 @@
 package loadsession
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
-	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"gopkg.in/yaml.v3"
+	kubeconfigutil "kubephos.dev/kubephos/internal/kubeconfig"
 	"net"
 	"net/url"
-	"os"
-	"os/exec"
+
 	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
-
-	"gopkg.in/yaml.v3"
 
 	"kubephos.dev/kubephos/internal/domain"
 	"kubephos.dev/kubephos/internal/plugins"
@@ -44,6 +41,8 @@ type Invocation struct {
 }
 
 type Spec struct {
+	ClusterName              string           `json:"clusterName,omitempty"`
+	Peers                    []ClusterPeer    `json:"peers,omitempty"`
 	ClusterConnectionRef     string           `json:"clusterConnectionRef"`
 	ApplicationDeploymentRef string           `json:"applicationDeploymentRef"`
 	LoadScenarioSetRef       string           `json:"loadScenarioSetRef"`
@@ -86,6 +85,7 @@ type clusterConnection struct {
 		Version string `json:"version"`
 	} `json:"metadata"`
 	Spec struct {
+		Networking   string `json:"networking,omitempty"`
 		Distribution string `json:"distribution"`
 		Server       string `json:"server"`
 		Kubeconfig   string `json:"kubeconfig"`
@@ -252,9 +252,9 @@ type commandRunner interface {
 
 func (Plugin) Manifest() plugins.Manifest {
 	return plugins.Manifest{
-		ID: pluginID, Name: "Interactive Kubernetes load session", Version: "0.7.0",
+		ID: pluginID, Name: "Interactive Kubernetes load session", Version: "0.9.0",
 		Description:     "Runs an ordered RPS timeline using a verified Locust journey against a catalog application or external HTTP destination.",
-		Schema:          json.RawMessage(`{"type":"object","additionalProperties":false,"required":["clusterConnectionRef","applicationDeploymentRef","loadScenarioSetRef","scenarioId","action","replicas","maxUsers","spawnRate"],"properties":{"clusterConnectionRef":{"type":"string","title":"Kubernetes cluster","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ClusterConnection","x-kubephos-artifact-version":"v1alpha1"},"applicationDeploymentRef":{"type":"string","title":"Application deployment","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ApplicationDeployment","x-kubephos-artifact-version":"v1alpha1"},"loadScenarioSetRef":{"type":"string","title":"Load scenarios","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"LoadScenarioSet","x-kubephos-artifact-version":"v1alpha1"},"scenarioId":{"type":"string","title":"Load scenario","description":"User behavior implemented by the Locust file supplied by the selected application.","minLength":1,"maxLength":63,"default":"storefront-journey"},"action":{"type":"string","title":"Action","x-kubephos-primary-action":true,"enum":["start","stop","resume"],"default":"start"},"interactive":{"type":"boolean","title":"Interactive session","default":false},"replicas":{"type":"integer","title":"Load workers","minimum":1,"maximum":100,"default":1},"maxUsers":{"type":"integer","title":"Maximum concurrent users per worker","minimum":1,"maximum":100000,"default":1000},"spawnRate":{"type":"number","title":"Users started per second","minimum":0.1,"maximum":100000,"default":10},"steps":{"type":"array","title":"Temporal workload timeline","maxItems":100,"items":{"type":"object"}},"geographicSteps":{"type":"array","title":"Geographic traffic timeline","maxItems":100,"items":{"type":"object"}}}}`),
+		Schema:          json.RawMessage(`{"type":"object","additionalProperties":false,"required":["clusterConnectionRef","applicationDeploymentRef","loadScenarioSetRef","scenarioId","action","replicas","maxUsers","spawnRate"],"properties":{"clusterConnectionRef":{"type":"string","title":"Kubernetes cluster","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ClusterConnection","x-kubephos-artifact-version":"v1alpha1"},"applicationDeploymentRef":{"type":"string","title":"Application deployment","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ApplicationDeployment","x-kubephos-artifact-version":"v1alpha1"},"loadScenarioSetRef":{"type":"string","title":"Load scenarios","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"LoadScenarioSet","x-kubephos-artifact-version":"v1alpha1"},"scenarioId":{"type":"string","title":"Load scenario","description":"User behavior implemented by the Locust file supplied by the selected application.","minLength":1,"maxLength":63,"default":"storefront-journey"},"action":{"type":"string","title":"Action","x-kubephos-primary-action":true,"enum":["start","stop","resume"],"default":"start"},"interactive":{"type":"boolean","title":"Interactive session","default":false},"replicas":{"type":"integer","title":"Load workers","minimum":1,"maximum":100,"default":1},"maxUsers":{"type":"integer","title":"Maximum concurrent users per worker","minimum":1,"maximum":100000,"default":1000},"spawnRate":{"type":"number","title":"Users started per second","minimum":0.1,"maximum":100000,"default":10},"steps":{"type":"array","title":"Temporal workload timeline","maxItems":100,"items":{"type":"object"}},"geographicSteps":{"type":"array","title":"Geographic traffic timeline","maxItems":100,"items":{"type":"object"}},"clusterName":{"type":"string","x-kubephos-hidden":true},"peers":{"type":"array","minItems":1,"maxItems":5,"x-kubephos-hidden":true,"items":{"type":"object","required":["name","clusterConnectionRef","applicationDeploymentRef"],"additionalProperties":false,"properties":{"name":{"type":"string"},"clusterConnectionRef":{"type":"string","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ClusterConnection","x-kubephos-artifact-version":"v1alpha1"},"applicationDeploymentRef":{"type":"string","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ApplicationDeployment","x-kubephos-artifact-version":"v1alpha1"}}}}}}`),
 		ArtifactInputs:  []domain.ArtifactContract{{Type: "ClusterConnection", Version: "v1alpha1"}, {Type: "ApplicationDeployment", Version: "v1alpha1"}, {Type: "LoadScenarioSet", Version: "v1alpha1"}},
 		ArtifactOutputs: []domain.ArtifactContract{{Type: "LoadSession", Version: "v1alpha1"}},
 		Capabilities:    []string{"load.session.control", "load.session.preflight", "load.session.cleanup", "lifecycle.cleanup"},
@@ -325,7 +325,7 @@ func (Plugin) Plan(ctx context.Context, raw json.RawMessage) (domain.Plan, error
 	if err != nil {
 		return domain.Plan{}, err
 	}
-	return domain.Plan{PluginID: pluginID, Steps: []domain.PlanStep{{
+	plan := domain.Plan{PluginID: pluginID, Steps: []domain.PlanStep{{
 		ID: "control-load-session", Name: strings.ToUpper(spec.Action[:1]) + spec.Action[1:] + " declared load profile", Input: input, Mutating: true,
 		ArtifactInputs: []domain.ArtifactInput{
 			{Name: "cluster-connection", Type: "ClusterConnection", Version: "v1alpha1", ArtifactID: spec.ClusterConnectionRef},
@@ -333,7 +333,9 @@ func (Plugin) Plan(ctx context.Context, raw json.RawMessage) (domain.Plan, error
 			{Name: "load-scenario-set", Type: "LoadScenarioSet", Version: "v1alpha1", ArtifactID: spec.LoadScenarioSetRef},
 		},
 		Outputs: []domain.ArtifactOutput{{Name: "load-session", Type: "LoadSession", Version: "v1alpha1", MediaType: "application/json", Source: "/loadSession"}},
-	}}}, nil
+	}}}
+	plan.Steps[0].ArtifactInputs = append(plan.Steps[0].ArtifactInputs, clusterPeerInputs(spec.Peers)...)
+	return plan, nil
 }
 
 func (plugin Plugin) Precheck(ctx context.Context, step domain.PlanStep, log plugins.Logger) (domain.HealthReport, error) {
@@ -389,7 +391,7 @@ func (plugin Plugin) Precheck(ctx context.Context, step domain.PlanStep, log plu
 		if exists {
 			return unhealthy("The declared load workload already exists; use resume only after a KubePhos stop", "loadSession", "conflict"), nil
 		}
-		targets, err := resolveLoadTargets(ctx, runner, cluster.Spec.Kubeconfig, deployment.Spec.Namespace, endpoint, spec)
+		targets, err := resolveRuntimeLoadTargets(ctx, runner, step, cluster, deployment, endpoint, spec)
 		if err != nil {
 			return unhealthy(err.Error(), "geographicDistribution", "invalid"), nil
 		}
@@ -443,7 +445,7 @@ func (plugin Plugin) Execute(ctx context.Context, step domain.PlanStep, log plug
 		if exists {
 			return nil, errors.New("load workload appeared after precheck")
 		}
-		targets, err := resolveLoadTargets(ctx, runner, cluster.Spec.Kubeconfig, deployment.Spec.Namespace, endpoint, spec)
+		targets, err := resolveRuntimeLoadTargets(ctx, runner, step, cluster, deployment, endpoint, spec)
 		if err != nil {
 			return nil, err
 		}
@@ -703,7 +705,7 @@ func validateArtifacts(cluster clusterConnection, deployment applicationDeployme
 		if err != nil || (target.Scheme != "http" && target.Scheme != "https") || target.Host == "" || target.User != nil || target.Fragment != "" || endpoint.Protocol != target.Scheme {
 			return errors.New("external load endpoint is invalid")
 		}
-	} else if endpoint.Service == "" || endpoint.Port < 1 || endpoint.Port > 65535 || (endpoint.Protocol != "http" && endpoint.Protocol != "https") {
+	} else if endpoint.Service == "" || endpoint.Port < 1 || endpoint.Port > 65535 || (endpoint.Protocol != "http" && endpoint.Protocol != "https" && endpoint.Protocol != "tcp") {
 		return errors.New("application load endpoint is invalid")
 	}
 	scriptDigest := sha256.Sum256([]byte(profile.Script))
@@ -714,56 +716,7 @@ func validateArtifacts(cluster clusterConnection, deployment applicationDeployme
 }
 
 func validateKubeconfig(value, server string) error {
-	var config struct {
-		APIVersion     string `yaml:"apiVersion"`
-		Kind           string `yaml:"kind"`
-		CurrentContext string `yaml:"current-context"`
-		Clusters       []struct {
-			Name    string `yaml:"name"`
-			Cluster struct {
-				Server string `yaml:"server"`
-			} `yaml:"cluster"`
-		} `yaml:"clusters"`
-		Contexts []struct {
-			Name    string `yaml:"name"`
-			Context struct {
-				Cluster string `yaml:"cluster"`
-				User    string `yaml:"user"`
-			} `yaml:"context"`
-		} `yaml:"contexts"`
-		Users []struct {
-			Name string `yaml:"name"`
-			User struct {
-				Certificate string `yaml:"client-certificate-data"`
-				Key         string `yaml:"client-key-data"`
-			} `yaml:"user"`
-		} `yaml:"users"`
-	}
-	if err := yaml.Unmarshal([]byte(value), &config); err != nil || config.APIVersion != "v1" || config.Kind != "Config" || config.CurrentContext == "" {
-		return errors.New("cluster kubeconfig is invalid")
-	}
-	var clusterName, userName string
-	for _, item := range config.Contexts {
-		if item.Name == config.CurrentContext {
-			clusterName, userName = item.Context.Cluster, item.Context.User
-		}
-	}
-	clusterOK := false
-	for _, item := range config.Clusters {
-		clusterOK = clusterOK || item.Name == clusterName && item.Cluster.Server == server
-	}
-	userOK := false
-	for _, item := range config.Users {
-		if item.Name == userName {
-			certificate, certificateErr := base64.StdEncoding.DecodeString(item.User.Certificate)
-			key, keyErr := base64.StdEncoding.DecodeString(item.User.Key)
-			userOK = certificateErr == nil && keyErr == nil && len(certificate) > 0 && len(key) > 0
-		}
-	}
-	if !clusterOK || !userOK {
-		return errors.New("cluster kubeconfig target or client identity is invalid")
-	}
-	return nil
+	return kubeconfigutil.ValidateClientIdentity(value, server)
 }
 
 func verifyNamespace(ctx context.Context, runner commandRunner, kubeconfig string, deployment applicationDeployment) error {
@@ -1089,6 +1042,9 @@ func resolveLoadTargets(ctx context.Context, runner commandRunner, kubeconfig, n
 		path = "/"
 	}
 	fallback := []loadTarget{{URL: fmt.Sprintf("%s://%s:%d%s", strings.ToLower(endpoint.Protocol), endpoint.Service, endpoint.Port, path), Weight: 1}}
+	if endpoint.Protocol == "tcp" && len(spec.GeographicSteps) > 0 {
+		return nil, errors.New("geographic traffic distribution requires an HTTP node proxy and is unavailable for native TCP workloads")
+	}
 	zones := geographicZones(spec.GeographicSteps)
 	if len(zones) == 0 {
 		return fallback, nil
@@ -1195,6 +1151,11 @@ func waitForLoadDuration(ctx context.Context, runner commandRunner, kubeconfig, 
 func loadManifest(profile loadProfile, marker string, spec Spec, targets []loadTarget) ([]byte, error) {
 	annotations := map[string]any{applicationOwnershipKey: marker, loadProfileKey: profile.ID}
 	labels := map[string]any{"app.kubernetes.io/name": "kubephos-load", "kubephos.dev/load-scenario": profile.ID}
+	podAnnotations := map[string]any{applicationOwnershipKey: marker, loadProfileKey: profile.ID, "prometheus.io/scrape": "true", "prometheus.io/path": "/stats/prometheus", "prometheus.io/port": "9646"}
+	native := strings.HasPrefix(targets[0].URL, "tcp://")
+	if native {
+		podAnnotations["sidecar.istio.io/inject"] = "false"
+	}
 	targetValue, err := json.Marshal(targets)
 	if err != nil {
 		return nil, err
@@ -1212,6 +1173,7 @@ func loadManifest(profile loadProfile, marker string, spec Spec, targets []loadT
 		return nil, err
 	}
 	environment := []any{
+		map[string]any{"name": "KUBEPHOS_LOAD_METRICS", "value": "true"},
 		map[string]any{"name": "KUBEPHOS_TARGETS", "value": string(targetValue)},
 		map[string]any{"name": "KUBEPHOS_MAX_USERS", "value": fmt.Sprint(spec.MaxUsers)},
 		map[string]any{"name": "KUBEPHOS_SPAWN_RATE", "value": fmt.Sprint(spec.SpawnRate)},
@@ -1243,16 +1205,16 @@ func loadManifest(profile loadProfile, marker string, spec Spec, targets []loadT
 			"replicas": 0,
 			"selector": map[string]any{"matchLabels": labels},
 			"template": map[string]any{
-				"metadata": map[string]any{"labels": labels, "annotations": annotations},
+				"metadata": map[string]any{"labels": labels, "annotations": podAnnotations},
 				"spec": map[string]any{
 					"nodeSelector": map[string]any{"kubephos.dev/role": "management"},
 					"containers": []any{map[string]any{
 						"name": "locust", "image": profile.RuntimeImage, "imagePullPolicy": "IfNotPresent",
+						"ports":        []any{map[string]any{"name": "load-metrics", "containerPort": 9646}},
 						"command":      []any{"locust"},
 						"args":         []any{"-f", "/scenario/locustfile.py", "--headless", "--host", targets[0].URL, "--users", fmt.Sprint(spec.MaxUsers), "--spawn-rate", fmt.Sprint(spec.SpawnRate)},
 						"env":          environment,
 						"volumeMounts": []any{map[string]any{"name": "scenario", "mountPath": "/scenario", "readOnly": true}},
-						"resources":    map[string]any{"requests": map[string]any{"cpu": "100m", "memory": "128Mi"}, "limits": map[string]any{"cpu": "1", "memory": "512Mi"}},
 					}},
 					"volumes": []any{map[string]any{"name": "scenario", "configMap": map[string]any{"name": profile.Workload.Name}}},
 				},
@@ -1405,8 +1367,63 @@ def paced_fast_http_request(self, *args, **kwargs):
         args = (args[0], request_url(args[1]), *args[2:])
     return original_fast_http_request(self, *args, **kwargs)
 
+module.kubephos_wait_for_request_slot = wait_for_request_slot
+
 HttpSession.request = paced_http_request
 FastHttpSession.request = paced_fast_http_request
+
+if os.environ.get("KUBEPHOS_LOAD_METRICS") == "true":
+    from locust import events
+    from gevent.pywsgi import WSGIServer
+    buckets = (0.1, 0.25, 0.5, 1, 2.5, 5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000, 30000, 60000)
+    metrics = {}
+    metrics_server = None
+
+    @events.request.add_listener
+    def record_request(request_type, name, response_time, exception, **kwargs):
+        operation = name if request_type == "redis" else request_type
+        counts = metrics.setdefault(operation, {"success": 0, "failure": 0, "sum": 0.0, "count": 0, "buckets": [0] * len(buckets)})
+        counts["failure" if exception is not None else "success"] += 1
+        if response_time is None or not math.isfinite(response_time) or response_time < 0:
+            return
+        counts["sum"] += response_time
+        counts["count"] += 1
+        for i, bound in enumerate(buckets):
+            if response_time <= bound:
+                counts["buckets"][i] += 1
+
+    def expose_metrics(environ, start_response):
+        if environ.get("PATH_INFO") != "/stats/prometheus":
+            start_response("404 Not Found", [])
+            return [b""]
+        lines = ["# TYPE kubephos_load_requests_total counter", "# TYPE kubephos_load_duration_milliseconds histogram"]
+        for operation, counts in metrics.items():
+            label = "operation=" + json.dumps(operation)
+            for outcome in ("success", "failure"):
+                lines.append('kubephos_load_requests_total{%s,outcome="%s"} %d' % (label, outcome, counts[outcome]))
+            for bound, count in zip(buckets, counts["buckets"]):
+                lines.append('kubephos_load_duration_milliseconds_bucket{%s,le="%s"} %d' % (label, bound, count))
+            lines.append('kubephos_load_duration_milliseconds_bucket{%s,le="+Inf"} %d' % (label, counts["count"]))
+            lines.append('kubephos_load_duration_milliseconds_count{%s} %d' % (label, counts["count"]))
+            lines.append('kubephos_load_duration_milliseconds_sum{%s} %s' % (label, counts["sum"]))
+        start_response("200 OK", [("Content-Type", "text/plain; version=0.0.4")])
+        return [("\n".join(lines) + "\n").encode()]
+
+    @events.init.add_listener
+    def start_metrics(**kwargs):
+        global metrics_server
+        # Seed both outcomes before traffic starts, including all-success runs.
+        redis_operation = getattr(module, "CONFIG", {}).get("operation")
+        if redis_operation == "mixed":
+            operations = ("GET", "SET")
+        elif redis_operation:
+            operations = (redis_operation,)
+        else:
+            operations = ("GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS")
+        for operation in operations:
+            metrics[operation] = {"success": 0, "failure": 0, "sum": 0.0, "count": 0, "buckets": [0] * len(buckets)}
+        metrics_server = WSGIServer(("0.0.0.0", 9646), expose_metrics, log=None)
+        metrics_server.start()
 
 class KubePhosLoadShape(LoadTestShape):
     def tick(self):
@@ -1444,18 +1461,7 @@ func (plugin Plugin) now() time.Time {
 type localRunner struct{}
 
 func (localRunner) Run(ctx context.Context, kubeconfig string, stdin []byte, args ...string) (string, error) {
-	directory, err := os.MkdirTemp("", "kubephos-cluster-")
-	if err != nil {
-		return "", err
-	}
-	defer os.RemoveAll(directory)
-	path := directory + "/kubeconfig"
-	if err := os.WriteFile(path, []byte(kubeconfig), 0600); err != nil {
-		return "", err
-	}
-	command := exec.CommandContext(ctx, "kubectl", append([]string{"--kubeconfig", path}, args...)...)
-	command.Stdin = bytes.NewReader(stdin)
-	output, err := command.CombinedOutput()
+	output, err := kubeconfigutil.RunKubectl(ctx, kubeconfig, stdin, args...)
 	if err != nil {
 		message := strings.TrimSpace(string(output))
 		if len(message) > 1200 {

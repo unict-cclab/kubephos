@@ -1,6 +1,6 @@
+import {ResourceAttribution} from './ResourceAttribution'
 import {useEffect, useState} from 'react'
 import {request} from '../api'
-import {formatDate} from '../lib'
 import type {Connection, Session} from '../types'
 import {DetailBreadcrumb} from './DetailBreadcrumb'
 
@@ -44,15 +44,16 @@ export function ConnectionDetailsPage({connection, session, close}: {connection:
       setPending(false)
     }
   }
-  return <div className="detail-page"><DetailBreadcrumb parent="Infrastructure" current={connection.name} back={close} /><div className="detail-page-heading"><div><h2>{connection.name}</h2></div></div><article className="detail-page-card simple-resource-detail">
+  return <div className="detail-page"><DetailBreadcrumb parent="Infrastructure" current={connection.name} back={close} /><div className="detail-page-heading"><div><h2>{connection.name}</h2></div></div><ResourceAttribution resource={connection} editable /><article className="detail-page-card simple-resource-detail">
+
     {details ? <dl className="simple-detail-grid">
       <div><dt>Name</dt><dd>{details.name}</dd></div>
       <div><dt>Endpoint</dt><dd>{details.configuration.endpoint || '—'}</dd></div>
       <div><dt>Verify TLS</dt><dd>{details.configuration.verifyTLS ? 'Yes' : 'No'}</dd></div>
       <div><dt>Token ID</dt><dd>{details.configuration.tokenId || '—'}</dd></div>
-      <div className="simple-secret-field"><dt>Token secret</dt><dd><input aria-label="Token secret" type={visible ? 'text' : 'password'} value={visible ? secret : details.configuration.tokenSecret ?? '••••••••'} readOnly />{session.user?.role === 'admin' && <button type="button" disabled={pending} onClick={() => void reveal()}>{pending ? 'Loading…' : visible ? 'Hide' : 'Show'}</button>}</dd></div>
-      <div><dt>Created</dt><dd>{formatDate(details.createdAt)}</dd></div>
-      <div><dt>Updated</dt><dd>{formatDate(details.updatedAt)}</dd></div>
+      <div className="simple-secret-field"><dt>Token secret</dt><dd><input aria-label="Token secret" type={visible ? 'text' : 'password'} value={visible ? secret : details.configuration.tokenSecret ?? '••••••••'} readOnly />{session.user?.role === 'admin' && <button className="text-button" type="button" disabled={pending} onClick={() => void reveal()}>{pending ? 'Loading…' : visible ? 'Hide' : 'Show'}</button>}</dd></div>
+
+
     </dl> : error ? <p className="managed-error">{error}</p> : <p className="details-copy">Loading…</p>}
     {details && error && <p className="managed-error">{error}</p>}
   </article></div>

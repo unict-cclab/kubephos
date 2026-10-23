@@ -1,0 +1,53 @@
+# Architecture and configuration
+
+## Services
+
+| Service | Responsibility |
+| --- | --- |
+| App | API, web UI, authentication proxy, CLI and validation |
+| Worker | Background infrastructure operations and experiments |
+| PostgreSQL | Durable configuration, state, history and logs |
+| SeaweedFS | Generated artifacts, datasets and figures |
+| Keycloak | User credentials and browser authentication |
+| Liquibase | Ordered database migrations before startup |
+
+App, worker and the migration-files helper use the same KubePhos image. Persistent
+volumes belong to the installation's Compose project. The installer generates a
+unique project name; development explicitly uses `kubephos-dev`.
+
+Plugins provide infrastructure, application, placement, load and monitoring
+capabilities through versioned contracts in `contracts/` and `plugins/`.
+Applications are declared in `catalog/applications/`. Managed component versions
+are defined in `internal/managedcomponents/components.go`.
+
+## Installation settings
+
+The installer asks only for the installation path, browser URL and image version
+when their defaults are unsuitable. It generates the database password, OIDC
+client secrets and Keycloak bootstrap password. Internal service URLs, directories,
+realm names and client IDs are fixed by the installed Compose configuration.
+
+The `.env.example` file documents the generated settings; it is not a usable
+configuration until the secret fields are populated. Never rotate the values in
+`.env` independently from the corresponding persisted services.
+
+The public URL must match the browser URL because it determines authentication
+callbacks. Default local ports follow `KUBEPHOS_PORT` if no URL is specified.
+
+## Advanced execution settings
+
+Core CLI settings remain available for non-Compose integrations in
+`internal/config/config.go`. Worker concurrency and poll interval use built-in
+defaults; change them only for a measured operational need, with a Compose override
+setting `KUBEPHOS_WORKER_CONCURRENCY` and `KUBEPHOS_WORKER_POLL_INTERVAL`.
+
+Remote OCI plugin execution is optional. To enable it, add
+`deploy/compose.plugins.yaml` after the base Compose file and configure the remote
+runtime host, CA, client certificate and private key. Mount certificate files
+read-only through your own override when paths are used. The same settings must
+reach both app and worker. `KUBEPHOS_PLUGIN_ALLOWED_REGISTRIES` restricts image
+sources; `KUBEPHOS_BUILD_ALLOWED_GIT_HOSTS` defaults to `github.com`.
+
+These advanced settings are intentionally absent from the basic installer.
+Managed clusters, Harbor, NFS and cloud images are configured in the UI rather
+than global environment variables.

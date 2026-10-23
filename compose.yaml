@@ -1,28 +1,22 @@
-name: kubephos
+name: ${COMPOSE_PROJECT_NAME:-kubephos}
 
 x-kubephos-image: &kubephos-image ${KUBEPHOS_IMAGE:-ghcr.io/unict-cclab/kubephos}:${KUBEPHOS_VERSION:-latest}
 
 x-platform-environment: &platform-environment
-  KUBEPHOS_DATABASE_URL: postgres://kubephos:${POSTGRES_PASSWORD:-kubephos-dev}@postgres:5432/kubephos?sslmode=disable
+  KUBEPHOS_DATABASE_URL: postgres://kubephos:${POSTGRES_PASSWORD:?Run ./install.sh to generate credentials}@postgres:5432/kubephos?sslmode=disable
   KUBEPHOS_ARTIFACT_ENDPOINT: http://seaweedfs:8888
   KUBEPHOS_PLUGIN_DIRECTORY: /opt/kubephos/plugins
   KUBEPHOS_CATALOG_DIRECTORY: /opt/kubephos/catalog/applications
   KUBEPHOS_WEB_DIRECTORY: /opt/kubephos/web
   KUBEPHOS_CREDENTIAL_KEY_FILE: /var/lib/kubephos/master.key
-  KUBEPHOS_PLUGIN_RUNTIME_HOST: ${KUBEPHOS_PLUGIN_RUNTIME_HOST:-}
-  KUBEPHOS_PLUGIN_RUNTIME_CA: ${KUBEPHOS_PLUGIN_RUNTIME_CA:-}
-  KUBEPHOS_PLUGIN_RUNTIME_CERT: ${KUBEPHOS_PLUGIN_RUNTIME_CERT:-}
-  KUBEPHOS_PLUGIN_RUNTIME_KEY: ${KUBEPHOS_PLUGIN_RUNTIME_KEY:-}
-  KUBEPHOS_PLUGIN_ALLOWED_REGISTRIES: ${KUBEPHOS_PLUGIN_ALLOWED_REGISTRIES:-}
-  KUBEPHOS_BUILD_ALLOWED_GIT_HOSTS: ${KUBEPHOS_BUILD_ALLOWED_GIT_HOSTS:-github.com}
-  KUBEPHOS_URL: ${KUBEPHOS_URL:-http://localhost:8080}
+  KUBEPHOS_URL: ${KUBEPHOS_URL:-http://localhost:${KUBEPHOS_PORT:-8080}}
   KUBEPHOS_KEYCLOAK_INTERNAL_URL: http://keycloak:8080/auth
-  KUBEPHOS_KEYCLOAK_PUBLIC_URL: ${KUBEPHOS_URL:-http://localhost:8080}/auth
+  KUBEPHOS_KEYCLOAK_PUBLIC_URL: ${KUBEPHOS_URL:-http://localhost:${KUBEPHOS_PORT:-8080}}/auth
   KUBEPHOS_KEYCLOAK_REALM: kubephos
   KUBEPHOS_KEYCLOAK_CLIENT_ID: kubephos
-  KUBEPHOS_KEYCLOAK_CLIENT_SECRET: ${KUBEPHOS_KEYCLOAK_CLIENT_SECRET:-kubephos-dev-client-secret}
+  KUBEPHOS_KEYCLOAK_CLIENT_SECRET: ${KUBEPHOS_KEYCLOAK_CLIENT_SECRET:?Run ./install.sh to generate credentials}
   KUBEPHOS_KEYCLOAK_MANAGEMENT_CLIENT_ID: kubephos-management
-  KUBEPHOS_KEYCLOAK_MANAGEMENT_CLIENT_SECRET: ${KUBEPHOS_KEYCLOAK_MANAGEMENT_CLIENT_SECRET:-kubephos-management-dev-client-secret}
+  KUBEPHOS_KEYCLOAK_MANAGEMENT_CLIENT_SECRET: ${KUBEPHOS_KEYCLOAK_MANAGEMENT_CLIENT_SECRET:?Run ./install.sh to generate credentials}
 
 services:
   postgres:
@@ -30,7 +24,7 @@ services:
     environment:
       POSTGRES_DB: kubephos
       POSTGRES_USER: kubephos
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-kubephos-dev}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Run ./install.sh to generate credentials}
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U kubephos -d kubephos"]
       interval: 3s
@@ -46,7 +40,7 @@ services:
       PGHOST: postgres
       PGDATABASE: kubephos
       PGUSER: kubephos
-      PGPASSWORD: ${POSTGRES_PASSWORD:-kubephos-dev}
+      PGPASSWORD: ${POSTGRES_PASSWORD:?Run ./install.sh to generate credentials}
     command: ["sh", "-ec", "psql -v ON_ERROR_STOP=1 -c 'CREATE SCHEMA IF NOT EXISTS keycloak AUTHORIZATION kubephos'"]
     depends_on:
       postgres:
@@ -61,24 +55,24 @@ services:
       KC_DB_URL: jdbc:postgresql://postgres:5432/kubephos
       KC_DB_SCHEMA: keycloak
       KC_DB_USERNAME: kubephos
-      KC_DB_PASSWORD: ${POSTGRES_PASSWORD:-kubephos-dev}
+      KC_DB_PASSWORD: ${POSTGRES_PASSWORD:?Run ./install.sh to generate credentials}
       KC_HTTP_ENABLED: "true"
       KC_HTTP_RELATIVE_PATH: /auth
-      KC_HOSTNAME: ${KUBEPHOS_URL:-http://localhost:8080}/auth
+      KC_HOSTNAME: ${KUBEPHOS_URL:-http://localhost:${KUBEPHOS_PORT:-8080}}/auth
       KC_PROXY_HEADERS: xforwarded
       KC_HEALTH_ENABLED: "true"
-      KC_BOOTSTRAP_ADMIN_USERNAME: ${KUBEPHOS_KEYCLOAK_ADMIN_USERNAME:-kubephos-bootstrap}
-      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KUBEPHOS_KEYCLOAK_ADMIN_PASSWORD:-kubephos-bootstrap-dev}
-      KUBEPHOS_URL: ${KUBEPHOS_URL:-http://localhost:8080}
-      KUBEPHOS_KEYCLOAK_CLIENT_SECRET: ${KUBEPHOS_KEYCLOAK_CLIENT_SECRET:-kubephos-dev-client-secret}
-      KUBEPHOS_KEYCLOAK_MANAGEMENT_CLIENT_SECRET: ${KUBEPHOS_KEYCLOAK_MANAGEMENT_CLIENT_SECRET:-kubephos-management-dev-client-secret}
+      KC_BOOTSTRAP_ADMIN_USERNAME: kubephos-bootstrap
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KUBEPHOS_KEYCLOAK_ADMIN_PASSWORD:?Run ./install.sh to generate credentials}
+      KUBEPHOS_URL: ${KUBEPHOS_URL:-http://localhost:${KUBEPHOS_PORT:-8080}}
+      KUBEPHOS_KEYCLOAK_CLIENT_SECRET: ${KUBEPHOS_KEYCLOAK_CLIENT_SECRET:?Run ./install.sh to generate credentials}
+      KUBEPHOS_KEYCLOAK_MANAGEMENT_CLIENT_SECRET: ${KUBEPHOS_KEYCLOAK_MANAGEMENT_CLIENT_SECRET:?Run ./install.sh to generate credentials}
     configs:
       - source: keycloak-realm
         target: /opt/keycloak/data/import/kubephos-realm.json
       - source: keycloak-theme-properties
         target: /opt/keycloak/themes/kubephos/login/theme.properties
       - source: keycloak-theme-css
-        target: /opt/keycloak/themes/kubephos/login/resources/css/kubephos.css
+        target: /opt/keycloak/themes/kubephos/login/resources/css/kubephos-v2.css
     depends_on:
       keycloak-db-init:
         condition: service_completed_successfully
@@ -103,7 +97,7 @@ services:
     environment:
       LIQUIBASE_COMMAND_URL: jdbc:postgresql://postgres:5432/kubephos
       LIQUIBASE_COMMAND_USERNAME: kubephos
-      LIQUIBASE_COMMAND_PASSWORD: ${POSTGRES_PASSWORD:-kubephos-dev}
+      LIQUIBASE_COMMAND_PASSWORD: ${POSTGRES_PASSWORD:?Run ./install.sh to generate credentials}
       LIQUIBASE_COMMAND_CHANGELOG_FILE: db.changelog.yaml
       LIQUIBASE_SEARCH_PATH: /liquibase/changelog
     command: update
@@ -118,7 +112,7 @@ services:
 
   seaweedfs:
     image: chrislusf/seaweedfs:4.29
-    command: server -dir=/data -filer -s3 -ip=seaweedfs
+    command: server -dir=/data -filer -ip=seaweedfs
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "-", "http://seaweedfs:9333/cluster/status"]
       interval: 5s
@@ -158,13 +152,12 @@ services:
     command: worker
     environment:
       <<: *platform-environment
-      KUBEPHOS_INSTANCE_ID: ${HOSTNAME:-compose}
-      KUBEPHOS_WORKER_CONCURRENCY: ${KUBEPHOS_WORKER_CONCURRENCY:-4}
-      KUBEPHOS_WORKER_POLL_INTERVAL: ${KUBEPHOS_WORKER_POLL_INTERVAL:-500ms}
     depends_on:
       migrate:
         condition: service_completed_successfully
       seaweedfs:
+        condition: service_healthy
+      keycloak:
         condition: service_healthy
     volumes:
       - platform-data:/var/lib/kubephos
@@ -194,16 +187,16 @@ configs:
             "name": "KubePhos",
             "enabled": true,
             "clientAuthenticatorType": "client-secret",
-            "secret": "${KUBEPHOS_KEYCLOAK_CLIENT_SECRET:-kubephos-dev-client-secret}",
+            "secret": "${KUBEPHOS_KEYCLOAK_CLIENT_SECRET:?Run ./install.sh to generate credentials}",
             "publicClient": false,
             "standardFlowEnabled": true,
             "directAccessGrantsEnabled": false,
             "serviceAccountsEnabled": false,
-            "redirectUris": ["${KUBEPHOS_URL:-http://localhost:8080}/api/v1/auth/callback"],
-            "webOrigins": ["${KUBEPHOS_URL:-http://localhost:8080}"],
+            "redirectUris": ["${KUBEPHOS_URL:-http://localhost:${KUBEPHOS_PORT:-8080}}/api/v1/auth/callback"],
+            "webOrigins": ["${KUBEPHOS_URL:-http://localhost:${KUBEPHOS_PORT:-8080}}"],
             "attributes": {
               "pkce.code.challenge.method": "S256",
-              "post.logout.redirect.uris": "${KUBEPHOS_URL:-http://localhost:8080}/*"
+              "post.logout.redirect.uris": "${KUBEPHOS_URL:-http://localhost:${KUBEPHOS_PORT:-8080}}/*"
             }
           },
           {
@@ -211,7 +204,7 @@ configs:
             "name": "KubePhos Management",
             "enabled": true,
             "clientAuthenticatorType": "client-secret",
-            "secret": "${KUBEPHOS_KEYCLOAK_MANAGEMENT_CLIENT_SECRET:-kubephos-management-dev-client-secret}",
+            "secret": "${KUBEPHOS_KEYCLOAK_MANAGEMENT_CLIENT_SECRET:?Run ./install.sh to generate credentials}",
             "publicClient": false,
             "standardFlowEnabled": false,
             "directAccessGrantsEnabled": false,
@@ -233,21 +226,27 @@ configs:
     content: |
       parent=keycloak.v2
       import=common/keycloak
-      styles=css/styles.css css/kubephos.css
+      styles=css/styles.css css/kubephos-v2.css
   keycloak-theme-css:
     content: |
+      @font-face {
+        font-family: Geist;
+        src: url("/fonts/geist-latin-wght-normal.woff2") format("woff2");
+        font-weight: 100 900;
+        font-display: swap;
+      }
       :root {
         color-scheme: light;
-        --kubephos-accent: #4f5bd5;
-        --kubephos-canvas: #f6f7f9;
-        --kubephos-ink: #172033;
-        --kubephos-line: #e4e7ec;
-        --kubephos-muted: #667085;
+        --kubephos-accent: #171717;
+        --kubephos-canvas: #fafafa;
+        --kubephos-ink: #171717;
+        --kubephos-line: #e5e5e5;
+        --kubephos-muted: #737373;
         --kubephos-surface: #ffffff;
-        --kubephos-focus: rgba(79, 91, 213, .18);
+        --kubephos-focus: rgba(115, 115, 115, .22);
       }
       html, body, button, input {
-        font-family: Manrope, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        font-family: Geist, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       }
       #keycloak-bg {
         min-height: 100vh;
@@ -256,7 +255,7 @@ configs:
       }
       .pf-v5-c-login {
         min-height: 100vh;
-        background: radial-gradient(circle at 50% -10%, rgba(79, 91, 213, .1), transparent 35%), var(--kubephos-canvas);
+        background: var(--kubephos-canvas);
       }
       .pf-v5-c-login__container {
         width: min(430px, calc(100% - 32px));
@@ -274,7 +273,7 @@ configs:
         gap: 11px;
         color: var(--kubephos-ink) !important;
         font-size: 21px;
-        font-weight: 800;
+        font-weight: 500;
         letter-spacing: -.035em;
         text-transform: none;
       }
@@ -284,20 +283,20 @@ configs:
         height: 40px;
         place-items: center;
         border-radius: 8px;
-        background: #eef0ff;
+        background: #f5f5f5;
         color: var(--kubephos-accent);
         content: "K";
         font-size: 18px;
-        font-weight: 850;
+        font-weight: 600;
         letter-spacing: 0;
       }
       .pf-v5-c-login__main {
         overflow: hidden;
         border: 1px solid var(--kubephos-line) !important;
         border-block-start: 1px solid var(--kubephos-line) !important;
-        border-radius: 16px;
+        border-radius: 12px;
         background: var(--kubephos-surface);
-        box-shadow: 0 18px 48px rgba(23, 32, 51, .16);
+        box-shadow: 0 4px 16px rgba(0, 0, 0, .08);
       }
       .pf-v5-c-login__main-header {
         border-top: 0 !important;
@@ -309,7 +308,7 @@ configs:
       #kc-page-title {
         color: var(--kubephos-ink);
         font-size: 24px;
-        font-weight: 800;
+        font-weight: 400;
         letter-spacing: -.035em;
         line-height: 1.2;
       }
@@ -318,12 +317,12 @@ configs:
       }
       .pf-v5-c-form__label-text {
         color: var(--kubephos-ink);
-        font-size: 13px;
-        font-weight: 750;
+        font-size: 14px;
+        font-weight: 500;
       }
       .pf-v5-c-form-control {
         min-height: 44px;
-        border: 1px solid #d0d5dd;
+        border: 1px solid #d4d4d4;
         border-radius: 8px;
         outline: 0;
         background: var(--kubephos-surface);
@@ -335,7 +334,7 @@ configs:
         box-shadow: none !important;
       }
       .pf-v5-c-form-control:hover {
-        border-color: #aeb5c0;
+        border-color: #a3a3a3;
       }
       .pf-v5-c-form-control:focus-within {
         border-color: var(--kubephos-accent);
@@ -372,11 +371,14 @@ configs:
       }
       .pf-v5-c-button.pf-m-control {
         min-width: 44px;
-        border: 1px solid #d0d5dd;
+        border: 1px solid #d4d4d4;
         border-left: 0;
         border-radius: 0 8px 8px 0;
         background: var(--kubephos-surface);
         color: var(--kubephos-muted);
+      }
+      .pf-v5-c-button.pf-m-control::after {
+        border: 0;
       }
       .pf-v5-c-input-group:focus-within .pf-v5-c-button.pf-m-control {
         border-color: var(--kubephos-accent);
@@ -391,11 +393,12 @@ configs:
         min-height: 44px;
         border-radius: 8px;
         background: var(--kubephos-accent);
-        font-size: 13px;
-        font-weight: 800;
+        color: var(--kubephos-surface);
+        font-size: 14px;
+        font-weight: 500;
       }
       .pf-v5-c-button.pf-m-primary:hover, .pf-v5-c-button.pf-m-primary:focus {
-        background: #414bc0;
+        background: color-mix(in srgb, var(--kubephos-accent) 85%, var(--kubephos-surface));
       }
       .pf-v5-c-button.pf-m-primary:focus-visible, a:focus-visible {
         outline: 3px solid var(--kubephos-focus);
@@ -404,7 +407,7 @@ configs:
       a, .pf-v5-c-helper-text__item-text a {
         color: var(--kubephos-accent);
         font-size: 12px;
-        font-weight: 700;
+        font-weight: 500;
       }
       .pf-v5-c-alert {
         border-radius: 9px;
@@ -412,23 +415,23 @@ configs:
       @media (prefers-color-scheme: dark) {
         :root {
           color-scheme: dark;
-          --kubephos-accent: #8b96ff;
-          --kubephos-canvas: #11161d;
-          --kubephos-ink: #e7ebf2;
-          --kubephos-line: #303946;
-          --kubephos-muted: #9ca6b5;
-          --kubephos-surface: #191f28;
-          --kubephos-focus: rgba(139, 150, 255, .28);
+          --kubephos-accent: #fafafa;
+          --kubephos-canvas: #0a0a0a;
+          --kubephos-ink: #fafafa;
+          --kubephos-line: #404040;
+          --kubephos-muted: #a3a3a3;
+          --kubephos-surface: #171717;
+          --kubephos-focus: rgba(163, 163, 163, .28);
         }
         .pf-v5-c-login {
-          background: radial-gradient(circle at 50% -10%, rgba(139, 150, 255, .12), transparent 35%), var(--kubephos-canvas);
+          background: var(--kubephos-canvas);
         }
         #kc-header-wrapper::before {
-          background: #252d50;
+          background: #262626;
         }
         .pf-v5-c-form-control, .pf-v5-c-button.pf-m-control {
-          border-color: #465160;
-          background: #202731;
+          border-color: #404040;
+          background: #262626;
         }
       }
       @media (max-width: 520px) {

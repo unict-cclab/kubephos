@@ -370,7 +370,7 @@ func TestCanceledInvocationAllowsPluginCleanup(t *testing.T) {
 	directory := t.TempDir()
 	executable := filepath.Join(directory, "cancel-plugin")
 	marker := filepath.Join(directory, "active.tmp")
-	script := "#!/bin/sh\ntrap 'rm -f \"" + marker + "\"; exit 143' TERM\ntouch \"" + marker + "\"\nsleep 30\n"
+	script := "#!/bin/sh\ntrap 'rm -f \"" + marker + "\"; exit 143' TERM\nsleep 30 &\nchild=$!\ntouch \"" + marker + "\"\nwait \"$child\"\n"
 	if err := os.WriteFile(executable, []byte(script), 0700); err != nil {
 		t.Fatal(err)
 	}
@@ -467,11 +467,11 @@ func TestResolveCatalogRequiresPermission(t *testing.T) {
 			return json.RawMessage(`{"kind":"Application"}`), nil
 		},
 	}
-	if _, err := process.resolveCatalog(context.Background(), []byte(`{"applicationRef":"app:dev.example.app@1.0.0"}`)); err == nil {
+	if _, err := process.resolveCatalog(context.Background(), []byte(`{"applicationRef":"app:dev.example.app"}`)); err == nil {
 		t.Fatal("expected catalog permission error")
 	}
 	process.manifest.Permissions = []string{"catalog.read:applications"}
-	result, err := process.resolveCatalog(context.Background(), []byte(`{"applicationRef":"app:dev.example.app@1.0.0"}`))
+	result, err := process.resolveCatalog(context.Background(), []byte(`{"applicationRef":"app:dev.example.app"}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -499,7 +499,7 @@ func TestReferenceResolutionExcludesVerifiedArtifactContents(t *testing.T) {
 }
 
 func TestReferenceResolutionExcludesPluginResult(t *testing.T) {
-	payload, err := referenceResolutionPayload([]byte(`{"step":{"input":{"applicationRef":"app:dev.example.input@1.0.0"}},"result":{"applicationRef":"app:dev.example.output@1.0.0","credentialRef":"cred_output"}}`))
+	payload, err := referenceResolutionPayload([]byte(`{"step":{"input":{"applicationRef":"app:dev.example.input"}},"result":{"applicationRef":"app:dev.example.output","credentialRef":"cred_output"}}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -511,7 +511,7 @@ func TestReferenceResolutionExcludesPluginResult(t *testing.T) {
 	}
 	collectRefs(value, "app:", applicationRefs)
 	collectRefs(value, "cred_", credentialRefs)
-	if !applicationRefs["app:dev.example.input@1.0.0"] || applicationRefs["app:dev.example.output@1.0.0"] || len(credentialRefs) != 0 {
+	if !applicationRefs["app:dev.example.input"] || applicationRefs["app:dev.example.output"] || len(credentialRefs) != 0 {
 		t.Fatalf("plugin result leaked into reference resolution: %s", payload)
 	}
 }

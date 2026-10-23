@@ -17,7 +17,7 @@ describe('OperationDrawer', () => {
     }
     const fetch = vi.fn(async (input: RequestInfo | URL) => {
       const path = String(input)
-      if (path.endsWith('/logs')) return new Response(JSON.stringify({items: []}), {status: 200})
+      if (path.includes('/logs?')) return new Response(JSON.stringify({items: []}), {status: 200})
       return new Response(JSON.stringify(operation), {status: 200})
     })
     vi.stubGlobal('fetch', fetch)
@@ -63,4 +63,42 @@ describe('OperationDrawer', () => {
     expect(screen.queryByRole('heading', {name: 'Autoscaler logs'})).not.toBeInTheDocument()
     expect(screen.queryByRole('heading', {name: 'Descheduler logs'})).not.toBeInTheDocument()
   })
+  it('shows scheduler and descheduler logs in separate panels', async () => {
+    const run = {id: 'run_test', name: 'Both strategies', status: 'running', stages: [], createdAt: '2026-01-01T00:00:00Z'}
+    const runtime = {items: [
+      {kind: 'scheduler', title: 'Custom scheduler', state: 'available', lines: ['I1004 scheduling detail']},
+      {kind: 'descheduler', title: 'Descheduler', state: 'available', lines: ['I1004 eviction detail']}
+    ]}
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input)
+      if (path.includes('/strategy-logs')) return new Response(JSON.stringify(runtime), {status: 200})
+      if (path.includes('/logs?')) return new Response(JSON.stringify({items: []}), {status: 200})
+      return new Response(JSON.stringify(run), {status: 200})
+    }))
+    render(<PipelineRunLogsPage runID="run_test" close={() => undefined} notify={() => undefined} />)
+    expect(await screen.findByRole('heading', {name: 'Custom scheduler logs'})).toBeInTheDocument()
+    expect(screen.getByRole('heading', {name: 'Descheduler logs'})).toBeInTheDocument()
+    expect(screen.getByText('I1004 scheduling detail')).toBeInTheDocument()
+    expect(screen.getByText('I1004 eviction detail')).toBeInTheDocument()
+  })
+
+})
+
+
+it('shows process logs while strategy logs are still pending', async () => {
+  const run = {id: 'run_slow', name: 'Slow runtime', status: 'succeeded', stages: []}
+  const fetch = vi.fn(async (url: RequestInfo | URL) => {
+    const path = String(url)
+    if (path.includes('/strategy-logs')) return new Promise<Response>(() => {})
+    if (path.includes('/logs?')) return new Response(JSON.stringify({items: [{sequence: 1, level: 'info', message: 'process visible immediately', createdAt: '2026-01-01T00:00:00Z', stageTitle: 'Deploy', stagePosition: 1, phase: 'execution'}]}), {status: 200})
+    return new Response(JSON.stringify(run), {status: 200})
+  })
+  vi.stubGlobal('fetch', fetch)
+  const {unmount} = render(<PipelineRunLogsPage runID="run_slow" close={() => {}} notify={vi.fn()} />)
+  expect(await screen.findByText('process visible immediately')).toBeInTheDocument()
+  expect(screen.getByRole('heading', {name: 'Slow runtime'})).toBeInTheDocument()
+  expect(screen.getByText('Loading strategy logs…')).toBeInTheDocument()
+  const runtimeCall = fetch.mock.calls.find(([url]) => String(url).includes('/strategy-logs'))!
+  expect(runtimeCall).toBeDefined()
+  unmount()
 })

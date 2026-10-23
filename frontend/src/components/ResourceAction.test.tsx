@@ -19,3 +19,20 @@ describe('resource list actions', () => {
     expect(remove).toHaveBeenCalledOnce()
   })
 })
+
+it('keeps creation labels visible and respects disabled actions', () => {
+  const create = vi.fn()
+  render(<ResourceAction action="create" label="Create user" disabled onClick={create} />)
+  const button = screen.getByRole('button', {name: 'Create user'})
+  expect(button).toHaveTextContent('Create user')
+  expect(button).toBeDisabled()
+  fireEvent.click(button)
+  expect(create).not.toHaveBeenCalled()
+})
+
+it('keeps add actions discoverable with a visible label across editors', () => {
+  render(<ResourceAction action="add" label="Add workload phase" onClick={() => {}} />)
+  const button = screen.getByRole('button', {name: 'Add workload phase'})
+  expect(button).toHaveTextContent('Add workload phase')
+  expect(button).not.toHaveClass('icon-button')
+})

@@ -277,3 +277,18 @@ func (runner *fakeRunner) Run(_ context.Context, _ string, stdin []byte, args ..
 	}
 	return "", errors.New("unexpected command: " + command)
 }
+
+func TestCSIControllerPlacementPreservesNodeDaemon(t *testing.T) {
+	raw := []byte("apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: csi-nfs-controller\nspec:\n  template:\n    spec:\n      nodeSelector:\n        kubernetes.io/os: linux\n---\napiVersion: apps/v1\nkind: DaemonSet\nmetadata:\n  name: csi-nfs-node\nspec:\n  template:\n    spec:\n      nodeSelector:\n        kubernetes.io/os: linux\n")
+	got, err := managementControllerManifest(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	docs := strings.Split(string(got), "---")
+	if !strings.Contains(docs[0], "kubephos.dev/role: management") || !strings.Contains(docs[0], "kubernetes.io/os: linux") {
+		t.Fatalf("controller selector missing: %s", got)
+	}
+	if strings.Contains(docs[1], "kubephos.dev/role") {
+		t.Fatal("node daemon was restricted to management")
+	}
+}

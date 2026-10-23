@@ -2,6 +2,7 @@ package pluginssh
 
 import (
 	"os/exec"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -25,5 +26,17 @@ func TestCancellableCommandTerminatesProcessGroup(t *testing.T) {
 	case <-completed:
 	case <-time.After(2 * time.Second):
 		t.Fatal("cancellable command left its process group running")
+	}
+}
+
+func TestCancellableCommandPreservesInput(t *testing.T) {
+	command := exec.Command("bash", "-c", cancellableCommand("cat"))
+	command.Stdin = strings.NewReader("managed image payload")
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(output) != "managed image payload" {
+		t.Fatalf("input lost: %q", output)
 	}
 }

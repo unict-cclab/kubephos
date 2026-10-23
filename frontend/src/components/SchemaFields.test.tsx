@@ -2,9 +2,44 @@ import {fireEvent, render, screen} from '@testing-library/react'
 import {describe, expect, it} from 'vitest'
 import {readSchemaValues} from '../lib'
 import type {Application, JsonSchema} from '../types'
-import {SchemaFields} from './SchemaFields'
+import {SchemaFields, hasConfigurableFields} from './SchemaFields'
 
 describe('SchemaFields', () => {
+  it('merges asynchronous suggestions without resetting edits or unrelated fields', () => {
+    const schema: JsonSchema = {type: 'object', properties: {vmid: {type: 'integer', title: 'VMID'}, address: {type: 'string', title: 'IP'}, storage: {type: 'string', title: 'Storage'}}}
+    const props = {schema, applications: [], artifacts: [], connections: [], credentials: []}
+    const view = render(<SchemaFields {...props} />)
+    fireEvent.change(screen.getByLabelText('VMID'), {target: {value: '450'}})
+    fireEvent.change(screen.getByLabelText('Storage'), {target: {value: 'local-lvm'}})
+    view.rerender(<SchemaFields {...props} suggestions={{vmid: 300, address: '10.0.0.30'}} />)
+    expect(screen.getByLabelText('VMID')).toHaveValue(450)
+    expect(screen.getByLabelText('IP')).toHaveValue('10.0.0.30')
+    expect(screen.getByLabelText('Storage')).toHaveValue('local-lvm')
+  })
+
+  it('keeps advanced settings collapsed and submits saved values and resource overrides', () => {
+    const schema: JsonSchema = {type: 'object', properties: {
+      primaries: {type: 'integer', title: 'Primary shards'},
+      timeoutSeconds: {type: 'integer', title: 'Timeout', 'x-kubephos-advanced': true},
+      appendOnly: {type: 'boolean', title: 'Persistence', 'x-kubephos-advanced': true},
+      ...Object.fromEntries(['cpuRequest', 'cpuLimit', 'memoryRequest', 'memoryLimit'].map(name => [name, {type: 'string', 'x-kubephos-advanced': true}])),
+      resourceOverrides: {type: 'object', 'x-kubephos-advanced': true},
+    }}
+    const values = {primaries: 3, timeoutSeconds: 12, appendOnly: true, cpuRequest: '200m', memoryRequest: '256Mi', resourceOverrides: {'redis-primary-1': {cpuLimit: '1'}}}
+    const {container} = render(<form><SchemaFields schema={schema} values={values} serviceTargets={[{id: 'redis-primary-1', traits: ['schedulable']}]} applications={[]} artifacts={[]} connections={[]} credentials={[]} /></form>)
+    const advanced = screen.getByText('Advanced settings').closest('details')!
+    expect(advanced).not.toHaveAttribute('open')
+    expect(screen.getByLabelText('Primary shards').closest('details')).toBeNull()
+    expect(advanced).toContainElement(screen.getByLabelText('Timeout'))
+    expect(advanced).toContainElement(screen.getByText('Service resources'))
+    const form = container.querySelector('form')!
+    expect(readSchemaValues(form, schema)).toEqual(values)
+    fireEvent.click(screen.getByText('Advanced settings'))
+    fireEvent.change(screen.getByLabelText('Timeout'), {target: {value: '20'}})
+    fireEvent.click(screen.getByText('Advanced settings'))
+    expect(readSchemaValues(form, schema)).toEqual({...values, timeoutSeconds: 20})
+  })
+
   it('keeps hidden defaults in the submitted form without showing a control', () => {
     const schema: JsonSchema = {type: 'object', required: ['window'], properties: {window: {type: 'string', title: 'Metrics fallback window', default: '15m', 'x-kubephos-hidden': true}}}
     const {container} = render(<form><SchemaFields schema={schema} applications={[]} artifacts={[]} connections={[]} credentials={[]} /></form>)
@@ -15,29 +50,29 @@ describe('SchemaFields', () => {
   it('renders catalog references without application-specific fields', () => {
     render(<form><SchemaFields
       schema={{type: 'object', required: ['applicationRef'], properties: {applicationRef: {type: 'string', format: 'kubephos-application-ref', title: 'Application'}}}}
-      applications={[{id: 'dev.example.app', reference: 'app:dev.example.app@1.0.0', name: 'Example', version: '1.0.0', description: '', origin: 'imported', digest: 'sha256:test', descriptor: {}}]}
+      applications={[{id: 'dev.example.app', reference: 'app:dev.example.app', name: 'Example', description: '', origin: 'imported', digest: 'sha256:test', descriptor: {}}]}
       artifacts={[]}
       connections={[]}
       credentials={[]}
     /></form>)
     const field = screen.getByRole('combobox', {name: 'Application'})
-    expect(field).toHaveValue('app:dev.example.app@1.0.0')
-    expect(screen.getByRole('option')).toHaveTextContent('Example · 1.0.0')
+    expect(field).toHaveValue('app:dev.example.app')
+    expect(screen.getByRole('option')).toHaveTextContent('Example')
   })
 
   it('filters application references by a trait declared in the schema', () => {
     render(<form><SchemaFields
       schema={{type: 'object', properties: {applicationRef: {type: 'string', format: 'kubephos-application-ref', title: 'Application', 'x-kubephos-required-trait': 'scalable'}}}}
       applications={[
-        {id: 'dev.example.scalable', reference: 'app:dev.example.scalable@1.0.0', name: 'Scalable', version: '1.0.0', description: '', origin: 'imported', digest: 'sha256:a', descriptor: {spec: {interface: {components: [{id: 'api', traits: ['scalable']}]}}}},
-        {id: 'dev.example.fixed', reference: 'app:dev.example.fixed@1.0.0', name: 'Fixed', version: '1.0.0', description: '', origin: 'imported', digest: 'sha256:b', descriptor: {spec: {interface: {components: [{id: 'api'}]}}}},
+        {id: 'dev.example.scalable', reference: 'app:dev.example.scalable', name: 'Scalable', description: '', origin: 'imported', digest: 'sha256:a', descriptor: {spec: {interface: {components: [{id: 'api', traits: ['scalable']}]}}}},
+        {id: 'dev.example.fixed', reference: 'app:dev.example.fixed', name: 'Fixed', description: '', origin: 'imported', digest: 'sha256:b', descriptor: {spec: {interface: {components: [{id: 'api'}]}}}},
       ]}
       artifacts={[]}
       connections={[]}
       credentials={[]}
     /></form>)
-    expect(screen.getByRole('option')).toHaveTextContent('Scalable · 1.0.0')
-    expect(screen.queryByText('Fixed · 1.0.0')).not.toBeInTheDocument()
+    expect(screen.getByRole('option')).toHaveTextContent('Scalable')
+    expect(screen.queryByText('Fixed')).not.toBeInTheDocument()
   })
 
   it('offers only artifacts matching the declared contract', () => {
@@ -141,7 +176,7 @@ describe('SchemaFields', () => {
       values: {type: 'object', title: 'Application settings', 'x-kubephos-schema-from-application': 'applicationRef'},
     }}
     const applications: Application[] = [{
-      id: 'dev.example.app', reference: 'app:dev.example.app@1.0.0', name: 'Example', version: '1.0.0', description: '', origin: 'imported', digest: 'sha256:test',
+      id: 'dev.example.app', reference: 'app:dev.example.app', name: 'Example', description: '', origin: 'imported', digest: 'sha256:test',
       descriptor: {spec: {valuesSchema: {type: 'object', required: ['replicas'], properties: {replicas: {type: 'integer', title: 'Initial replicas', minimum: 1, maximum: 10}}}, defaults: {replicas: 2}}},
     }]
     const {container} = render(<form><SchemaFields schema={schema} applications={applications} artifacts={[]} connections={[]} credentials={[]} /></form>)
@@ -158,11 +193,38 @@ describe('SchemaFields', () => {
       values: {type: 'object', title: 'Application settings', 'x-kubephos-schema-from-application': 'applicationRef'},
     }}
     const applications: Application[] = [{
-      id: 'dev.example.app', reference: 'app:dev.example.app@1.0.0', name: 'Example', version: '1.0.0', description: '', origin: 'imported', digest: 'sha256:test',
+      id: 'dev.example.app', reference: 'app:dev.example.app', name: 'Example', description: '', origin: 'imported', digest: 'sha256:test',
       descriptor: {spec: {valuesSchema: {type: 'object', properties: {replicas: {type: 'integer', title: 'Initial replicas'}, workers: {type: 'integer', title: 'Workers'}}}, defaults: {replicas: 2, workers: 3}}},
     }]
     render(<form><SchemaFields schema={schema} values={{applicationRef: applications[0].reference, values: {replicas: 7}}} applications={applications} artifacts={[]} connections={[]} credentials={[]} /></form>)
     expect(screen.getByRole('spinbutton', {name: 'Initial replicas'})).toHaveValue(7)
     expect(screen.getByRole('spinbutton', {name: 'Workers'})).toHaveValue(3)
   })
+})
+
+it('submits fixed boolean settings without presenting an unusable selector', () => {
+  const schema: JsonSchema = {type: 'object', properties: {telemetry: {type: 'boolean', enum: [false]}, enabled: {type: 'boolean', enum: [true]}}}
+  const {container} = render(<form><SchemaFields schema={schema} applications={[]} artifacts={[]} connections={[]} credentials={[]} /></form>)
+  expect(screen.queryByRole('combobox')).not.toBeInTheDocument()
+  expect(readSchemaValues(container.querySelector('form')!,schema)).toEqual({telemetry: false, enabled: true})
+})
+
+it('uses declared field order independently of JSON property order and preserves submitted values', () => {
+  const schema: JsonSchema = {type: 'object', properties: {
+    responseSize: {type: 'integer', title: 'Response size', default: 10, 'x-kubephos-order': 3},
+    services: {type: 'integer', title: 'Services', default: 6, 'x-kubephos-order': 1},
+    topology: {type: 'string', title: 'Topology', default: 'tree', 'x-kubephos-order': 2}
+  }}
+  const {container} = render(<form><SchemaFields schema={schema} applications={[]} artifacts={[]} connections={[]} credentials={[]} /></form>)
+  expect(screen.getAllByRole('spinbutton').map(input => input.getAttribute('aria-label'))).toEqual(['Services', 'Response size'])
+  expect([...container.querySelectorAll('label')].map(label => label.firstChild?.textContent)).toEqual(['Services', 'Topology', 'Response size'])
+  expect(readSchemaValues(container.querySelector('form')!, schema)).toEqual({services: 6, topology: 'tree', responseSize: 10})
+})
+
+it('does not count fixed, hidden or conditionally invisible fields as configurable parameters', () => {
+  expect(hasConfigurableFields({properties: {cloudTelemetryEnabled: {type: 'string', enum: ['false']}, internal: {type: 'integer', 'x-kubephos-hidden': true}}}, {cloudTelemetryEnabled: 'false'})).toBe(false)
+  expect(hasConfigurableFields({properties: {telemetry: {type: 'string', enum: ['false']}}}, {telemetry: 'legacy'})).toBe(true)
+  expect(hasConfigurableFields({properties: {nested: {type: 'object', properties: {fixed: {enum: ['fixed']}}}}})).toBe(false)
+  expect(hasConfigurableFields({properties: {serviceCount: {type: 'integer'}}})).toBe(true)
+  expect(hasConfigurableFields({properties: {advanced: {type: 'integer', 'x-kubephos-advanced': true}}})).toBe(true)
 })

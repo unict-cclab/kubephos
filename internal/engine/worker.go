@@ -39,6 +39,16 @@ func (w *Worker) Run(ctx context.Context) error {
 	group.Add(1)
 	go func() {
 		defer group.Done()
+		for ctx.Err() == nil {
+			if err := w.store.ProcessArtifactDeletions(ctx, w.artifacts.Delete); err != nil && ctx.Err() == nil {
+				slog.Error("delete experiment artifacts", "error", err)
+			}
+			w.wait(ctx)
+		}
+	}()
+	group.Add(1)
+	go func() {
+		defer group.Done()
 		w.expireLeases(ctx)
 	}()
 	group.Add(1)
@@ -453,11 +463,15 @@ func (w *Worker) reserveEffects(ctx context.Context, operation domain.Operation,
 				release()
 				return err
 			}
-		case "delete":
-			if err := w.store.AuthorizeManagedResource(ctx, provider, effect.ExternalID, operation.WorkspaceID); err != nil {
+		case "delete", "update":
+			authorize := w.store.AuthorizeManagedResource
+			if step.Cleanup {
+				authorize = w.store.AuthorizeManagedCleanup
+			}
+			if err := authorize(ctx, provider, effect.ExternalID, operation.WorkspaceID); err != nil {
 				return err
 			}
-			if err := log("warning", fmt.Sprintf("Authorized deletion of managed resource %s", effect.ExternalID)); err != nil {
+			if err := log("warning", fmt.Sprintf("Authorized %s of managed resource %s", effect.Action, effect.ExternalID)); err != nil {
 				return err
 			}
 		default:
@@ -493,6 +507,18 @@ func (w *Worker) completeEffects(ctx context.Context, operation domain.Operation
 			}
 			details, _ := json.Marshal(map[string]any{"operationId": operation.ID, "externalId": effect.ExternalID, "state": resource.State})
 			if err := w.store.AppendAuditEvent(ctx, domain.AuditEvent{Actor: "worker", Action: "infrastructure.create", TargetType: effect.Kind, TargetID: effect.ExternalID, Outcome: "succeeded", Details: details}); err != nil {
+				return err
+			}
+		case "update":
+			resource, ok := resources[effect.ExternalID]
+			if !ok {
+				return fmt.Errorf("updated resource %s is missing", effect.ExternalID)
+			}
+			if err := w.store.UpdateManagedResource(ctx, provider, operation.WorkspaceID, resource); err != nil {
+				return err
+			}
+			details, _ := json.Marshal(map[string]any{"operationId": operation.ID, "externalId": effect.ExternalID, "state": resource.State})
+			if err := w.store.AppendAuditEvent(ctx, domain.AuditEvent{Actor: "worker", Action: "infrastructure.update", TargetType: effect.Kind, TargetID: effect.ExternalID, Outcome: "succeeded", Details: details}); err != nil {
 				return err
 			}
 		case "delete":
@@ -552,7 +578,16 @@ func (w *Worker) captureDiscovery(ctx context.Context, operation domain.Operatio
 }
 
 func (w *Worker) monitor(ctx context.Context, cancel context.CancelFunc, done <-chan struct{}, owner, operationID string) {
-	ticker := time.NewTicker(2 * time.Second)
+	monitorOperation(ctx, cancel, done, w.store, owner, operationID, 2*time.Second)
+}
+
+type operationMonitorStore interface {
+	OperationCancelRequested(context.Context, string) (bool, error)
+	RenewLease(context.Context, string, string) error
+}
+
+func monitorOperation(ctx context.Context, cancel context.CancelFunc, done <-chan struct{}, store operationMonitorStore, owner, operationID string, interval time.Duration) {
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
 		select {
@@ -561,7 +596,14 @@ func (w *Worker) monitor(ctx context.Context, cancel context.CancelFunc, done <-
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			requested, err := w.store.OperationCancelRequested(ctx, operationID)
+			// Bound database calls so a stalled cancellation check cannot exhaust
+			// the 30-second lease. Renew independently of cancellation reads.
+			checkCtx, checkCancel := context.WithTimeout(ctx, 5*time.Second)
+			if err := store.RenewLease(checkCtx, operationID, owner); err != nil {
+				slog.Error("renew lease", "operation", operationID, "error", err)
+			}
+			requested, err := store.OperationCancelRequested(checkCtx, operationID)
+			checkCancel()
 			if err != nil {
 				slog.Error("check cancellation", "operation", operationID, "error", err)
 				continue
@@ -569,9 +611,6 @@ func (w *Worker) monitor(ctx context.Context, cancel context.CancelFunc, done <-
 			if requested {
 				cancel()
 				return
-			}
-			if err := w.store.RenewLease(ctx, operationID, owner); err != nil {
-				slog.Error("renew lease", "operation", operationID, "error", err)
 			}
 		}
 	}

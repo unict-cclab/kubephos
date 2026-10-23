@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -19,16 +18,15 @@ import (
 	"kubephos.dev/kubephos/internal/domain"
 	"kubephos.dev/kubephos/internal/plugins"
 	"kubephos.dev/kubephos/internal/schema"
+	"kubephos.dev/kubephos/internal/workloadresources"
 )
 
 const (
 	materializerID      = "io.kubephos.applications.mubench"
-	materializerVersion = "0.2.0"
+	materializerVersion = "0.4.0"
 	sourceRevision      = "176c8f14f2740414436078d5dcd969d38dd4acd4"
 	locustImage         = "locustio/locust:2.42.6"
 )
-
-var quantityPattern = regexp.MustCompile(`^[0-9]+(?:m|Ki|Mi|Gi)?$`)
 
 type Invocation struct {
 	Input   json.RawMessage            `json:"input"`
@@ -269,9 +267,10 @@ func resolveMaterializer(invocation Invocation) (materializerSpec, catalog.Descr
 		}
 		return spec, descriptor, generatorConfig{}, fmt.Errorf("application setting %s is invalid: %s", issues[0].Path, issues[0].Message)
 	}
-	if !quantityPattern.MatchString(fmt.Sprint(values["cpuRequest"])) || !quantityPattern.MatchString(fmt.Sprint(values["memoryRequest"])) {
-		return spec, descriptor, generatorConfig{}, errors.New("CPU and memory requests must be Kubernetes quantities")
+	if _, err := workloadresources.Build(values); err != nil {
+		return spec, descriptor, generatorConfig{}, err
 	}
+
 	if _, err := serviceReplicas(values, "s0"); err != nil {
 		return spec, descriptor, generatorConfig{}, err
 	}
@@ -292,6 +291,10 @@ func resolveMaterializer(invocation Invocation) (materializerSpec, catalog.Descr
 	if err != nil {
 		return spec, descriptor, config, err
 	}
+	if err := workloadresources.Validate(values, serviceNames(config.ServiceCount)); err != nil {
+		return spec, descriptor, config, err
+	}
+
 	spec.Values = values
 	return spec, descriptor, config, nil
 }
@@ -389,6 +392,10 @@ func materialize(input materializerInput, config generatorConfig) (materializerR
 }
 
 func manifests(group string, config generatorConfig, values map[string]any, topologyIndexes map[string]*int) ([]byte, error) {
+	if err := workloadresources.Validate(values, serviceNames(config.ServiceCount)); err != nil {
+		return nil, err
+	}
+
 	workmodel := map[string]any{}
 	complexity := map[string][]int{"light": {25, 50}, "balanced": {100, 200}, "heavy": {500, 1000}}[fmt.Sprint(values["workloadProfile"])]
 	if len(complexity) == 0 {
@@ -450,7 +457,6 @@ func serviceDocuments(name, group, image string, values map[string]any, topology
 			map[string]any{"name": "PN", "value": fmt.Sprint(values["workers"])},
 			map[string]any{"name": "TN", "value": fmt.Sprint(values["threads"])},
 		},
-		"resources":      map[string]any{"requests": map[string]any{"cpu": values["cpuRequest"], "memory": values["memoryRequest"]}},
 		"readinessProbe": map[string]any{"tcpSocket": map[string]any{"port": "http"}, "initialDelaySeconds": 3, "periodSeconds": 5},
 		"livenessProbe":  map[string]any{"tcpSocket": map[string]any{"port": "http"}, "initialDelaySeconds": 15, "periodSeconds": 10},
 		"volumeMounts": []any{
@@ -458,6 +464,11 @@ func serviceDocuments(name, group, image string, values map[string]any, topology
 			map[string]any{"name": "internal-services", "mountPath": "/app/MSConfig/InternalServiceFunctions"},
 		},
 	}
+	resources, _ := workloadresources.ForService(values, name)
+	if len(resources) > 0 {
+		container["resources"] = resources
+	}
+
 	podSpec := map[string]any{
 		"terminationGracePeriodSeconds": 5,
 		"containers":                    []any{container},
@@ -504,7 +515,7 @@ func nodeProxyDocuments(group string, topologyIndex *int) []any {
 	}
 	configuration := "server {\n  listen 8080;\n  location / {\n    proxy_http_version 1.1;\n    proxy_set_header X-Real-IP $remote_addr;\n    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;\n    proxy_set_header X-Forwarded-Proto $scheme;\n    proxy_set_header X-Kubephos-Proxy-Node ${NODE_NAME};\n    proxy_set_header X-Kubephos-Proxy-Zone ${NODE_ZONE};\n    proxy_pass http://s0:80/api/v1;\n  }\n}\n"
 	configMap := map[string]any{"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]any{"name": "node-proxy", "labels": labels}, "data": map[string]any{"default.conf.template": configuration}}
-	daemonSet := map[string]any{"apiVersion": "apps/v1", "kind": "DaemonSet", "metadata": map[string]any{"name": "node-proxy", "labels": labels}, "spec": map[string]any{"selector": map[string]any{"matchLabels": map[string]any{"app": "node-proxy"}}, "template": map[string]any{"metadata": map[string]any{"labels": labels}, "spec": map[string]any{"nodeSelector": map[string]any{"kubephos.dev/role": "application"}, "containers": []any{map[string]any{"name": "nginx", "image": "nginx:1.27-alpine", "ports": []any{map[string]any{"name": "http", "containerPort": 8080}}, "env": []any{map[string]any{"name": "NODE_NAME", "valueFrom": map[string]any{"fieldRef": map[string]any{"fieldPath": "spec.nodeName"}}}, map[string]any{"name": "NODE_ZONE", "valueFrom": map[string]any{"fieldRef": map[string]any{"fieldPath": "metadata.labels['topology.kubernetes.io/zone']"}}}}, "volumeMounts": []any{map[string]any{"name": "config", "mountPath": "/etc/nginx/templates/default.conf.template", "subPath": "default.conf.template"}}, "resources": map[string]any{"requests": map[string]any{"cpu": "25m", "memory": "32Mi"}, "limits": map[string]any{"cpu": "250m", "memory": "128Mi"}}}}, "volumes": []any{map[string]any{"name": "config", "configMap": map[string]any{"name": "node-proxy"}}}}}}}
+	daemonSet := map[string]any{"apiVersion": "apps/v1", "kind": "DaemonSet", "metadata": map[string]any{"name": "node-proxy", "labels": labels}, "spec": map[string]any{"selector": map[string]any{"matchLabels": map[string]any{"app": "node-proxy"}}, "template": map[string]any{"metadata": map[string]any{"labels": labels}, "spec": map[string]any{"nodeSelector": map[string]any{"kubephos.dev/role": "application"}, "containers": []any{map[string]any{"name": "nginx", "image": "nginx:1.27-alpine", "ports": []any{map[string]any{"name": "http", "containerPort": 8080}}, "env": []any{map[string]any{"name": "NODE_NAME", "valueFrom": map[string]any{"fieldRef": map[string]any{"fieldPath": "spec.nodeName"}}}, map[string]any{"name": "NODE_ZONE", "valueFrom": map[string]any{"fieldRef": map[string]any{"fieldPath": "metadata.labels['topology.kubernetes.io/zone']"}}}}, "volumeMounts": []any{map[string]any{"name": "config", "mountPath": "/etc/nginx/templates/default.conf.template", "subPath": "default.conf.template"}}}}, "volumes": []any{map[string]any{"name": "config", "configMap": map[string]any{"name": "node-proxy"}}}}}}}
 	service := map[string]any{"apiVersion": "v1", "kind": "Service", "metadata": map[string]any{"name": "node-proxy", "labels": labels}, "spec": map[string]any{"type": "NodePort", "externalTrafficPolicy": "Local", "selector": map[string]any{"app": "node-proxy"}, "ports": []any{map[string]any{"name": "http", "port": 80, "targetPort": "http"}}}}
 	return []any{configMap, daemonSet, service}
 }
@@ -600,4 +611,12 @@ func SortedComponentIDs(descriptor catalog.Descriptor) []string {
 	}
 	sort.Strings(result)
 	return result
+}
+
+func serviceNames(count int) []string {
+	names := make([]string, count)
+	for i := range names {
+		names[i] = fmt.Sprintf("s%d", i)
+	}
+	return names
 }

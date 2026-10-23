@@ -4,53 +4,51 @@ metadata:
   id: io.kubephos.chaos.network.zones
   name: Inter-zone network injection
   version: 0.3.1
-  description: Applies latency, jitter, bandwidth and packet loss to directed links between application zones.
+  description: Applies latency, jitter, bandwidth and packet loss to directed links
+    between application zones.
 spec:
   protocol: v1alpha1
   commands:
-    - describe
-    - validate
-    - plan
-    - precheck
-    - execute
-    - verify
-    - status
-    - cancel
-    - cleanup
+  - describe
+  - validate
+  - plan
+  - precheck
+  - execute
+  - verify
+  - status
+  - cancel
+  - cleanup
   configurationSchema:
     type: object
     additionalProperties: false
     required:
-      - clusterConnectionRef
-      - applicationDeploymentRef
-      - managedPlatformRef
-      - latencyMilliseconds
-      - jitterMilliseconds
-      - nodeGroupLabel
-      - networkInterface
-      - hostNetwork
-      - enableLatency
-      - correlationPercent
-      - enableBandwidth
-      - bandwidthBytesPerSecond
-      - enablePacketLoss
-      - packetLossPercent
+    - clusterConnectionRef
+    - applicationDeploymentRef
+    - managedPlatformRef
+    - nodeGroupLabel
+    - networkInterface
+    - hostNetwork
+    - enableLatency
+    - latencyMilliseconds
+    - jitterMilliseconds
+    - correlationPercent
+    - enableBandwidth
+    - bandwidthBytesPerSecond
+    - enablePacketLoss
+    - packetLossPercent
     properties:
       clusterConnectionRef:
         type: string
-        title: Kubernetes cluster
         format: kubephos-artifact-ref
         x-kubephos-artifact-type: ClusterConnection
         x-kubephos-artifact-version: v1alpha1
       applicationDeploymentRef:
         type: string
-        title: Application deployment
         format: kubephos-artifact-ref
         x-kubephos-artifact-type: ApplicationDeployment
         x-kubephos-artifact-version: v1alpha1
       managedPlatformRef:
         type: string
-        title: Managed chaos runtime
         format: kubephos-artifact-ref
         x-kubephos-artifact-type: ManagedPlatformCapability
         x-kubephos-artifact-version: v1alpha1
@@ -76,7 +74,7 @@ spec:
         default: true
       latencyMilliseconds:
         type: integer
-        title: Cross-zone latency in ms
+        title: Latency in ms
         minimum: 1
         maximum: 60000
         default: 50
@@ -118,24 +116,31 @@ spec:
         maxItems: 225
         items:
           type: object
+      clusterName:
+        type: string
+        x-kubephos-hidden: true
+      clusterNetworks:
+        type: object
+        additionalProperties: true
+        x-kubephos-hidden: true
   runtime:
     executable: network-injection-plugin
     timeout: 10m
   artifacts:
     inputs:
-      - type: ClusterConnection
-        version: v1alpha1
-      - type: ApplicationDeployment
-        version: v1alpha1
-      - type: ManagedPlatformCapability
-        version: v1alpha1
+    - type: ClusterConnection
+      version: v1alpha1
+    - type: ApplicationDeployment
+      version: v1alpha1
+    - type: ManagedPlatformCapability
+      version: v1alpha1
     outputs:
-      - type: NetworkInjection
-        version: v1alpha1
+    - type: NetworkInjection
+      version: v1alpha1
   capabilities:
-    - chaos.network.zones
-    - chaos.network.preflight
-    - chaos.network.cleanup
-    - lifecycle.cleanup
+  - chaos.network.zones
+  - chaos.network.preflight
+  - chaos.network.cleanup
+  - lifecycle.cleanup
   permissions:
-    - cluster.admin
+  - cluster.admin

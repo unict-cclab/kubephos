@@ -3,4 +3,17 @@
 tmp
 dist
 node_modules
+**/node_modules
+**/dist
+**/*.tsbuildinfo
 coverage.out
+*.orig
+.agents
+.codex
+.aws
+*kubeconfig*.yaml
+.kubephos
+credentials.json
+**/__pycache__
+**/*.pyc
+.env.*

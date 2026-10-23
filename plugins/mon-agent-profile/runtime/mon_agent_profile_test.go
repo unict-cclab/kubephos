@@ -50,9 +50,31 @@ func TestMonAgentProfileValidationRejectsUnsafeValues(t *testing.T) {
 	}
 }
 
+func TestForeignProfileIsNeverModifiedDuringFailedRunCleanup(t *testing.T) {
+	runner := &fakeRunner{period: "10", queryRange: "1m", annotations: map[string]string{profileMarkerKey: "older-run", previousPeriodKey: "30", previousRangeKey: "5m"}}
+	plugin := Plugin{Runner: runner}
+	step := domain.PlanStep{Input: json.RawMessage(`{}`), Cleanup: true, ResolvedInputs: profileArtifacts()}
+	if health, err := plugin.Precheck(context.Background(), step, discardLog); err != nil || health.Status != domain.HealthHealthy {
+		t.Fatalf("cleanup precheck: %v %v", health, err)
+	}
+	if err := plugin.Cleanup(context.Background(), step, nil, discardLog); err != nil {
+		t.Fatal(err)
+	}
+	if health, err := plugin.Verify(context.Background(), step, nil, discardLog); err != nil || health.Status != domain.HealthHealthy {
+		t.Fatalf("cleanup verify: %v %v", health, err)
+	}
+	if runner.annotations[profileMarkerKey] != "older-run" || runner.period != "10" {
+		t.Fatal("another run's profile was modified")
+	}
+	step.Cleanup = false
+	if _, err := plugin.Execute(context.Background(), step, discardLog); err == nil {
+		t.Fatal("overwrote an existing profile")
+	}
+}
+
 func profileArtifacts() map[string]domain.ResolvedArtifact {
 	cluster := json.RawMessage(`{"apiVersion":"artifacts.kubephos.dev/v1alpha1","kind":"ClusterConnection","metadata":{"name":"cluster","version":"v1"},"spec":{"server":"https://10.0.0.1:6443","kubeconfig":"config"}}`)
-	application := json.RawMessage(`{"apiVersion":"artifacts.kubephos.dev/v1alpha1","kind":"ApplicationDeployment","metadata":{"name":"app","version":"v1alpha1","ownershipMarker":"app-marker"},"spec":{"applicationRef":"app:test@1.0.0","clusterServer":"https://10.0.0.1:6443","namespace":"app"}}`)
+	application := json.RawMessage(`{"apiVersion":"artifacts.kubephos.dev/v1alpha1","kind":"ApplicationDeployment","metadata":{"name":"app","version":"v1alpha1","ownershipMarker":"app-marker"},"spec":{"applicationRef":"app:test","clusterServer":"https://10.0.0.1:6443","namespace":"app"}}`)
 	observability := json.RawMessage(`{"apiVersion":"artifacts.kubephos.dev/v1alpha1","kind":"ObservabilityCapability","spec":{"clusterServer":"https://10.0.0.1:6443","namespace":"kubephos-observability","monAgent":{"name":"kubephos-mon-agent","version":"v0.0.7","namespace":"kubephos-observability","scrapePeriodSeconds":30,"promQLRange":"5m","status":"ready"}}}`)
 	return map[string]domain.ResolvedArtifact{"cluster-connection": {Value: cluster}, "application-deployment": {Value: application}, "observability": {Value: observability}}
 }

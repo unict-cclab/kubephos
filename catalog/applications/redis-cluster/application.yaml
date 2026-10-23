@@ -1,0 +1,112 @@
+apiVersion: catalog.kubephos.dev/v1alpha1
+kind: Application
+metadata:
+  id: dev.kubephos.redis-cluster
+  name: Redis Cluster
+  description: Redis Cluster with configurable shards, replication and native Redis traffic.
+spec:
+  package: {type: embedded, format: plain-yaml, entrypoint: generated.yaml}
+  materializer: io.kubephos.applications.redis
+  interface:
+    group: redis-cluster
+    components:
+    - id: redis-primary-1
+      workload: {apiVersion: apps/v1, kind: StatefulSet, name: redis-primary-1}
+      selector: {app: redis-primary-1}
+      traits: [schedulable, deschedulable]
+      index: 0
+      dependencies: [redis-replica-1-1]
+    - id: redis-replica-1-1
+      workload: {apiVersion: apps/v1, kind: StatefulSet, name: redis-replica-1-1}
+      selector: {app: redis-replica-1-1}
+      traits: [schedulable, deschedulable]
+      index: 1
+    - id: redis-primary-2
+      workload: {apiVersion: apps/v1, kind: StatefulSet, name: redis-primary-2}
+      selector: {app: redis-primary-2}
+      traits: [schedulable, deschedulable]
+      index: 0
+      dependencies: [redis-replica-2-1]
+    - id: redis-replica-2-1
+      workload: {apiVersion: apps/v1, kind: StatefulSet, name: redis-replica-2-1}
+      selector: {app: redis-replica-2-1}
+      traits: [schedulable, deschedulable]
+      index: 1
+    - id: redis-primary-3
+      workload: {apiVersion: apps/v1, kind: StatefulSet, name: redis-primary-3}
+      selector: {app: redis-primary-3}
+      traits: [schedulable, deschedulable]
+      index: 0
+      dependencies: [redis-replica-3-1]
+    - id: redis-replica-3-1
+      workload: {apiVersion: apps/v1, kind: StatefulSet, name: redis-replica-3-1}
+      selector: {app: redis-replica-3-1}
+      traits: [schedulable, deschedulable]
+      index: 1
+    - id: redis-primary-4
+      workload: {apiVersion: apps/v1, kind: StatefulSet, name: redis-primary-4}
+      selector: {app: redis-primary-4}
+      traits: [schedulable, deschedulable]
+      index: 0
+      dependencies: [redis-replica-4-1]
+    - id: redis-replica-4-1
+      workload: {apiVersion: apps/v1, kind: StatefulSet, name: redis-replica-4-1}
+      selector: {app: redis-replica-4-1}
+      traits: [schedulable, deschedulable]
+      index: 1
+    - id: redis-primary-5
+      workload: {apiVersion: apps/v1, kind: StatefulSet, name: redis-primary-5}
+      selector: {app: redis-primary-5}
+      traits: [schedulable, deschedulable]
+      index: 0
+      dependencies: [redis-replica-5-1]
+    - id: redis-replica-5-1
+      workload: {apiVersion: apps/v1, kind: StatefulSet, name: redis-replica-5-1}
+      selector: {app: redis-replica-5-1}
+      traits: [schedulable, deschedulable]
+      index: 1
+    endpoints:
+    - {id: redis, component: redis-primary-1, service: redis, port: 6379, protocol: tcp}
+    loadScenarios:
+    - id: redis-operations
+      engine: locust
+      script: generated/locustfile.py
+      runtimeImage: locustio/locust:2.42.6
+      targetEndpoint: redis
+  valuesSchema:
+    type: object
+    additionalProperties: false
+    x-kubephos-dynamic-topology: true
+    properties:
+      primaries: {type: integer, title: Primary shards, minimum: 3, maximum: 20, x-kubephos-order: 1}
+      replicasPerPrimary: {type: integer, title: Replicas per primary, minimum: 0, maximum: 3, x-kubephos-order: 2}
+      storageSize: {type: string, title: Storage per Redis node, pattern: '^[1-9][0-9]*(Mi|Gi|Ti)$', x-kubephos-advanced: true, x-kubephos-order: 3}
+      appendOnly: {type: boolean, title: Append-only persistence, x-kubephos-advanced: true, x-kubephos-order: 4}
+      operation:
+        x-kubephos-order: 5
+        type: string
+        title: Redis operation
+        enum: [mixed, SET, GET, HSET, LPUSH, LPOP, LRANGE_100, LRANGE_500]
+      readPercentage: {type: integer, title: GET percentage in mixed workload, minimum: 0, maximum: 100, x-kubephos-advanced: true, x-kubephos-order: 6}
+      keyCount: {type: integer, title: Keys per data type, minimum: 1, maximum: 100000, x-kubephos-order: 7}
+      payloadBytes: {type: integer, title: Value size (bytes), minimum: 1, maximum: 1048576, x-kubephos-order: 8}
+      listLength: {type: integer, title: Initial list length, minimum: 1, maximum: 10000, x-kubephos-advanced: true, x-kubephos-order: 9}
+      timeoutSeconds: {type: integer, title: Redis request timeout (seconds), minimum: 1, maximum: 60, x-kubephos-advanced: true, x-kubephos-order: 10}
+      cpuRequest: {type: string, title: CPU request per node, minLength: 1, maxLength: 16, x-kubephos-advanced: true, x-kubephos-order: 11}
+      memoryRequest: {type: string, title: Memory request per node, minLength: 1, maxLength: 16, x-kubephos-advanced: true, x-kubephos-order: 12}
+      cpuLimit: {type: string, title: CPU limit per node (optional), minLength: 1, maxLength: 16, x-kubephos-advanced: true, x-kubephos-order: 13}
+      memoryLimit: {type: string, title: Memory limit per node (optional), minLength: 1, maxLength: 16, x-kubephos-advanced: true, x-kubephos-order: 14}
+      resourceOverrides: {type: object, title: Resource overrides by node, additionalProperties: true, x-kubephos-advanced: true, x-kubephos-order: 15}
+    required: [primaries, replicasPerPrimary, storageSize, appendOnly, operation, readPercentage, keyCount, payloadBytes, listLength, timeoutSeconds]
+  defaults:
+    primaries: 5
+    replicasPerPrimary: 1
+    storageSize: 1Gi
+    appendOnly: false
+    operation: mixed
+    readPercentage: 50
+    keyCount: 1000
+    payloadBytes: 3
+    listLength: 500
+    timeoutSeconds: 5
+    resourceOverrides: {}

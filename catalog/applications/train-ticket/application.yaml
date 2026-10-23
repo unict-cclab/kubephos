@@ -3,7 +3,6 @@ kind: Application
 metadata:
   id: dev.kubephos.train-ticket
   name: Train Ticket
-  version: 1.0.0-kubephos.4
   description: Large railway booking benchmark with managed NFS storage, source-aware ingress and a reproducible search journey.
 spec:
   package:
@@ -513,9 +512,6 @@ spec:
                         fieldRef: {fieldPath: "metadata.labels['topology.kubernetes.io/zone']"}
                   volumeMounts:
                     - {name: config, mountPath: /etc/nginx/templates/default.conf.template, subPath: default.conf.template}
-                  resources:
-                    requests: {cpu: 25m, memory: 32Mi}
-                    limits: {cpu: 250m, memory: 128Mi}
               volumes:
                 - name: config
                   configMap: {name: node-proxy}
@@ -547,13 +543,44 @@ spec:
     additionalProperties: false
     properties:
       initialReplicas:
+        x-kubephos-order: 1
         type: integer
         title: Initial replicas
         minimum: 1
         maximum: 20
       replicaOverrides:
+        x-kubephos-order: 2
         type: object
-        title: Service overrides
+        title: Initial replicas by service
+        additionalProperties: true
+      cpuRequest:
+        x-kubephos-order: 3
+        type: string
+        title: CPU request per service (optional)
+        minLength: 1
+        maxLength: 16
+      memoryRequest:
+        x-kubephos-order: 4
+        type: string
+        title: Memory request per service (optional)
+        minLength: 1
+        maxLength: 16
+      cpuLimit:
+        x-kubephos-order: 5
+        type: string
+        title: CPU limit per service (optional)
+        minLength: 1
+        maxLength: 16
+      memoryLimit:
+        x-kubephos-order: 6
+        type: string
+        title: Memory limit per service (optional)
+        minLength: 1
+        maxLength: 16
+      resourceOverrides:
+        x-kubephos-order: 7
+        type: object
+        title: Resource overrides by service
         additionalProperties: true
   defaults:
     initialReplicas: 1

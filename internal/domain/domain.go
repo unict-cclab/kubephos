@@ -141,21 +141,23 @@ type PipelineRunStage struct {
 }
 
 type Experiment struct {
-	ID              string              `json:"id"`
-	WorkspaceID     string              `json:"workspaceId"`
-	ConfigurationID string              `json:"configurationId,omitempty"`
-	OwnerUserID     string              `json:"ownerUserId,omitempty"`
-	OwnerUsername   string              `json:"ownerUsername,omitempty"`
-	Kind            string              `json:"kind"`
-	Name            string              `json:"name"`
-	Description     string              `json:"description"`
-	Status          string              `json:"status"`
-	ResultType      string              `json:"resultType"`
-	ResultVersion   string              `json:"resultVersion"`
-	Variants        []ExperimentVariant `json:"variants"`
-	ScheduledFor    *time.Time          `json:"scheduledFor,omitempty"`
-	CreatedAt       time.Time           `json:"createdAt"`
-	UpdatedAt       time.Time           `json:"updatedAt"`
+	ConfigurationSnapshot json.RawMessage     `json:"configurationSnapshot,omitempty"`
+	ID                    string              `json:"id"`
+	WorkspaceID           string              `json:"workspaceId"`
+	ConfigurationID       string              `json:"configurationId,omitempty"`
+	OwnerUserID           string              `json:"ownerUserId,omitempty"`
+	OwnerUsername         string              `json:"ownerUsername,omitempty"`
+	Kind                  string              `json:"kind"`
+	Name                  string              `json:"name"`
+	Description           string              `json:"description"`
+	Status                string              `json:"status"`
+	CancelRequested       bool                `json:"cancelRequested"`
+	ResultType            string              `json:"resultType"`
+	ResultVersion         string              `json:"resultVersion"`
+	Variants              []ExperimentVariant `json:"variants"`
+	ScheduledFor          *time.Time          `json:"scheduledFor,omitempty"`
+	CreatedAt             time.Time           `json:"createdAt"`
+	UpdatedAt             time.Time           `json:"updatedAt"`
 }
 
 type ExperimentFigure struct {
@@ -199,6 +201,7 @@ type ExperimentTrial struct {
 }
 
 type ExperimentConfiguration struct {
+	Kind              string           `json:"kind"`
 	ID                string           `json:"id"`
 	WorkspaceID       string           `json:"workspaceId"`
 	ClusterResourceID string           `json:"clusterResourceId"`
@@ -271,7 +274,6 @@ type CatalogApplication struct {
 	ID          string          `json:"id"`
 	Reference   string          `json:"reference"`
 	Name        string          `json:"name"`
-	Version     string          `json:"version"`
 	Description string          `json:"description"`
 	Origin      string          `json:"origin"`
 	Descriptor  json.RawMessage `json:"descriptor"`
@@ -346,15 +348,14 @@ type AuditEvent struct {
 }
 
 type User struct {
-	ID           string    `json:"id"`
-	Username     string    `json:"username"`
-	PasswordHash string    `json:"-"`
-	ExternalID   string    `json:"-"`
-	Email        string    `json:"email,omitempty"`
-	Role         string    `json:"role"`
-	Enabled      bool      `json:"enabled"`
-	CreatedAt    time.Time `json:"createdAt"`
-	UpdatedAt    time.Time `json:"updatedAt"`
+	ID         string    `json:"id"`
+	Username   string    `json:"username"`
+	ExternalID string    `json:"-"`
+	Email      string    `json:"email,omitempty"`
+	Role       string    `json:"role"`
+	Enabled    bool      `json:"enabled"`
+	CreatedAt  time.Time `json:"createdAt"`
+	UpdatedAt  time.Time `json:"updatedAt"`
 }
 
 type ClusterUserAssignment struct {

@@ -1,0 +1,358 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: model-store
+spec:
+  accessModes:
+  - ReadWriteMany
+  storageClassName: shared-storage
+  resources:
+    requests:
+      storage: 10Gi
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: model-manifest
+data:
+  models.json: '[]'
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: model-scripts
+data:
+  download.py: |
+    import hashlib, json, os, pathlib, tempfile, urllib.request
+    root = pathlib.Path("/models")
+    manifest = json.loads(pathlib.Path("/config/models.json").read_text())
+    def digest(path):
+        value = hashlib.sha256()
+        with path.open("rb") as stream:
+            for chunk in iter(lambda: stream.read(4 * 1024 * 1024), b""):
+                value.update(chunk)
+        return value.hexdigest()
+    root.mkdir(parents=True, exist_ok=True)
+    for model in {item["id"]: item for item in manifest}.values():
+        directory = root / model["id"]
+        directory.mkdir(parents=True, exist_ok=True)
+        target = directory / "model.gguf"
+        marker = directory / "ready.json"
+        fingerprint = hashlib.sha256(json.dumps({key: value for key, value in model.items() if key != "service"}, sort_keys=True).encode()).hexdigest()
+        ready = {}
+        if marker.exists():
+            try:
+                ready = json.loads(marker.read_text())
+            except (ValueError, OSError):
+                pass
+        if target.exists() and ready.get("fingerprint") == fingerprint and target.stat().st_size == ready.get("size") and digest(target) == ready.get("sha256"):
+            print(json.dumps({"model": model["id"], "state": "cached"}), flush=True)
+            continue
+        if model["sha256"] and model["size"] and target.exists() and target.stat().st_size == model["size"] and digest(target) == model["sha256"]:
+            marker.write_text(json.dumps({"fingerprint": fingerprint, "size": model["size"], "sha256": model["sha256"]}))
+            print(json.dumps({"model": model["id"], "state": "cached"}), flush=True)
+            continue
+        marker.unlink(missing_ok=True)
+        fd, temporary = tempfile.mkstemp(prefix=".download-", dir=directory)
+        try:
+            checksum = hashlib.sha256()
+            size = 0
+            magic = b""
+            request = urllib.request.Request(model["url"], headers={"User-Agent": "KubePhos-AI-example/1.0"})
+            with os.fdopen(fd, "wb") as output:
+                with urllib.request.urlopen(request, timeout=120) as response:
+                    while True:
+                        chunk = response.read(4 * 1024 * 1024)
+                        if not chunk:
+                            break
+                        if size == 0:
+                            magic = chunk[:4]
+                        output.write(chunk)
+                        checksum.update(chunk)
+                        size += len(chunk)
+                output.flush()
+                os.fsync(output.fileno())
+            if magic != b"GGUF" or (model["size"] and size != model["size"]) or (model["sha256"] and checksum.hexdigest() != model["sha256"]):
+                raise ValueError("Model integrity verification failed: " + model["id"])
+            os.replace(temporary, target)
+            fd, ready_file = tempfile.mkstemp(prefix=".ready-", dir=directory)
+            with os.fdopen(fd, "w") as output:
+                json.dump({"fingerprint": fingerprint, "size": size, "sha256": checksum.hexdigest()}, output)
+            os.replace(ready_file, marker)
+            print(json.dumps({"model": model["id"], "state": "downloaded", "bytes": size, "sha256": checksum.hexdigest()}), flush=True)
+        finally:
+            pathlib.Path(temporary).unlink(missing_ok=True)
+    print(json.dumps({"state": "ready", "models": len(manifest)}), flush=True)
+  wait.py: |
+    import hashlib, json, pathlib, sys, time
+    manifest = json.loads(pathlib.Path("/config/models.json").read_text())
+    model = next(item for item in manifest if item["service"] == sys.argv[1])
+    root = pathlib.Path("/models")
+    backend = root / "backends/localai-v4.11.0-cpu"
+    path = root / model["id"] / "model.gguf"
+    fingerprint = hashlib.sha256(json.dumps({key: value for key, value in model.items() if key != "service"}, sort_keys=True).encode()).hexdigest()
+    marker = path.parent / "ready.json"
+    deadline = time.monotonic() + 4200
+    while time.monotonic() < deadline:
+        ready = {}
+        if marker.exists():
+            try:
+                ready = json.loads(marker.read_text())
+            except (ValueError, OSError):
+                pass
+        if (backend / "llama-cpp/metadata.json").exists() and (backend / "cpu-llama-cpp/run.sh").exists() and path.exists() and ready.get("fingerprint") == fingerprint and path.stat().st_size == ready.get("size"):
+            print("Model available: " + model["id"], flush=True)
+            sys.exit(0)
+        time.sleep(5)
+    raise TimeoutError("Model prefetch did not complete: " + model["id"])
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: localai-model-config
+data: {}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: node-proxy-config
+data:
+  default.conf.template: |
+    access_log /dev/stdout;
+    client_max_body_size 2m;
+    server {
+      listen 8080;
+      location = / { default_type application/json; return 200 '{"status":"ok"}\n'; }
+      location = /healthz { access_log off; return 200 "ok\n"; }
+      location /v1/ {
+        default_type application/json;
+        if ($model_backend = "") { return 400 '{"error":{"message":"X-Model must select a configured service","type":"invalid_request_error"}}'; }
+        proxy_pass http://$model_backend;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_set_header X-Model $http_x_model;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Kubephos-Proxy-Node ${NODE_NAME};
+        proxy_set_header X-Kubephos-Proxy-Zone ${NODE_ZONE};
+        proxy_connect_timeout 5s;
+        proxy_read_timeout 600s;
+        proxy_send_timeout 600s;
+        proxy_buffering off;
+        proxy_request_buffering off;
+        proxy_next_upstream off;
+        add_header X-Accel-Buffering no always;
+      }
+      location / { return 404; }
+    }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: m1
+spec:
+  type: ClusterIP
+  selector:
+    app: m1
+  ports:
+  - name: http
+    port: 80
+    targetPort: http
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: node-proxy
+spec:
+  type: NodePort
+  selector:
+    app: node-proxy
+  ports:
+  - name: http
+    port: 80
+    targetPort: http
+  externalTrafficPolicy: Local
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: cache-prefetch
+spec:
+  backoffLimit: 2
+  activeDeadlineSeconds: 3600
+  template:
+    metadata:
+      labels:
+        app: cache-prefetch
+        group: ai-workload
+      annotations:
+        sidecar.istio.io/inject: 'false'
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: download
+        image: docker.io/library/python:3.12-slim-bookworm
+        command:
+        - python3
+        - -u
+        - /scripts/download.py
+        volumeMounts:
+        - name: models
+          mountPath: /models
+        - name: manifest
+          mountPath: /config
+        - name: scripts
+          mountPath: /scripts
+      volumes:
+      - name: models
+        persistentVolumeClaim:
+          claimName: model-store
+      - name: manifest
+        configMap:
+          name: model-manifest
+      - name: scripts
+        configMap:
+          name: model-scripts
+      initContainers:
+      - name: download-backend
+        image: docker.io/localai/localai:v4.11.0
+        command:
+        - /bin/sh
+        - -ec
+        args:
+        - |
+          BACKEND_PATH=/cache/backends/localai-v4.11.0-cpu
+          mkdir -p "$BACKEND_PATH"
+          if [ ! -f "$BACKEND_PATH/llama-cpp/metadata.json" ] || [ ! -x "$BACKEND_PATH/cpu-llama-cpp/run.sh" ]; then
+            /local-ai backends install llama-cpp --backends-path="$BACKEND_PATH"
+          fi
+        volumeMounts:
+        - name: models
+          mountPath: /cache
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: m1
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: m1
+  template:
+    metadata:
+      labels:
+        app: m1
+        group: ai-workload
+    spec:
+      initContainers:
+      - name: wait-models
+        image: docker.io/library/python:3.12-slim-bookworm
+        command:
+        - python3
+        - -u
+        - /scripts/wait.py
+        - m1
+        volumeMounts:
+        - name: models
+          mountPath: /models
+          readOnly: true
+        - name: manifest
+          mountPath: /config
+        - name: scripts
+          mountPath: /scripts
+      containers:
+      - name: localai
+        image: docker.io/localai/localai:v4.11.0
+        args:
+        - run
+        - --backends-path=/backends
+        - --models-path=/models
+        - --models-config-file=/config/models.yaml
+        - --load-to-memory=m1
+        - --allow-insecure-public-bind
+        ports:
+        - name: http
+          containerPort: 8080
+        startupProbe:
+          httpGet:
+            path: /readyz
+            port: http
+          periodSeconds: 10
+          failureThreshold: 120
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: http
+        volumeMounts:
+        - name: models
+          mountPath: /models/model.gguf
+          subPath: Qwen2.5-0.5B-Instruct/model.gguf
+          readOnly: true
+        - name: localai-config
+          mountPath: /config/models.yaml
+          subPath: m1.yaml
+        - name: models
+          mountPath: /backends
+          subPath: backends/localai-v4.11.0-cpu
+          readOnly: true
+      volumes:
+      - name: models
+        persistentVolumeClaim:
+          claimName: model-store
+          readOnly: true
+      - name: manifest
+        configMap:
+          name: model-manifest
+      - name: scripts
+        configMap:
+          name: model-scripts
+      - name: localai-config
+        configMap:
+          name: localai-model-config
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: node-proxy
+spec:
+  selector:
+    matchLabels:
+      app: node-proxy
+  template:
+    metadata:
+      labels:
+        app: node-proxy
+        group: ai-workload
+    spec:
+      containers:
+      - name: proxy
+        image: docker.io/library/nginx:stable-alpine
+        env:
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        - name: NODE_ZONE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.labels['topology.kubernetes.io/zone']
+        ports:
+        - name: http
+          containerPort: 8080
+        readinessProbe:
+          httpGet:
+            path: /healthz
+            port: http
+          periodSeconds: 5
+        volumeMounts:
+        - name: config
+          mountPath: /etc/nginx/templates/default.conf.template
+          subPath: default.conf.template
+      volumes:
+      - name: config
+        configMap:
+          name: node-proxy-config
+      nodeSelector:
+        kubephos.dev/role: application

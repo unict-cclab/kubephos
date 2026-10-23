@@ -39,6 +39,7 @@ type sshAccess interface {
 type networkSSHAccess struct{}
 
 type TopologySpec struct {
+	ReconcileOptions
 	ConnectionRef      string            `json:"connectionRef"`
 	MachineTemplateRef string            `json:"machineTemplateRef"`
 	Node               string            `json:"node"`
@@ -49,6 +50,8 @@ type TopologySpec struct {
 	Gateway            string            `json:"gateway"`
 	DNSServer          string            `json:"dnsServer"`
 	NamePrefix         string            `json:"namePrefix"`
+	MachineNodes       []string          `json:"machineNodes,omitempty"`
+	MachineNames       []string          `json:"machineNames,omitempty"`
 	MachineCount       int               `json:"machineCount"`
 	Cores              int               `json:"cores"`
 	MemoryMiB          int               `json:"memoryMiB"`
@@ -59,6 +62,7 @@ type TopologySpec struct {
 }
 
 type topologyStepInput struct {
+	ReconcileOptions
 	Action             string           `json:"action"`
 	ConnectionRef      string           `json:"connectionRef"`
 	MachineTemplateRef string           `json:"machineTemplateRef"`
@@ -76,6 +80,7 @@ type topologyStepInput struct {
 }
 
 type plannedMachine struct {
+	Node      string `json:"node,omitempty"`
 	VMID      int    `json:"vmid"`
 	Name      string `json:"name"`
 	Address   string `json:"address"`
@@ -172,10 +177,10 @@ func (TopologyPlugin) Manifest() plugins.Manifest {
 	return plugins.Manifest{
 		ID: topologyPluginID, Provider: "proxmox", Name: "Proxmox machine topology", Version: "0.3.1",
 		Description:     "Creates a validated group of isolated machines from one Proxmox template.",
-		Schema:          json.RawMessage(`{"type":"object","additionalProperties":false,"required":["connectionRef","node","templateVMID","baseVMID","addressStart","prefixLength","gateway","dnsServer","namePrefix","machineCount","cores","memoryMiB","diskGiB","sshUser","cleanupAfterTest"],"properties":{"connectionRef":{"type":"string","title":"Proxmox connection","format":"kubephos-connection-ref","x-kubephos-provider":"proxmox"},"machineTemplateRef":{"type":"string","title":"Managed machine template","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"MachineTemplate","x-kubephos-artifact-version":"v1alpha1"},"node":{"type":"string","title":"Proxmox node","minLength":1,"maxLength":64},"templateVMID":{"type":"integer","title":"Template VMID","minimum":100,"maximum":999999999},"baseVMID":{"type":"integer","title":"First new VMID","minimum":100,"maximum":999999988},"addressStart":{"type":"string","title":"First machine address"},"prefixLength":{"type":"integer","title":"Network prefix length","minimum":8,"maximum":30,"default":24},"gateway":{"type":"string","title":"Network gateway"},"dnsServer":{"type":"string","title":"DNS server"},"namePrefix":{"type":"string","title":"Machine group name","pattern":"^[a-z0-9][a-z0-9-]{0,19}$","default":"cluster"},"machineCount":{"type":"integer","title":"Number of machines","minimum":1,"maximum":12,"default":3},"cores":{"type":"integer","title":"Default CPU cores per machine","minimum":1,"maximum":32,"default":2},"memoryMiB":{"type":"integer","title":"Default memory MiB per machine","minimum":512,"maximum":131072,"default":4096},"diskGiB":{"type":"integer","title":"Default disk GiB per machine","minimum":8,"maximum":2048,"default":32},"machineProfiles":{"type":"array","title":"Capacity for each machine","maxItems":12,"items":{"type":"object","additionalProperties":false,"required":["cores","memoryMiB","diskGiB"],"properties":{"cores":{"type":"integer","minimum":1,"maximum":32},"memoryMiB":{"type":"integer","minimum":512,"maximum":131072},"diskGiB":{"type":"integer","minimum":8,"maximum":2048}}}},"sshUser":{"type":"string","title":"SSH user","pattern":"^[a-z_][a-z0-9_-]{0,31}$","default":"ubuntu"},"cleanupAfterTest":{"type":"boolean","title":"Remove machines after validation","default":false}}}`),
-		ArtifactInputs:  []domain.ArtifactContract{{Type: "MachineTemplate", Version: "v1alpha1"}},
+		Schema:          json.RawMessage(`{"type":"object","additionalProperties":false,"required":["connectionRef","node","templateVMID","baseVMID","addressStart","prefixLength","gateway","dnsServer","namePrefix","machineCount","cores","memoryMiB","diskGiB","sshUser","cleanupAfterTest"],"properties":{"connectionRef":{"type":"string","title":"Proxmox connection","format":"kubephos-connection-ref","x-kubephos-provider":"proxmox"},"machineTemplateRef":{"type":"string","title":"Managed machine template","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"MachineTemplate","x-kubephos-artifact-version":"v1alpha1"},"node":{"type":"string","title":"Template Proxmox server","minLength":1,"maxLength":64},"templateVMID":{"type":"integer","title":"Template VMID","minimum":100,"maximum":999999999},"baseVMID":{"type":"integer","title":"First new VMID","minimum":100,"maximum":999999999},"addressStart":{"type":"string","title":"First machine address"},"prefixLength":{"type":"integer","title":"Network prefix length","minimum":8,"maximum":30,"default":24},"gateway":{"type":"string","title":"Network gateway"},"dnsServer":{"type":"string","title":"DNS server"},"machineNodes":{"type":"array","title":"Proxmox server for each machine","minItems":1,"maxItems":12,"items":{"type":"string","pattern":"^[A-Za-z0-9._-]{1,64}$"}},"machineNames":{"type":"array","minItems":1,"maxItems":12,"uniqueItems":true,"items":{"type":"string","pattern":"^[a-z0-9][a-z0-9-]{0,62}$"}},"namePrefix":{"type":"string","title":"Machine group name","pattern":"^[a-z0-9][a-z0-9-]{0,31}$","default":"cluster"},"machineCount":{"type":"integer","title":"Number of machines","minimum":1,"maximum":12,"default":3},"cores":{"type":"integer","title":"Default CPU cores per machine","minimum":1,"maximum":32,"default":2},"memoryMiB":{"type":"integer","title":"Default memory MiB per machine","minimum":512,"maximum":131072,"default":4096},"diskGiB":{"type":"integer","title":"Default disk GiB per machine","minimum":8,"maximum":2048,"default":32},"machineProfiles":{"type":"array","title":"Capacity for each machine","maxItems":12,"items":{"type":"object","additionalProperties":false,"required":["cores","memoryMiB","diskGiB"],"properties":{"cores":{"type":"integer","minimum":1,"maximum":32},"memoryMiB":{"type":"integer","minimum":512,"maximum":131072},"diskGiB":{"type":"integer","minimum":8,"maximum":2048}}}},"sshUser":{"type":"string","title":"SSH user","pattern":"^[a-z_][a-z0-9_-]{0,31}$","default":"ubuntu"},"cleanupAfterTest":{"type":"boolean","title":"Remove machines after validation","default":false},"reconcile":{"type":"boolean"},"prune":{"type":"boolean"},"previousMachineSetRef":{"type":"string","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"MachineSet","x-kubephos-artifact-version":"v1alpha1"},"machineAccessRef":{"type":"string","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"MachineAccess","x-kubephos-artifact-version":"v1alpha1"},"readyClusterRef":{"type":"string","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ClusterConnection","x-kubephos-artifact-version":"v1alpha1"},"ownershipMarker":{"type":"string","pattern":"^[a-f0-9]{16}$"},"plannedMachines":{"type":"array","minItems":1,"maxItems":12,"items":{"type":"object","additionalProperties":false,"required":["vmid","name","node","address","cores","memoryMiB","diskGiB"],"properties":{"vmid":{"type":"integer","minimum":100,"maximum":999999999},"name":{"type":"string","pattern":"^[a-z0-9][a-z0-9-]{0,62}$"},"node":{"type":"string","pattern":"^[A-Za-z0-9._-]{1,64}$"},"address":{"type":"string"},"cores":{"type":"integer","minimum":1,"maximum":32},"memoryMiB":{"type":"integer","minimum":512,"maximum":131072},"diskGiB":{"type":"integer","minimum":8,"maximum":2048}}}},"previousMachines":{"type":"array","minItems":1,"maxItems":12,"items":{"type":"object","additionalProperties":false,"required":["vmid","name","node","address","cores","memoryMiB","diskGiB"],"properties":{"vmid":{"type":"integer","minimum":100,"maximum":999999999},"name":{"type":"string","pattern":"^[a-z0-9][a-z0-9-]{0,62}$"},"node":{"type":"string","pattern":"^[A-Za-z0-9._-]{1,64}$"},"address":{"type":"string"},"cores":{"type":"integer","minimum":1,"maximum":32},"memoryMiB":{"type":"integer","minimum":512,"maximum":131072},"diskGiB":{"type":"integer","minimum":8,"maximum":2048}}}}}}`),
+		ArtifactInputs:  []domain.ArtifactContract{{Type: "MachineTemplate", Version: "v1alpha1"}, {Type: "MachineSet", Version: "v1alpha1"}, {Type: "MachineAccess", Version: "v1alpha1"}, {Type: "ClusterConnection", Version: "v1alpha1"}},
 		ArtifactOutputs: []domain.ArtifactContract{{Type: "MachineSet", Version: "v1alpha1"}, {Type: "MachineAccess", Version: "v1alpha1"}},
-		Capabilities:    []string{"infrastructure.machine-topology.provision", "infrastructure.provision", "infrastructure.deprovision", "infrastructure.preflight", "lifecycle.cleanup", "lifecycle.cleanup.compatible"},
+		Capabilities:    []string{"infrastructure.reconfigure", "infrastructure.machine-topology.provision", "infrastructure.provision", "infrastructure.deprovision", "infrastructure.preflight", "lifecycle.cleanup", "lifecycle.cleanup.compatible"},
 		Permissions:     []string{"network.proxmox.read", "network.proxmox.write", "secrets.read:proxmox-api-token"},
 	}
 }
@@ -192,12 +197,21 @@ func (TopologyPlugin) Validate(ctx context.Context, invocation Invocation) domai
 	if _, err := topologyAddresses(spec.AddressStart, spec.PrefixLength, spec.Gateway, spec.DNSServer, spec.MachineCount); err != nil {
 		return invalidReport(report, "addressStart", err.Error())
 	}
+	if spec.Reconcile {
+		if err := validateReconcileSpec(spec); err != nil {
+			return invalidReport(report, "plannedMachines", err.Error())
+		}
+		return report
+	}
 	resources, err := connection.resources(ctx)
 	if err != nil {
 		return invalidReport(report, "connectionRef", fmt.Sprintf("Proxmox inventory cannot be read: %v", err))
 	}
 	if err := validateTopologyInventory(resources, spec.TemplateVMID, spec.BaseVMID, spec.MachineCount, spec.Node); err != nil {
 		return invalidReport(report, "baseVMID", err.Error())
+	}
+	if err := validateMachineNames(resources, spec.MachineNames); err != nil {
+		return invalidReport(report, "machineNames", err.Error())
 	}
 	templateConfiguration, err := connection.config(ctx, spec.Node, spec.TemplateVMID)
 	if err != nil {
@@ -209,6 +223,11 @@ func (TopologyPlugin) Validate(ctx context.Context, invocation Invocation) domai
 	nodes, err := connection.nodes(ctx)
 	if err != nil || !nodeIsOnline(nodes, spec.Node) {
 		return invalidReport(report, "node", fmt.Sprintf("Proxmox node %s is not online.", spec.Node))
+	}
+	for index, node := range spec.MachineNodes {
+		if !nodeIsOnline(nodes, node) {
+			return invalidReport(report, fmt.Sprintf("machineNodes.%d", index), fmt.Sprintf("Proxmox server %s is not online.", node))
+		}
 	}
 	permissions, err := connection.permissions(ctx)
 	if err != nil {
@@ -237,6 +256,9 @@ func (TopologyPlugin) Plan(ctx context.Context, invocation Invocation) (domain.P
 	if _, err := resolveConnection(spec.ConnectionRef, invocation.Connections); err != nil {
 		return domain.Plan{}, err
 	}
+	if spec.Reconcile {
+		return planTopologyReconcile(spec)
+	}
 	addresses, err := topologyAddresses(spec.AddressStart, spec.PrefixLength, spec.Gateway, spec.DNSServer, spec.MachineCount)
 	if err != nil {
 		return domain.Plan{}, err
@@ -253,7 +275,13 @@ func (TopologyPlugin) Plan(ctx context.Context, invocation Invocation) (domain.P
 	machines := make([]plannedMachine, spec.MachineCount)
 	createEffects := make([]domain.ResourceEffect, spec.MachineCount)
 	for index := range machines {
-		machines[index] = plannedMachine{VMID: spec.BaseVMID + index, Name: fmt.Sprintf("kubephos-%s-%02d-%s", spec.NamePrefix, index+1, marker[:6]), Address: addresses[index], Cores: profiles[index].Cores, MemoryMiB: profiles[index].MemoryMiB, DiskGiB: profiles[index].DiskGiB}
+		machines[index] = plannedMachine{Node: spec.Node, VMID: spec.BaseVMID + index, Name: fmt.Sprintf("kubephos-%s-%02d-%s", spec.NamePrefix, index+1, marker[:6]), Address: addresses[index], Cores: profiles[index].Cores, MemoryMiB: profiles[index].MemoryMiB, DiskGiB: profiles[index].DiskGiB}
+		if len(spec.MachineNodes) > 0 {
+			machines[index].Node = spec.MachineNodes[index]
+		}
+		if len(spec.MachineNames) > 0 {
+			machines[index].Name = spec.MachineNames[index]
+		}
 		createEffects[index] = domain.ResourceEffect{Action: "create", ExternalID: externalID(machines[index].VMID), Kind: "virtual-machine", Name: machines[index].Name}
 	}
 	base := topologyStepInput{ConnectionRef: spec.ConnectionRef, MachineTemplateRef: spec.MachineTemplateRef, Node: spec.Node, TemplateVMID: spec.TemplateVMID, Cores: spec.Cores, MemoryMiB: spec.MemoryMiB, DiskGiB: spec.DiskGiB, SSHUser: spec.SSHUser, PrefixLength: spec.PrefixLength, Gateway: spec.Gateway, DNSServer: spec.DNSServer, Marker: marker, Machines: machines}
@@ -300,12 +328,29 @@ func (TopologyPlugin) Precheck(ctx context.Context, step domain.PlanStep, secret
 	if err := validateTopologyTemplateArtifact(step, input); err != nil {
 		return unhealthy(err.Error(), "machine-template", "invalid"), nil
 	}
+	if input.Reconcile && step.Cleanup {
+		if err := checkReconcileCleanup(ctx, connection, input); err != nil {
+			return unhealthy(err.Error(), "ownership", "rejected"), nil
+		}
+		return healthyReconcile(), nil
+	}
+	if input.Reconcile && !step.Cleanup {
+		if err := checkReconcile(ctx, connection, input, step); err != nil {
+			return unhealthy(err.Error(), "topology", "invalid"), nil
+		}
+		return healthyReconcile(), nil
+	}
 	if err := log("info", fmt.Sprintf("Checking Proxmox before topology %s", input.Action)); err != nil {
 		return domain.HealthReport{}, err
 	}
 	nodes, err := connection.nodes(ctx)
-	if err != nil || !nodeIsOnline(nodes, input.Node) {
+	if err != nil || input.Action == "provision" && !step.Cleanup && !nodeIsOnline(nodes, input.Node) {
 		return unhealthy("Proxmox node is not online", "node", "offline"), nil
+	}
+	for _, planned := range input.Machines {
+		if !nodeIsOnline(nodes, plannedMachineNode(input, planned)) {
+			return unhealthy("Destination Proxmox server is not online", "node", "offline"), nil
+		}
 	}
 	resources, err := connection.resources(ctx)
 	if err != nil {
@@ -318,11 +363,11 @@ func (TopologyPlugin) Precheck(ctx context.Context, step domain.PlanStep, secret
 			if !found {
 				continue
 			}
-			if resource.Node != input.Node {
+			if resource.Node != plannedMachineNode(input, planned) {
 				return unhealthy(fmt.Sprintf("Managed VM %d was found on another node", planned.VMID), "target", "mismatch"), nil
 			}
 			present++
-			configuration, err := connection.config(ctx, input.Node, planned.VMID)
+			configuration, err := connection.config(ctx, plannedMachineNode(input, planned), planned.VMID)
 			if err != nil || !cleanupOwnedTopology(configuration, input, planned) {
 				return unhealthy(fmt.Sprintf("VM %d ownership does not match the validated topology", planned.VMID), "ownership", "rejected"), nil
 			}
@@ -344,10 +389,10 @@ func (TopologyPlugin) Precheck(ctx context.Context, step domain.PlanStep, secret
 	case "delete":
 		for _, planned := range input.Machines {
 			resource, found := findVM(resources, planned.VMID)
-			if !found || resource.Node != input.Node {
+			if !found || resource.Node != plannedMachineNode(input, planned) {
 				return unhealthy(fmt.Sprintf("Managed VM %d was not found on the expected node", planned.VMID), "target", "missing"), nil
 			}
-			configuration, err := connection.config(ctx, input.Node, planned.VMID)
+			configuration, err := connection.config(ctx, plannedMachineNode(input, planned), planned.VMID)
 			if err != nil || !ownedTopology(configuration, input, planned) {
 				return unhealthy(fmt.Sprintf("VM %d ownership does not match the validated topology", planned.VMID), "ownership", "rejected"), nil
 			}
@@ -365,6 +410,9 @@ func (plugin TopologyPlugin) Execute(ctx context.Context, step domain.PlanStep, 
 	}
 	if err := validateTopologyTemplateArtifact(step, input); err != nil {
 		return nil, err
+	}
+	if input.Reconcile {
+		return plugin.executeReconcile(ctx, connection, input, step, log)
 	}
 	if input.Action == "delete" {
 		if err := cleanupTopology(ctx, connection, input, log); err != nil {
@@ -409,7 +457,7 @@ func (plugin TopologyPlugin) Verify(ctx context.Context, step domain.PlanStep, r
 	if err := validateTopologyTemplateArtifact(step, input); err != nil {
 		return unhealthy(err.Error(), "machine-template", "invalid"), nil
 	}
-	if step.Cleanup || input.Action == "delete" {
+	if step.Cleanup || input.Action == "delete" || input.Action == "prune" {
 		for _, planned := range input.Machines {
 			_, err := connection.vm(ctx, planned.VMID)
 			if err == nil {
@@ -431,10 +479,10 @@ func (plugin TopologyPlugin) Verify(ctx context.Context, step domain.PlanStep, r
 	}
 	for _, planned := range input.Machines {
 		resource, err := connection.vm(ctx, planned.VMID)
-		if err != nil || resource.Status != "running" {
+		if err != nil || resource.Status != "running" || resource.Node != plannedMachineNode(input, planned) {
 			return unhealthy(fmt.Sprintf("VM %d is not running", planned.VMID), "power", "unhealthy"), nil
 		}
-		configuration, err := connection.config(ctx, input.Node, planned.VMID)
+		configuration, err := connection.config(ctx, plannedMachineNode(input, planned), planned.VMID)
 		if err != nil || !ownedTopology(configuration, input, planned) {
 			return unhealthy(fmt.Sprintf("VM %d ownership could not be verified", planned.VMID), "ownership", "rejected"), nil
 		}
@@ -456,6 +504,12 @@ func (TopologyPlugin) Cleanup(ctx context.Context, step domain.PlanStep, _ json.
 	if err != nil {
 		return err
 	}
+	if input.Action == "prune" {
+		return nil
+	}
+	if input.Reconcile {
+		input = cleanupReconcileInput(input)
+	}
 	return cleanupTopology(ctx, connection, input, log)
 }
 
@@ -476,6 +530,9 @@ func parseTopologyStep(step domain.PlanStep, secrets, connections map[string]jso
 	var input topologyStepInput
 	if err := json.Unmarshal(step.Input, &input); err != nil {
 		return topologyStepInput{}, nil, err
+	}
+	if step.Cleanup && input.Reconcile {
+		input = cleanupReconcileInput(input)
 	}
 	configuration, err := resolveConnection(input.ConnectionRef, connections)
 	if err != nil {
@@ -516,7 +573,7 @@ func validateTopologyValues(spec TopologySpec) *domain.ValidationIssue {
 	case spec.TemplateVMID >= spec.BaseVMID && spec.TemplateVMID < spec.BaseVMID+spec.MachineCount:
 		return &domain.ValidationIssue{Path: "baseVMID", Message: "The VMID range cannot contain the template VMID."}
 	case !regexpNamePrefix.MatchString(spec.NamePrefix):
-		return &domain.ValidationIssue{Path: "namePrefix", Message: "Machine group name must be a lowercase label with at most 20 characters."}
+		return &domain.ValidationIssue{Path: "namePrefix", Message: "Machine group name must be a lowercase label with at most 32 characters."}
 	case spec.Cores < 1 || spec.Cores > 32:
 		return &domain.ValidationIssue{Path: "cores", Message: "CPU cores must be between 1 and 32."}
 	case spec.MemoryMiB < 512 || spec.MemoryMiB > 131072:
@@ -525,8 +582,24 @@ func validateTopologyValues(spec TopologySpec) *domain.ValidationIssue {
 		return &domain.ValidationIssue{Path: "diskGiB", Message: "Disk must be between 8 and 2048 GiB."}
 	case len(spec.MachineProfiles) > 0 && len(spec.MachineProfiles) != spec.MachineCount:
 		return &domain.ValidationIssue{Path: "machineProfiles", Message: "Machine profiles must match the requested machine count."}
+	case len(spec.MachineNodes) > 0 && len(spec.MachineNodes) != spec.MachineCount:
+		return &domain.ValidationIssue{Path: "machineNodes", Message: "Machine servers must match the requested machine count."}
+	case len(spec.MachineNames) > 0 && len(spec.MachineNames) != spec.MachineCount:
+		return &domain.ValidationIssue{Path: "machineNames", Message: "Machine names must match the requested machine count."}
 	case !regexpSSHUser.MatchString(spec.SSHUser):
 		return &domain.ValidationIssue{Path: "sshUser", Message: "SSH user is invalid."}
+	}
+	for index, node := range spec.MachineNodes {
+		if !regexpNode.MatchString(node) {
+			return &domain.ValidationIssue{Path: fmt.Sprintf("machineNodes.%d", index), Message: "Proxmox server name is invalid."}
+		}
+	}
+	seenNames := map[string]bool{}
+	for index, name := range spec.MachineNames {
+		if !regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`).MatchString(name) || seenNames[name] {
+			return &domain.ValidationIssue{Path: fmt.Sprintf("machineNames.%d", index), Message: "Machine names must be unique lowercase labels with at most 63 characters."}
+		}
+		seenNames[name] = true
 	}
 	for index, capacity := range spec.MachineProfiles {
 		if !validMachineCapacity(capacity) {
@@ -556,7 +629,7 @@ func validMachineCapacity(capacity machineCapacity) bool {
 
 var (
 	regexpNode       = regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}$`)
-	regexpNamePrefix = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,19}$`)
+	regexpNamePrefix = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,31}$`)
 	regexpSSHUser    = regexp.MustCompile(`^[a-z_][a-z0-9_-]{0,31}$`)
 )
 
@@ -583,6 +656,13 @@ func validatePlannedInventory(resources []vmResource, input topologyStepInput) e
 	if err := validateTopologyInventory(resources, input.TemplateVMID, input.Machines[0].VMID, len(input.Machines), input.Node); err != nil {
 		return err
 	}
+	names := make([]string, len(input.Machines))
+	for index, planned := range input.Machines {
+		names[index] = planned.Name
+	}
+	if err := validateMachineNames(resources, names); err != nil {
+		return err
+	}
 	for index, planned := range input.Machines {
 		if index > 0 && planned.VMID != input.Machines[index-1].VMID+1 {
 			return errors.New("planned VMIDs are not consecutive")
@@ -592,11 +672,22 @@ func validatePlannedInventory(resources []vmResource, input topologyStepInput) e
 }
 
 func createTopologyMachine(ctx context.Context, connection *client, input topologyStepInput, planned plannedMachine, publicKey string, log plugins.Logger) error {
-	capacity := plannedMachineCapacity(input, planned)
-	if err := log("info", fmt.Sprintf("Cloning template %d to VM %d", input.TemplateVMID, planned.VMID)); err != nil {
+	resources, err := connection.resources(ctx)
+	if err != nil {
 		return err
 	}
-	upid, err := connection.task(ctx, http.MethodPost, fmt.Sprintf("/api2/json/nodes/%s/qemu/%d/clone", url.PathEscape(input.Node), input.TemplateVMID), url.Values{"newid": {strconv.Itoa(planned.VMID)}, "name": {planned.Name}, "full": {"1"}})
+	if _, exists := findVM(resources, planned.VMID); exists {
+		return fmt.Errorf("target VMID %d already exists and is protected", planned.VMID)
+	}
+	if err := validateMachineNames(resources, []string{planned.Name}); err != nil {
+		return err
+	}
+
+	capacity := plannedMachineCapacity(input, planned)
+	if err := log("info", fmt.Sprintf("Cloning template %d on %s to VM %d on %s", input.TemplateVMID, input.Node, planned.VMID, plannedMachineNode(input, planned))); err != nil {
+		return err
+	}
+	upid, err := connection.task(ctx, http.MethodPost, fmt.Sprintf("/api2/json/nodes/%s/qemu/%d/clone", url.PathEscape(input.Node), input.TemplateVMID), url.Values{"newid": {strconv.Itoa(planned.VMID)}, "name": {planned.Name}, "full": {"1"}, "target": {plannedMachineNode(input, planned)}})
 	if err != nil {
 		return err
 	}
@@ -609,14 +700,14 @@ func createTopologyMachine(ctx context.Context, connection *client, input topolo
 		"sshkeys": {encodeProxmoxSSHKey(publicKey)}, "ipconfig0": {staticIPConfig(planned.Address, input.PrefixLength, input.Gateway)},
 		"nameserver": {input.DNSServer}, "agent": {"enabled=1"}, "ciupgrade": {"0"},
 	}
-	upid, err = connection.task(ctx, http.MethodPost, fmt.Sprintf("/api2/json/nodes/%s/qemu/%d/config", url.PathEscape(input.Node), planned.VMID), values)
+	upid, err = connection.task(ctx, http.MethodPost, fmt.Sprintf("/api2/json/nodes/%s/qemu/%d/config", url.PathEscape(plannedMachineNode(input, planned)), planned.VMID), values)
 	if err != nil {
 		return err
 	}
-	if err := connection.waitTask(ctx, input.Node, upid); err != nil {
+	if err := connection.waitTask(ctx, plannedMachineNode(input, planned), upid); err != nil {
 		return err
 	}
-	configuration, err := connection.config(ctx, input.Node, planned.VMID)
+	configuration, err := connection.config(ctx, plannedMachineNode(input, planned), planned.VMID)
 	if err != nil {
 		return err
 	}
@@ -627,18 +718,18 @@ func createTopologyMachine(ctx context.Context, connection *client, input topolo
 	if err := log("info", fmt.Sprintf("Resizing VM %d disk to %d GiB", planned.VMID, capacity.DiskGiB)); err != nil {
 		return err
 	}
-	upid, err = connection.task(ctx, http.MethodPut, fmt.Sprintf("/api2/json/nodes/%s/qemu/%d/resize", url.PathEscape(input.Node), planned.VMID), url.Values{"disk": {disk}, "size": {strconv.Itoa(capacity.DiskGiB) + "G"}})
+	upid, err = connection.task(ctx, http.MethodPut, fmt.Sprintf("/api2/json/nodes/%s/qemu/%d/resize", url.PathEscape(plannedMachineNode(input, planned)), planned.VMID), url.Values{"disk": {disk}, "size": {strconv.Itoa(capacity.DiskGiB) + "G"}})
 	if err != nil {
 		return err
 	}
-	if err := connection.waitTask(ctx, input.Node, upid); err != nil {
+	if err := connection.waitTask(ctx, plannedMachineNode(input, planned), upid); err != nil {
 		return err
 	}
-	upid, err = connection.task(ctx, http.MethodPost, fmt.Sprintf("/api2/json/nodes/%s/qemu/%d/status/start", url.PathEscape(input.Node), planned.VMID), nil)
+	upid, err = connection.task(ctx, http.MethodPost, fmt.Sprintf("/api2/json/nodes/%s/qemu/%d/status/start", url.PathEscape(plannedMachineNode(input, planned)), planned.VMID), nil)
 	if err != nil {
 		return err
 	}
-	return connection.waitTask(ctx, input.Node, upid)
+	return connection.waitTask(ctx, plannedMachineNode(input, planned), upid)
 }
 
 func topologyExecutionResult(ctx context.Context, connection *client, input topologyStepInput, privateKey, publicKey string, access sshAccess, log plugins.Logger) (topologyResult, error) {
@@ -659,9 +750,9 @@ func topologyExecutionResult(ctx context.Context, connection *client, input topo
 		if err != nil {
 			return topologyResult{}, err
 		}
-		metadata, _ := json.Marshal(map[string]any{"vmid": planned.VMID, "node": input.Node, "type": "qemu", "templateVMID": input.TemplateVMID, "address": planned.Address, "cores": capacity.Cores, "memoryMiB": capacity.MemoryMiB, "diskGiB": capacity.DiskGiB, "ownershipMarker": input.Marker})
+		metadata, _ := json.Marshal(map[string]any{"vmid": planned.VMID, "node": plannedMachineNode(input, planned), "type": "qemu", "templateVMID": input.TemplateVMID, "address": planned.Address, "cores": capacity.Cores, "memoryMiB": capacity.MemoryMiB, "diskGiB": capacity.DiskGiB, "ownershipMarker": input.Marker})
 		resources = append(resources, domain.DiscoveredResource{ExternalID: externalID(planned.VMID), Kind: "virtual-machine", Name: planned.Name, State: resource.Status, Metadata: metadata})
-		machines = append(machines, machine{ID: externalID(planned.VMID), Name: planned.Name, Node: input.Node, Address: planned.Address, SSHPort: 22, SSHUser: input.SSHUser, State: resource.Status, Cores: capacity.Cores, MemoryMiB: capacity.MemoryMiB, DiskGiB: capacity.DiskGiB})
+		machines = append(machines, machine{ID: externalID(planned.VMID), Name: planned.Name, Node: plannedMachineNode(input, planned), Address: planned.Address, SSHPort: 22, SSHUser: input.SSHUser, State: resource.Status, Cores: capacity.Cores, MemoryMiB: capacity.MemoryMiB, DiskGiB: capacity.DiskGiB})
 	}
 	name := strings.TrimPrefix(input.Machines[0].Name, "kubephos-")
 	return topologyResult{
@@ -684,7 +775,7 @@ func collectTopologyGuestDiagnostics(ctx context.Context, connection *client, in
 		go func() {
 			diagnosticContext, cancel := context.WithTimeout(ctx, 20*time.Second)
 			defer cancel()
-			output, err := connection.guestExec(diagnosticContext, input.Node, planned.VMID, command)
+			output, err := connection.guestExec(diagnosticContext, plannedMachineNode(input, planned), planned.VMID, command)
 			results <- result{vmid: planned.VMID, output: output, err: err}
 		}()
 	}
@@ -750,7 +841,7 @@ func verifyTopologyGateways(ctx context.Context, connection *client, input topol
 		go func() {
 			probeContext, cancel := context.WithTimeout(ctx, 10*time.Second)
 			defer cancel()
-			output, err := connection.guestExec(probeContext, input.Node, planned.VMID, command)
+			output, err := connection.guestExec(probeContext, plannedMachineNode(input, planned), planned.VMID, command)
 			results <- result{vmid: planned.VMID, output: output, err: err}
 		}()
 	}
@@ -778,7 +869,7 @@ func verifyTopologyGuestAddresses(ctx context.Context, connection *client, input
 	for _, planned := range input.Machines {
 		planned := planned
 		go func() {
-			address, err := connection.waitIPv4(ctx, input.Node, planned.VMID, timeout)
+			address, err := connection.waitIPv4(ctx, plannedMachineNode(input, planned), planned.VMID, timeout)
 			results <- result{planned: planned, address: address, err: err}
 		}()
 	}
@@ -815,7 +906,11 @@ func validateTopologyResult(input topologyStepInput, result topologyResult) erro
 	if derivedPublic != strings.TrimSpace(result.MachineAccess.Spec.PublicKey) {
 		return errors.New("machine access key pair does not match")
 	}
-	if len(result.MachineSet.Spec.Machines) != len(input.Machines) || len(result.Resources) != len(input.Machines) {
+	resourceMachines := input.Machines
+	if input.Reconcile {
+		resourceMachines = cleanupReconcileInput(input).Machines
+	}
+	if len(result.MachineSet.Spec.Machines) != len(input.Machines) || len(result.Resources) != len(resourceMachines) {
 		return errors.New("machine set cardinality does not match the validated plan")
 	}
 	plannedByID := make(map[string]plannedMachine, len(input.Machines))
@@ -827,10 +922,13 @@ func validateTopologyResult(input topologyStepInput, result topologyResult) erro
 		planned, ok := plannedByID[value.ID]
 		capacity := plannedMachineCapacity(input, planned)
 		address := net.ParseIP(value.Address)
-		if !ok || seen[value.ID] || value.Name != planned.Name || value.Node != input.Node || value.Address != planned.Address || value.SSHUser != input.SSHUser || value.SSHPort != 22 || value.State != "running" || value.Cores != capacity.Cores || value.MemoryMiB != capacity.MemoryMiB || value.DiskGiB != capacity.DiskGiB || address == nil || address.To4() == nil || address.IsLoopback() || address.IsLinkLocalUnicast() {
+		if !ok || seen[value.ID] || value.Name != planned.Name || value.Node != plannedMachineNode(input, planned) || value.Address != planned.Address || value.SSHUser != input.SSHUser || value.SSHPort != 22 || value.State != "running" || value.Cores != capacity.Cores || value.MemoryMiB != capacity.MemoryMiB || value.DiskGiB != capacity.DiskGiB || address == nil || address.To4() == nil || address.IsLoopback() || address.IsLinkLocalUnicast() {
 			return fmt.Errorf("machine %q does not match the validated topology", value.ID)
 		}
 		seen[value.ID] = true
+	}
+	for _, planned := range resourceMachines {
+		plannedByID[externalID(planned.VMID)] = planned
 	}
 	seenResources := make(map[string]bool, len(result.Resources))
 	for _, resource := range result.Resources {
@@ -864,7 +962,8 @@ func cleanupTopology(ctx context.Context, connection *client, input topologyStep
 	sort.Slice(values, func(i, j int) bool { return values[i].VMID > values[j].VMID })
 	var failures []error
 	for _, planned := range values {
-		if _, err := connection.vm(ctx, planned.VMID); err != nil {
+		resource, inspectErr := connection.vm(ctx, planned.VMID)
+		if err := inspectErr; err != nil {
 			var responseError apiError
 			if errors.As(err, &responseError) && responseError.Status == http.StatusNotFound {
 				continue
@@ -872,7 +971,10 @@ func cleanupTopology(ctx context.Context, connection *client, input topologyStep
 			failures = append(failures, fmt.Errorf("inspect VM %d before cleanup: %w", planned.VMID, err))
 			continue
 		}
-		configuration, err := connection.config(ctx, input.Node, planned.VMID)
+		if input.Reconcile {
+			planned.Node = resource.Node
+		}
+		configuration, err := connection.config(ctx, plannedMachineNode(input, planned), planned.VMID)
 		if err != nil {
 			var responseError apiError
 			if errors.As(err, &responseError) && responseError.Status == http.StatusNotFound {
@@ -889,7 +991,7 @@ func cleanupTopology(ctx context.Context, connection *client, input topologyStep
 			failures = append(failures, err)
 			continue
 		}
-		if err := removeVM(ctx, connection, stepInput{Node: input.Node, TargetVMID: planned.VMID, Name: planned.Name, Marker: input.Marker}, log); err != nil {
+		if err := removeVM(ctx, connection, stepInput{Node: plannedMachineNode(input, planned), TargetVMID: planned.VMID, Name: planned.Name, Marker: input.Marker}, log); err != nil {
 			failures = append(failures, err)
 		}
 	}
@@ -902,7 +1004,7 @@ func ownedTopology(configuration vmConfig, input topologyStepInput, planned plan
 }
 
 func cleanupOwnedTopology(configuration vmConfig, input topologyStepInput, planned plannedMachine) bool {
-	if ownedTopology(configuration, input, planned) {
+	if input.Marker != "" && configuration.Description == topologyDescription(input.Marker) {
 		return true
 	}
 	if input.Marker == "" || configuration.Name != planned.Name {
@@ -1147,4 +1249,16 @@ func (c *client) waitIPv4(ctx context.Context, node string, vmid int, timeout ti
 		case <-time.After(5 * time.Second):
 		}
 	}
+}
+
+// Older saved plans inherit the template server when no per-machine server is present.
+func plannedMachineNode(input topologyStepInput, planned plannedMachine) string {
+	if planned.Node != "" {
+		return planned.Node
+	}
+	return input.Node
+}
+
+func healthyReconcile() domain.HealthReport {
+	return domain.HealthReport{Status: domain.HealthHealthy, Summary: "Managed VM changes have verified ownership and online destinations"}
 }

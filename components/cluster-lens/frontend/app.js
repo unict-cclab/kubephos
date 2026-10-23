@@ -36,6 +36,8 @@ const groupColors = [
   "#a16207",
 ];
 
+const darkGroupColors = ["#60a5fa", "#4ade80", "#f87171", "#c084fc", "#fb923c", "#22d3ee", "#fb7185", "#a5b4fc", "#2dd4bf", "#facc15"];
+
 const nodeRadius = 82;
 
 let refreshMs = 2000;
@@ -105,6 +107,9 @@ async function init() {
   setInterval(() => {
     if (autoRefresh) refresh();
   }, refreshMs);
+  window.addEventListener("kubephos-theme-change", () => {
+    if (latestSnapshot) render(latestSnapshot);
+  });
   window.addEventListener("resize", () => {
     if (latestSnapshot) render(latestSnapshot);
   });
@@ -159,7 +164,7 @@ function render(snapshot) {
   const visiblePods = filterPods(snapshot.pods);
   const compact = visiblePods.length > 20 && zoom < 1.2;
   graph.classList.toggle("compact", compact);
-  graphHintEl.textContent = compact ? "Zoom in or filter to show pod labels · Select an element for details" : "Drag to pan · Scroll to zoom · Select a node or pod";
+  graphHintEl.textContent = compact ? "Zoom in or filter to show pod labels · Select an element for details" : (snapshot.mode === "multi" ? "Drag to pan · Scroll to zoom · Select a cluster or pod" : "Drag to pan · Scroll to zoom · Select a node or pod");
   const podsByNode = groupBy(visiblePods, (pod) => pod.node);
   const nodePositions = layoutNodes(snapshot.nodes, width, height, visiblePods);
   applyNodePositionOverrides(snapshot.context, nodePositions, width, height);
@@ -173,9 +178,9 @@ function render(snapshot) {
 
   contextEl.textContent = `${snapshot.context} · ${new Date(snapshot.generatedAt).toLocaleTimeString()}`;
   statsEl.innerHTML = [
-    pill(snapshot.nodes.length, "Nodes"),
+    pill(snapshot.nodes.length, snapshot.mode === "multi" ? "Clusters" : "Nodes"),
     pill(visiblePods.length, "Pods"),
-    pill(zoneEdges.length, "Zone links"),
+    pill(zoneEdges.length, snapshot.mode === "multi" ? "Cluster links" : "Zone links"),
     pill(countGroups(visiblePods), "Groups"),
   ].join("");
   renderGatewayTraffic(gatewayTrafficByZone);
@@ -185,7 +190,7 @@ function render(snapshot) {
   emptyEl.hidden = snapshot.nodes.length > 0;
   renderLegend(visiblePods);
 
-  drawZones(snapshot.nodes, nodePositions, visiblePods, gatewayTrafficByZone);
+  if (snapshot.mode !== "multi") drawZones(snapshot.nodes, nodePositions, visiblePods, gatewayTrafficByZone);
   drawZoneEdges(zoneEdges, zonePositions);
   if (showGateway) drawGatewayTraffic(visiblePods, snapshot.appEdges, nodePositions, appPositions, width, height, visibleGatewayTraffic);
   if (showPodLines) drawAppEdges(snapshot.appEdges, appPositions);
@@ -369,7 +374,7 @@ function drawZoneEdges(edges, zonePositions) {
       "marker-end": "url(#zone-edge-arrow)",
     });
     path.addEventListener("pointerdown", stopGraphPan);
-    path.addEventListener("click", () => inspect("Zone Link", edge));
+    path.addEventListener("click", () => inspect(latestSnapshot?.mode === "multi" ? "Cluster Link" : "Zone Link", edge));
     const tooltip = svg("title");
     tooltip.textContent = `${edge.source} → ${edge.target}${edge.label ? ` · ${edge.label}` : ""}`;
     path.append(tooltip);
@@ -402,7 +407,7 @@ function drawNodes(nodes, nodePositions, podsByNode) {
     const pos = nodePositions.get(node.name);
     if (!pos) continue;
     const group = svg("g", { class: "node-hit" });
-    group.addEventListener("click", () => inspect("Node", node));
+    group.addEventListener("click", () => inspect(latestSnapshot?.mode === "multi" ? "Cluster" : "Node", node));
     group.addEventListener("pointerdown", (event) => startNodeDrag(event, node.name, pos));
     group.append(svg("circle", {
       cx: pos.x,
@@ -1180,7 +1185,8 @@ function nodeLabelLines(name) {
 function colorFor(value) {
   let hash = 0;
   for (const char of value || "default") hash = (hash * 31 + char.charCodeAt(0)) >>> 0;
-  return groupColors[hash % groupColors.length];
+  const palette = document.documentElement.dataset.theme === "dark" ? darkGroupColors : groupColors;
+  return palette[hash % palette.length];
 }
 
 function podColor(pod) {

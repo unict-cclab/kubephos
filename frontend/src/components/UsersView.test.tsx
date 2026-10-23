@@ -13,10 +13,11 @@ describe('users view', () => {
     render(<UsersView users={[user]} assignments={[]} clusters={[]} session={session} changed={vi.fn()} />)
 
     const table = screen.getByRole('table')
-    expect(table).toHaveClass('users-table')
+    expect(table).toHaveClass('resource-list-table')
     expect(within(table).getByText('Administrator')).toHaveClass('user-role', 'admin')
-    expect(screen.getByText('admin@example.test')).toBeInTheDocument()
-    expect(screen.getByText('0')).toHaveClass('user-cluster-count')
+    expect(within(table).getByRole('columnheader', {name: 'Email'})).toBeInTheDocument()
+    expect(screen.getByText('admin@example.test').closest('td')).toHaveAttribute('data-label', 'Email')
+    expect(screen.getByText('All')).toHaveClass('user-cluster-count')
   })
 
   it('renders an empty table state', () => {
@@ -24,7 +25,7 @@ describe('users view', () => {
 
     render(<UsersView users={[]} assignments={[]} clusters={[]} session={session} changed={vi.fn()} />)
 
-    expect(screen.getByText('No users.')).toHaveAttribute('colspan', '4')
+    expect(screen.getByText('No users.').closest('td')).toHaveAttribute('colspan', '9')
   })
 
   it('opens a full detail page and saves cluster assignments', async () => {

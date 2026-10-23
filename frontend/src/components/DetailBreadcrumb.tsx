@@ -1,3 +1,4 @@
+import {ReturnButton} from './ReturnButton'
 interface Props {
   parent: string
   current: string
@@ -5,5 +6,5 @@ interface Props {
 }
 
 export function DetailBreadcrumb({parent, current, back}: Props) {
-  return <nav className="detail-breadcrumbs" aria-label="Detail breadcrumb"><button onClick={back}>{parent}</button><span aria-hidden="true">›</span><strong aria-current="page">{current}</strong></nav>
+  return <nav className="detail-return" aria-label={`Navigation from ${current}`}><ReturnButton destination={parent === 'Back' ? undefined : parent} onClick={back} /></nav>
 }

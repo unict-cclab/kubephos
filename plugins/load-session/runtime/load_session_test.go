@@ -79,7 +79,10 @@ func TestLoadManifestBuildsGenericLocustRuntime(t *testing.T) {
 		t.Fatal(err)
 	}
 	value := string(manifest)
-	for _, expected := range []string{"kind: ConfigMap", "kind: Deployment", "from locust import HttpUser", "--host", "http://node-proxy:80/", "kubephos.dev/role: management", "example.test/locust:1.0.0", "return 0, spawn_rate", "del name, value", "KUBEPHOS_PARAMETERS", "KUBEPHOS_PARAM_TENANT", "KUBEPHOS_PARAM_API_VERSION"} {
+	if strings.Contains(value, "resources:") {
+		t.Fatal("Locust must not receive implicit resource requests or limits")
+	}
+	for _, expected := range []string{"kind: ConfigMap", "kind: Deployment", "from locust import HttpUser", "--host", "http://node-proxy:80/", "kubephos.dev/role: management", "example.test/locust:1.0.0", "return 0, spawn_rate", "del name, value", "KUBEPHOS_PARAMETERS", "KUBEPHOS_PARAM_TENANT", "KUBEPHOS_PARAM_API_VERSION", "prometheus.io/scrape: \"true\"", "prometheus.io/path: /stats/prometheus", "prometheus.io/port: \"9646\"", "KUBEPHOS_LOAD_METRICS"} {
 		if !strings.Contains(value, expected) {
 			t.Fatalf("generated runtime is missing %q:\n%s", expected, value)
 		}
@@ -183,7 +186,7 @@ func testArtifacts(t *testing.T) map[string]domain.ResolvedArtifact {
 	key := base64.StdEncoding.EncodeToString([]byte("private-key"))
 	kubeconfig := "apiVersion: v1\nkind: Config\ncurrent-context: managed\nclusters:\n- name: managed\n  cluster:\n    server: https://10.10.0.10:6443\ncontexts:\n- name: managed\n  context:\n    cluster: managed\n    user: admin\nusers:\n- name: admin\n  user:\n    client-certificate-data: " + certificate + "\n    client-key-data: " + key + "\n"
 	cluster, _ := json.Marshal(map[string]any{"apiVersion": artifactAPI, "kind": "ClusterConnection", "metadata": map[string]string{"name": "development", "version": "v1.36.0+k3s1"}, "spec": map[string]string{"distribution": "k3s", "server": "https://10.10.0.10:6443", "kubeconfig": kubeconfig}})
-	deployment, _ := json.Marshal(map[string]any{"apiVersion": artifactAPI, "kind": "ApplicationDeployment", "metadata": map[string]string{"name": "kubephos-app-one", "version": "v1alpha1", "ownershipMarker": "application-marker"}, "spec": map[string]any{"applicationRef": "app:dev.example.app@1.0.0", "clusterServer": "https://10.10.0.10:6443", "namespace": "kubephos-app-one", "manifestDigest": "sha256:" + strings.Repeat("a", 64), "endpoints": []map[string]any{{"id": "frontend-http", "component": "frontend", "service": "frontend", "port": 80, "protocol": "http"}}}})
+	deployment, _ := json.Marshal(map[string]any{"apiVersion": artifactAPI, "kind": "ApplicationDeployment", "metadata": map[string]string{"name": "kubephos-app-one", "version": "v1alpha1", "ownershipMarker": "application-marker"}, "spec": map[string]any{"applicationRef": "app:dev.example.app", "clusterServer": "https://10.10.0.10:6443", "namespace": "kubephos-app-one", "manifestDigest": "sha256:" + strings.Repeat("a", 64), "endpoints": []map[string]any{{"id": "frontend-http", "component": "frontend", "service": "frontend", "port": 80, "protocol": "http"}}}})
 	script := "from locust import HttpUser\nclass User(HttpUser):\n    pass\n"
 	scriptHash := sha256.Sum256([]byte(script))
 	scenarios := []loadProfile{{ID: "default-load", Engine: "locust", TargetEndpoint: "frontend-http", RuntimeImage: "example.invalid/load:1.0.0", Script: script, ScriptDigest: "sha256:" + hex.EncodeToString(scriptHash[:])}}
@@ -191,7 +194,7 @@ func testArtifacts(t *testing.T) map[string]domain.ResolvedArtifact {
 	if err != nil {
 		t.Fatal(err)
 	}
-	profileSet, _ := json.Marshal(map[string]any{"apiVersion": artifactAPI, "kind": "LoadScenarioSet", "metadata": map[string]string{"applicationRef": "app:dev.example.app@1.0.0", "digest": digest}, "spec": map[string]any{"scenarios": scenarios}})
+	profileSet, _ := json.Marshal(map[string]any{"apiVersion": artifactAPI, "kind": "LoadScenarioSet", "metadata": map[string]string{"applicationRef": "app:dev.example.app", "digest": digest}, "spec": map[string]any{"scenarios": scenarios}})
 	return map[string]domain.ResolvedArtifact{"cluster-connection": {Value: cluster}, "application-deployment": {Value: deployment}, "load-scenario-set": {Value: profileSet}}
 }
 
@@ -287,4 +290,26 @@ func (runner *fakeRunner) Run(_ context.Context, _ string, stdin []byte, args ..
 		return "deleted", nil
 	}
 	return "", errors.New("unexpected command: " + command)
+}
+
+func TestNativeRedisLoadSkipsEnvoyAndExposesMetrics(t *testing.T) {
+	profile := loadProfile{ID: "redis", Engine: "locust", RuntimeImage: "locustio/locust:2.42.6", Script: "from locust import User\n", Workload: scenarioWorkload("redis")}
+	manifest, err := loadManifest(profile, "owner", Spec{MaxUsers: 50, SpawnRate: 10, Steps: []LoadStep{{Type: "constant", DurationSeconds: 60, RPS: 100}}}, []loadTarget{{URL: "tcp://redis:6379/", Weight: 1}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	value := string(manifest)
+	for _, expected := range []string{"sidecar.istio.io/inject: \"false\"", "prometheus.io/scrape: \"true\"", "prometheus.io/path: /stats/prometheus", "prometheus.io/port: \"9646\"", "name: KUBEPHOS_LOAD_METRICS", "kubephos_wait_for_request_slot", "kubephos_load_duration_milliseconds_bucket"} {
+		if !strings.Contains(value, expected) {
+			t.Fatalf("native runtime missing %s", expected)
+		}
+	}
+	targets, err := resolveLoadTargets(context.Background(), rejectingRunner{}, "config", "namespace", serviceEndpoint{Service: "redis", Port: 6379, Protocol: "tcp"}, Spec{})
+	if err != nil || len(targets) != 1 || targets[0].URL != "tcp://redis:6379/" {
+		t.Fatalf("incorrect native target: %v %v", targets, err)
+	}
+	_, err = resolveLoadTargets(context.Background(), rejectingRunner{}, "config", "namespace", serviceEndpoint{Service: "redis", Port: 6379, Protocol: "tcp"}, Spec{GeographicSteps: []GeographicStep{{Type: "constant", DurationSeconds: 1}}})
+	if err == nil {
+		t.Fatal("native requests cannot use HTTP geographic proxies")
+	}
 }

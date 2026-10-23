@@ -1,0 +1,9 @@
+# Local development only. Use `make up`; never apply this to an installation.
+name: kubephos-dev
+services:
+  app:
+    image: kubephos:dev
+  worker:
+    image: kubephos:dev
+  migration-files:
+    image: kubephos:dev

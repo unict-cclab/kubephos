@@ -5,11 +5,11 @@ import "strings"
 const (
 	Project            = "kubephos-dev"
 	ClusterLensName    = "cluster-lens"
-	ClusterLensVersion = "v1.2.6"
+	ClusterLensVersion = "v1.3.1"
 	MonAgentName       = "mon-agent"
-	MonAgentVersion    = "v0.0.8"
+	MonAgentVersion    = "v0.0.10"
 	MentatName         = "mentat"
-	MentatVersion      = "v0.3.5"
+	MentatVersion      = "v0.3.8"
 )
 
 type Component struct {

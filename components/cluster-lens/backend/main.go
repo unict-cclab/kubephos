@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"math"
 	"net/http"
 	"net/url"
 	"os"
@@ -33,6 +34,7 @@ const (
 )
 
 type snapshot struct {
+	Mode               string                   `json:"mode,omitempty"`
 	GeneratedAt        time.Time                `json:"generatedAt"`
 	Context            string                   `json:"context"`
 	Nodes              []nodeView               `json:"nodes"`
@@ -93,10 +95,10 @@ type gatewayTrafficView struct {
 }
 
 type applicationTrafficView struct {
-	Namespace                   string  `json:"namespace"`
-	ThroughputRequestsPerSecond float64 `json:"throughputRequestsPerSecond"`
-	P95ResponseTimeMilliseconds float64 `json:"p95ResponseTimeMilliseconds"`
-	WindowSeconds               int64   `json:"windowSeconds"`
+	Namespace                   string   `json:"namespace"`
+	ThroughputRequestsPerSecond *float64 `json:"throughputRequestsPerSecond"`
+	P95ResponseTimeMilliseconds *float64 `json:"p95ResponseTimeMilliseconds"`
+	WindowSeconds               int64    `json:"windowSeconds"`
 }
 
 type gatewayTarget struct {
@@ -108,6 +110,8 @@ type gatewayTarget struct {
 }
 
 type server struct {
+	meshClusters  []string
+	clusterName   string
 	staticDir     string
 	refresh       time.Duration
 	kube          kubernetes.Interface
@@ -156,7 +160,7 @@ func main() {
 		log.Fatalf("kubernetes client: %v", err)
 	}
 
-	s := &server{staticDir: staticDir, refresh: refresh, kube: kube, metrics: apiNodeMetricSource{client: kube.CoreV1().RESTClient()}, context: contextName, prometheusURL: envOr("CLUSTER_LENS_PROMETHEUS_URL", defaultPrometheusURL), httpClient: &http.Client{Timeout: 5 * time.Second}}
+	s := &server{meshClusters: meshClusterNames(os.Getenv("CLUSTER_LENS_MESH_CLUSTERS")), clusterName: os.Getenv("CLUSTER_LENS_CLUSTER_NAME"), staticDir: staticDir, refresh: refresh, kube: kube, metrics: apiNodeMetricSource{client: kube.CoreV1().RESTClient()}, context: contextName, prometheusURL: envOr("CLUSTER_LENS_PROMETHEUS_URL", defaultPrometheusURL), httpClient: &http.Client{Timeout: 5 * time.Second}}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/snapshot", s.snapshot)
 	mux.HandleFunc("/api/config", s.config)
@@ -270,6 +274,7 @@ func (s *server) buildSnapshot(ctx context.Context) (snapshot, error) {
 	}
 
 	gatewayTargets := map[string]gatewayTarget{}
+	loadNamespaces := map[string]bool{}
 
 	for _, pod := range pods.Items {
 		if pod.Spec.NodeName == "" {
@@ -290,6 +295,9 @@ func (s *server) buildSnapshot(ctx context.Context) (snapshot, error) {
 		sort.Strings(containers)
 
 		labels := pod.Labels
+		if labels["app.kubernetes.io/name"] == "kubephos-load" {
+			loadNamespaces[pod.Namespace] = true
+		}
 		if labels["kubephos.dev/traffic-entrypoint"] != "" {
 			gatewayTargets[key(pod.Namespace, owner)] = gatewayTarget{Namespace: pod.Namespace, Workload: owner, Pod: pod.Name, Node: pod.Spec.NodeName, Zone: nodeZones[pod.Spec.NodeName]}
 		}
@@ -316,7 +324,9 @@ func (s *server) buildSnapshot(ctx context.Context) (snapshot, error) {
 		} else {
 			snap.GatewayTraffic = traffic
 		}
-		applicationTraffic, applicationTrafficErr := s.readApplicationTraffic(ctx, gatewayTargets)
+	}
+	if len(loadNamespaces) > 0 {
+		applicationTraffic, applicationTrafficErr := s.readApplicationTraffic(ctx, loadNamespaces)
 		if applicationTrafficErr != nil {
 			warnings = append(warnings, fmt.Sprintf("application traffic: %v", applicationTrafficErr))
 		} else {
@@ -344,45 +354,48 @@ func (s *server) buildSnapshot(ctx context.Context) (snapshot, error) {
 		return snap.ApplicationTraffic[i].Namespace < snap.ApplicationTraffic[j].Namespace
 	})
 
+	if err := s.applyMeshSnapshot(ctx, &snap); err != nil {
+		warnings = append(warnings, err.Error())
+	}
 	snap.AppEdges = dedupeEdges(snap.AppEdges)
 	snap.Warnings = warnings
 	return snap, nil
 }
 
-func (s *server) readApplicationTraffic(ctx context.Context, targets map[string]gatewayTarget) ([]applicationTrafficView, error) {
-	namespaces := map[string]bool{}
-	workloads := map[string]bool{}
-	for _, target := range targets {
-		if target.Namespace != "" && target.Workload != "" {
-			namespaces[target.Namespace] = true
-			workloads[target.Workload] = true
-		}
-	}
-	if len(namespaces) == 0 || len(workloads) == 0 {
+func (s *server) readApplicationTraffic(ctx context.Context, namespaces map[string]bool) ([]applicationTrafficView, error) {
+	if len(namespaces) == 0 {
 		return []applicationTrafficView{}, nil
 	}
-	namespaceSelector := prometheusRegex(namespaces)
-	workloadSelector := prometheusRegex(workloads)
-	throughputQuery := `sum by (source_workload_namespace) (rate(istio_requests_total{reporter="source",source_workload_namespace=~` + strconv.Quote(namespaceSelector) + `,source_workload=~` + strconv.Quote(workloadSelector) + `,response_code=~"2..|3.."}[1m]))`
-	responseTimeQuery := `histogram_quantile(0.95, sum by (source_workload_namespace,le) (rate(istio_request_duration_milliseconds_bucket{reporter="source",source_workload_namespace=~` + strconv.Quote(namespaceSelector) + `,source_workload=~` + strconv.Quote(workloadSelector) + `}[1m])))`
-	throughput, err := s.readPrometheusValues(ctx, throughputQuery, "source_workload_namespace")
+	selector := `namespace=~` + strconv.Quote(prometheusRegex(namespaces))
+	throughputQuery := `sum by (namespace) (rate(kubephos_load_requests_total{` + selector + `,outcome="success"}[1m]))`
+	responseTimeQuery := `histogram_quantile(0.95, sum by (namespace,le) (rate(kubephos_load_duration_milliseconds_bucket{` + selector + `}[1m])))`
+	throughput, err := s.readPrometheusValues(ctx, throughputQuery, "namespace")
 	if err != nil {
 		return nil, err
 	}
-	responseTimes, err := s.readPrometheusValues(ctx, responseTimeQuery, "source_workload_namespace")
+	responseTimes, err := s.readPrometheusValues(ctx, responseTimeQuery, "namespace")
 	if err != nil {
 		return nil, err
 	}
+
 	values := make([]applicationTrafficView, 0, len(namespaces))
 	for namespace := range namespaces {
 		values = append(values, applicationTrafficView{
 			Namespace:                   namespace,
-			ThroughputRequestsPerSecond: throughput[namespace],
-			P95ResponseTimeMilliseconds: responseTimes[namespace],
+			ThroughputRequestsPerSecond: optionalMetricValue(throughput, namespace),
+			P95ResponseTimeMilliseconds: optionalMetricValue(responseTimes, namespace),
 			WindowSeconds:               60,
 		})
 	}
 	return values, nil
+}
+
+func optionalMetricValue(values map[string]float64, namespace string) *float64 {
+	value, exists := values[namespace]
+	if !exists {
+		return nil
+	}
+	return &value
 }
 
 func prometheusRegex(values map[string]bool) string {
@@ -444,7 +457,7 @@ func (s *server) readPrometheusValues(ctx context.Context, promQL, label string)
 			continue
 		}
 		value, err := strconv.ParseFloat(raw, 64)
-		if err == nil && value >= 0 {
+		if err == nil && value >= 0 && !math.IsInf(value, 0) {
 			values[result.Metric[label]] = value
 		}
 	}

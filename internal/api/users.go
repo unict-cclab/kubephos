@@ -4,7 +4,6 @@ import (
 	"errors"
 	"net/http"
 	"net/mail"
-	"regexp"
 	"strings"
 
 	"kubephos.dev/kubephos/internal/auth"
@@ -13,8 +12,6 @@ import (
 	"kubephos.dev/kubephos/internal/keycloak"
 	"kubephos.dev/kubephos/internal/storage"
 )
-
-var managedUsernamePattern = regexp.MustCompile(`^[a-z][a-z0-9._-]{2,39}$`)
 
 func (s *Server) listUsers(response http.ResponseWriter, request *http.Request) {
 	users, err := s.store.ListUsers(request.Context())
@@ -47,7 +44,7 @@ func (s *Server) createUser(response http.ResponseWriter, request *http.Request)
 	if input.Role == "" {
 		input.Role = "user"
 	}
-	if !managedUsernamePattern.MatchString(input.Username) {
+	if auth.ValidateUsername(input.Username) != nil {
 		writeError(response, http.StatusUnprocessableEntity, "invalid_username", "Username must contain 3 to 40 lowercase letters, numbers, dots, dashes or underscores.")
 		return
 	}
@@ -62,7 +59,7 @@ func (s *Server) createUser(response http.ResponseWriter, request *http.Request)
 		writeError(response, http.StatusUnprocessableEntity, "invalid_role", "Role must be admin or user.")
 		return
 	}
-	if _, err := auth.HashPassword(input.Password); err != nil {
+	if err := auth.ValidatePassword(input.Password); err != nil {
 		writeError(response, http.StatusUnprocessableEntity, "invalid_password", err.Error())
 		return
 	}

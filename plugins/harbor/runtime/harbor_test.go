@@ -56,6 +56,10 @@ func TestManagedRegistryLifecycle(t *testing.T) {
 	if err != nil || health.Status != domain.HealthHealthy {
 		t.Fatalf("verify failed %#v %v", health, err)
 	}
+	commands := strings.Join(runner.commands, "\n")
+	if !strings.Contains(commands, "sudo hostnamectl set-hostname 'build-registry'") || !strings.Contains(commands, "test \"$(hostname)\" = 'build-registry'") {
+		t.Fatalf("managed hostname was not installed and verified")
+	}
 	var decoded result
 	if err := json.Unmarshal(value, &decoded); err != nil {
 		t.Fatal(err)
@@ -166,7 +170,7 @@ func TestManagedRegistryRejectsNonDedicatedTopology(t *testing.T) {
 }
 
 func TestInstallerIsVersionedAndDigestVerified(t *testing.T) {
-	command := installCommand("marker", "10.10.0.12", "admin-password", "database-password", "robot-secret")
+	command := installCommand("registry-harbor-1", "marker", "10.10.0.12", "admin-password", "database-password", "robot-secret")
 	if !strings.Contains(command, "harbor-online-installer-"+harborVersion+".tgz") || !strings.Contains(command, installerDigest) || !strings.Contains(command, "sha256sum -c -") {
 		t.Fatal("installer command is not pinned and digest verified")
 	}
@@ -200,7 +204,7 @@ func TestInstallerIsVersionedAndDigestVerified(t *testing.T) {
 	if strings.Contains(command, "http://") || strings.Contains(command, "curl -k") || strings.Contains(command, "curl --insecure") || !strings.Contains(command, "subjectAltName=IP:10.10.0.12") || !strings.Contains(command, "--cacert "+tlsPath+"/ca.crt") || !strings.Contains(command, caMarker) {
 		t.Fatal("installer command does not enforce verifiable registry TLS")
 	}
-	if !strings.Contains(command, "&& { attempt=0; until curl --connect-timeout 3 --max-time 10") || !strings.Contains(command, `test "$attempt" -lt 61 || exit 1`) {
+	if !strings.Contains(command, "{ attempt=0; until curl --connect-timeout 3 --max-time 10") || !strings.Contains(command, `test "$attempt" -lt 61 || exit 1`) {
 		t.Fatal("registry readiness retries are not bounded or chained to successful installation")
 	}
 	if !strings.Contains(command, "install -d -m 0755 "+tlsPath) || !strings.Contains(command, "chmod 0600 "+tlsPath+"/ca.key "+tlsPath+"/server.key") || !strings.Contains(command, "test -r "+tlsPath+"/ca.crt") || !strings.Contains(command, "openssl verify -CAfile "+tlsPath+"/ca.crt") {
@@ -211,8 +215,8 @@ func TestInstallerIsVersionedAndDigestVerified(t *testing.T) {
 func TestRemoteCommandsHaveValidShellSyntax(t *testing.T) {
 	commands := []string{
 		installPrecheckCommand(),
-		installCommand("marker", "10.10.0.12", "admin-password", "database-password", "robot-secret"),
-		readinessCommand("marker", "10.10.0.12", "admin-password", "robot$name", "robot-secret"),
+		installCommand("registry-harbor-1", "marker", "10.10.0.12", "admin-password", "database-password", "robot-secret"),
+		readinessCommand("registry-harbor-1", "marker", "10.10.0.12", "admin-password", "robot$name", "robot-secret"),
 		cleanupPrecheckCommand("marker"),
 		cleanupCommand("marker"),
 		cleanupVerifyCommand(),
@@ -246,6 +250,7 @@ func testArtifacts(t *testing.T) map[string]domain.ResolvedArtifact {
 }
 
 type fakeRunner struct {
+	commands    []string
 	lock        sync.Mutex
 	installed   bool
 	omitSecret  bool
@@ -255,6 +260,7 @@ type fakeRunner struct {
 func (runner *fakeRunner) Run(_ context.Context, _ machine, _ machineAccess, command string) (string, error) {
 	runner.lock.Lock()
 	defer runner.lock.Unlock()
+	runner.commands = append(runner.commands, command)
 	switch {
 	case strings.Contains(command, "non-interactive sudo is unavailable"):
 		if runner.installed {
@@ -281,7 +287,7 @@ func (runner *fakeRunner) Run(_ context.Context, _ machine, _ machineAccess, com
 			return "", errors.New("registry is absent")
 		}
 		return "", nil
-	case strings.HasPrefix(command, "if test ! -e"):
+	case strings.Contains(command, "if test ! -e "+markerFile):
 		runner.installed = false
 		return "", nil
 	case strings.HasPrefix(command, "test ! -e"):

@@ -3,7 +3,6 @@ kind: Application
 metadata:
   id: dev.kubephos.bank-of-anthos
   name: Bank of Anthos
-  version: 0.6.10-kubephos.4
   description: Cloud-native banking system with immutable user journeys and source-aware traffic ingress.
 spec:
   package:
@@ -145,9 +144,6 @@ spec:
                         fieldRef: {fieldPath: "metadata.labels['topology.kubernetes.io/zone']"}
                   volumeMounts:
                     - {name: config, mountPath: /etc/nginx/templates/default.conf.template, subPath: default.conf.template}
-                  resources:
-                    requests: {cpu: 25m, memory: 32Mi}
-                    limits: {cpu: 250m, memory: 128Mi}
               volumes:
                 - name: config
                   configMap: {name: node-proxy}
@@ -161,19 +157,80 @@ spec:
           externalTrafficPolicy: Local
           selector: {app: node-proxy}
           ports: [{name: http, port: 80, targetPort: 8080}]
+  # The pinned upstream manifests enable Google Cloud exporters by default.
+  # Disable them on managed k3s; observability is provided by the platform.
+  overlays:
+    - target: {apiVersion: apps/v1, kind: Deployment, name: frontend}
+      operations:
+        - {op: replace, path: /spec/template/spec/containers/0/env/2/value, valueFrom: /cloudTelemetryEnabled}
+    - target: {apiVersion: apps/v1, kind: Deployment, name: contacts}
+      operations:
+        - {op: replace, path: /spec/template/spec/containers/0/env/2/value, valueFrom: /cloudTelemetryEnabled}
+    - target: {apiVersion: apps/v1, kind: Deployment, name: userservice}
+      operations:
+        - {op: replace, path: /spec/template/spec/containers/0/env/2/value, valueFrom: /cloudTelemetryEnabled}
+    - target: {apiVersion: apps/v1, kind: Deployment, name: balancereader}
+      operations:
+        - {op: replace, path: /spec/template/spec/containers/0/env/2/value, valueFrom: /cloudTelemetryEnabled}
+        - {op: replace, path: /spec/template/spec/containers/0/env/3/value, valueFrom: /cloudTelemetryEnabled}
+    - target: {apiVersion: apps/v1, kind: Deployment, name: ledgerwriter}
+      operations:
+        - {op: replace, path: /spec/template/spec/containers/0/env/2/value, valueFrom: /cloudTelemetryEnabled}
+        - {op: replace, path: /spec/template/spec/containers/0/env/3/value, valueFrom: /cloudTelemetryEnabled}
+    - target: {apiVersion: apps/v1, kind: Deployment, name: transactionhistory}
+      operations:
+        - {op: replace, path: /spec/template/spec/containers/0/env/2/value, valueFrom: /cloudTelemetryEnabled}
+        - {op: replace, path: /spec/template/spec/containers/0/env/3/value, valueFrom: /cloudTelemetryEnabled}
   valuesSchema:
     type: object
     additionalProperties: false
     properties:
+      cloudTelemetryEnabled:
+        x-kubephos-order: 1
+        type: string
+        title: Google Cloud telemetry
+        enum: ["false"]
       initialReplicas:
+        x-kubephos-order: 2
         type: integer
         title: Initial replicas
         minimum: 1
         maximum: 20
       replicaOverrides:
+        x-kubephos-order: 3
         type: object
-        title: Service overrides
+        title: Initial replicas by service
+        additionalProperties: true
+      cpuRequest:
+        x-kubephos-order: 4
+        type: string
+        title: CPU request per service (optional)
+        minLength: 1
+        maxLength: 16
+      memoryRequest:
+        x-kubephos-order: 5
+        type: string
+        title: Memory request per service (optional)
+        minLength: 1
+        maxLength: 16
+      cpuLimit:
+        x-kubephos-order: 6
+        type: string
+        title: CPU limit per service (optional)
+        minLength: 1
+        maxLength: 16
+      memoryLimit:
+        x-kubephos-order: 7
+        type: string
+        title: Memory limit per service (optional)
+        minLength: 1
+        maxLength: 16
+      resourceOverrides:
+        x-kubephos-order: 8
+        type: object
+        title: Resource overrides by service
         additionalProperties: true
   defaults:
+    cloudTelemetryEnabled: "false"
     initialReplicas: 1
     replicaOverrides: {}

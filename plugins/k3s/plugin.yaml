@@ -8,23 +8,23 @@ metadata:
 spec:
   protocol: v1alpha1
   commands:
-    - describe
-    - validate
-    - plan
-    - precheck
-    - execute
-    - verify
-    - status
-    - cancel
-    - cleanup
+  - describe
+  - validate
+  - plan
+  - precheck
+  - execute
+  - verify
+  - status
+  - cancel
+  - cleanup
   configurationSchema:
     type: object
     additionalProperties: false
     required:
-      - machineSetRef
-      - machineAccessRef
-      - clusterName
-      - controlPlanes
+    - machineSetRef
+    - machineAccessRef
+    - clusterName
+    - controlPlanes
     properties:
       machineSetRef:
         type: string
@@ -41,14 +41,14 @@ spec:
       clusterName:
         type: string
         title: Cluster name
-        pattern: "^[a-z0-9][a-z0-9-]{0,31}$"
+        pattern: ^[a-z0-9][a-z0-9-]{0,31}$
         default: development
       controlPlanes:
         type: integer
         title: Control plane nodes
         enum:
-          - 1
-          - 3
+        - 1
+        - 3
         default: 1
       controlPlaneZones:
         type: array
@@ -57,7 +57,7 @@ spec:
         maxItems: 12
         items:
           type: string
-          pattern: "^[a-z0-9][a-z0-9-]{0,31}$"
+          pattern: ^[a-z0-9][a-z0-9-]{0,31}$
       nodePools:
         type: array
         title: Node pools
@@ -65,14 +65,20 @@ spec:
         items:
           type: object
           additionalProperties: false
-          required: [name, role, count, zones]
+          required:
+          - name
+          - role
+          - count
+          - zones
           properties:
             name:
               type: string
-              pattern: "^[a-z0-9][a-z0-9-]{0,31}$"
+              pattern: ^[a-z0-9][a-z0-9-]{0,31}$
             role:
               type: string
-              enum: [management, application]
+              enum:
+              - management
+              - application
             count:
               type: integer
               minimum: 1
@@ -83,7 +89,10 @@ spec:
               maxItems: 12
               items:
                 type: string
-                pattern: "^[a-z0-9][a-z0-9-]{0,31}$"
+                pattern: ^[a-z0-9][a-z0-9-]{0,31}$
+            labels:
+              type: object
+              additionalProperties: true
       registryEndpointRef:
         type: string
         title: Managed registry
@@ -96,30 +105,50 @@ spec:
         format: kubephos-artifact-ref
         x-kubephos-artifact-type: RegistryCredential
         x-kubephos-artifact-version: v1alpha1
+      reconcile:
+        type: boolean
+      previousMachineSetRef:
+        type: string
+        format: kubephos-artifact-ref
+        x-kubephos-artifact-type: MachineSet
+        x-kubephos-artifact-version: v1alpha1
+      networking:
+        type: string
+        enum:
+        - flannel
+        - cilium
+      clusterId:
+        type: integer
+        minimum: 1
+        maximum: 255
+      podCIDR:
+        type: string
+      serviceCIDR:
+        type: string
   runtime:
     executable: k3s-plugin
     timeout: 30m
   artifacts:
     inputs:
-      - type: MachineSet
-        version: v1alpha1
-      - type: MachineAccess
-        version: v1alpha1
-      - type: RegistryEndpoint
-        version: v1alpha1
-      - type: RegistryCredential
-        version: v1alpha1
+    - type: MachineSet
+      version: v1alpha1
+    - type: MachineAccess
+      version: v1alpha1
+    - type: RegistryEndpoint
+      version: v1alpha1
+    - type: RegistryCredential
+      version: v1alpha1
     outputs:
-      - type: ClusterConnection
-        version: v1alpha1
-      - type: ClusterInventory
-        version: v1alpha1
+    - type: ClusterConnection
+      version: v1alpha1
+    - type: ClusterInventory
+      version: v1alpha1
   capabilities:
-    - cluster.bootstrap
-    - cluster.preflight
-    - cluster.cleanup
-    - lifecycle.cleanup
-    - lifecycle.cleanup.compatible
+  - cluster.bootstrap
+  - cluster.preflight
+  - cluster.cleanup
+  - lifecycle.cleanup
+  - lifecycle.cleanup.compatible
   permissions:
-    - network.ssh
-    - cluster.admin
+  - network.ssh
+  - cluster.admin

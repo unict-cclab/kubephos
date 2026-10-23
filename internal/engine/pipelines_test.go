@@ -1,8 +1,10 @@
 package engine
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -79,5 +81,53 @@ func TestFailedCleanupDoesNotBlockEarlierStages(t *testing.T) {
 	}
 	if err := errors.Join(failures...); err == nil || !strings.Contains(err.Error(), "Network injection") {
 		t.Fatalf("expected the failed cleanup to be retained, got %v", err)
+	}
+}
+
+func TestCleanupRestoresNetworkAfterLoadAndDeschedulerBeforeNamespace(t *testing.T) {
+	stages := []domain.PipelineRunStage{{PluginID: "prepare"}, {PluginID: "io.kubephos.chaos.network.zones"}, {PluginID: "scheduler"}, {PluginID: "io.kubephos.applications.kubernetes.deploy"}, {PluginID: "descheduler"}, {PluginID: "load"}, {PluginID: "metrics"}}
+	got := pipelineCleanupOrder(stages)
+	want := []int{6, 5, 4, 1, 3, 2, 0}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %v want %v", got, want)
+	}
+	stages[3].PluginID = "other"
+	if got := pipelineCleanupOrder(stages); !reflect.DeepEqual(got, []int{6, 5, 4, 3, 2, 1, 0}) {
+		t.Fatalf("non-application order changed: %v", got)
+	}
+}
+func TestFinalCleanupVerificationRequiresEveryHealthGate(t *testing.T) {
+	plan := domain.Plan{Steps: []domain.PlanStep{{ID: "one", Cleanup: true}, {ID: "two", Cleanup: true}}}
+	for _, tc := range []struct {
+		name         string
+		resolveError bool
+		verifyError  bool
+		remaining    bool
+		want         bool
+	}{{"all absent", false, false, false, true}, {"remaining resource", false, false, true, false}, {"API failure", false, true, false, false}, {"unverified input", true, false, false, false}} {
+		t.Run(tc.name, func(t *testing.T) {
+			resolve := func(ctx context.Context, i int, s domain.PlanStep) (domain.PlanStep, error) {
+				if tc.resolveError {
+					return s, errors.New("artifact verification failed")
+				}
+				return s, nil
+			}
+			verify := func(ctx context.Context, s domain.PlanStep) (domain.HealthReport, error) {
+				if tc.verifyError {
+					return domain.HealthReport{}, errors.New("API unavailable")
+				}
+				status := domain.HealthHealthy
+				if tc.remaining && s.ID == "two" {
+					status = domain.HealthUnhealthy
+				}
+				return domain.HealthReport{Status: status}, nil
+			}
+			if got := verifyCleanupPlan(context.Background(), plan, resolve, verify); got != tc.want {
+				t.Fatalf("got %v want %v", got, tc.want)
+			}
+			if verifyCleanupPlan(context.Background(), domain.Plan{}, resolve, verify) {
+				t.Fatal("empty plan accepted")
+			}
+		})
 	}
 }

@@ -4,6 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Cluster Lens · KubePhos</title>
+    <script src="/theme.js"></script>
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
@@ -17,6 +18,7 @@
           </div>
         </div>
         <div class="header-status">
+          <button id="themeToggle" class="theme-toggle" type="button" aria-label="Use dark mode" aria-pressed="false"></button>
           <span id="connectionStatus" class="connection-status" role="status">Connecting</span>
           <span id="context" class="context">Waiting for cluster</span>
           <label class="live-toggle"><input id="autoRefresh" type="checkbox" checked /> Auto-refresh</label>

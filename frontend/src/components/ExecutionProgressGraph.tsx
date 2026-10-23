@@ -1,4 +1,5 @@
-import {useState} from 'react'
+import {ActionIcon} from './ActionIcon'
+import {useState, type CSSProperties} from 'react'
 
 export interface ProgressNode {
   id: string
@@ -17,9 +18,10 @@ interface Props {
   showLogs?: () => void
 }
 
-function phase(status: string): 'complete' | 'active' | 'failed' | 'pending' {
+function phase(status: string): 'complete' | 'active' | 'failed' | 'canceled' | 'pending' {
   if (status === 'succeeded') return 'complete'
-  if (status === 'failed' || status === 'canceled') return 'failed'
+  if (status === 'failed') return 'failed'
+  if (status === 'canceled') return 'canceled'
   if (['running', 'prechecking', 'verifying', 'starting'].includes(status)) return 'active'
   return 'pending'
 }
@@ -53,11 +55,11 @@ export function highLevelExecutionNodes(nodes: ProgressNode[]): ProgressNode[] {
     else phases[3].members.push(node)
   })
   return phases.filter(item => item.members.length).map(item => {
-    const failed = item.members.find(node => phase(node.status) === 'failed')
+    const failed = item.members.find(node => ['failed', 'canceled'].includes(phase(node.status)))
     const active = item.members.find(node => phase(node.status) === 'active')
     const complete = item.members.every(node => phase(node.status) === 'complete')
     const representative = failed ?? active ?? [...item.members].reverse().find(node => node.operationId) ?? item.members[0]
-    const error = item.members.find(node => node.detail && phase(node.status) === 'failed')?.detail
+    const error = item.members.find(node => node.detail && ['failed', 'canceled'].includes(phase(node.status)))?.detail
     return {id: item.id, title: item.title, status: failed?.status ?? active?.status ?? (complete ? 'succeeded' : 'pending'), detail: error ?? item.detail, operationId: representative.operationId, stageCount: item.members.length}
   })
 }
@@ -66,14 +68,15 @@ export function ExecutionProgressGraph({nodes, label, openOperation, showLogs}: 
   const [chosen, setChosen] = useState<string | null>(null)
   const visibleNodes = highLevelExecutionNodes(nodes)
   if (!visibleNodes.length) return <p className="execution-graph-empty">The execution plan is being prepared.</p>
-  const selected = visibleNodes.find(node => node.id === chosen) ?? visibleNodes.find(node => phase(node.status) === 'active' || phase(node.status) === 'failed') ?? [...visibleNodes].reverse().find(node => phase(node.status) === 'complete') ?? visibleNodes[0]
+  const selected = visibleNodes.find(node => node.id === chosen) ?? visibleNodes.find(node => ['active', 'failed', 'canceled'].includes(phase(node.status))) ?? [...visibleNodes].reverse().find(node => phase(node.status) === 'complete') ?? visibleNodes[0]
   const completed = visibleNodes.filter(node => phase(node.status) === 'complete').length
   const current = visibleNodes.findIndex(node => phase(node.status) === 'active')
   const heading = current >= 0 ? `Step ${current + 1} of ${visibleNodes.length}` : completed === visibleNodes.length ? 'All steps complete' : `${completed} of ${visibleNodes.length} complete`
   return <div className="execution-graph" aria-label={label}>
-    <div className="execution-graph-heading"><strong>{heading}</strong><span>{Math.round(completed / visibleNodes.length * 100)}% verified</span></div>
-    <div className="execution-graph-track" role="group" aria-label={`${label} steps`}>{visibleNodes.map((node, index) => <button type="button" key={node.id} className={`execution-graph-node ${phase(node.status)} ${selected.id === node.id ? 'selected' : ''}`} aria-pressed={selected.id === node.id} aria-label={`${index + 1}. ${node.title}: ${statusLabel(node.status)}`} onClick={() => setChosen(node.id)}>
-      <span className="execution-graph-marker" aria-hidden="true">{phase(node.status) === 'complete' ? '✓' : index + 1}</span><strong>{node.title}</strong><small>{statusLabel(node.status)}</small>
+    <div className="execution-graph-heading"><strong>{heading}</strong>{current >= 0 && <span>{completed} / {visibleNodes.length} completed</span>}</div>
+    <div className="execution-graph-meter" role="progressbar" aria-label={`${label} completed steps`} aria-valuemin={0} aria-valuemax={visibleNodes.length} aria-valuenow={completed}><span style={{width: `${completed / visibleNodes.length * 100}%`}} /></div>
+    <div className={`execution-graph-track${visibleNodes.length > 6 ? ' dense' : ''}`} role="group" aria-label={`${label} steps`} style={{'--execution-step-count': visibleNodes.length} as CSSProperties}>{visibleNodes.map((node, index) => <button type="button" key={node.id} className={`execution-graph-node ${phase(node.status)} ${selected.id === node.id ? 'selected' : ''}`} aria-pressed={selected.id === node.id} aria-current={phase(node.status) === 'active' ? 'step' : undefined} aria-label={`${index + 1}. ${node.title}: ${statusLabel(node.status)}`} onClick={() => setChosen(node.id)}>
+      <span className="execution-graph-marker" aria-hidden="true">{phase(node.status) === 'complete' ? <ActionIcon name="check" /> : phase(node.status) === 'failed' ? <ActionIcon name="close" /> : phase(node.status) === 'canceled' ? <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2" /></svg> : index + 1}</span><span className="execution-graph-caption"><strong>{node.title}</strong><small>{statusLabel(node.status)}</small></span>
     </button>)}</div>
     <div className="execution-graph-inspector"><div><span className={`execution-graph-state ${phase(selected.status)}`}>{statusLabel(selected.status)}</span><strong>{selected.title}</strong>{selected.detail && <p>{selected.detail}</p>}</div>{selected.operationId && openOperation ? <button type="button" className="button secondary compact" onClick={() => openOperation(selected.operationId!)}>Open logs</button> : showLogs ? <button type="button" className="button secondary compact" onClick={showLogs}>Open logs</button> : null}</div>
   </div>

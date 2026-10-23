@@ -4,23 +4,20 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
-	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	kubeconfigutil "kubephos.dev/kubephos/internal/kubeconfig"
 	"net"
 	"net/http"
 	"net/url"
-	"os"
-	"os/exec"
+
 	"path"
 	"regexp"
 	"strings"
 	"time"
-
-	"gopkg.in/yaml.v3"
 
 	"kubephos.dev/kubephos/internal/domain"
 	"kubephos.dev/kubephos/internal/plugins"
@@ -142,7 +139,7 @@ type endpointProbe interface {
 
 func (Plugin) Manifest() plugins.Manifest {
 	return plugins.Manifest{
-		ID: pluginID, Name: "Kubernetes shared storage", Version: "0.2.0",
+		ID: pluginID, Name: "Kubernetes shared storage", Version: "0.2.1",
 		Description:     "Attaches validated shared storage to a Kubernetes cluster.",
 		Schema:          json.RawMessage(`{"type":"object","additionalProperties":false,"required":["clusterConnectionRef","sharedStorageEndpointRef","storageClassName"],"properties":{"clusterConnectionRef":{"type":"string","title":"Kubernetes cluster","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ClusterConnection","x-kubephos-artifact-version":"v1alpha1"},"sharedStorageEndpointRef":{"type":"string","title":"Shared storage","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"SharedStorageEndpoint","x-kubephos-artifact-version":"v1alpha1"},"storageClassName":{"type":"string","title":"Storage class name","pattern":"^[a-z0-9]([-a-z0-9]*[a-z0-9])?$","maxLength":63,"default":"shared-storage"}}}`),
 		ArtifactInputs:  []domain.ArtifactContract{{Type: "ClusterConnection", Version: "v1alpha1"}, {Type: "SharedStorageEndpoint", Version: "v1alpha1"}},
@@ -406,64 +403,7 @@ func validateArtifacts(cluster clusterConnection, storage sharedStorageEndpoint)
 }
 
 func validateKubeconfig(value, server string) error {
-	var config struct {
-		APIVersion     string `yaml:"apiVersion"`
-		Kind           string `yaml:"kind"`
-		CurrentContext string `yaml:"current-context"`
-		Clusters       []struct {
-			Name    string `yaml:"name"`
-			Cluster struct {
-				Server string `yaml:"server"`
-			} `yaml:"cluster"`
-		} `yaml:"clusters"`
-		Contexts []struct {
-			Name    string `yaml:"name"`
-			Context struct {
-				Cluster string `yaml:"cluster"`
-				User    string `yaml:"user"`
-			} `yaml:"context"`
-		} `yaml:"contexts"`
-		Users []struct {
-			Name string `yaml:"name"`
-			User struct {
-				ClientCertificateData string `yaml:"client-certificate-data"`
-				ClientKeyData         string `yaml:"client-key-data"`
-			} `yaml:"user"`
-		} `yaml:"users"`
-	}
-	if err := yaml.Unmarshal([]byte(value), &config); err != nil || config.APIVersion != "v1" || config.Kind != "Config" || config.CurrentContext == "" {
-		return errors.New("cluster kubeconfig is invalid")
-	}
-	contexts := map[string][2]string{}
-	for _, item := range config.Contexts {
-		contexts[item.Name] = [2]string{item.Context.Cluster, item.Context.User}
-	}
-	current, ok := contexts[config.CurrentContext]
-	if !ok || current[0] == "" || current[1] == "" {
-		return errors.New("cluster kubeconfig current context is invalid")
-	}
-	clusterOK := false
-	for _, item := range config.Clusters {
-		if item.Name == current[0] && item.Cluster.Server == server {
-			clusterOK = true
-		}
-	}
-	if !clusterOK {
-		return errors.New("cluster kubeconfig does not target the verified server")
-	}
-	userOK := false
-	for _, item := range config.Users {
-		if item.Name != current[1] {
-			continue
-		}
-		cert, certErr := base64.StdEncoding.DecodeString(item.User.ClientCertificateData)
-		key, keyErr := base64.StdEncoding.DecodeString(item.User.ClientKeyData)
-		userOK = certErr == nil && keyErr == nil && len(cert) > 0 && len(key) > 0
-	}
-	if !userOK {
-		return errors.New("cluster kubeconfig client identity is invalid")
-	}
-	return nil
+	return kubeconfigutil.ValidateClientIdentity(value, server)
 }
 
 func storageClassManifest(input stepInput, storage sharedStorageEndpoint) ([]byte, error) {
@@ -615,6 +555,12 @@ func (plugin Plugin) manifestBundle(ctx context.Context) ([]byte, error) {
 		if err != nil {
 			return nil, fmt.Errorf("fetch %s CSI manifest: %w", source.Name, err)
 		}
+		if source.Name == "controller" {
+			value, err = managementControllerManifest(value)
+			if err != nil {
+				return nil, err
+			}
+		}
 		parts = append(parts, string(value))
 	}
 	return []byte(strings.Join(parts, "\n---\n")), nil
@@ -642,29 +588,7 @@ func (plugin Plugin) probe() endpointProbe {
 type kubectlRunner struct{}
 
 func (kubectlRunner) Run(ctx context.Context, kubeconfig string, stdin []byte, args ...string) (string, error) {
-	file, err := os.CreateTemp("", "kubephos-kubeconfig-*")
-	if err != nil {
-		return "", err
-	}
-	name := file.Name()
-	defer os.Remove(name)
-	if err := file.Chmod(0600); err != nil {
-		file.Close()
-		return "", err
-	}
-	if _, err := file.WriteString(kubeconfig); err != nil {
-		file.Close()
-		return "", err
-	}
-	if err := file.Close(); err != nil {
-		return "", err
-	}
-	commandArgs := append([]string{"--kubeconfig", name}, args...)
-	command := exec.CommandContext(ctx, "kubectl", commandArgs...)
-	if stdin != nil {
-		command.Stdin = strings.NewReader(string(stdin))
-	}
-	output, err := command.CombinedOutput()
+	output, err := kubeconfigutil.RunKubectl(ctx, kubeconfig, stdin, args...)
 	if err != nil {
 		return "", fmt.Errorf("kubectl %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(string(output)))
 	}

@@ -1,5 +1,9 @@
-import {useEffect, useId, useMemo, useState, type Dispatch, type SetStateAction} from 'react'
-import {exportChart, niceAxis} from './ResultsView'
+import {workloadTable, trafficTable} from './PhaseReadout'
+import {FormTabs} from './FormTabs'
+import {ResourceAction} from './ResourceAction'
+import {ActionIcon} from './ActionIcon'
+import {useEffect, useId, useMemo, useState, type Dispatch, type SetStateAction, type ReactNode} from 'react'
+import {exportChart, niceAxis, timeAxis} from '../charts'
 import {NumericInput} from './NumericInput'
 
 export type LoadProfileStep = {
@@ -28,7 +32,7 @@ type GeographicStep = {
   endWeights: Record<string, number>
 }
 
-export function LoadProfileEditor({prefix, zones, values = {}}: {prefix: string; zones: string[]; values?: Record<string, unknown>}) {
+export function LoadProfileEditor({prefix, zones, values = {}, distribution = 'zone', tabbed = true, settings}: {settings?: ReactNode; prefix: string; zones: string[]; values?: Record<string, unknown>; distribution?: 'zone' | 'cluster'; tabbed?: boolean}) {
   const initialSteps = loadProfileSteps(values.steps)
   const initialGeography = geographicProfileSteps(values.geographicSteps, zones)
   const [sequence, setSequence] = useState(Math.max(3, initialSteps.length + initialGeography.length + 1))
@@ -50,29 +54,34 @@ export function LoadProfileEditor({prefix, zones, values = {}}: {prefix: string;
   }
   const serializedSteps = steps.map(({id: _, ...step}) => step)
   const serializedGeography = zones.length ? geographicSteps.map(({id: _, ...step}) => step.type === 'constant' ? {type: step.type, durationSeconds: step.durationSeconds, weights: step.weights} : {type: step.type, durationSeconds: step.durationSeconds, startWeights: step.startWeights, endWeights: step.endWeights}) : []
-  return <div className="load-profile-editor">
-    <input type="hidden" name={`${prefix}.steps`} value={JSON.stringify(serializedSteps)} readOnly />
-    <input type="hidden" name={`${prefix}.geographicSteps`} value={JSON.stringify(serializedGeography)} readOnly />
-    <div className="timeline-heading"><strong>Workload timeline</strong><span className="duration-badge">{formatDuration(duration)}</span></div>
+  const workload = <div className="form-stack" data-review-skip="true"><div className="timeline-heading"><strong>Total duration</strong><span className="timeline-duration">{formatDuration(duration)}</span></div>
     <div className="timeline-list">{steps.map((step, index) => <article className="timeline-card" key={step.id}>
-      <div className="timeline-card-head"><span className="timeline-index">{index + 1}</span><select aria-label={`Workload phase ${index + 1} type`} value={step.type} onChange={event => updateLoadStep(setSteps, step.id, {type: event.target.value as LoadStep['type']})}><option value="constant">Constant</option><option value="sinusoidal">Sinusoidal</option><option value="exponential">Exponential</option></select><TimelineActions index={index} count={steps.length} move={direction => setSteps(items => move(items, index, direction))} remove={() => setSteps(items => items.filter(item => item.id !== step.id))} /></div>
-      <div className="timeline-fields"><Minutes label="Duration" value={step.durationSeconds} set={value => updateLoadStep(setSteps, step.id, {durationSeconds: value})} />
+      <div className="timeline-card-head"><h4>Phase {index + 1}</h4><TimelineActions index={index} count={steps.length} move={direction => setSteps(items => move(items, index, direction))} remove={() => setSteps(items => items.filter(item => item.id !== step.id))} /></div>
+      <div className="timeline-fields"><label>Type<select aria-label={`Workload phase ${index + 1} type`} value={step.type} onChange={event => updateLoadStep(setSteps, step.id, {type: event.target.value as LoadStep['type']})}><option value="constant">Constant</option><option value="sinusoidal">Sinusoidal</option><option value="exponential">Exponential</option></select></label><Minutes label="Duration" value={step.durationSeconds} set={value => updateLoadStep(setSteps, step.id, {durationSeconds: value})} />
         {step.type === 'constant' && <NumberField label="Requests / second" value={step.rps} min={0} set={value => updateLoadStep(setSteps, step.id, {rps: value})} />}
         {step.type === 'sinusoidal' && <><NumberField label="Baseline RPS" value={step.baselineRps} min={0} set={value => updateLoadStep(setSteps, step.id, {baselineRps: value})} /><NumberField label="Amplitude RPS" value={step.amplitudeRps} min={0} set={value => updateLoadStep(setSteps, step.id, {amplitudeRps: value})} /><Minutes label="Period" value={step.periodSeconds} set={value => updateLoadStep(setSteps, step.id, {periodSeconds: value})} /><Minutes label="Phase offset" value={step.phaseSeconds} allowZero set={value => updateLoadStep(setSteps, step.id, {phaseSeconds: value})} /></>}
         {step.type === 'exponential' && <><NumberField label="Start RPS" value={step.startRps} min={0} set={value => updateLoadStep(setSteps, step.id, {startRps: value})} /><NumberField label="End RPS" value={step.endRps} min={0} set={value => updateLoadStep(setSteps, step.id, {endRps: value})} /><NumberField label="Curve" value={step.curve} min={-20} max={20} step={0.1} set={value => updateLoadStep(setSteps, step.id, {curve: value})} /></>}
       </div>
     </article>)}</div>
-    <button type="button" className="button secondary compact" onClick={addLoadStep}>Add workload phase</button>
-    <LoadProfilePreview steps={serializedSteps} />
-    {zones.length > 0 && <><div className="timeline-heading geographic-heading"><strong>Geographic timeline</strong><span className={`duration-badge ${duration === geographicDuration ? '' : 'mismatch'}`}>{formatDuration(geographicDuration)} / {formatDuration(duration)}</span></div>
+    <ResourceAction action="add" label="Add workload phase" onClick={addLoadStep} /></div>
+  const geography = <div className="form-stack" data-review-skip="true"><div className="timeline-duration-summary"><div><strong>Traffic duration</strong><span>{formatDuration(geographicDuration)}</span></div><div><strong>Workload duration</strong><span>{formatDuration(duration)}</span></div></div>
       <div className="timeline-list">{geographicSteps.map((step, index) => <article className="timeline-card geographic-card" key={step.id}>
-        <div className="timeline-card-head"><span className="timeline-index">{index + 1}</span><select aria-label={`Geographic phase ${index + 1} type`} value={step.type} onChange={event => updateGeographicStep(setGeographicSteps, step.id, {type: event.target.value as GeographicStep['type']})}><option value="constant">Fixed distribution</option><option value="linear">Linear transition</option></select><TimelineActions index={index} count={geographicSteps.length} move={direction => setGeographicSteps(items => move(items, index, direction))} remove={() => setGeographicSteps(items => items.filter(item => item.id !== step.id))} /></div>
-        <div className="timeline-fields"><Minutes label="Duration" value={step.durationSeconds} set={value => updateGeographicStep(setGeographicSteps, step.id, {durationSeconds: value})} /></div>
-        {step.type === 'constant' ? <WeightGrid title="Traffic weight" zones={zones} values={step.weights} set={(zone, value) => updateGeographicStep(setGeographicSteps, step.id, {weights: {...step.weights, [zone]: value}})} /> : <div className="weight-transition"><WeightGrid title="Start weights" zones={zones} values={step.startWeights} set={(zone, value) => updateGeographicStep(setGeographicSteps, step.id, {startWeights: {...step.startWeights, [zone]: value}})} /><span>→</span><WeightGrid title="End weights" zones={zones} values={step.endWeights} set={(zone, value) => updateGeographicStep(setGeographicSteps, step.id, {endWeights: {...step.endWeights, [zone]: value}})} /></div>}
+        <div className="timeline-card-head"><h4>Phase {index + 1}</h4><TimelineActions index={index} count={geographicSteps.length} move={direction => setGeographicSteps(items => move(items, index, direction))} remove={() => setGeographicSteps(items => items.filter(item => item.id !== step.id))} /></div>
+        <div className="timeline-fields"><label>Type<select aria-label={`Geographic phase ${index + 1} type`} value={step.type} onChange={event => updateGeographicStep(setGeographicSteps, step.id, {type: event.target.value as GeographicStep['type']})}><option value="constant">Fixed distribution</option><option value="linear">Linear transition</option></select></label><Minutes label="Duration" value={step.durationSeconds} set={value => updateGeographicStep(setGeographicSteps, step.id, {durationSeconds: value})} /></div>
+        {step.type === 'constant' ? <WeightGrid title="Traffic weight" zones={zones} values={step.weights} set={(zone, value) => updateGeographicStep(setGeographicSteps, step.id, {weights: {...step.weights, [zone]: value}})} /> : <div className="weight-transition"><WeightGrid title="Start weights" zones={zones} values={step.startWeights} set={(zone, value) => updateGeographicStep(setGeographicSteps, step.id, {startWeights: {...step.startWeights, [zone]: value}})} /><WeightGrid title="End weights" zones={zones} values={step.endWeights} set={(zone, value) => updateGeographicStep(setGeographicSteps, step.id, {endWeights: {...step.endWeights, [zone]: value}})} /></div>}
       </article>)}</div>
-      <button type="button" className="button secondary compact" onClick={addGeographicStep}>Add geographic phase</button>
-      {duration !== geographicDuration && <p className="timeline-error">Geographic phases must cover exactly {formatDuration(duration)} before this configuration can be saved.</p>}
-    </>}
+      <ResourceAction action="add" label="Add geographic phase" onClick={addGeographicStep} />
+      {duration !== geographicDuration && <p className="timeline-error">Geographic phases must cover exactly {formatDuration(duration)} before this configuration can be saved.</p>}</div>
+  const preview = <LoadProfilePreview steps={serializedSteps} />
+  return <div className={`load-profile-editor${tabbed ? ' load-profile-editor-tabbed' : ''}`}>
+    <input type="hidden" data-review-title="Workload phases" data-review-table={JSON.stringify(workloadTable(serializedSteps))} name={`${prefix}.steps`} value={JSON.stringify(serializedSteps)} readOnly />
+    <input type="hidden" data-review-title={distribution === 'cluster' ? 'Traffic phases by cluster' : 'Traffic phases by zone'} data-review-table={zones.length ? JSON.stringify(trafficTable(serializedGeography, distribution === 'cluster')) : undefined} name={`${prefix}.geographicSteps`} value={JSON.stringify(serializedGeography)} readOnly />
+    {tabbed ? <FormTabs label="Load profile settings" items={[
+      {id: 'workload', title: 'Workload', content: workload},
+      ...(zones.length ? [{id: 'distribution', title: 'Traffic distribution', content: geography}] : []),
+      ...(settings ? [{id: 'generator', title: 'Generator', content: settings}] : []),
+      {id: 'preview', title: 'Preview', content: preview}
+    ]} /> : <>{workload}{preview}{zones.length > 0 && geography}</>}
   </div>
 }
 
@@ -85,30 +94,23 @@ export function LoadProfilePreview({steps, progressSeconds, progressLabel}: {ste
   const duration = steps.reduce((total, step) => total + validNumber(step.durationSeconds), 0)
   const samples = loadSamples(steps)
   const maximum = Math.max(1, ...samples.map(point => point.rps))
-  const xAxis = niceAxis(duration / 60)
+  const xAxis = timeAxis(duration / 60)
   const yAxis = niceAxis(maximum)
   const x = (seconds: number) => plot.left + (seconds / 60 / xAxis.upper) * (width - plot.left - plot.right)
   const y = (rps: number) => height - plot.bottom - (rps / yAxis.upper) * (height - plot.bottom - plot.top)
   const points = samples.map((point, index) => `${index ? 'L' : 'M'}${x(point.seconds).toFixed(2)} ${y(point.rps).toFixed(2)}`).join(' ')
   const progress = progressSeconds === undefined ? undefined : Math.min(duration, Math.max(0, progressSeconds))
   const progressRps = progress === undefined ? 0 : rpsAt(steps, progress)
-  let elapsed = 0
-  const boundaries = steps.slice(0, -1).map(step => {
-    elapsed += validNumber(step.durationSeconds)
-    return elapsed
-  })
   const output = (format: 'pdf' | 'png') => exportChart(svgID, 'input-load-profile', format).then(() => setExportError('')).catch(cause => setExportError(cause instanceof Error ? cause.message : 'Could not export input load profile.'))
   return <figure className="metric-card input-load-card" aria-label="Input load preview">
-    <div className="metric-card-header"><div><h3>Input load profile</h3><span>{steps.length} phases · {formatDuration(duration)}</span></div><div className="chart-export-actions"><button type="button" onClick={() => void output('pdf')}>PDF</button><button type="button" onClick={() => void output('png')}>PNG 600 DPI</button></div></div>
+    <div className="metric-card-header"><div><h3>Input load profile</h3><span>{formatDuration(duration)}</span></div><div className="chart-export-actions"><button className="button secondary compact" type="button" onClick={() => void output('pdf')}>PDF</button><button className="button secondary compact" type="button" onClick={() => void output('png')}>PNG</button></div></div>
     {exportError && <p className="form-error">{exportError}</p>}
     <div className="chart-wrap"><svg id={svgID} viewBox={`0 0 ${width} ${height}`} xmlns="http://www.w3.org/2000/svg" role="img" aria-label={`Load profile lasting ${formatDuration(duration)} with a peak of ${formatRps(maximum)} requests per second`}>
-      <style>{`text{fill:#111;font-family:Arial,Helvetica,"DejaVu Sans",sans-serif}.tick{font-size:17px}.axis-label{font-size:20px}.legend-label{font-size:15px}.axis{stroke:#111;stroke-width:2;fill:none}.tick-line{stroke:#111;stroke-width:1.5}`}</style>
-      <rect x={plot.left} y={plot.top} width={width - plot.left - plot.right} height={height - plot.top - plot.bottom} className="axis" />
-      {xAxis.ticks.map(tick => <g key={`x-${tick}`}><line x1={x(tick * 60)} y1={height - plot.bottom} x2={x(tick * 60)} y2={height - plot.bottom + 7} className="tick-line" /><text x={x(tick * 60)} y={height - plot.bottom + 28} textAnchor="middle" className="tick">{tick.toLocaleString('en-US', {maximumFractionDigits: 2})}</text></g>)}
-      {yAxis.ticks.map(tick => <g key={`y-${tick}`}><line x1={plot.left - 7} y1={y(tick)} x2={plot.left} y2={y(tick)} className="tick-line" /><text x={plot.left - 13} y={y(tick) + 6} textAnchor="end" className="tick">{tick.toLocaleString('en-US', {maximumFractionDigits: 2})}</text></g>)}
-      <text x={(plot.left + width - plot.right) / 2} y={height - plot.bottom + 58} textAnchor="middle" className="axis-label">Time (min)</text>
-      <text x="27" y={(plot.top + height - plot.bottom) / 2} textAnchor="middle" className="axis-label" transform={`rotate(-90 27 ${(plot.top + height - plot.bottom) / 2})`}>Requests / second</text>
-      {boundaries.map((seconds, index) => <g key={`phase-${seconds}`}><line x1={x(seconds)} x2={x(seconds)} y1={plot.top} y2={height - plot.bottom} stroke="#777" strokeWidth="1.5" strokeDasharray="5 5" /><text x={x(seconds) + 5} y={plot.top + 18} className="legend-label">{index + 2}</text></g>)}
+      <rect x={plot.left} y={plot.top} width={width - plot.left - plot.right} height={height - plot.top - plot.bottom} className="axis" fill="none" stroke="#111" strokeWidth="2" />
+      {xAxis.ticks.map(tick => <g key={`x-${tick}`}><line x1={x(tick * 60)} y1={height - plot.bottom} x2={x(tick * 60)} y2={height - plot.bottom + 7} className="tick-line" stroke="#111" strokeWidth="1.5" /><text x={x(tick * 60)} y={height - plot.bottom + 28} textAnchor="middle" className="tick" fontSize="17" fill="#111" fontFamily="Arial, Helvetica, DejaVu Sans, sans-serif">{tick.toLocaleString('en-US', {maximumFractionDigits: 2})}</text></g>)}
+      {yAxis.ticks.map(tick => <g key={`y-${tick}`}><line x1={plot.left - 7} y1={y(tick)} x2={plot.left} y2={y(tick)} className="tick-line" stroke="#111" strokeWidth="1.5" /><text x={plot.left - 13} y={y(tick) + 6} textAnchor="end" className="tick" fontSize="17" fill="#111" fontFamily="Arial, Helvetica, DejaVu Sans, sans-serif">{tick.toLocaleString('en-US', {maximumFractionDigits: 2})}</text></g>)}
+      <text x={(plot.left + width - plot.right) / 2} y={height - plot.bottom + 58} textAnchor="middle" className="axis-label" fontSize="20" fill="#111" fontFamily="Arial, Helvetica, DejaVu Sans, sans-serif">Time (min)</text>
+      <text x="27" y={(plot.top + height - plot.bottom) / 2} textAnchor="middle" className="axis-label" transform={`rotate(-90 27 ${(plot.top + height - plot.bottom) / 2})`} fontSize="20" fill="#111" fontFamily="Arial, Helvetica, DejaVu Sans, sans-serif">Requests / second</text>
       {points && <path d={points} fill="none" stroke="#1f77b4" strokeWidth="2.5" strokeLinejoin="round" />}
       {samples.filter((_, index) => index % Math.max(1, Math.floor(samples.length / 12)) === 0).map((point, index) => <circle key={index} cx={x(point.seconds)} cy={y(point.rps)} r="4" fill="#1f77b4" />)}
       {progress !== undefined && <g className="load-progress-marker"><line x1={x(progress)} x2={x(progress)} y1={plot.top} y2={height - plot.bottom} stroke="#d55e00" strokeWidth="2" strokeDasharray="6 5" /><circle cx={x(progress)} cy={y(progressRps)} r="8" fill="#d55e00" /></g>}
@@ -197,7 +199,8 @@ function formatRps(value: number): string {
 }
 
 function TimelineActions({index, count, move: moveItem, remove}: {index: number; count: number; move: (direction: -1 | 1) => void; remove: () => void}) {
-  return <div className="timeline-actions"><button type="button" className="icon-button" aria-label="Move up" disabled={index === 0} onClick={() => moveItem(-1)}>↑</button><button type="button" className="icon-button" aria-label="Move down" disabled={index === count - 1} onClick={() => moveItem(1)}>↓</button><button type="button" className="icon-button" aria-label="Remove phase" disabled={count === 1} onClick={remove}>×</button></div>
+  if (count <= 1) return null
+  return <div className="timeline-actions"><button type="button" className="icon-button" aria-label="Move up" title="Move up" disabled={index === 0} onClick={() => moveItem(-1)}><ActionIcon name="up" /></button><button type="button" className="icon-button" aria-label="Move down" title="Move down" disabled={index === count - 1} onClick={() => moveItem(1)}><ActionIcon name="down" /></button><button type="button" className="icon-button" aria-label="Remove phase" title="Remove phase" disabled={count === 1} onClick={remove}><ActionIcon name="close" /></button></div>
 }
 
 function NumberField({label, value, set, min, max = 100000, step = 1}: {label: string; value: number; set: (value: number) => void; min: number; max?: number; step?: number}) {
@@ -209,7 +212,8 @@ function Minutes({label, value, set, allowZero = false}: {label: string; value: 
 }
 
 function WeightGrid({title, zones, values, set}: {title: string; zones: string[]; values: Record<string, number>; set: (zone: string, value: number) => void}) {
-  return <fieldset className="weight-grid"><legend>{title}</legend><div>{zones.map(zone => <label key={zone}>{zone}<NumericInput min={0} max={1000} step={0.1} value={values[zone] ?? 0} required onValueChange={value => set(zone, value)} /></label>)}</div></fieldset>
+  const titleID = useId()
+  return <div className="weight-grid" role="group" aria-labelledby={titleID}><div className="weight-grid-title" id={titleID}>{title}</div><div className="weight-grid-fields">{zones.map(zone => <label key={zone}><span>{zone}</span><NumericInput min={0} max={1000} step={0.1} value={values[zone] ?? 0} required onValueChange={value => set(zone, value)} /></label>)}</div></div>
 }
 
 function newLoadStep(id: number): LoadStep {

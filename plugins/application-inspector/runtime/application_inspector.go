@@ -156,9 +156,9 @@ func (Plugin) Manifest() plugins.Manifest {
 	return plugins.Manifest{
 		ID:          "io.kubephos.applications.inspect",
 		Name:        "Application package materializer",
-		Version:     "0.4.3",
+		Version:     "0.4.4",
 		Description: "Resolves, materializes and verifies a pinned application package and its declared interface.",
-		Schema:      json.RawMessage(`{"type":"object","required":["applicationRef"],"additionalProperties":false,"properties":{"applicationRef":{"type":"string","title":"Application","description":"Immutable application version from the catalog.","format":"kubephos-application-ref"},"values":{"type":"object","title":"Application settings","description":"Validated settings declared by the selected application.","x-kubephos-schema-from-application":"applicationRef"}}}`),
+		Schema:      json.RawMessage(`{"type":"object","required":["applicationRef"],"additionalProperties":false,"properties":{"applicationRef":{"type":"string","title":"Application","description":"Application from the catalog.","format":"kubephos-application-ref"},"values":{"type":"object","title":"Application settings","description":"Validated settings declared by the selected application.","x-kubephos-schema-from-application":"applicationRef"}}}`),
 		ArtifactOutputs: []domain.ArtifactContract{
 			{Type: "ManifestSet", Version: "v1alpha1"},
 			{Type: "WorkloadTargets", Version: "v1alpha1"},
@@ -244,6 +244,10 @@ func (Plugin) Precheck(ctx context.Context, step domain.PlanStep, log plugins.Lo
 	if err != nil {
 		return domain.HealthReport{Status: domain.HealthUnhealthy, Summary: err.Error(), Checks: map[string]string{"replicas": "invalid"}}, nil
 	}
+	manifest, err = applyResourceSettings(manifest, input.Descriptor, input.Values)
+	if err != nil {
+		return domain.HealthReport{Status: domain.HealthUnhealthy, Summary: err.Error(), Checks: map[string]string{"resources": "invalid"}}, nil
+	}
 	if _, err := buildLoadScenarios(content.Scripts, input.Descriptor); err != nil {
 		return domain.HealthReport{Status: domain.HealthUnhealthy, Summary: err.Error(), Checks: map[string]string{"loadScenarios": "invalid"}}, nil
 	}
@@ -285,6 +289,10 @@ func (Plugin) Execute(ctx context.Context, step domain.PlanStep, log plugins.Log
 		return nil, err
 	}
 	applicationManifest, err = applyReplicaSettings(applicationManifest, input.Descriptor, input.Values)
+	if err != nil {
+		return nil, err
+	}
+	applicationManifest, err = applyResourceSettings(applicationManifest, input.Descriptor, input.Values)
 	if err != nil {
 		return nil, err
 	}

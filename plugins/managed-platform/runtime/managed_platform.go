@@ -98,6 +98,7 @@ type clusterConnection struct {
 		Version string `json:"version"`
 	} `json:"metadata"`
 	Spec struct {
+		Networking   string `json:"networking,omitempty"`
 		Distribution string `json:"distribution"`
 		Server       string `json:"server"`
 		Kubeconfig   string `json:"kubeconfig"`
@@ -209,7 +210,7 @@ type chartFetcher interface {
 
 func (Plugin) Manifest() plugins.Manifest {
 	return plugins.Manifest{
-		ID: pluginID, Name: "Managed Kubernetes platform", Version: "0.2.9",
+		ID: pluginID, Name: "Managed Kubernetes platform", Version: "0.2.10",
 		Description:     "Installs and verifies the managed service mesh, chaos, autoscaling and cluster support baseline, including Headlamp.",
 		Schema:          json.RawMessage(`{"type":"object","additionalProperties":false,"required":["clusterConnectionRef"],"properties":{"clusterConnectionRef":{"type":"string","title":"Kubernetes cluster","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ClusterConnection","x-kubephos-artifact-version":"v1alpha1"}}}`),
 		ArtifactInputs:  []domain.ArtifactContract{{Type: "ClusterConnection", Version: "v1alpha1"}},
@@ -287,7 +288,7 @@ func (plugin Plugin) Precheck(ctx context.Context, step domain.PlanStep, log plu
 				return unhealthy("Managed namespace ownership cannot be verified", namespace, "invalid"), nil
 			}
 		}
-		if err := verifySupportOwnership(ctx, runner, cluster.Spec.Kubeconfig, input.Marker); err != nil {
+		if err := verifySupportOwnershipForNetwork(ctx, runner, cluster.Spec.Kubeconfig, input.Marker, cluster.Spec.Networking); err != nil {
 			return unhealthy(err.Error(), "supportComponents", "invalid"), nil
 		}
 		return domain.HealthReport{Status: domain.HealthHealthy, Summary: "Managed platform resources are safe to remove", Checks: map[string]string{"api": "ready", "ownership": "verified"}}, nil
@@ -339,26 +340,32 @@ func (plugin Plugin) Execute(ctx context.Context, step domain.PlanStep, log plug
 		return nil, err
 	}
 	runner := plugin.runner()
-	for _, namespace := range []string{istioNamespace, chaosNamespace, systemNamespace} {
+	for _, namespace := range platformNamespaces(cluster.Spec.Networking) {
 		manifest, _ := json.Marshal(map[string]any{"apiVersion": "v1", "kind": "Namespace", "metadata": map[string]any{"name": namespace, "annotations": map[string]string{ownershipKey: input.Marker}}})
 		if _, err := runner.Kubectl(ctx, cluster.Spec.Kubeconfig, manifest, "apply", "-f", "-"); err != nil {
 			return nil, fmt.Errorf("create namespace %s: %w", namespace, err)
 		}
 	}
-	if err := log("info", "Installing Istio base and control plane"); err != nil {
-		return nil, err
-	}
-	if _, err := runner.Helm(ctx, cluster.Spec.Kubeconfig, charts["istio-base"], []byte("defaultRevision: default\n"), "upgrade", "--install", istioBaseRelease, "@chart", "--namespace", istioNamespace, "--values", "@values", "--wait", "--timeout", "10m", "--atomic"); err != nil {
-		return nil, fmt.Errorf("install Istio base: %w", err)
-	}
-	istiodValues := []byte("replicaCount: 1\nnodeSelector:\n  kubephos.dev/role: management\nmeshConfig:\n  enableTracing: true\n  extensionProviders:\n  - name: jaeger\n    opentelemetry:\n      service: jaeger.kubephos-observability.svc.cluster.local\n      port: 4317\n")
-	if _, err := runner.Helm(ctx, cluster.Spec.Kubeconfig, charts["istiod"], istiodValues, "upgrade", "--install", istiodRelease, "@chart", "--namespace", istioNamespace, "--values", "@values", "--wait", "--timeout", "10m", "--atomic"); err != nil {
-		return nil, fmt.Errorf("install Istio control plane: %w", err)
+	if cluster.Spec.Networking != "cilium" {
+		if err := log("info", "Installing Istio base and control plane"); err != nil {
+			return nil, err
+		}
+		if _, err := runner.Helm(ctx, cluster.Spec.Kubeconfig, charts["istio-base"], []byte("defaultRevision: default\n"), "upgrade", "--install", istioBaseRelease, "@chart", "--namespace", istioNamespace, "--values", "@values", "--wait", "--timeout", "10m", "--atomic"); err != nil {
+			return nil, fmt.Errorf("install Istio base: %w", err)
+		}
+		if err := placeManagementIngress(ctx, runner, cluster.Spec.Kubeconfig); err != nil {
+			return nil, err
+		}
+		istiodValues := []byte("replicaCount: 1\nnodeSelector:\n  kubephos.dev/role: management\nmeshConfig:\n  enableTracing: true\n  extensionProviders:\n  - name: jaeger\n    opentelemetry:\n      service: jaeger.kubephos-observability.svc.cluster.local\n      port: 4317\n")
+		if _, err := runner.Helm(ctx, cluster.Spec.Kubeconfig, charts["istiod"], istiodValues, "upgrade", "--install", istiodRelease, "@chart", "--namespace", istioNamespace, "--values", "@values", "--wait", "--timeout", "10m", "--atomic"); err != nil {
+			return nil, fmt.Errorf("install Istio control plane: %w", err)
+		}
+
 	}
 	if err := log("info", "Installing the managed chaos runtime and dashboard"); err != nil {
 		return nil, err
 	}
-	chaosValues := []byte("chaosDaemon:\n  runtime: containerd\n  socketPath: /run/k3s/containerd/containerd.sock\ncontrollerManager:\n  replicaCount: 1\n  nodeSelector:\n    kubephos.dev/role: management\ndashboard:\n  enabled: true\n  replicaCount: 1\n  nodeSelector:\n    kubephos.dev/role: management\n  securityMode: false\n  service:\n    type: NodePort\n    port: 2333\n    nodePort: 32300\n")
+	chaosValues := []byte("dnsServer:\n  nodeSelector:\n    kubephos.dev/role: management\nchaosDaemon:\n  runtime: containerd\n  socketPath: /run/k3s/containerd/containerd.sock\ncontrollerManager:\n  replicaCount: 1\n  nodeSelector:\n    kubephos.dev/role: management\ndashboard:\n  enabled: true\n  replicaCount: 1\n  nodeSelector:\n    kubephos.dev/role: management\n  securityMode: false\n  service:\n    type: NodePort\n    port: 2333\n    nodePort: 32300\n")
 	if _, err := runner.Helm(ctx, cluster.Spec.Kubeconfig, charts["chaos-mesh"], chaosValues, "upgrade", "--install", chaosRelease, "@chart", "--namespace", chaosNamespace, "--values", "@values", "--wait", "--wait-for-jobs", "--timeout", "15m", "--atomic"); err != nil {
 		return nil, fmt.Errorf("install chaos runtime: %w", err)
 	}
@@ -403,6 +410,9 @@ func (plugin Plugin) Execute(ctx context.Context, step domain.PlanStep, log plug
 		return nil, fmt.Errorf("install Alloy: %w", err)
 	}
 	extended := extendedObservabilityManifest(input.Marker)
+	if cluster.Spec.Networking == "cilium" {
+		extended = bytes.Split(extended, []byte("---\napiVersion: telemetry.istio.io"))[0]
+	}
 	if _, err := runner.Kubectl(ctx, cluster.Spec.Kubeconfig, extended, "apply", "--dry-run=server", "-f", "-"); err != nil {
 		return nil, fmt.Errorf("managed tracing failed admission: %w", err)
 	}
@@ -412,12 +422,15 @@ func (plugin Plugin) Execute(ctx context.Context, step domain.PlanStep, log plug
 	if _, err := runner.Kubectl(ctx, cluster.Spec.Kubeconfig, nil, "rollout", "status", "deployment/jaeger", "-n", "kubephos-observability", "--timeout=5m"); err != nil {
 		return nil, fmt.Errorf("Jaeger is not ready: %w", err)
 	}
-	prometheus, err := discoverPrometheusService(ctx, runner, cluster.Spec.Kubeconfig)
-	if err != nil {
-		return nil, fmt.Errorf("discover managed Prometheus for Kiali: %w", err)
-	}
-	if _, err := runner.Helm(ctx, cluster.Spec.Kubeconfig, charts["kiali"], kialiValues(prometheus), "upgrade", "--install", kialiRelease, "@chart", "--namespace", istioNamespace, "--values", "@values", "--wait", "--timeout", "10m", "--atomic"); err != nil {
-		return nil, fmt.Errorf("install Kiali: %w", err)
+	if cluster.Spec.Networking != "cilium" {
+		prometheus, err := discoverPrometheusService(ctx, runner, cluster.Spec.Kubeconfig)
+		if err != nil {
+			return nil, fmt.Errorf("discover managed Prometheus for Kiali: %w", err)
+		}
+		if _, err := runner.Helm(ctx, cluster.Spec.Kubeconfig, charts["kiali"], kialiValues(prometheus), "upgrade", "--install", kialiRelease, "@chart", "--namespace", istioNamespace, "--values", "@values", "--wait", "--timeout", "10m", "--atomic"); err != nil {
+			return nil, fmt.Errorf("install Kiali: %w", err)
+		}
+
 	}
 	if err := log("info", "Installing the managed cluster-admin Headlamp dashboard"); err != nil {
 		return nil, err
@@ -433,6 +446,9 @@ func (plugin Plugin) Execute(ctx context.Context, step domain.PlanStep, log plug
 		APIVersion: artifactAPI, Kind: "ManagedPlatformCapability", Metadata: managedPlatformCapabilityMetadata{Name: "managed-platform", Version: istioVersion + "+chaos." + chaosVersion + "+cpa." + cpaVersion + "+mentat." + mentatVersion + "+lens." + clusterLensVersion + "+headlamp." + headlampVersion},
 		Spec: managedPlatformCapabilitySpec{ClusterServer: cluster.Spec.Server, Components: []managedComponent{{Name: "istio", Version: istioVersion, Namespace: istioNamespace, Status: "ready"}, {Name: "chaos-mesh", Version: chaosVersion, Namespace: chaosNamespace, Status: "ready"}, {Name: "custom-pod-autoscaler-operator", Version: cpaVersion, Namespace: systemNamespace, Status: "ready"}, {Name: "mentat", Version: mentatVersion, Namespace: observabilityNamespace, Status: "ready"}, {Name: "cluster-lens", Version: clusterLensVersion, Namespace: observabilityNamespace, Status: "ready"}, {Name: "loki", Version: lokiVersion, Namespace: observabilityNamespace, Status: "ready"}, {Name: "alloy", Version: alloyVersion, Namespace: observabilityNamespace, Status: "ready"}, {Name: "jaeger", Version: jaegerVersion, Namespace: observabilityNamespace, Status: "ready"}, {Name: "kiali", Version: kialiVersion, Namespace: istioNamespace, Status: "ready"}, {Name: "headlamp", Version: headlampVersion, Namespace: observabilityNamespace, Status: "ready"}}, Endpoints: []managedEndpoint{{Name: "chaos-dashboard", Namespace: chaosNamespace, Service: "chaos-dashboard", Scheme: "http", NodePort: chaosDashboardPort}, {Name: "cluster-lens", Namespace: observabilityNamespace, Service: "cluster-lens", Scheme: "http", NodePort: clusterLensPort}, {Name: "loki", Namespace: observabilityNamespace, Service: "kubephos-loki-gateway", Scheme: "http", NodePort: lokiPort}, {Name: "jaeger", Namespace: observabilityNamespace, Service: "jaeger", Scheme: "http", NodePort: jaegerPort}, {Name: "kiali", Namespace: istioNamespace, Service: "kiali", Scheme: "http", NodePort: kialiPort}, {Name: "headlamp", Namespace: observabilityNamespace, Service: headlampRelease, Scheme: "http", NodePort: headlampPort}}},
 	}, HeadlampCredential: serviceCredential{APIVersion: artifactAPI, Kind: "ServiceCredential", Metadata: serviceCredentialMetadata{Name: "headlamp-admin", Role: "cluster-admin"}, Spec: serviceCredentialSpec{Namespace: observabilityNamespace, Service: headlampRelease, Username: "token", Password: token}}}
+	if cluster.Spec.Networking == "cilium" {
+		value.ManagedPlatformCapability = ciliumPlatformCapability(value.ManagedPlatformCapability)
+	}
 	return json.Marshal(value)
 }
 
@@ -465,7 +481,7 @@ func (plugin Plugin) Verify(ctx context.Context, step domain.PlanStep, raw json.
 		return domain.HealthReport{}, err
 	}
 	capability := value.ManagedPlatformCapability
-	if capability.APIVersion != artifactAPI || capability.Kind != "ManagedPlatformCapability" || capability.Spec.ClusterServer != cluster.Spec.Server || len(capability.Spec.Components) != 10 || len(capability.Spec.Endpoints) != 6 {
+	if capability.APIVersion != artifactAPI || capability.Kind != "ManagedPlatformCapability" || capability.Spec.ClusterServer != cluster.Spec.Server || len(capability.Spec.Components) != platformComponentCount(cluster.Spec.Networking) || len(capability.Spec.Endpoints) != platformEndpointCount(cluster.Spec.Networking) {
 		return unhealthy("Managed platform capability is invalid", "artifact", "invalid"), nil
 	}
 	credential := value.HeadlampCredential
@@ -473,12 +489,18 @@ func (plugin Plugin) Verify(ctx context.Context, step domain.PlanStep, raw json.
 		return unhealthy("Headlamp credential is invalid", "headlampCredential", "invalid"), nil
 	}
 	for _, release := range []struct{ name, namespace string }{{istioBaseRelease, istioNamespace}, {istiodRelease, istioNamespace}, {chaosRelease, chaosNamespace}, {cpaRelease, systemNamespace}, {lokiRelease, observabilityNamespace}, {alloyRelease, observabilityNamespace}, {kialiRelease, istioNamespace}, {headlampRelease, observabilityNamespace}} {
+		if cluster.Spec.Networking == "cilium" && (release.namespace == istioNamespace) {
+			continue
+		}
 		if _, err := runner.Helm(ctx, cluster.Spec.Kubeconfig, nil, nil, "status", release.name, "--namespace", release.namespace); err != nil {
 			return unhealthy("Managed release is unhealthy: "+err.Error(), release.name, "unhealthy"), nil
 		}
 	}
-	if _, err := runner.Kubectl(ctx, cluster.Spec.Kubeconfig, nil, "rollout", "status", "deployment/istiod", "-n", istioNamespace, "--timeout=5m"); err != nil {
-		return unhealthy("Istio control plane is not ready: "+err.Error(), "istio", "unhealthy"), nil
+	if cluster.Spec.Networking != "cilium" {
+		if _, err := runner.Kubectl(ctx, cluster.Spec.Kubeconfig, nil, "rollout", "status", "deployment/istiod", "-n", istioNamespace, "--timeout=5m"); err != nil {
+			return unhealthy("Istio control plane is not ready: "+err.Error(), "istio", "unhealthy"), nil
+		}
+
 	}
 	if _, err := runner.Kubectl(ctx, cluster.Spec.Kubeconfig, nil, "rollout", "status", "daemonset/chaos-daemon", "-n", chaosNamespace, "--timeout=5m"); err != nil {
 		return unhealthy("Chaos daemon is not ready on all nodes: "+err.Error(), "chaosDaemon", "unhealthy"), nil
@@ -497,7 +519,7 @@ func (plugin Plugin) Verify(ctx context.Context, step domain.PlanStep, raw json.
 	if _, err := runner.Kubectl(ctx, cluster.Spec.Kubeconfig, nil, "rollout", "status", "deployment/jaeger", "-n", "kubephos-observability", "--timeout=5m"); err != nil {
 		return unhealthy("Jaeger is not ready: "+err.Error(), "jaeger", "unhealthy"), nil
 	}
-	if err := verifySupportOwnership(ctx, runner, cluster.Spec.Kubeconfig, input.Marker); err != nil {
+	if err := verifySupportOwnershipForNetwork(ctx, runner, cluster.Spec.Kubeconfig, input.Marker, cluster.Spec.Networking); err != nil {
 		return unhealthy(err.Error(), "supportOwnership", "invalid"), nil
 	}
 	prometheus, err := discoverPrometheusService(ctx, runner, cluster.Spec.Kubeconfig)
@@ -508,15 +530,18 @@ func (plugin Plugin) Verify(ctx context.Context, step domain.PlanStep, raw json.
 	if _, err := runner.Kubectl(ctx, cluster.Spec.Kubeconfig, nil, "get", "--raw="+prometheusReadyPath); err != nil {
 		return unhealthy("Managed Prometheus endpoint is not ready: "+err.Error(), "prometheusEndpoint", "unhealthy"), nil
 	}
-	kialiConfig, err := runner.Kubectl(ctx, cluster.Spec.Kubeconfig, nil, "get", "configmap", "kiali", "-n", istioNamespace, "-o", "jsonpath={.data.config\\.yaml}")
-	if err != nil {
-		return unhealthy("Kiali configuration is unavailable: "+err.Error(), "kialiPrometheus", "unhealthy"), nil
-	}
-	if err := validateKialiPrometheusConfig(kialiConfig, prometheus); err != nil {
-		return unhealthy(err.Error(), "kialiPrometheus", "invalid"), nil
-	}
-	if _, err := runner.Kubectl(ctx, cluster.Spec.Kubeconfig, nil, "exec", "deployment/kiali", "-n", istioNamespace, "--", "getent", "hosts", prometheus.Hostname()); err != nil {
-		return unhealthy("Kiali cannot resolve the managed Prometheus service: "+err.Error(), "kialiPrometheusDNS", "unhealthy"), nil
+	if cluster.Spec.Networking != "cilium" {
+		kialiConfig, err := runner.Kubectl(ctx, cluster.Spec.Kubeconfig, nil, "get", "configmap", "kiali", "-n", istioNamespace, "-o", "jsonpath={.data.config\\.yaml}")
+		if err != nil {
+			return unhealthy("Kiali configuration is unavailable: "+err.Error(), "kialiPrometheus", "unhealthy"), nil
+		}
+		if err := validateKialiPrometheusConfig(kialiConfig, prometheus); err != nil {
+			return unhealthy(err.Error(), "kialiPrometheus", "invalid"), nil
+		}
+		if _, err := runner.Kubectl(ctx, cluster.Spec.Kubeconfig, nil, "exec", "deployment/kiali", "-n", istioNamespace, "--", "getent", "hosts", prometheus.Hostname()); err != nil {
+			return unhealthy("Kiali cannot resolve the managed Prometheus service: "+err.Error(), "kialiPrometheusDNS", "unhealthy"), nil
+		}
+
 	}
 	jaegerPath := "/api/v1/namespaces/kubephos-observability/services/http:jaeger:16686/proxy/api/services"
 	if _, err := runner.Kubectl(ctx, cluster.Spec.Kubeconfig, nil, "get", "--raw="+jaegerPath); err != nil {
@@ -576,10 +601,13 @@ func (plugin Plugin) Cleanup(ctx context.Context, step domain.PlanStep, _ json.R
 	if _, err := runner.Kubectl(ctx, cluster.Spec.Kubeconfig, supportCleanupManifest(input.Marker), "delete", "-f", "-", "--ignore-not-found", "--wait=true", "--timeout=5m"); err != nil {
 		return err
 	}
-	if _, err := runner.Kubectl(ctx, cluster.Spec.Kubeconfig, extendedObservabilityManifest(input.Marker), "delete", "-f", "-", "--ignore-not-found", "--wait=true", "--timeout=5m"); err != nil {
+	if _, err := runner.Kubectl(ctx, cluster.Spec.Kubeconfig, networkObservabilityManifest(input.Marker, cluster.Spec.Networking), "delete", "-f", "-", "--ignore-not-found", "--wait=true", "--timeout=5m"); err != nil {
 		return err
 	}
 	for _, release := range []struct{ name, namespace string }{{headlampRelease, observabilityNamespace}, {kialiRelease, istioNamespace}, {alloyRelease, observabilityNamespace}, {lokiRelease, observabilityNamespace}, {cpaRelease, systemNamespace}, {chaosRelease, chaosNamespace}, {istiodRelease, istioNamespace}, {istioBaseRelease, istioNamespace}} {
+		if cluster.Spec.Networking == "cilium" && release.namespace == istioNamespace {
+			continue
+		}
 		if _, err := runner.Helm(ctx, cluster.Spec.Kubeconfig, nil, nil, "uninstall", release.name, "--namespace", release.namespace, "--wait", "--timeout", "10m", "--ignore-not-found"); err != nil {
 			return err
 		}
@@ -1130,6 +1158,9 @@ spec:
 `
 
 func verifySupportOwnership(ctx context.Context, runner clusterRunner, kubeconfig, marker string) error {
+	return verifySupportOwnershipForNetwork(ctx, runner, kubeconfig, marker, "")
+}
+func verifySupportOwnershipForNetwork(ctx context.Context, runner clusterRunner, kubeconfig, marker, networking string) error {
 	resources := []struct{ name, namespace string }{
 		{"clusterrole/kubephos-mentat", ""}, {"clusterrolebinding/kubephos-mentat", ""}, {"clusterrole/kubephos-cluster-lens", ""}, {"clusterrolebinding/kubephos-cluster-lens", ""},
 		{"serviceaccount/mentat", "kubephos-observability"}, {"daemonset/mentat", "kubephos-observability"}, {"podmonitor/mentat", "kubephos-observability"},
@@ -1137,6 +1168,9 @@ func verifySupportOwnership(ctx context.Context, runner clusterRunner, kubeconfi
 		{"deployment/jaeger", "kubephos-observability"}, {"service/jaeger", "kubephos-observability"}, {"persistentvolumeclaim/jaeger-badger", "kubephos-observability"}, {"telemetry/kubephos-tracing", istioNamespace},
 	}
 	for _, resource := range resources {
+		if networking == "cilium" && resource.namespace == istioNamespace {
+			continue
+		}
 		args := []string{"get", resource.name, "--ignore-not-found", "-o", "jsonpath={.metadata.annotations.kubephos\\.dev/ownership-marker}"}
 		if resource.namespace != "" {
 			args = append(args, "-n", resource.namespace)

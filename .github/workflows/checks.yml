@@ -1,0 +1,85 @@
+name: Checks
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  go:
+    runs-on: ubuntu-latest
+    container: golang:1.26.10
+    strategy:
+      fail-fast: false
+      matrix:
+        module: ['.', components/cluster-lens/backend, components/mon-agent, components/mentat]
+    steps:
+      - uses: actions/checkout@v6.0.3
+      - name: Install Python for generated workload checks
+        if: matrix.module == '.'
+        run: apt-get update && apt-get install -y --no-install-recommends python3
+      - name: Test and vet
+        working-directory: ${{ matrix.module }}
+        run: |
+          go test ./...
+          go vet ./...
+      - name: Check reachable Go vulnerabilities
+        working-directory: ${{ matrix.module }}
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
+
+  storage:
+    runs-on: ubuntu-latest
+    container: golang:1.26.10
+    services:
+      postgres:
+        image: postgres:18.6-alpine3.23
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 3s
+          --health-timeout 3s
+          --health-retries 20
+    env:
+      KUBEPHOS_TEST_DATABASE_URL: postgres://postgres@postgres/postgres?sslmode=disable
+    steps:
+      - uses: actions/checkout@v6.0.3
+      - name: Check storage and migrations against PostgreSQL
+        run: go test ./internal/storage -v
+
+  frontend:
+    runs-on: ubuntu-latest
+    container: node:24.20.0
+    steps:
+      - uses: actions/checkout@v6.0.3
+      - name: Install frontend dependencies
+        run: npm --prefix frontend ci
+      - name: Test frontend and Cluster Lens
+        run: |
+          npm --prefix frontend test
+          node --test components/cluster-lens/tests/*.test.cjs
+      - name: Build frontend
+        run: |
+          npm --prefix frontend run build
+          npm --prefix frontend run check:bundle
+          npm --prefix frontend run check:theme
+      - name: Audit frontend dependencies
+        run: npm --prefix frontend audit --audit-level=moderate
+
+  installer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6.0.3
+      - name: Test installer and Compose separation
+        run: |
+          bash -n install.sh
+          python3 scripts/test_install.py
+          python3 scripts/test_release.py
+          shellcheck install.sh
+          ./install.sh --prepare-only --admin-email admin@example.test --directory "$RUNNER_TEMP/kubephos-install"
+          docker compose --project-directory "$RUNNER_TEMP/kubephos-install" config --quiet
+          docker compose --env-file deploy/dev.env -f compose.yaml -f compose.dev.yaml config --quiet

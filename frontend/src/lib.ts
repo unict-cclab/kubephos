@@ -1,7 +1,10 @@
-import type {Application, JsonSchema, SchemaProperty} from './types'
+import type {Application, Experiment, JsonSchema, SchemaProperty} from './types'
+
+const dateFormatter = new Intl.DateTimeFormat(undefined, {dateStyle: 'medium', timeStyle: 'short'})
 
 export function formatDate(value: string): string {
-  return new Intl.DateTimeFormat(undefined, {dateStyle: 'medium', timeStyle: 'short'}).format(new Date(value))
+  const date = new Date(value)
+  return Number.isFinite(date.getTime()) ? dateFormatter.format(date) : '—'
 }
 
 export function formatBytes(value: number): string {
@@ -9,12 +12,16 @@ export function formatBytes(value: number): string {
   return `${(value / 1024).toFixed(1)} KB`
 }
 
-export function shortID(value: string): string {
-  return value.length > 18 ? `${value.slice(0, 18)}…` : value
-}
-
 export function isTerminalExperiment(status: string): boolean {
   return ['succeeded', 'failed', 'canceled'].includes(status.trim().toLowerCase())
+}
+
+export function experimentDeletionMessage(experiment: Pick<Experiment, 'name' | 'kind'>): string {
+  return `Delete ${experiment.kind === 'suite' ? 'suite' : 'experiment'} ${experiment.name} and its runs, logs and collected artifacts?`
+}
+
+export function experimentDisplayStatus(experiment: Pick<Experiment, 'status' | 'cancelRequested'>): string {
+  return experiment.cancelRequested && ['queued', 'running'].includes(experiment.status) ? 'stopping' : experiment.status
 }
 
 export function humanize(value: string): string {
@@ -46,7 +53,7 @@ export function readSchemaValues(form: HTMLFormElement, schema: JsonSchema, pref
 }
 
 function readValue(field: HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement, property: SchemaProperty): unknown {
-  if (property.type === 'boolean' && field instanceof HTMLInputElement) return field.checked
+  if (property.type === 'boolean') return field instanceof HTMLInputElement && field.type === 'checkbox' ? field.checked : field.value === 'true'
   if (field.value === '') return undefined
   if (property.type === 'integer') return Number.parseInt(field.value, 10)
   if (property.type === 'number') return Number(field.value)

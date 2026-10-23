@@ -4,12 +4,12 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
-	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	kubeconfigutil "kubephos.dev/kubephos/internal/kubeconfig"
 	"net/http"
 	"net/url"
 	"os"
@@ -219,7 +219,7 @@ type chartFetcher interface {
 
 func (Plugin) Manifest() plugins.Manifest {
 	return plugins.Manifest{
-		ID: pluginID, Name: "Managed observability", Version: "0.2.3",
+		ID: pluginID, Name: "Managed observability", Version: "0.2.5",
 		Description:     "Installs the release-managed metrics and dashboard profile on a Kubernetes cluster.",
 		Schema:          json.RawMessage(`{"type":"object","additionalProperties":false,"required":["clusterConnectionRef","storageClassCapabilityRef","scrapeInterval","retention"],"properties":{"clusterConnectionRef":{"type":"string","title":"Kubernetes cluster","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ClusterConnection","x-kubephos-artifact-version":"v1alpha1"},"storageClassCapabilityRef":{"type":"string","title":"Persistent storage","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"StorageClassCapability","x-kubephos-artifact-version":"v1alpha1"},"scrapeInterval":{"type":"string","title":"Metrics interval","enum":["5s","10s","15s","30s"],"default":"15s"},"retention":{"type":"string","title":"Metrics retention","enum":["1d","7d","15d"],"default":"7d"}}}`),
 		ArtifactInputs:  []domain.ArtifactContract{{Type: "ClusterConnection", Version: "v1alpha1"}, {Type: "StorageClassCapability", Version: "v1alpha1"}},
@@ -518,64 +518,14 @@ func validManagedRegistryHost(host string) bool {
 }
 
 func validateKubeconfig(value, server string) error {
-	var config struct {
-		APIVersion     string `yaml:"apiVersion"`
-		Kind           string `yaml:"kind"`
-		CurrentContext string `yaml:"current-context"`
-		Clusters       []struct {
-			Name    string `yaml:"name"`
-			Cluster struct {
-				Server string `yaml:"server"`
-			} `yaml:"cluster"`
-		} `yaml:"clusters"`
-		Contexts []struct {
-			Name    string `yaml:"name"`
-			Context struct {
-				Cluster string `yaml:"cluster"`
-				User    string `yaml:"user"`
-			} `yaml:"context"`
-		} `yaml:"contexts"`
-		Users []struct {
-			Name string `yaml:"name"`
-			User struct {
-				ClientCertificateData string `yaml:"client-certificate-data"`
-				ClientKeyData         string `yaml:"client-key-data"`
-			} `yaml:"user"`
-		} `yaml:"users"`
-	}
-	if err := yaml.Unmarshal([]byte(value), &config); err != nil || config.APIVersion != "v1" || config.Kind != "Config" || config.CurrentContext == "" {
-		return errors.New("cluster kubeconfig is invalid")
-	}
-	var clusterName, userName string
-	for _, item := range config.Contexts {
-		if item.Name == config.CurrentContext {
-			clusterName, userName = item.Context.Cluster, item.Context.User
-		}
-	}
-	clusterOK := false
-	for _, item := range config.Clusters {
-		if item.Name == clusterName && item.Cluster.Server == server {
-			clusterOK = true
-		}
-	}
-	userOK := false
-	for _, item := range config.Users {
-		if item.Name != userName {
-			continue
-		}
-		cert, certErr := base64.StdEncoding.DecodeString(item.User.ClientCertificateData)
-		key, keyErr := base64.StdEncoding.DecodeString(item.User.ClientKeyData)
-		userOK = certErr == nil && keyErr == nil && len(cert) > 0 && len(key) > 0
-	}
-	if !clusterOK || !userOK {
-		return errors.New("cluster kubeconfig target or client identity is invalid")
-	}
-	return nil
+	return kubeconfigutil.ValidateClientIdentity(value, server)
 }
 
 func managedValues(input stepInput, storageClass, password string) ([]byte, error) {
 	values := map[string]any{
-		"alertmanager":          map[string]any{"enabled": false},
+		"alertmanager":          map[string]any{"enabled": false, "alertmanagerSpec": map[string]any{"nodeSelector": map[string]string{"kubephos.dev/role": "management"}}},
+		"prometheusOperator":    map[string]any{"nodeSelector": map[string]string{"kubephos.dev/role": "management"}, "admissionWebhooks": map[string]any{"patch": map[string]any{"nodeSelector": map[string]string{"kubephos.dev/role": "management"}}, "deployment": map[string]any{"nodeSelector": map[string]string{"kubephos.dev/role": "management"}}}},
+		"kube-state-metrics":    map[string]any{"nodeSelector": map[string]string{"kubephos.dev/role": "management"}},
 		"kubeControllerManager": map[string]any{"enabled": false},
 		"kubeScheduler":         map[string]any{"enabled": false},
 		"kubeProxy":             map[string]any{"enabled": false},
@@ -595,7 +545,8 @@ func managedValues(input stepInput, storageClass, password string) ([]byte, erro
 		"prometheus": map[string]any{
 			"service": map[string]any{"type": "NodePort", "nodePort": prometheusPort},
 			"prometheusSpec": map[string]any{
-				"scrapeInterval": input.ScrapeInterval, "evaluationInterval": input.ScrapeInterval, "retention": input.Retention,
+				"nodeSelector":   map[string]string{"kubephos.dev/role": "management"},
+				"scrapeInterval": input.ScrapeInterval, "scrapeTimeout": prometheusScrapeTimeout(input.ScrapeInterval), "evaluationInterval": input.ScrapeInterval, "retention": input.Retention,
 				"additionalScrapeConfigs": []any{map[string]any{
 					"job_name":              "istio-mesh",
 					"kubernetes_sd_configs": []any{map[string]any{"role": "pod"}},
@@ -1067,4 +1018,11 @@ func invalid(report domain.ValidationReport, path, message string) domain.Valida
 
 func unhealthy(summary, key, value string) domain.HealthReport {
 	return domain.HealthReport{Status: domain.HealthUnhealthy, Summary: summary, Checks: map[string]string{key: value}}
+}
+
+func prometheusScrapeTimeout(interval string) string {
+	if interval == "5s" {
+		return "5s"
+	}
+	return "10s"
 }

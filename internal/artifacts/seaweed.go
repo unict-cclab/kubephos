@@ -95,6 +95,31 @@ func (c *Client) Get(ctx context.Context, key string) (io.ReadCloser, string, er
 	return response.Body, response.Header.Get("Content-Type"), nil
 }
 
+// Delete removes an object or a complete operation directory. Missing objects
+// are already deleted, so durable deletion jobs can safely retry after a crash.
+func (c *Client) Delete(ctx context.Context, key string) error {
+	key = normalizeKey(key)
+	if !(strings.HasPrefix(key, "/kubephos/operations/op_") || strings.HasPrefix(key, "/experiments/exp_")) || strings.Contains(key, "..") || strings.ContainsAny(key, "?%#") {
+		return fmt.Errorf("invalid artifact deletion key")
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodDelete, c.endpoint+key+"?recursive=true", nil)
+	if err != nil {
+		return err
+	}
+	response, err := c.client.Do(request)
+	if err != nil {
+		return err
+	}
+	defer response.Body.Close()
+	if response.StatusCode == http.StatusNotFound {
+		return nil
+	}
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return fmt.Errorf("artifact deletion returned %s", response.Status)
+	}
+	return nil
+}
+
 func (c *Client) ReadVerified(ctx context.Context, key, expectedDigest string, expectedSize int64) ([]byte, error) {
 	if expectedSize < 0 || expectedSize > MaxArtifactBytes+1024 {
 		return nil, fmt.Errorf("stored artifact size %d is outside the permitted range", expectedSize)

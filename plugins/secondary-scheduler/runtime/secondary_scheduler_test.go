@@ -157,7 +157,7 @@ func TestSchedulerManifestUsesManagedTaggedImage(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(value)
-	if !strings.Contains(text, testSchedulerImage) || strings.Contains(text, ":latest") || !strings.Contains(text, "cluster-admin") || !strings.Contains(text, "system:volume-scheduler") || !strings.Contains(text, "--config=/etc/kubephos/scheduler.yaml") {
+	if !strings.Contains(text, testSchedulerImage) || strings.Contains(text, ":latest") || !strings.Contains(text, "cluster-admin") || !strings.Contains(text, "system:volume-scheduler") || !strings.Contains(text, "--config=/etc/kubephos/scheduler.yaml") || strings.Contains(text, `"--v=4"`) {
 		t.Fatalf("unexpected scheduler manifest %s", text)
 	}
 	if !strings.Contains(text, "kubeconfig: /etc/kubephos/kubeconfig") || !strings.Contains(text, "tokenFile: /var/run/secrets/kubernetes.io/serviceaccount/token") || !strings.Contains(text, "server: https://kubernetes.default.svc") {
@@ -205,7 +205,7 @@ func testArtifacts() map[string]domain.ResolvedArtifact {
 	kubeconfig := "apiVersion: v1\nkind: Config\ncurrent-context: managed\nclusters:\n- name: managed\n  cluster:\n    server: https://10.10.0.10:6443\ncontexts:\n- name: managed\n  context:\n    cluster: managed\n    user: admin\nusers:\n- name: admin\n  user:\n    client-certificate-data: " + certificate + "\n    client-key-data: " + key + "\n"
 	cluster, _ := json.Marshal(map[string]any{"apiVersion": artifactAPI, "kind": "ClusterConnection", "metadata": map[string]string{"name": "development", "version": "v1.36.0+k3s1"}, "spec": map[string]string{"distribution": "k3s", "server": "https://10.10.0.10:6443", "kubeconfig": kubeconfig}})
 	target := workloadTarget{ID: "frontend", APIVersion: "apps/v1", Kind: "Deployment", Name: "frontend", Selector: map[string]string{"app": "frontend"}, Traits: []string{"scalable", "schedulable"}}
-	application, _ := json.Marshal(map[string]any{"apiVersion": artifactAPI, "kind": "ApplicationDeployment", "metadata": map[string]string{"name": "kubephos-app-one", "version": "v1alpha1", "ownershipMarker": "application-marker"}, "spec": map[string]any{"applicationRef": "app:dev.example.app@1.0.0", "clusterServer": "https://10.10.0.10:6443", "namespace": "kubephos-app-one", "controlNamespace": "kubephos-control-" + domain.RuntimeExecutionIDToken, "manifestDigest": "sha256:" + strings.Repeat("a", 64), "workloads": []workloadTarget{target}}})
+	application, _ := json.Marshal(map[string]any{"apiVersion": artifactAPI, "kind": "ApplicationDeployment", "metadata": map[string]string{"name": "kubephos-app-one", "version": "v1alpha1", "ownershipMarker": "application-marker"}, "spec": map[string]any{"applicationRef": "app:dev.example.app", "clusterServer": "https://10.10.0.10:6443", "namespace": "kubephos-app-one", "controlNamespace": "kubephos-control-" + domain.RuntimeExecutionIDToken, "manifestDigest": "sha256:" + strings.Repeat("a", 64), "workloads": []workloadTarget{target}}})
 	targets, _ := json.Marshal([]workloadTarget{target})
 	digest := sha256.Sum256(targets)
 	binding, _ := json.Marshal(map[string]any{"apiVersion": artifactAPI, "kind": "TargetBinding", "metadata": map[string]string{"name": "workload-targets-schedulable", "version": "v1alpha1"}, "spec": map[string]any{"sourceArtifactId": "art_workloads", "sourceDigest": "sha256:" + hex.EncodeToString(digest[:]), "requiredTrait": "schedulable", "includeComponentIds": []string{"frontend"}, "excludeComponentIds": []string{}, "targets": []workloadTarget{target}}})
@@ -249,7 +249,7 @@ func (runner *fakeRunner) Run(_ context.Context, _ string, stdin []byte, args ..
 	if strings.HasPrefix(command, "apply --dry-run=server") || strings.HasPrefix(command, "apply --dry-run=client") || strings.Contains(command, "patch deployment/frontend") && strings.Contains(command, "--dry-run=server") {
 		return "accepted", nil
 	}
-	if strings.HasPrefix(command, "get serviceaccount scheduler ") || strings.HasPrefix(command, "get configmap scheduler-config ") || strings.HasPrefix(command, "get deployment scheduler ") || strings.HasPrefix(command, "get clusterrolebinding kubephos-") || strings.HasPrefix(command, "get rolebinding kubephos-") {
+	if strings.HasPrefix(command, "get podmonitor scheduler-metrics ") || strings.HasPrefix(command, "get secret scheduler-metrics ") || strings.HasPrefix(command, "get serviceaccount scheduler-metrics ") || strings.HasPrefix(command, "get serviceaccount scheduler ") || strings.HasPrefix(command, "get configmap scheduler-config ") || strings.HasPrefix(command, "get deployment scheduler ") || strings.HasPrefix(command, "get clusterrolebinding kubephos-") || strings.HasPrefix(command, "get rolebinding kubephos-") {
 		if !runner.installed {
 			return "", nil
 		}
@@ -354,4 +354,37 @@ func (runner *fakeRunner) workloadJSON() string {
 	}
 	value, _ := json.Marshal(map[string]any{"apiVersion": "apps/v1", "kind": "Deployment", "metadata": map[string]string{"name": "frontend"}, "spec": map[string]any{"template": map[string]any{"metadata": map[string]any{"labels": map[string]string{"app": "frontend"}, "annotations": annotations}, "spec": map[string]string{"schedulerName": runner.workloadScheduler}}}})
 	return string(value)
+}
+
+func TestControllerDeploymentRequiresManagementNode(t *testing.T) {
+	raw, err := schedulerManifest(stepInput{Spec: Spec{Image: testSchedulerImage, ConfigFile: defaultSchedulerConfig}, Marker: "marker", Namespace: "kubephos-test", SchedulerName: "kubephos-test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployments := 0
+	for _, document := range strings.Split(string(raw), "\n---\n") {
+		var item struct {
+			Kind string `json:"kind"`
+			Spec struct {
+				Template struct {
+					Spec struct {
+						NodeSelector map[string]string `json:"nodeSelector"`
+					} `json:"spec"`
+				} `json:"template"`
+			} `json:"spec"`
+		}
+		if err := json.Unmarshal([]byte(document), &item); err != nil {
+			t.Fatal(err)
+		}
+		if item.Kind != "Deployment" {
+			continue
+		}
+		deployments++
+		if item.Spec.Template.Spec.NodeSelector["kubephos.dev/role"] != "management" {
+			t.Fatal("scheduler deployment is not constrained to management nodes")
+		}
+	}
+	if deployments != 1 {
+		t.Fatalf("expected one scheduler deployment, got %d", deployments)
+	}
 }

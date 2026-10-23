@@ -27,7 +27,6 @@ const maxDescriptorBytes = 512 * 1024
 
 var (
 	idPattern       = regexp.MustCompile(`^[a-z0-9][a-z0-9.-]{2,127}$`)
-	versionPattern  = regexp.MustCompile(`^[0-9A-Za-z][0-9A-Za-z.+_-]{0,63}$`)
 	namePattern     = regexp.MustCompile(`^[a-z0-9][a-z0-9.-]{0,62}$`)
 	groupPattern    = regexp.MustCompile(`^[A-Za-z0-9](?:[-_.A-Za-z0-9]{0,61}[A-Za-z0-9])?$`)
 	commitPattern   = regexp.MustCompile(`^[0-9a-fA-F]{40}$`)
@@ -44,7 +43,6 @@ type Descriptor struct {
 type Metadata struct {
 	ID          string `json:"id" yaml:"id"`
 	Name        string `json:"name" yaml:"name"`
-	Version     string `json:"version" yaml:"version"`
 	Description string `json:"description,omitempty" yaml:"description,omitempty"`
 }
 
@@ -173,14 +171,11 @@ func LoadDirectory(root string) ([]domain.CatalogApplication, error) {
 		return nil, err
 	}
 	sort.Slice(entries, func(left, right int) bool {
-		if entries[left].ID == entries[right].ID {
-			return entries[left].Version < entries[right].Version
-		}
 		return entries[left].ID < entries[right].ID
 	})
 	for index := 1; index < len(entries); index++ {
-		if entries[index-1].ID == entries[index].ID && entries[index-1].Version == entries[index].Version {
-			return nil, fmt.Errorf("duplicate application %s version %s", entries[index].ID, entries[index].Version)
+		if entries[index-1].ID == entries[index].ID {
+			return nil, fmt.Errorf("duplicate application %s", entries[index].ID)
 		}
 	}
 	return entries, nil
@@ -216,9 +211,8 @@ func Parse(raw []byte, origin string) (domain.CatalogApplication, error) {
 	digest := sha256.Sum256(canonical)
 	return domain.CatalogApplication{
 		ID:          descriptor.Metadata.ID,
-		Reference:   Reference(descriptor.Metadata.ID, descriptor.Metadata.Version),
+		Reference:   Reference(descriptor.Metadata.ID),
 		Name:        descriptor.Metadata.Name,
-		Version:     descriptor.Metadata.Version,
 		Description: descriptor.Metadata.Description,
 		Origin:      origin,
 		Descriptor:  canonical,
@@ -227,24 +221,15 @@ func Parse(raw []byte, origin string) (domain.CatalogApplication, error) {
 	}, nil
 }
 
-func Reference(applicationID, version string) string {
-	return "app:" + applicationID + "@" + version
+func Reference(applicationID string) string {
+	return "app:" + applicationID
 }
 
-func ParseReference(value string) (string, string, error) {
-	if !strings.HasPrefix(value, "app:") {
-		return "", "", errors.New("application reference must start with app:")
+func ParseReference(value string) (string, error) {
+	if !strings.HasPrefix(value, "app:") || !idPattern.MatchString(strings.TrimPrefix(value, "app:")) {
+		return "", errors.New("application reference is invalid")
 	}
-	identity := strings.TrimPrefix(value, "app:")
-	separator := strings.LastIndex(identity, "@")
-	if separator < 1 || separator == len(identity)-1 {
-		return "", "", errors.New("application reference must include ID and version")
-	}
-	applicationID, version := identity[:separator], identity[separator+1:]
-	if !idPattern.MatchString(applicationID) || !versionPattern.MatchString(version) {
-		return "", "", errors.New("application reference is invalid")
-	}
-	return applicationID, version, nil
+	return strings.TrimPrefix(value, "app:"), nil
 }
 
 func validate(descriptor Descriptor, origin string) error {
@@ -257,9 +242,6 @@ func validate(descriptor Descriptor, origin string) error {
 	}
 	if strings.TrimSpace(metadata.Name) == "" || len([]rune(metadata.Name)) > 80 {
 		return errors.New("metadata.name must contain between 1 and 80 characters")
-	}
-	if !versionPattern.MatchString(metadata.Version) {
-		return errors.New("metadata.version is invalid")
 	}
 	if len([]rune(metadata.Description)) > 280 {
 		return errors.New("metadata.description cannot exceed 280 characters")

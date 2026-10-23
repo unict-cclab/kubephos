@@ -1,0 +1,232 @@
+apiVersion: catalog.kubephos.dev/v1alpha1
+kind: Application
+metadata:
+  id: dev.kubephos.localai
+  name: LocalAI
+  description: CPU inference benchmark with a selectable model per service, shared
+    model and backend cache, and header-based routing.
+spec:
+  package:
+    type: embedded
+    format: plain-yaml
+    entrypoint: generated.yaml
+  materializer: io.kubephos.applications.localai
+  materializerConfig:
+    models:
+    - id: Qwen2.5-0.5B-Instruct
+      url: https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/9217f5db79a29953eb74d5343926648285ec7e67/qwen2.5-0.5b-instruct-q4_k_m.gguf
+      sha256: 74a4da8c9fdbcd15bd1f6d01d621410d31c6fc00986f5eb687824e7b93d7a9db
+      size: 491400032
+    - id: Qwen2.5-1.5B-Instruct
+      url: https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/91cad51170dc346986eccefdc2dd33a9da36ead9/qwen2.5-1.5b-instruct-q4_k_m.gguf
+      sha256: 6a1a2eb6d15622bf3c96857206351ba97e1af16c30d7a74ee38970e434e9407e
+      size: 1117320736
+    - id: Qwen2.5-3B-Instruct
+      url: https://huggingface.co/Qwen/Qwen2.5-3B-Instruct-GGUF/resolve/7dabda4d13d513e3e842b20f0d435c732f172cbe/qwen2.5-3b-instruct-q4_k_m.gguf
+      sha256: 626b4a6678b86442240e33df819e00132d3ba7dddfe1cdc4fbb18e0a9615c62d
+      size: 2104932768
+    - id: Qwen3-0.6B
+      url: https://huggingface.co/Qwen/Qwen3-0.6B-GGUF/resolve/23749fefcc72300e3a2ad315e1317431b06b590a/Qwen3-0.6B-Q8_0.gguf
+      sha256: 9465e63a22add5354d9bb4b99e90117043c7124007664907259bd16d043bb031
+      size: 639446688
+    - id: Qwen3-1.7B
+      url: https://huggingface.co/Qwen/Qwen3-1.7B-GGUF/resolve/90862c4b9d2787eaed51d12237eafdfe7c5f6077/Qwen3-1.7B-Q8_0.gguf
+      sha256: 061b54daade076b5d3362dac252678d17da8c68f07560be70818cace6590cb1a
+      size: 1834426016
+    - id: Qwen3-4B
+      url: https://huggingface.co/Qwen/Qwen3-4B-GGUF/resolve/bc640142c66e1fdd12af0bd68f40445458f3869b/Qwen3-4B-Q4_K_M.gguf
+      sha256: 7485fe6f11af29433bc51cab58009521f205840f5b4ae3a32fa7f92e8534fdf5
+      size: 2497280256
+    - id: Qwen2.5-Coder-0.5B-Instruct
+      url: https://huggingface.co/Qwen/Qwen2.5-Coder-0.5B-Instruct-GGUF/resolve/ebb2015119c907b064c512bf053e945850b5875f/qwen2.5-coder-0.5b-instruct-q4_k_m.gguf
+      sha256: 1d9614638d18024d0fbb36575a15f1302a3adf044df10345688ec4f6e1c4ff32
+      size: 491400064
+    - id: Qwen2.5-Coder-1.5B-Instruct
+      url: https://huggingface.co/Qwen/Qwen2.5-Coder-1.5B-Instruct-GGUF/resolve/f86cb2c1fa58255f8052cc32aeede1b7482d4361/qwen2.5-coder-1.5b-instruct-q4_k_m.gguf
+      sha256: cc324af070c2ecbfd324a30884d2f951a7ff756aba85cb811a6ec436933bb046
+      size: 1117320768
+    - id: Qwen2.5-Coder-3B-Instruct
+      url: https://huggingface.co/Qwen/Qwen2.5-Coder-3B-Instruct-GGUF/resolve/f74adce6aa16316c625447af059dbebe4983757c/qwen2.5-coder-3b-instruct-q4_k_m.gguf
+      sha256: 724fb256bec1ff062b2f65e4569e871ad2e95ab2a3989723d1769c54294730b7
+      size: 2104932800
+  interface:
+    group: localai
+    components:
+    - id: m1
+      workload:
+        apiVersion: apps/v1
+        kind: Deployment
+        name: m1
+      selector:
+        app: m1
+      traits:
+      - scalable
+      - schedulable
+      - deschedulable
+      index: 1
+    - id: m2
+      workload:
+        apiVersion: apps/v1
+        kind: Deployment
+        name: m2
+      selector:
+        app: m2
+      traits:
+      - scalable
+      - schedulable
+      - deschedulable
+      index: 1
+    - id: m3
+      workload:
+        apiVersion: apps/v1
+        kind: Deployment
+        name: m3
+      selector:
+        app: m3
+      traits:
+      - scalable
+      - schedulable
+      - deschedulable
+      index: 1
+    - id: node-proxy
+      workload:
+        apiVersion: apps/v1
+        kind: DaemonSet
+        name: node-proxy
+      selector:
+        app: node-proxy
+      traits:
+      - traffic-entrypoint
+      index: 0
+      dependencies:
+      - m1
+      - m2
+      - m3
+    endpoints:
+    - id: node-proxy-http
+      component: node-proxy
+      service: node-proxy
+      port: 80
+      protocol: http
+      path: /
+    loadScenarios:
+    - id: inference
+      engine: locust
+      script: generated/locustfile.py
+      runtimeImage: locustio/locust:2.42.6
+      targetEndpoint: node-proxy-http
+  valuesSchema:
+    type: object
+    additionalProperties: false
+    x-kubephos-dynamic-topology: true
+    properties:
+      models:
+        x-kubephos-order: 1
+        type: array
+        title: Models per service
+        minItems: 1
+        maxItems: 100
+        items:
+          type: string
+          enum:
+          - Qwen2.5-0.5B-Instruct
+          - Qwen2.5-1.5B-Instruct
+          - Qwen2.5-3B-Instruct
+          - Qwen3-0.6B
+          - Qwen3-1.7B
+          - Qwen3-4B
+          - Qwen2.5-Coder-0.5B-Instruct
+          - Qwen2.5-Coder-1.5B-Instruct
+          - Qwen2.5-Coder-3B-Instruct
+        x-kubephos-item-prefix: m
+      initialReplicas:
+        x-kubephos-order: 2
+        type: integer
+        title: Initial replicas per service
+        minimum: 1
+        maximum: 20
+      replicaOverrides:
+        x-kubephos-order: 3
+        type: object
+        title: Initial replicas by service
+        additionalProperties: true
+      contextSize:
+        x-kubephos-order: 4
+        type: integer
+        title: Context size (tokens)
+        minimum: 128
+        maximum: 32768
+      threads:
+        x-kubephos-order: 5
+        type: integer
+        title: CPU threads per service replica
+        minimum: 1
+        maximum: 64
+      storageSize:
+        x-kubephos-order: 6
+        type: string
+        title: Model storage size
+        pattern: ^[1-9][0-9]*(Mi|Gi|Ti)$
+      prompt:
+        x-kubephos-order: 7
+        type: string
+        title: Inference prompt
+        minLength: 1
+        maxLength: 4096
+      maxTokens:
+        x-kubephos-order: 8
+        type: integer
+        title: Maximum output tokens
+        minimum: 1
+        maximum: 2048
+      cpuRequest:
+        x-kubephos-order: 9
+        type: string
+        title: CPU request per service (optional)
+        minLength: 1
+        maxLength: 16
+      memoryRequest:
+        x-kubephos-order: 10
+        type: string
+        title: Memory request per service (optional)
+        minLength: 1
+        maxLength: 16
+      cpuLimit:
+        x-kubephos-order: 11
+        type: string
+        title: CPU limit per service (optional)
+        minLength: 1
+        maxLength: 16
+      memoryLimit:
+        x-kubephos-order: 12
+        type: string
+        title: Memory limit per service (optional)
+        minLength: 1
+        maxLength: 16
+      resourceOverrides:
+        x-kubephos-order: 13
+        type: object
+        title: Resource overrides by service
+        additionalProperties: true
+    required:
+    - models
+    - initialReplicas
+    - contextSize
+    - threads
+    - storageSize
+    - prompt
+    - maxTokens
+    x-kubephos-service-prefix: m
+  defaults:
+    models:
+    - Qwen2.5-0.5B-Instruct
+    - Qwen2.5-1.5B-Instruct
+    - Qwen2.5-Coder-0.5B-Instruct
+    initialReplicas: 1
+    replicaOverrides: {}
+    contextSize: 2048
+    threads: 1
+    storageSize: 20Gi
+    prompt: Write a short sentence about Kubernetes.
+    maxTokens: 32
+    resourceOverrides: {}

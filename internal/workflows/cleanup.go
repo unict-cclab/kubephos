@@ -21,7 +21,7 @@ func CleanupPlan(source domain.Operation) (domain.Plan, error) {
 		}
 		effects := make([]domain.ResourceEffect, 0, len(planned.Effects))
 		for _, effect := range planned.Effects {
-			if effect.Action == "create" {
+			if effect.Action == "create" || effect.Action == "update" {
 				effect.Action = "delete"
 				effects = append(effects, effect)
 			}

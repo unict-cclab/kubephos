@@ -56,6 +56,10 @@ func TestBootstrapValidatesInstallsVerifiesAndCleansCluster(t *testing.T) {
 	if decoded.ClusterConnection.Spec.Server != "https://10.20.0.10:6443" || strings.Contains(decoded.ClusterConnection.Spec.Kubeconfig, "127.0.0.1") || !strings.Contains(decoded.ClusterConnection.Spec.Kubeconfig, "current-context: dev") || !strings.Contains(decoded.ClusterConnection.Spec.Kubeconfig, "name: dev-admin") || len(decoded.ClusterInventory.Spec.Nodes) != 3 {
 		t.Fatalf("unexpected cluster result %#v", decoded)
 	}
+	nodeNames := []string{decoded.ClusterInventory.Spec.Nodes[0].Name, decoded.ClusterInventory.Spec.Nodes[1].Name, decoded.ClusterInventory.Spec.Nodes[2].Name}
+	if strings.Join(nodeNames, ",") != "dev-control-plane-1,dev-worker-1,dev-worker-2" {
+		t.Fatalf("unexpected managed node names %v", nodeNames)
+	}
 	step.Cleanup = true
 	health, err = plugin.Precheck(context.Background(), step, func(string, string) error { return nil })
 	if err != nil || health.Status != domain.HealthHealthy {
@@ -97,12 +101,30 @@ func TestManagedPoolsAssignStableRolesAndZones(t *testing.T) {
 	if err := validatePoolCapacity(spec, 8); err != nil {
 		t.Fatal(err)
 	}
-	expected := []struct{ pool, role, zone string }{{"control-plane", "control-plane", "zone-a"}, {"control-plane", "control-plane", "zone-b"}, {"control-plane", "control-plane", "zone-a"}, {"management", "management", "zone-a"}, {"management", "management", "zone-b"}, {"applications", "application", "zone-a"}, {"applications", "application", "zone-b"}, {"applications", "application", "zone-a"}}
+	expected := []struct{ pool, role, zone, name string }{{"control-plane", "control-plane", "zone-a", "research-control-plane-1"}, {"control-plane", "control-plane", "zone-b", "research-control-plane-2"}, {"control-plane", "control-plane", "zone-a", "research-control-plane-3"}, {"management", "management", "zone-a", "research-management-1"}, {"management", "management", "zone-b", "research-management-2"}, {"applications", "application", "zone-a", "research-applications-1"}, {"applications", "application", "zone-b", "research-applications-2"}, {"applications", "application", "zone-a", "research-applications-3"}}
+	spec.ClusterName = "research"
 	for position, value := range expected {
 		labels := machineLabels(spec, position)
 		if labels["kubephos.dev/pool"] != value.pool || labels["kubephos.dev/role"] != value.role || labels["topology.kubernetes.io/zone"] != value.zone {
 			t.Fatalf("machine %d has unexpected labels %#v", position, labels)
 		}
+		if name := managedNodeName(spec, position); name != value.name {
+			t.Fatalf("machine %d has name %q, want %q", position, name, value.name)
+		}
+	}
+}
+
+func TestManagedPoolsRejectControlPlaneAsPoolName(t *testing.T) {
+	spec := Spec{ControlPlanes: 1, ControlPlaneZones: []string{"zone-a"}, NodePools: []NodePool{{Name: "control-plane", Role: "management", Count: 1, Zones: []string{"zone-a"}}}}
+	if err := validatePoolConfiguration(spec); err == nil {
+		t.Fatal("reserved control-plane pool name was accepted")
+	}
+}
+
+func TestManagedPoolsRejectNodeNamesLongerThanDNSLabel(t *testing.T) {
+	spec := Spec{ClusterName: strings.Repeat("a", 32), ControlPlanes: 1, ControlPlaneZones: []string{"zone-a"}, NodePools: []NodePool{{Name: strings.Repeat("b", 32), Role: "management", Count: 1, Zones: []string{"zone-a"}}}}
+	if err := validatePoolConfiguration(spec); err == nil {
+		t.Fatal("node name longer than a DNS label was accepted")
 	}
 }
 
@@ -185,6 +207,7 @@ func TestInstallTaintsControlPlane(t *testing.T) {
 type fakeRunner struct {
 	lock      sync.Mutex
 	installed map[string]string
+	nodeNames map[string]string
 }
 
 func (r *fakeRunner) Run(_ context.Context, target machine, _ machineAccess, command string) (string, error) {
@@ -200,9 +223,11 @@ func (r *fakeRunner) Run(_ context.Context, target machine, _ machineAccess, com
 		return "", nil
 	case strings.Contains(command, "sh -s - server"):
 		r.installed[target.Name] = "server"
+		r.rememberNodeName(target.Name, command)
 		return "installed", nil
 	case strings.Contains(command, "sh -s - agent"):
 		r.installed[target.Name] = "agent"
+		r.rememberNodeName(target.Name, command)
 		return "installed", nil
 	case command == "sudo k3s kubectl get --raw=/readyz":
 		if _, exists := r.installed[target.Name]; !exists {
@@ -211,11 +236,12 @@ func (r *fakeRunner) Run(_ context.Context, target machine, _ machineAccess, com
 		return "ok", nil
 	case command == "sudo k3s kubectl get nodes -o json":
 		items := make([]map[string]any, 0, len(r.installed))
-		for name, role := range r.installed {
+		for machineName, role := range r.installed {
 			labels := map[string]string{}
 			if role == "server" {
 				labels["node-role.kubernetes.io/control-plane"] = "true"
 			}
+			name := r.nodeNames[machineName]
 			items = append(items, map[string]any{"metadata": map[string]any{"name": name, "labels": labels}, "status": map[string]any{"conditions": []map[string]string{{"type": "Ready", "status": "True"}}, "nodeInfo": map[string]string{"kubeletVersion": k3sVersion}}})
 		}
 		value, _ := json.Marshal(map[string]any{"items": items})
@@ -224,6 +250,7 @@ func (r *fakeRunner) Run(_ context.Context, target machine, _ machineAccess, com
 		return "apiVersion: v1\nkind: Config\nclusters:\n  - name: default\n    cluster:\n      server: https://127.0.0.1:6443\nusers:\n  - name: default\n    user:\n      token: test\ncontexts:\n  - name: default\n    context:\n      cluster: default\n      user: default\ncurrent-context: default\n", nil
 	case strings.HasPrefix(command, "if [ -x /usr/local/bin/k3s-agent-uninstall.sh ]"):
 		delete(r.installed, target.Name)
+		delete(r.nodeNames, target.Name)
 		return "", nil
 	case strings.HasPrefix(command, "test ! -x /usr/local/bin/k3s && test ! -e /etc/systemd/system/k3s.service"):
 		if _, exists := r.installed[target.Name]; exists {
@@ -232,6 +259,21 @@ func (r *fakeRunner) Run(_ context.Context, target machine, _ machineAccess, com
 		return "", nil
 	default:
 		return "", fmt.Errorf("unexpected command %q", command)
+	}
+}
+
+func (r *fakeRunner) rememberNodeName(machineName, command string) {
+	if r.nodeNames == nil {
+		r.nodeNames = map[string]string{}
+	}
+	const prefix = "--node-name '"
+	start := strings.Index(command, prefix)
+	if start < 0 {
+		return
+	}
+	value := command[start+len(prefix):]
+	if end := strings.IndexByte(value, '\''); end >= 0 {
+		r.nodeNames[machineName] = value[:end]
 	}
 }
 

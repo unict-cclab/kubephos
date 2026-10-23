@@ -1,7 +1,14 @@
-export type Role = 'admin' | 'user'
-export type View = 'overview' | 'infrastructure' | 'kubernetes' | 'experiments' | 'suites' | 'results' | 'advanced' | 'workspaces' | 'pipelines' | 'operations' | 'catalog' | 'plugins' | 'users'
+export interface ResourceAttributionFields {
+  createdAt?: string
+  updatedAt?: string
+  createdBy?: string
+  modifiedBy?: string
+}
 
-export interface User {
+export type Role = 'admin' | 'user'
+export type View = 'overview' | 'infrastructure' | 'kubernetes' | 'experiments' | 'results' | 'catalog' | 'users'
+
+export interface User extends ResourceAttributionFields {
   id: string
   username: string
   email?: string
@@ -31,7 +38,11 @@ export interface SchemaProperty {
   title?: string
   description?: string
   default?: unknown
-  enum?: Array<string | number>
+  enum?: Array<string | number | boolean>
+  items?: SchemaProperty
+  minItems?: number
+  maxItems?: number
+  'x-kubephos-item-prefix'?: string
   format?: string
   minimum?: number
   maximum?: number
@@ -52,6 +63,8 @@ export interface SchemaProperty {
   'x-kubephos-schema-from-application'?: string
   'x-kubephos-visible-when'?: {property: string; values: Array<string | number | boolean>}
   'x-kubephos-hidden'?: boolean
+  'x-kubephos-advanced'?: boolean
+  'x-kubephos-order'?: number
 }
 
 export interface JsonSchema {
@@ -59,6 +72,7 @@ export interface JsonSchema {
   required?: string[]
   properties?: Record<string, SchemaProperty>
   'x-kubephos-dynamic-topology'?: boolean
+  'x-kubephos-service-prefix'?: string
 }
 
 export interface Plugin {
@@ -76,7 +90,7 @@ export interface Plugin {
   runtime: {kind: string; reference?: string; digest?: string}
 }
 
-export interface PluginPackage {
+export interface PluginPackage extends ResourceAttributionFields {
 	sequence: number
 	pluginId: string
 	version: string
@@ -87,7 +101,7 @@ export interface PluginPackage {
 	updatedAt: string
 }
 
-export interface PluginImportJob {
+export interface PluginImportJob extends ResourceAttributionFields {
   id: string
   status: 'queued' | 'inspecting' | 'validating' | 'activating' | 'succeeded' | 'failed'
   progress: number
@@ -105,7 +119,18 @@ export interface PluginImportJob {
   updatedAt: string
 }
 
-export interface CatalogStrategy {
+export interface CatalogModel extends ResourceAttributionFields {
+  id: string
+  url: string
+  sha256: string
+  size: number
+  backend: string
+  quantization: string
+  origin: 'built-in' | 'custom'
+  enabled: boolean
+}
+
+export interface CatalogStrategy extends ResourceAttributionFields {
   id: string
   workspaceId: string
   harborResourceId?: string
@@ -151,7 +176,7 @@ export interface CredentialDefinition {
   schema: JsonSchema
 }
 
-export interface Workspace {
+export interface Workspace extends ResourceAttributionFields {
   id: string
   name: string
   description: string
@@ -233,6 +258,18 @@ export interface MetricSeries {
   points: MetricPoint[]
 }
 
+export interface ControlMetricSummary {
+  timestampResolutionSeconds?: number
+  metric: string
+  status: 'available' | 'no_events' | 'unavailable' | 'not_configured'
+  scope: 'cluster' | 'experiment'
+  source?: string
+  count?: number
+  mean?: number
+  total?: number
+  reason?: string
+}
+
 export interface TimeSeriesDataset {
   apiVersion: string
   kind: 'TimeSeriesDataset'
@@ -244,6 +281,9 @@ export interface TimeSeriesDataset {
     start: string
     end: string
     stepSeconds: number
+    endToEndSource?: 'locust'
+    workloadStartedAt?: string
+    controlMetrics?: ControlMetricSummary[]
     sloMilliseconds?: number
     source: {kind: string; version: string; profile: string}
     series: MetricSeries[]
@@ -279,7 +319,8 @@ export interface ExperimentVariant {
   trials: ExperimentTrial[]
 }
 
-export interface Experiment {
+export interface Experiment extends ResourceAttributionFields {
+  configurationSnapshot?: Record<string, unknown>
   id: string
   workspaceId: string
   configurationId?: string
@@ -288,6 +329,7 @@ export interface Experiment {
   kind: 'comparison' | 'instance' | 'suite'
   name: string
   description: string
+  cancelRequested?: boolean
   status: string
   resultType: string
   resultVersion: string
@@ -319,7 +361,8 @@ export interface ExperimentConfigurationComponent {
   targets: {include: string[]; exclude: string[]}
 }
 
-export interface ExperimentConfiguration {
+export interface ExperimentConfiguration extends ResourceAttributionFields {
+  kind?: 'single' | 'suite'
   id: string
   workspaceId: string
   clusterResourceId: string
@@ -330,6 +373,9 @@ export interface ExperimentConfiguration {
   applicationRef: string
   applicationDigest: string
 	definition: {
+    kind?: 'single' | 'suite'
+    variants?: Array<{configurationId: string; alias: string; color: string}>
+    runs?: number
 	applicationValues: Record<string, unknown>
 		destinationMode?: 'application' | 'external'
 		externalDestination?: {targetUrl: string; runtimeImage: string; script: string; parameters?: Record<string, string>}
@@ -355,7 +401,7 @@ export interface PipelineStage {
   bindings?: PipelineBinding[]
 }
 
-export interface Pipeline {
+export interface Pipeline extends ResourceAttributionFields {
   id: string
   workspaceId: string
   name: string
@@ -389,7 +435,7 @@ export interface PipelineRunStage {
   cleanupError?: string
 }
 
-export interface PipelineRun {
+export interface PipelineRun extends ResourceAttributionFields {
   id: string
   pipelineId: string
   workspaceId: string
@@ -410,7 +456,7 @@ export interface PipelineRun {
   stages: PipelineRunStage[]
 }
 
-export interface Operation {
+export interface Operation extends ResourceAttributionFields {
   id: string
   workspaceId: string
   pluginId: string
@@ -453,11 +499,10 @@ export interface ApplicationLoadScenario {
   targetEndpoint?: string
 }
 
-export interface Application {
+export interface Application extends ResourceAttributionFields {
   id: string
   reference: string
   name: string
-  version: string
   description: string
   origin: string
   digest: string
@@ -475,14 +520,14 @@ export interface Application {
   updatedAt?: string
 }
 
-export interface Credential {
+export interface Credential extends ResourceAttributionFields {
   id: string
   name: string
   kind: string
   fingerprint: string
 }
 
-export interface Connection {
+export interface Connection extends ResourceAttributionFields {
   id: string
   name: string
   description?: string
@@ -492,7 +537,7 @@ export interface Connection {
   updatedAt: string
 }
 
-export interface ManagedResource {
+export interface ManagedResource extends ResourceAttributionFields {
   id: string
   workspaceId: string
   name: string

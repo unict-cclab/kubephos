@@ -117,7 +117,7 @@ func (TemplatePlugin) Manifest() plugins.Manifest {
 	return plugins.Manifest{
 		ID: templatePluginID, Provider: "proxmox", Name: "Proxmox VM template", Version: "0.1.0",
 		Description:     "Creates and validates a reusable Proxmox VM template.",
-		Schema:          json.RawMessage(`{"type":"object","additionalProperties":false,"required":["connectionRef","name","node","vmid","os","storage","imageStorage","bridge","diskGiB","prefixLength","dnsServer","sshUser"],"properties":{"connectionRef":{"type":"string","title":"Proxmox connection","format":"kubephos-connection-ref","x-kubephos-provider":"proxmox"},"name":{"type":"string","title":"Template name","pattern":"^[a-z0-9][a-z0-9-]{0,31}$"},"node":{"type":"string","title":"Proxmox node","minLength":1,"maxLength":64},"vmid":{"type":"integer","title":"Template VMID","minimum":100,"maximum":999999999},"os":{"type":"string","title":"Operating system","enum":["ubuntu-24.04","ubuntu-22.04","debian-12"],"default":"ubuntu-24.04"},"cloudImageURL":{"type":"string","title":"Custom cloud image URL","default":""},"storage":{"type":"string","title":"VM disk storage","minLength":1,"maxLength":64},"imageStorage":{"type":"string","title":"Image staging storage","minLength":1,"maxLength":64},"bridge":{"type":"string","title":"Network bridge","pattern":"^[A-Za-z0-9._-]{1,32}$","default":"vmbr0"},"diskGiB":{"type":"integer","title":"Disk GiB","minimum":8,"maximum":2048,"default":32},"address":{"type":"string","title":"Temporary address","description":"Leave empty to use DHCP.","default":""},"prefixLength":{"type":"integer","title":"Prefix length","minimum":1,"maximum":32,"default":24},"gateway":{"type":"string","title":"Gateway","default":""},"dnsServer":{"type":"string","title":"DNS server","default":"1.1.1.1"},"sshUser":{"type":"string","title":"SSH user","pattern":"^[a-z_][a-z0-9_-]{0,31}$","default":"ubuntu"}}}`),
+		Schema:          json.RawMessage(`{"type":"object","additionalProperties":false,"required":["connectionRef","name","node","vmid","os","storage","imageStorage","bridge","diskGiB","prefixLength","dnsServer","sshUser"],"properties":{"connectionRef":{"type":"string","title":"Proxmox connection","format":"kubephos-connection-ref","x-kubephos-provider":"proxmox"},"name":{"type":"string","title":"Template name","pattern":"^[a-z0-9][a-z0-9-]{0,31}$"},"node":{"type":"string","title":"Proxmox node","minLength":1,"maxLength":64},"vmid":{"type":"integer","title":"Template VMID","minimum":100,"maximum":999999999},"os":{"type":"string","title":"Operating system","enum":["ubuntu-24.04","ubuntu-22.04","debian-12"],"default":"ubuntu-24.04"},"cloudImageURL":{"type":"string","title":"Cloud image URL","default":""},"storage":{"type":"string","title":"VM disk storage","minLength":1,"maxLength":64},"imageStorage":{"type":"string","title":"Cloud image storage","minLength":1,"maxLength":64},"bridge":{"type":"string","title":"Network bridge","pattern":"^[A-Za-z0-9._-]{1,32}$","default":"vmbr0"},"diskGiB":{"type":"integer","title":"Disk GiB","minimum":8,"maximum":2048,"default":32},"address":{"type":"string","title":"Temporary address","default":""},"prefixLength":{"type":"integer","title":"Prefix length","minimum":1,"maximum":32,"default":24},"gateway":{"type":"string","title":"Gateway","default":""},"dnsServer":{"type":"string","title":"DNS server","default":"1.1.1.1"},"sshUser":{"type":"string","title":"SSH user","pattern":"^[a-z_][a-z0-9_-]{0,31}$","default":"ubuntu"}}}`),
 		ArtifactOutputs: []domain.ArtifactContract{{Type: "MachineTemplate", Version: "v1alpha1"}},
 		Capabilities:    []string{"infrastructure.provision", "infrastructure.deprovision", "infrastructure.machine-template.provision", "infrastructure.machine-template.deprovision", "infrastructure.preflight", "lifecycle.cleanup"},
 		Permissions:     []string{"network.proxmox.read", "network.proxmox.write", "network.egress", "secrets.read:proxmox-api-token"},
@@ -422,6 +422,10 @@ func validateTemplateValues(spec TemplateSpec) *domain.ValidationIssue {
 }
 
 func validateTemplateInventory(resources []vmResource, spec TemplateSpec) error {
+	if err := validateMachineNames(resources, []string{spec.Name}); err != nil {
+		return err
+	}
+
 	for _, resource := range resources {
 		if resource.VMID == spec.VMID {
 			return fmt.Errorf("VMID %d already exists and is protected", spec.VMID)
@@ -491,6 +495,14 @@ func ensureTemplateImage(ctx context.Context, connection *client, input template
 }
 
 func createTemplateVM(ctx context.Context, connection *client, input templateStepInput, volumeID, publicKey string, log plugins.Logger) error {
+	resources, err := connection.resources(ctx)
+	if err != nil {
+		return err
+	}
+	if err := validateTemplateInventory(resources, input.spec()); err != nil {
+		return err
+	}
+
 	if err := log("info", fmt.Sprintf("Creating Proxmox VM %d from the cloud image", input.VMID)); err != nil {
 		return err
 	}
@@ -663,19 +675,6 @@ func templateImageFilename(imageURL string) string {
 		name = "cloud-image"
 	}
 	return name + ".qcow2"
-}
-
-func osForImage(imageURL string) string {
-	switch {
-	case strings.Contains(imageURL, "/noble/"):
-		return "ubuntu-24.04"
-	case strings.Contains(imageURL, "/jammy/"):
-		return "ubuntu-22.04"
-	case strings.Contains(imageURL, "/bookworm/"):
-		return "debian-12"
-	default:
-		return "custom"
-	}
 }
 
 func templateIPConfig(input templateStepInput) string {

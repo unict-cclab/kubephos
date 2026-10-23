@@ -1,25 +1,23 @@
 package secondaryscheduler
 
 import (
-	"bytes"
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"gopkg.in/yaml.v3"
+	kubeconfigutil "kubephos.dev/kubephos/internal/kubeconfig"
 	"net/url"
-	"os"
-	"os/exec"
+
 	"sort"
 	"strings"
 	"sync"
 	"time"
 
-	"gopkg.in/yaml.v3"
-
 	"kubephos.dev/kubephos/internal/domain"
 	"kubephos.dev/kubephos/internal/managedregistry"
 	"kubephos.dev/kubephos/internal/plugins"
+	"kubephos.dev/kubephos/internal/strategytelemetry"
 )
 
 const (
@@ -210,7 +208,7 @@ type commandRunner interface {
 
 func (Plugin) Manifest() plugins.Manifest {
 	return plugins.Manifest{
-		ID: pluginID, Name: "Managed secondary scheduler", Version: "0.3.0",
+		ID: pluginID, Name: "Managed secondary scheduler", Version: "0.4.0",
 		Description:     "Installs a Kubernetes scheduler in the experiment control namespace and assigns only workloads selected by a validated target binding.",
 		Schema:          json.RawMessage(`{"type":"object","additionalProperties":false,"required":["clusterConnectionRef","applicationDeploymentRef","targetBindingRef","image","configFile"],"properties":{"clusterConnectionRef":{"type":"string","title":"Kubernetes cluster","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ClusterConnection","x-kubephos-artifact-version":"v1alpha1"},"applicationDeploymentRef":{"type":"string","title":"Application deployment","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ApplicationDeployment","x-kubephos-artifact-version":"v1alpha1"},"targetBindingRef":{"type":"string","title":"Workload binding","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"TargetBinding","x-kubephos-artifact-version":"v1alpha1"},"image":{"type":"string","title":"Mirrored strategy image","format":"kubephos-strategy-image","minLength":1},"configFile":{"type":"string","title":"Scheduler configuration","description":"KubeSchedulerConfiguration YAML. KubePhos assigns an isolated scheduler name and disables leader election.","format":"multiline","x-kubephos-multiline":true,"minLength":1,"maxLength":131072,"default":"apiVersion: kubescheduler.config.k8s.io/v1\nkind: KubeSchedulerConfiguration\nprofiles:\n  - schedulerName: kubephos-managed\nleaderElection:\n  leaderElect: false\n"}}}`),
 		ArtifactInputs:  []domain.ArtifactContract{{Type: "ClusterConnection", Version: "v1alpha1"}, {Type: "ApplicationDeployment", Version: "v1alpha1"}, {Type: "TargetBinding", Version: "v1alpha1"}},
@@ -641,56 +639,7 @@ func validateArtifacts(input stepInput, cluster clusterConnection, application a
 }
 
 func validateKubeconfig(value, server string) error {
-	var config struct {
-		APIVersion     string `yaml:"apiVersion"`
-		Kind           string `yaml:"kind"`
-		CurrentContext string `yaml:"current-context"`
-		Clusters       []struct {
-			Name    string `yaml:"name"`
-			Cluster struct {
-				Server string `yaml:"server"`
-			} `yaml:"cluster"`
-		} `yaml:"clusters"`
-		Contexts []struct {
-			Name    string `yaml:"name"`
-			Context struct {
-				Cluster string `yaml:"cluster"`
-				User    string `yaml:"user"`
-			} `yaml:"context"`
-		} `yaml:"contexts"`
-		Users []struct {
-			Name string `yaml:"name"`
-			User struct {
-				ClientCertificateData string `yaml:"client-certificate-data"`
-				ClientKeyData         string `yaml:"client-key-data"`
-			} `yaml:"user"`
-		} `yaml:"users"`
-	}
-	if err := yaml.Unmarshal([]byte(value), &config); err != nil || config.APIVersion != "v1" || config.Kind != "Config" || config.CurrentContext == "" {
-		return errors.New("cluster kubeconfig is invalid")
-	}
-	var clusterName, userName string
-	for _, item := range config.Contexts {
-		if item.Name == config.CurrentContext {
-			clusterName, userName = item.Context.Cluster, item.Context.User
-		}
-	}
-	clusterOK := false
-	for _, item := range config.Clusters {
-		clusterOK = clusterOK || item.Name == clusterName && item.Cluster.Server == server
-	}
-	userOK := false
-	for _, item := range config.Users {
-		if item.Name == userName {
-			certificate, certificateErr := base64.StdEncoding.DecodeString(item.User.ClientCertificateData)
-			key, keyErr := base64.StdEncoding.DecodeString(item.User.ClientKeyData)
-			userOK = certificateErr == nil && keyErr == nil && len(certificate) > 0 && len(key) > 0
-		}
-	}
-	if !clusterOK || !userOK {
-		return errors.New("cluster kubeconfig target or client identity is invalid")
-	}
-	return nil
+	return kubeconfigutil.ValidateClientIdentity(value, server)
 }
 
 func strategyVersion(image string) string {
@@ -757,8 +706,9 @@ func schedulerManifest(input stepInput) ([]byte, error) {
 		{"apiVersion": "rbac.authorization.k8s.io/v1", "kind": "ClusterRoleBinding", "metadata": map[string]any{"name": input.SchedulerName + "-volume", "labels": labels, "annotations": annotations}, "subjects": []map[string]string{{"kind": "ServiceAccount", "name": "scheduler", "namespace": input.Namespace}}, "roleRef": map[string]string{"apiGroup": "rbac.authorization.k8s.io", "kind": "ClusterRole", "name": "system:volume-scheduler"}},
 		{"apiVersion": "rbac.authorization.k8s.io/v1", "kind": "RoleBinding", "metadata": map[string]any{"name": input.SchedulerName + "-auth-reader", "namespace": "kube-system", "labels": labels, "annotations": annotations}, "subjects": []map[string]string{{"kind": "ServiceAccount", "name": "scheduler", "namespace": input.Namespace}}, "roleRef": map[string]string{"apiGroup": "rbac.authorization.k8s.io", "kind": "Role", "name": "extension-apiserver-authentication-reader"}},
 		{"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]any{"name": "scheduler-config", "namespace": input.Namespace, "labels": labels, "annotations": annotations}, "data": map[string]string{"scheduler.yaml": configuration, "kubeconfig": inClusterKubeconfig}},
-		{"apiVersion": "apps/v1", "kind": "Deployment", "metadata": map[string]any{"name": "scheduler", "namespace": input.Namespace, "labels": labels, "annotations": annotations}, "spec": map[string]any{"replicas": 1, "selector": map[string]any{"matchLabels": map[string]string{"app.kubernetes.io/instance": input.SchedulerName}}, "template": map[string]any{"metadata": map[string]any{"labels": labels, "annotations": annotations}, "spec": map[string]any{"serviceAccountName": "scheduler", "automountServiceAccountToken": true, "containers": []map[string]any{{"name": "scheduler", "image": input.Image, "imagePullPolicy": "IfNotPresent", "args": []string{"--config=/etc/kubephos/scheduler.yaml"}, "ports": []map[string]any{{"name": "healthz", "containerPort": 10259, "protocol": "TCP"}}, "readinessProbe": map[string]any{"httpGet": map[string]any{"path": "/healthz", "port": "healthz", "scheme": "HTTPS"}, "initialDelaySeconds": 5, "periodSeconds": 5}, "livenessProbe": map[string]any{"httpGet": map[string]any{"path": "/healthz", "port": "healthz", "scheme": "HTTPS"}, "initialDelaySeconds": 15, "periodSeconds": 10}, "resources": map[string]any{"requests": map[string]string{"cpu": "100m", "memory": "128Mi"}, "limits": map[string]string{"cpu": "500m", "memory": "512Mi"}}, "securityContext": map[string]any{"allowPrivilegeEscalation": false, "readOnlyRootFilesystem": true}, "volumeMounts": []map[string]any{{"name": "config", "mountPath": "/etc/kubephos", "readOnly": true}}}}, "volumes": []map[string]any{{"name": "config", "configMap": map[string]string{"name": "scheduler-config"}}}}}}},
+		{"apiVersion": "apps/v1", "kind": "Deployment", "metadata": map[string]any{"name": "scheduler", "namespace": input.Namespace, "labels": labels, "annotations": annotations}, "spec": map[string]any{"replicas": 1, "selector": map[string]any{"matchLabels": map[string]string{"app.kubernetes.io/instance": input.SchedulerName}}, "template": map[string]any{"metadata": map[string]any{"labels": labels, "annotations": annotations}, "spec": map[string]any{"serviceAccountName": "scheduler", "nodeSelector": map[string]string{"kubephos.dev/role": "management"}, "automountServiceAccountToken": true, "containers": []map[string]any{{"name": "scheduler", "image": input.Image, "imagePullPolicy": "IfNotPresent", "args": []string{"--config=/etc/kubephos/scheduler.yaml"}, "ports": []map[string]any{{"name": "healthz", "containerPort": 10259, "protocol": "TCP"}}, "readinessProbe": map[string]any{"httpGet": map[string]any{"path": "/healthz", "port": "healthz", "scheme": "HTTPS"}, "initialDelaySeconds": 5, "periodSeconds": 5}, "livenessProbe": map[string]any{"httpGet": map[string]any{"path": "/healthz", "port": "healthz", "scheme": "HTTPS"}, "initialDelaySeconds": 15, "periodSeconds": 10}, "resources": map[string]any{"requests": map[string]string{"cpu": "100m", "memory": "128Mi"}, "limits": map[string]string{"cpu": "500m", "memory": "512Mi"}}, "securityContext": map[string]any{"allowPrivilegeEscalation": false, "readOnlyRootFilesystem": true}, "volumeMounts": []map[string]any{{"name": "config", "mountPath": "/etc/kubephos", "readOnly": true}}}}, "volumes": []map[string]any{{"name": "config", "configMap": map[string]string{"name": "scheduler-config"}}}}}}},
 	}
+	objects = append(objects, strategytelemetry.Resources(input.Namespace, "scheduler", input.SchedulerName, ownershipKey, input.Marker, map[string]string{"app.kubernetes.io/instance": input.SchedulerName}, "healthz")...)
 	parts := make([]string, 0, len(objects))
 	for _, object := range objects {
 		value, err := json.Marshal(object)
@@ -787,7 +737,7 @@ func partitionSchedulerManifest(manifest []byte) ([]byte, []byte, error) {
 			components = append(components, document)
 		}
 	}
-	if len(foundation) != 3 || len(components) != 3 {
+	if len(foundation) != 4 || len(components) != 6 {
 		return nil, nil, errors.New("scheduler manifest partition is incomplete")
 	}
 	return []byte(strings.Join(foundation, "\n---\n")), []byte(strings.Join(components, "\n---\n")), nil
@@ -813,6 +763,10 @@ func schedulerResources(input stepInput) [][]string {
 		{"get", "deployment", "scheduler", "-n", input.Namespace},
 		{"get", "clusterrolebinding", input.SchedulerName + "-scheduler"},
 		{"get", "clusterrolebinding", input.SchedulerName + "-volume"},
+		{"get", "clusterrolebinding", input.SchedulerName + "-metrics"},
+		{"get", "podmonitor", "scheduler-metrics", "-n", input.Namespace},
+		{"get", "serviceaccount", "scheduler-metrics", "-n", input.Namespace},
+		{"get", "secret", "scheduler-metrics", "-n", input.Namespace},
 		{"get", "rolebinding", input.SchedulerName + "-auth-reader", "-n", "kube-system"},
 	}
 }
@@ -1245,20 +1199,7 @@ func (plugin Plugin) runner() commandRunner {
 type localRunner struct{}
 
 func (localRunner) Run(ctx context.Context, kubeconfig string, stdin []byte, args ...string) (string, error) {
-	directory, err := os.MkdirTemp("", "kubephos-cluster-*")
-	if err != nil {
-		return "", err
-	}
-	defer os.RemoveAll(directory)
-	path := directory + "/kubeconfig"
-	if err := os.WriteFile(path, []byte(kubeconfig), 0600); err != nil {
-		return "", err
-	}
-	command := exec.CommandContext(ctx, "kubectl", append([]string{"--kubeconfig", path}, args...)...)
-	if stdin != nil {
-		command.Stdin = bytes.NewReader(stdin)
-	}
-	output, err := command.CombinedOutput()
+	output, err := kubeconfigutil.RunKubectl(ctx, kubeconfig, stdin, args...)
 	message := strings.TrimSpace(string(output))
 	if err != nil {
 		if message == "" {

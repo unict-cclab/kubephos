@@ -204,12 +204,12 @@ func (plugin Plugin) Precheck(ctx context.Context, step domain.PlanStep, log plu
 	marker := state.Metadata.Annotations[profileMarkerKey]
 	if step.Cleanup {
 		if marker != "" && marker != application.Metadata.OwnershipMarker {
-			return unhealthy("Mon-agent is owned by another run", "ownership", "conflict"), nil
+			return domain.HealthReport{Status: domain.HealthHealthy, Summary: "This run does not own the mon-agent profile; cleanup will leave it unchanged", Checks: map[string]string{"ownership": "not-owned"}}, nil
 		}
 		return domain.HealthReport{Status: domain.HealthHealthy, Summary: "Mon-agent settings are safe to restore", Checks: map[string]string{"api": "ready", "ownership": "verified"}}, nil
 	}
 	if marker != "" {
-		return unhealthy("Mon-agent already has an active experiment profile", "ownership", "conflict"), nil
+		return unhealthy(fmt.Sprintf("Mon-agent still has experiment profile %s. Finish or retry that run's cleanup before starting another experiment.", marker), "ownership", "conflict"), nil
 	}
 	period, queryRange, err := settings(state, observability.Spec.MonAgent.Name)
 	if err != nil {
@@ -230,6 +230,9 @@ func (plugin Plugin) Execute(ctx context.Context, step domain.PlanStep, log plug
 	state, err := readDeployment(ctx, runner, cluster.Spec.Kubeconfig, observability)
 	if err != nil {
 		return nil, err
+	}
+	if marker := state.Metadata.Annotations[profileMarkerKey]; marker != "" {
+		return nil, fmt.Errorf("mon-agent profile %s is already assigned; refusing to replace another experiment profile", marker)
 	}
 	previousPeriod, previousRange, err := settings(state, observability.Spec.MonAgent.Name)
 	if err != nil {
@@ -266,6 +269,9 @@ func (plugin Plugin) Verify(ctx context.Context, step domain.PlanStep, raw json.
 		return unhealthy(err.Error(), "configuration", "invalid"), nil
 	}
 	if step.Cleanup {
+		if marker := state.Metadata.Annotations[profileMarkerKey]; marker != "" && marker != application.Metadata.OwnershipMarker {
+			return domain.HealthReport{Status: domain.HealthHealthy, Summary: "Another run's mon-agent profile was left unchanged", Checks: map[string]string{"ownership": "not-owned"}}, nil
+		}
 		if state.Metadata.Annotations[profileMarkerKey] != "" || period != observability.Spec.MonAgent.ScrapePeriodSeconds || queryRange != observability.Spec.MonAgent.PromQLRange {
 			return unhealthy("Mon-agent defaults were not restored", "monAgent", "invalid"), nil
 		}
@@ -299,7 +305,7 @@ func (plugin Plugin) Cleanup(ctx context.Context, step domain.PlanStep, _ json.R
 		return nil
 	}
 	if marker != application.Metadata.OwnershipMarker {
-		return errors.New("refusing to restore a mon-agent profile owned by another run")
+		return log("info", "This run does not own the mon-agent profile; leaving it unchanged")
 	}
 	previousPeriod, err := strconv.Atoi(state.Metadata.Annotations[previousPeriodKey])
 	if err != nil || previousPeriod < 1 {

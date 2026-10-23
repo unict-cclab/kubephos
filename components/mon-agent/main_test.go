@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"math"
 	"strings"
 	"testing"
 
@@ -124,5 +125,27 @@ func TestNodeNameFromMetricRejectsUnknownAddress(t *testing.T) {
 	metric := model.Metric{"instance": "192.168.101.99:9100"}
 	if got := nodeNameFromMetric(metric, map[string]string{"worker-a": "worker-a"}); got != "" {
 		t.Fatalf("node name = %q, want empty", got)
+	}
+}
+
+func TestUnavailableBandwidthRemovesAnnotation(t *testing.T) {
+	out := map[string]map[string]string{}
+	annotateNodePeerMetric(out, &model.Sample{Metric: model.Metric{"origin_node": "node-a", "destination_node": "node-b"}, Value: model.SampleValue(math.NaN())}, "network-bandwidth")
+	merged := mergeAnnotations(map[string]string{"network-bandwidth.node-b": "0"}, out["node-a"])
+	raw, err := annotationPatch(merged)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var patch struct {
+		Metadata struct {
+			Annotations map[string]any `json:"annotations"`
+		} `json:"metadata"`
+	}
+	if err := json.Unmarshal(raw, &patch); err != nil {
+		t.Fatal(err)
+	}
+	value, present := patch.Metadata.Annotations["network-bandwidth.node-b"]
+	if !present || value != nil {
+		t.Fatalf("missing measurement was not deleted: %s", raw)
 	}
 }

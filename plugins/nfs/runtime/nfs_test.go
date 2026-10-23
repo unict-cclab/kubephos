@@ -45,6 +45,10 @@ func TestManagedSharedStorageLifecycle(t *testing.T) {
 	if err != nil || health.Status != domain.HealthHealthy {
 		t.Fatalf("verify failed %#v %v", health, err)
 	}
+	commands := strings.Join(runner.commands, "\n")
+	if !strings.Contains(commands, "sudo hostnamectl set-hostname 'research-data'") || !strings.Contains(commands, "test \"$(hostname)\" = 'research-data'") {
+		t.Fatalf("managed hostname was not installed and verified")
+	}
 	var decoded result
 	if err := json.Unmarshal(value, &decoded); err != nil {
 		t.Fatal(err)
@@ -107,6 +111,7 @@ func testArtifacts(t *testing.T) map[string]domain.ResolvedArtifact {
 }
 
 type fakeRunner struct {
+	commands  []string
 	lock      sync.Mutex
 	installed bool
 }
@@ -114,6 +119,7 @@ type fakeRunner struct {
 func (runner *fakeRunner) Run(_ context.Context, _ machine, _ machineAccess, command string) (string, error) {
 	runner.lock.Lock()
 	defer runner.lock.Unlock()
+	runner.commands = append(runner.commands, command)
 	switch {
 	case strings.HasPrefix(command, "sudo -n true && command -v apt-get"):
 		if runner.installed {
@@ -128,7 +134,7 @@ func (runner *fakeRunner) Run(_ context.Context, _ machine, _ machineAccess, com
 		}
 		runner.installed = true
 		return "installation complete\n1:2.6.4-3ubuntu5.1", nil
-	case strings.HasPrefix(command, "sudo test \"$(sudo cat"):
+	case strings.HasPrefix(command, "test \"$(hostname)\" = "):
 		if !runner.installed {
 			return "", errors.New("service is absent")
 		}

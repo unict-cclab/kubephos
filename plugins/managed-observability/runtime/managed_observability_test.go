@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"gopkg.in/yaml.v3"
 	"io"
 	"net/http"
 	"strings"
@@ -378,4 +379,74 @@ func readyPods() string {
 	}
 	value, _ := json.Marshal(map[string]any{"items": items})
 	return string(value)
+}
+
+func TestFiveSecondScrapingHasValidTimeout(t *testing.T) {
+	values, err := managedValues(stepInput{Spec: Spec{ScrapeInterval: "5s", Retention: "7d"}}, "shared-storage", "secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(values), "scrapeTimeout: 5s") || !strings.Contains(string(values), "scrapeInterval: 5s") {
+		t.Fatalf("invalid five-second configuration: %s", values)
+	}
+}
+
+func TestCentralObservabilitySelectorsAndDistributedAgents(t *testing.T) {
+	raw, err := managedValues(stepInput{Spec: Spec{ScrapeInterval: "5s", Retention: "7d"}}, "shared-storage", "secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var values map[string]any
+	if err := yaml.Unmarshal(raw, &values); err != nil {
+		t.Fatal(err)
+	}
+	paths := [][]string{{"grafana"}, {"prometheusOperator"}, {"kube-state-metrics"}, {"prometheus", "prometheusSpec"}, {"alertmanager", "alertmanagerSpec"}, {"prometheusOperator", "admissionWebhooks", "patch"}, {"prometheusOperator", "admissionWebhooks", "deployment"}}
+	for _, path := range paths {
+		node := values
+		for _, key := range path {
+			node = node[key].(map[string]any)
+		}
+		selector := node["nodeSelector"].(map[string]any)
+		if selector["kubephos.dev/role"] != "management" {
+			t.Fatalf("missing management selector at %v", path)
+		}
+	}
+	if _, exists := values["prometheus-node-exporter"]; exists {
+		t.Fatal("distributed node-exporter must not be restricted to management")
+	}
+}
+
+func TestControllerDeploymentRequiresManagementNode(t *testing.T) {
+	raw, err := monAgentManifest("marker", serviceEndpoint{ServiceName: "prometheus", Port: 9090}, "registry.example.test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var list struct {
+		Items []struct {
+			Kind string `json:"kind"`
+			Spec struct {
+				Template struct {
+					Spec struct {
+						NodeSelector map[string]string `json:"nodeSelector"`
+					} `json:"spec"`
+				} `json:"template"`
+			} `json:"spec"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(raw, &list); err != nil {
+		t.Fatal(err)
+	}
+	deployments := 0
+	for _, item := range list.Items {
+		if item.Kind != "Deployment" {
+			continue
+		}
+		deployments++
+		if item.Spec.Template.Spec.NodeSelector["kubephos.dev/role"] != "management" {
+			t.Fatal("controller deployment is not constrained to management nodes")
+		}
+	}
+	if deployments == 0 {
+		t.Fatal("manifest contains no deployment")
+	}
 }

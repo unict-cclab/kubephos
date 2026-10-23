@@ -206,7 +206,7 @@ func releaseClusterLensRollout(configValue config.Config) error {
 }
 
 func managedPreviousClusterLensImage(image, host string) bool {
-	for _, version := range []string{"v1.1.0", "v1.2.0", "v1.2.1", "v1.2.2", "v1.2.3", "v1.2.4", "v1.2.5"} {
+	for _, version := range []string{"v1.3.0", "v1.1.0", "v1.2.0", "v1.2.1", "v1.2.2", "v1.2.3", "v1.2.4", "v1.2.5", "v1.2.6", "v1.2.7", "v1.2.8"} {
 		tag := host + "/kubephos-dev/cluster-lens:" + version
 		if image == tag {
 			return true

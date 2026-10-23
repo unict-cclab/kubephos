@@ -46,6 +46,10 @@ func (s *Server) revealManagedResourceAccess(response http.ResponseWriter, reque
 		writeError(response, http.StatusInternalServerError, "database_error", "Could not read resource access.")
 		return
 	}
+	if _, multi := multiClusterSpec(resource.Spec); multi {
+		s.multiClusterResourceAccess(response, request, resource, artifacts)
+		return
+	}
 	documents := make([]json.RawMessage, 0, len(artifacts))
 	host := ""
 	kubeconfig := ""

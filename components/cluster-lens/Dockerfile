@@ -1,4 +1,4 @@
-FROM golang:1.25 AS build
+FROM golang:1.26.10 AS build
 WORKDIR /src/backend
 COPY backend/go.mod backend/go.sum* ./
 RUN go mod download

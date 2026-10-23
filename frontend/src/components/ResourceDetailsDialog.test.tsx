@@ -1,4 +1,4 @@
-import {fireEvent, render, screen} from '@testing-library/react'
+import {fireEvent, render, screen, within} from '@testing-library/react'
 import {createElement} from 'react'
 import {afterEach, describe, expect, it, vi} from 'vitest'
 import {request} from '../api'
@@ -16,10 +16,11 @@ const resource: ManagedResource = {
   status: 'ready',
   validation: {valid: true, issues: []},
   spec: {
-    managedProfile: 'managed', addressStart: '192.0.2.10', controlPlanes: 1,
+    scrapeInterval: '5s', retention: '7d', managedProfile: 'managed', addressStart: '192.0.2.10', controlPlanes: 1,
     controlPlaneZones: ['zone-a'], controlPlaneCapacity: {cores: 4, memoryMiB: 8192, diskGiB: 80},
     managementPool: {name: 'management', count: 1, zones: ['zone-a'], capacity: {cores: 2, memoryMiB: 4096, diskGiB: 40}},
     applicationPools: [{name: 'apps', count: 2, zones: ['zone-b'], capacity: {cores: 4, memoryMiB: 8192, diskGiB: 80}}],
+    machineNodes: {'k3s-control-plane-1': 'pve', 'k3s-edge-a-1': 'pve-2'},
     customSetting: 'retained', kubeconfig: 'private'
   },
   createdAt: '2026-09-15T00:00:00Z',
@@ -47,6 +48,12 @@ describe('resource detail', () => {
     expect(screen.getByRole('link', {name: /Grafana/})).toBeInTheDocument()
     expect(screen.getByRole('link', {name: /Headlamp/})).toHaveAttribute('href', 'http://192.0.2.10:30003')
     expect(screen.getByText('Topology')).toBeInTheDocument()
+    const topology = within(screen.getByRole('table', {name: 'Cluster topology'}))
+    expect(topology.getByRole('columnheader', {name: 'Memory (MiB)'})).toBeInTheDocument()
+    expect(topology.getByRole('cell', {name: 'Control plane'})).toBeInTheDocument()
+    expect(screen.getByText('Last updated by')).toBeInTheDocument()
+ expect(screen.getByText('5s')).toBeInTheDocument()
+ expect(screen.getByText('7d')).toBeInTheDocument()
     expect(screen.queryByText('Entered data')).not.toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', {name: 'Access'}))
     expect(screen.queryByRole('link', {name: /Grafana/})).not.toBeInTheDocument()
@@ -55,10 +62,17 @@ describe('resource detail', () => {
     expect(screen.getByText('Status')).toBeInTheDocument()
     expect(screen.queryByText('No issues')).not.toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', {name: 'Configuration'}))
+    const placement = screen.getByRole('table', {name: 'VM placement'})
+    expect(within(placement).getByRole('cell', {name: 'k3s-control-plane-1'})).toBeInTheDocument()
+    expect(within(placement).getByRole('cell', {name: 'k3s-edge-a-1'})).toBeInTheDocument()
+    expect(within(placement).getByRole('cell', {name: 'pve-2'})).toBeInTheDocument()
     expect(screen.getByText('Cluster settings')).toBeInTheDocument()
-    expect(screen.getByText('Control plane')).toBeInTheDocument()
+    expect(screen.getByText('Prometheus')).toBeInTheDocument()
+ expect(screen.getByText('5s')).toBeInTheDocument()
+ expect(screen.getByText('7d')).toBeInTheDocument()
+ expect(screen.getByText('Control plane')).toBeInTheDocument()
     expect(screen.getByText('Management pool')).toBeInTheDocument()
-    expect(screen.getByText('Application pools')).toBeInTheDocument()
+    expect(screen.getByText('Pools')).toBeInTheDocument()
     expect(screen.getByText('retained')).toBeInTheDocument()
     expect(screen.getByText('Cluster settings')).toBeInTheDocument()
     expect(screen.getAllByText(/••••••••/)).toHaveLength(1)

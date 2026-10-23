@@ -238,6 +238,14 @@ func (Plugin) Execute(ctx context.Context, step domain.PlanStep, secrets, connec
 	}
 	switch input.Action {
 	case "create":
+		resources, err := connection.resources(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if err := validateInventory(resources, input.spec()); err != nil {
+			return nil, err
+		}
+
 		if err := log("info", fmt.Sprintf("Cloning template %d to new VM %d", input.TemplateVMID, input.TargetVMID)); err != nil {
 			return nil, err
 		}
@@ -455,6 +463,10 @@ func validateValues(spec Spec) *domain.ValidationIssue {
 }
 
 func validateInventory(resources []vmResource, spec Spec) error {
+	if err := validateMachineNames(resources, []string{spec.Name}); err != nil {
+		return err
+	}
+
 	var templateFound bool
 	for _, resource := range resources {
 		if resource.VMID == spec.TargetVMID {
@@ -674,4 +686,25 @@ func (c *client) waitTask(ctx context.Context, node, upid string) error {
 
 func normalizeEndpoint(value string) string {
 	return strings.TrimRight(strings.TrimSpace(value), "/")
+}
+
+// Proxmox allows duplicate names; KubePhos checks all nodes and VM/container types.
+func validateMachineNames(resources []vmResource, names []string) error {
+	seen := map[string]bool{}
+	for _, name := range names {
+		key := strings.ToLower(name)
+		if name == "" {
+			return errors.New("machine name is required")
+		}
+		if seen[key] {
+			return fmt.Errorf("machine name %q is repeated in the requested machines", name)
+		}
+		seen[key] = true
+		for _, resource := range resources {
+			if strings.EqualFold(resource.Name, name) {
+				return fmt.Errorf("machine name %q already exists on node %s (VMID %d) and is protected", name, resource.Node, resource.VMID)
+			}
+		}
+	}
+	return nil
 }

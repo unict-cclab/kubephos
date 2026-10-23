@@ -1,0 +1,595 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ai-workload
+  labels:
+    istio-injection: enabled
+    kubephos.dev/monitored: 'true'
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: model-store
+  namespace: ai-workload
+spec:
+  accessModes:
+  - ReadWriteMany
+  storageClassName: shared-storage
+  resources:
+    requests:
+      storage: 10Gi
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: model-manifest
+  namespace: ai-workload
+data:
+  models.json: |-
+    [
+      {
+        "id": "Qwen2.5-0.5B-Instruct",
+        "service": "m1",
+        "url": "https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/9217f5db79a29953eb74d5343926648285ec7e67/qwen2.5-0.5b-instruct-q4_k_m.gguf",
+        "sha256": "74a4da8c9fdbcd15bd1f6d01d621410d31c6fc00986f5eb687824e7b93d7a9db",
+        "size": 491400032
+      },
+      {
+        "id": "Qwen2.5-1.5B-Instruct",
+        "service": "m2",
+        "url": "https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/91cad51170dc346986eccefdc2dd33a9da36ead9/qwen2.5-1.5b-instruct-q4_k_m.gguf",
+        "sha256": "6a1a2eb6d15622bf3c96857206351ba97e1af16c30d7a74ee38970e434e9407e",
+        "size": 1117320736
+      },
+      {
+        "id": "Qwen2.5-Coder-0.5B-Instruct",
+        "service": "m3",
+        "url": "https://huggingface.co/Qwen/Qwen2.5-Coder-0.5B-Instruct-GGUF/resolve/ebb2015119c907b064c512bf053e945850b5875f/qwen2.5-coder-0.5b-instruct-q4_k_m.gguf",
+        "sha256": "1d9614638d18024d0fbb36575a15f1302a3adf044df10345688ec4f6e1c4ff32",
+        "size": 491400064
+      }
+    ]
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: model-scripts
+  namespace: ai-workload
+data:
+  download.py: |
+    import hashlib, json, os, pathlib, tempfile, urllib.request
+    root = pathlib.Path("/models")
+    manifest = json.loads(pathlib.Path("/config/models.json").read_text())
+    def digest(path):
+        value = hashlib.sha256()
+        with path.open("rb") as stream:
+            for chunk in iter(lambda: stream.read(4 * 1024 * 1024), b""):
+                value.update(chunk)
+        return value.hexdigest()
+    root.mkdir(parents=True, exist_ok=True)
+    for model in manifest:
+        directory = root / model["id"]
+        directory.mkdir(parents=True, exist_ok=True)
+        target = directory / "model.gguf"
+        if target.exists() and target.stat().st_size == model["size"] and digest(target) == model["sha256"]:
+            print(json.dumps({"model": model["id"], "state": "cached"}), flush=True)
+            continue
+        fd, temporary = tempfile.mkstemp(prefix=".download-", dir=directory)
+        try:
+            checksum = hashlib.sha256()
+            size = 0
+            request = urllib.request.Request(model["url"], headers={"User-Agent": "KubePhos-AI-example/1.0"})
+            with os.fdopen(fd, "wb") as output:
+                with urllib.request.urlopen(request, timeout=120) as response:
+                    while True:
+                        chunk = response.read(4 * 1024 * 1024)
+                        if not chunk:
+                            break
+                        output.write(chunk)
+                        checksum.update(chunk)
+                        size += len(chunk)
+                output.flush()
+                os.fsync(output.fileno())
+            if size != model["size"] or checksum.hexdigest() != model["sha256"]:
+                raise ValueError("Model integrity verification failed: " + model["id"])
+            os.replace(temporary, target)
+            print(json.dumps({"model": model["id"], "state": "downloaded", "bytes": size}), flush=True)
+        finally:
+            pathlib.Path(temporary).unlink(missing_ok=True)
+    print(json.dumps({"state": "ready", "models": len(manifest)}), flush=True)
+  wait.py: |
+    import json, pathlib, sys, time
+    manifest = json.loads(pathlib.Path("/config/models.json").read_text())
+    model = next(item for item in manifest if item["service"] == sys.argv[1])
+    root = pathlib.Path("/models")
+    backend = root / "backends/localai-v4.11.0-cpu"
+    path = root / model["id"] / "model.gguf"
+    deadline = time.monotonic() + 4200
+    while time.monotonic() < deadline:
+        if (backend / "llama-cpp/metadata.json").exists() and (backend / "cpu-llama-cpp/run.sh").exists() and path.exists() and path.stat().st_size == model["size"]:
+            print("Model available: " + model["id"], flush=True)
+            sys.exit(0)
+        time.sleep(5)
+    raise TimeoutError("Model prefetch did not complete: " + model["id"])
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: localai-model-config
+  namespace: ai-workload
+data:
+  m1.yaml: |
+    - name: m1
+      backend: llama-cpp
+      parameters:
+        model: model.gguf
+      context_size: 2048
+      threads: 1
+      gpu_layers: 0
+      template:
+        use_tokenizer_template: true
+  m2.yaml: |
+    - name: m2
+      backend: llama-cpp
+      parameters:
+        model: model.gguf
+      context_size: 2048
+      threads: 1
+      gpu_layers: 0
+      template:
+        use_tokenizer_template: true
+  m3.yaml: |
+    - name: m3
+      backend: llama-cpp
+      parameters:
+        model: model.gguf
+      context_size: 2048
+      threads: 1
+      gpu_layers: 0
+      template:
+        use_tokenizer_template: true
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: node-proxy-config
+  namespace: ai-workload
+data:
+  default.conf.template: |
+    upstream m1_backend { server m1:80; keepalive 16; }
+    upstream m2_backend { server m2:80; keepalive 16; }
+    upstream m3_backend { server m3:80; keepalive 16; }
+    map $http_x_model $model_backend {
+      default "";
+      m1 m1_backend;
+      m2 m2_backend;
+      m3 m3_backend;
+    }
+    access_log /dev/stdout;
+    client_max_body_size 2m;
+    server {
+      listen 8080;
+      location = / { default_type application/json; return 200 '{"status":"ok"}\n'; }
+      location = /healthz { access_log off; return 200 "ok\n"; }
+      location /v1/ {
+        default_type application/json;
+        if ($model_backend = "") { return 400 '{"error":{"message":"X-Model must select a configured service","type":"invalid_request_error"}}'; }
+        proxy_pass http://$model_backend;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_set_header X-Model $http_x_model;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Kubephos-Proxy-Node ${NODE_NAME};
+        proxy_connect_timeout 5s;
+        proxy_read_timeout 600s;
+        proxy_send_timeout 600s;
+        proxy_buffering off;
+        proxy_request_buffering off;
+        proxy_next_upstream off;
+        add_header X-Accel-Buffering no always;
+      }
+      location / { return 404; }
+    }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: m1
+  namespace: ai-workload
+spec:
+  type: ClusterIP
+  selector:
+    app: m1
+  ports:
+  - name: http
+    port: 80
+    targetPort: http
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: m2
+  namespace: ai-workload
+spec:
+  type: ClusterIP
+  selector:
+    app: m2
+  ports:
+  - name: http
+    port: 80
+    targetPort: http
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: m3
+  namespace: ai-workload
+spec:
+  type: ClusterIP
+  selector:
+    app: m3
+  ports:
+  - name: http
+    port: 80
+    targetPort: http
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: node-proxy
+  namespace: ai-workload
+spec:
+  type: NodePort
+  selector:
+    app: node-proxy
+  ports:
+  - name: http
+    port: 80
+    targetPort: http
+  externalTrafficPolicy: Local
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: cache-prefetch
+  namespace: ai-workload
+spec:
+  backoffLimit: 2
+  activeDeadlineSeconds: 3600
+  template:
+    metadata:
+      labels:
+        app: cache-prefetch
+        group: ai-workload
+      annotations:
+        sidecar.istio.io/inject: 'false'
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: download
+        image: docker.io/library/python:3.12-slim-bookworm
+        command:
+        - python3
+        - -u
+        - /scripts/download.py
+        volumeMounts:
+        - name: models
+          mountPath: /models
+        - name: manifest
+          mountPath: /config
+        - name: scripts
+          mountPath: /scripts
+      volumes:
+      - name: models
+        persistentVolumeClaim:
+          claimName: model-store
+      - name: manifest
+        configMap:
+          name: model-manifest
+      - name: scripts
+        configMap:
+          name: model-scripts
+      initContainers:
+      - name: download-backend
+        image: docker.io/localai/localai:v4.11.0
+        command:
+        - /bin/sh
+        - -ec
+        args:
+        - |
+          BACKEND_PATH=/cache/backends/localai-v4.11.0-cpu
+          mkdir -p "$BACKEND_PATH"
+          if [ ! -f "$BACKEND_PATH/llama-cpp/metadata.json" ] || [ ! -x "$BACKEND_PATH/cpu-llama-cpp/run.sh" ]; then
+            /local-ai backends install llama-cpp --backends-path="$BACKEND_PATH"
+          fi
+        volumeMounts:
+        - name: models
+          mountPath: /cache
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: m1
+  namespace: ai-workload
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: m1
+  template:
+    metadata:
+      labels:
+        app: m1
+        group: ai-workload
+    spec:
+      initContainers:
+      - name: wait-models
+        image: docker.io/library/python:3.12-slim-bookworm
+        command:
+        - python3
+        - -u
+        - /scripts/wait.py
+        - m1
+        volumeMounts:
+        - name: models
+          mountPath: /models
+          readOnly: true
+        - name: manifest
+          mountPath: /config
+        - name: scripts
+          mountPath: /scripts
+      containers:
+      - name: localai
+        image: docker.io/localai/localai:v4.11.0
+        args:
+        - run
+        - --backends-path=/backends
+        - --models-path=/models
+        - --models-config-file=/config/models.yaml
+        - --load-to-memory=m1
+        - --allow-insecure-public-bind
+        ports:
+        - name: http
+          containerPort: 8080
+        startupProbe:
+          httpGet:
+            path: /readyz
+            port: http
+          periodSeconds: 10
+          failureThreshold: 120
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: http
+        volumeMounts:
+        - name: models
+          mountPath: /models/model.gguf
+          subPath: Qwen2.5-0.5B-Instruct/model.gguf
+          readOnly: true
+        - name: localai-config
+          mountPath: /config/models.yaml
+          subPath: m1.yaml
+        - name: models
+          mountPath: /backends
+          subPath: backends/localai-v4.11.0-cpu
+          readOnly: true
+      volumes:
+      - name: models
+        persistentVolumeClaim:
+          claimName: model-store
+          readOnly: true
+      - name: manifest
+        configMap:
+          name: model-manifest
+      - name: scripts
+        configMap:
+          name: model-scripts
+      - name: localai-config
+        configMap:
+          name: localai-model-config
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: m2
+  namespace: ai-workload
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: m2
+  template:
+    metadata:
+      labels:
+        app: m2
+        group: ai-workload
+    spec:
+      initContainers:
+      - name: wait-models
+        image: docker.io/library/python:3.12-slim-bookworm
+        command:
+        - python3
+        - -u
+        - /scripts/wait.py
+        - m2
+        volumeMounts:
+        - name: models
+          mountPath: /models
+          readOnly: true
+        - name: manifest
+          mountPath: /config
+        - name: scripts
+          mountPath: /scripts
+      containers:
+      - name: localai
+        image: docker.io/localai/localai:v4.11.0
+        args:
+        - run
+        - --backends-path=/backends
+        - --models-path=/models
+        - --models-config-file=/config/models.yaml
+        - --load-to-memory=m2
+        - --allow-insecure-public-bind
+        ports:
+        - name: http
+          containerPort: 8080
+        startupProbe:
+          httpGet:
+            path: /readyz
+            port: http
+          periodSeconds: 10
+          failureThreshold: 120
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: http
+        volumeMounts:
+        - name: models
+          mountPath: /models/model.gguf
+          subPath: Qwen2.5-1.5B-Instruct/model.gguf
+          readOnly: true
+        - name: localai-config
+          mountPath: /config/models.yaml
+          subPath: m2.yaml
+        - name: models
+          mountPath: /backends
+          subPath: backends/localai-v4.11.0-cpu
+          readOnly: true
+      volumes:
+      - name: models
+        persistentVolumeClaim:
+          claimName: model-store
+          readOnly: true
+      - name: manifest
+        configMap:
+          name: model-manifest
+      - name: scripts
+        configMap:
+          name: model-scripts
+      - name: localai-config
+        configMap:
+          name: localai-model-config
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: m3
+  namespace: ai-workload
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: m3
+  template:
+    metadata:
+      labels:
+        app: m3
+        group: ai-workload
+    spec:
+      initContainers:
+      - name: wait-models
+        image: docker.io/library/python:3.12-slim-bookworm
+        command:
+        - python3
+        - -u
+        - /scripts/wait.py
+        - m3
+        volumeMounts:
+        - name: models
+          mountPath: /models
+          readOnly: true
+        - name: manifest
+          mountPath: /config
+        - name: scripts
+          mountPath: /scripts
+      containers:
+      - name: localai
+        image: docker.io/localai/localai:v4.11.0
+        args:
+        - run
+        - --backends-path=/backends
+        - --models-path=/models
+        - --models-config-file=/config/models.yaml
+        - --load-to-memory=m3
+        - --allow-insecure-public-bind
+        ports:
+        - name: http
+          containerPort: 8080
+        startupProbe:
+          httpGet:
+            path: /readyz
+            port: http
+          periodSeconds: 10
+          failureThreshold: 120
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: http
+        volumeMounts:
+        - name: models
+          mountPath: /models/model.gguf
+          subPath: Qwen2.5-Coder-0.5B-Instruct/model.gguf
+          readOnly: true
+        - name: localai-config
+          mountPath: /config/models.yaml
+          subPath: m3.yaml
+        - name: models
+          mountPath: /backends
+          subPath: backends/localai-v4.11.0-cpu
+          readOnly: true
+      volumes:
+      - name: models
+        persistentVolumeClaim:
+          claimName: model-store
+          readOnly: true
+      - name: manifest
+        configMap:
+          name: model-manifest
+      - name: scripts
+        configMap:
+          name: model-scripts
+      - name: localai-config
+        configMap:
+          name: localai-model-config
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: node-proxy
+  namespace: ai-workload
+spec:
+  selector:
+    matchLabels:
+      app: node-proxy
+  template:
+    metadata:
+      labels:
+        app: node-proxy
+        group: ai-workload
+    spec:
+      containers:
+      - name: proxy
+        image: docker.io/library/nginx:stable-alpine
+        env:
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        ports:
+        - name: http
+          containerPort: 8080
+        readinessProbe:
+          httpGet:
+            path: /healthz
+            port: http
+          periodSeconds: 5
+        volumeMounts:
+        - name: config
+          mountPath: /etc/nginx/templates/default.conf.template
+          subPath: default.conf.template
+      volumes:
+      - name: config
+        configMap:
+          name: node-proxy-config

@@ -3,32 +3,33 @@ kind: Plugin
 metadata:
   id: io.kubephos.load.kubernetes.session
   name: Interactive Kubernetes load session
-  version: 0.7.0
-  description: Runs an ordered RPS timeline using a verified Locust journey against a catalog application or external HTTP destination.
+  version: 0.9.0
+  description: Runs an ordered RPS timeline using a verified Locust journey against
+    a catalog application or external HTTP destination.
 spec:
   protocol: v1alpha1
   commands:
-    - describe
-    - validate
-    - plan
-    - precheck
-    - execute
-    - verify
-    - status
-    - cancel
-    - cleanup
+  - describe
+  - validate
+  - plan
+  - precheck
+  - execute
+  - verify
+  - status
+  - cancel
+  - cleanup
   configurationSchema:
     type: object
     additionalProperties: false
     required:
-      - clusterConnectionRef
-      - applicationDeploymentRef
-      - loadScenarioSetRef
-      - scenarioId
-      - action
-      - replicas
-      - maxUsers
-      - spawnRate
+    - clusterConnectionRef
+    - applicationDeploymentRef
+    - loadScenarioSetRef
+    - scenarioId
+    - action
+    - replicas
+    - maxUsers
+    - spawnRate
     properties:
       clusterConnectionRef:
         type: string
@@ -51,7 +52,8 @@ spec:
       scenarioId:
         type: string
         title: Load scenario
-        description: User behavior implemented by the Locust file supplied by the selected application.
+        description: User behavior implemented by the Locust file supplied by the
+          selected application.
         minLength: 1
         maxLength: 63
         default: storefront-journey
@@ -60,9 +62,9 @@ spec:
         title: Action
         x-kubephos-primary-action: true
         enum:
-          - start
-          - stop
-          - resume
+        - start
+        - stop
+        - resume
         default: start
       interactive:
         type: boolean
@@ -98,24 +100,52 @@ spec:
         maxItems: 100
         items:
           type: object
+      clusterName:
+        type: string
+        x-kubephos-hidden: true
+      peers:
+        type: array
+        minItems: 1
+        maxItems: 5
+        x-kubephos-hidden: true
+        items:
+          type: object
+          required:
+          - name
+          - clusterConnectionRef
+          - applicationDeploymentRef
+          additionalProperties: false
+          properties:
+            name:
+              type: string
+            clusterConnectionRef:
+              type: string
+              format: kubephos-artifact-ref
+              x-kubephos-artifact-type: ClusterConnection
+              x-kubephos-artifact-version: v1alpha1
+            applicationDeploymentRef:
+              type: string
+              format: kubephos-artifact-ref
+              x-kubephos-artifact-type: ApplicationDeployment
+              x-kubephos-artifact-version: v1alpha1
   runtime:
     executable: load-session-plugin
     timeout: 3h
   artifacts:
     inputs:
-      - type: ClusterConnection
-        version: v1alpha1
-      - type: ApplicationDeployment
-        version: v1alpha1
-      - type: LoadScenarioSet
-        version: v1alpha1
+    - type: ClusterConnection
+      version: v1alpha1
+    - type: ApplicationDeployment
+      version: v1alpha1
+    - type: LoadScenarioSet
+      version: v1alpha1
     outputs:
-      - type: LoadSession
-        version: v1alpha1
+    - type: LoadSession
+      version: v1alpha1
   capabilities:
-    - load.session.control
-    - load.session.preflight
-    - load.session.cleanup
-    - lifecycle.cleanup
+  - load.session.control
+  - load.session.preflight
+  - load.session.cleanup
+  - lifecycle.cleanup
   permissions:
-    - cluster.admin
+  - cluster.admin

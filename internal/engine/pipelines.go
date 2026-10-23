@@ -164,13 +164,9 @@ func (w *Worker) reconcilePipelineRun(ctx context.Context, owner string, run dom
 }
 
 func (w *Worker) reconcilePipelineCleanup(ctx context.Context, owner string, run domain.PipelineRun) (bool, error) {
-	failures := []error{}
-	for position := len(run.Stages) - 1; position >= 0; position-- {
+	for _, position := range pipelineCleanupOrder(run.Stages) {
 		stage := run.Stages[position]
-		if complete, failure := cleanupStageResult(stage); complete {
-			if failure != nil {
-				failures = append(failures, failure)
-			}
+		if complete, _ := cleanupStageResult(stage); complete {
 			continue
 		}
 		if stage.OperationID == "" {
@@ -224,13 +220,29 @@ func (w *Worker) reconcilePipelineCleanup(ctx context.Context, owner string, run
 		}
 		stage.CleanupStatus = operation.Status
 		stage.CleanupError = operation.Error
-		if complete, failure := cleanupStageResult(stage); complete {
-			if failure != nil {
-				failures = append(failures, failure)
-			}
+		run.Stages[position] = stage
+		if complete, _ := cleanupStageResult(stage); complete {
 			continue
 		}
 		return false, nil
+	}
+
+	// All remaining cleanups have now finished. Only namespace timeout failures
+	// may be recovered, and only after the original typed health gate passes.
+	failures := []error{}
+	for _, stage := range run.Stages {
+		if stage.CleanupStatus == domain.StepFailed && stage.PluginID == "io.kubephos.applications.kubernetes.deploy" && strings.Contains(stage.CleanupError, "namespace cleanup timed out") {
+			recovered, err := w.recheckNamespaceCleanup(ctx, run.ID, owner, stage)
+			if err != nil {
+				return false, err
+			}
+			if recovered {
+				continue
+			}
+		}
+		if _, failure := cleanupStageResult(stage); failure != nil {
+			failures = append(failures, failure)
+		}
 	}
 	return true, errors.Join(failures...)
 }
@@ -346,15 +358,114 @@ func (w *Worker) failPipelineRun(ctx context.Context, owner string, run domain.P
 	return w.store.FailPipelineRun(ctx, run.ID, owner, domain.OperationFailed, cause.Error())
 }
 
-func (w *Worker) cancelPipelineRun(ctx context.Context, owner string, run domain.PipelineRun, position int, message string) error {
-	if position >= 0 && position < len(run.Stages) {
-		if err := w.store.FailPipelineRunStage(ctx, run.Stages[position].ID, domain.StepCanceled, message); err != nil {
-			return err
-		}
-	}
-	return w.store.FailPipelineRun(ctx, run.ID, owner, domain.OperationCanceled, message)
-}
-
 func terminalOperation(status string) bool {
 	return status == domain.OperationSucceeded || status == domain.OperationFailed || status == domain.OperationCanceled
+}
+
+// Preserve reverse dependency order, except that network shaping is restored
+// after load/descheduler shutdown and before deleting application namespaces.
+func pipelineCleanupOrder(stages []domain.PipelineRunStage) []int {
+	order := make([]int, 0, len(stages))
+	network := []int{}
+	for i := len(stages) - 1; i >= 0; i-- {
+		if stages[i].PluginID == "io.kubephos.chaos.network.zones" {
+			network = append(network, i)
+		} else {
+			order = append(order, i)
+		}
+	}
+	at := len(order)
+	for i, index := range order {
+		if stages[index].PluginID == "io.kubephos.applications.kubernetes.deploy" {
+			at = i
+			break
+		}
+	}
+	if at == len(order) {
+		result := make([]int, len(stages))
+		for i := range result {
+			result[i] = len(stages) - 1 - i
+		}
+		return result
+	}
+	result := append([]int{}, order[:at]...)
+	result = append(result, network...)
+	return append(result, order[at:]...)
+}
+
+func (w *Worker) recheckNamespaceCleanup(ctx context.Context, runID, owner string, stage domain.PipelineRunStage) (bool, error) {
+	operation, err := w.store.GetOperation(ctx, stage.CleanupOperationID)
+	if err != nil {
+		return false, err
+	}
+	plugin, err := w.registry.Get(operation.PluginID)
+	if err != nil {
+		return false, err
+	}
+	if !plugin.Manifest().Matches(operation.PluginVersion, operation.PluginDigest) || !cleanupStage(operation.Plan) {
+		return false, nil
+	}
+	checkCtx, cancel := context.WithTimeout(ctx, 45*time.Second)
+	defer cancel()
+	if err := w.store.RenewPipelineRunLease(checkCtx, runID, owner); err != nil {
+		return false, err
+	}
+	heartbeatDone := make(chan struct{})
+	defer func() { cancel(); <-heartbeatDone }()
+	go func() {
+		defer close(heartbeatDone)
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-checkCtx.Done():
+				return
+			case <-ticker.C:
+				if err := w.store.RenewPipelineRunLease(checkCtx, runID, owner); err != nil {
+					cancel()
+					return
+				}
+			}
+		}
+	}()
+	log := func(level, message string) error {
+		return w.store.AppendLog(checkCtx, operation.ID, "", level, "cleanup-recheck", message)
+	}
+	if !verifyCleanupPlan(checkCtx, operation.Plan, func(ctx context.Context, position int, step domain.PlanStep) (domain.PlanStep, error) {
+		return w.resolveArtifactInputs(ctx, operation, position, step)
+	}, func(ctx context.Context, step domain.PlanStep) (domain.HealthReport, error) {
+		return plugin.Verify(ctx, step, nil, log)
+	}) {
+		return false, nil
+	}
+	if err := log("warning", "The initial namespace cleanup timed out, but the final verified health gate confirms absence after all remaining cleanups. Pipeline cleanup recovered."); err != nil {
+		return false, err
+	}
+	if err := w.store.RenewPipelineRunLease(checkCtx, runID, owner); err != nil {
+		return false, err
+	}
+	// Retain the failed operation and its diagnostic logs as the audit record.
+	operation.Status = domain.OperationSucceeded
+	operation.Error = ""
+	if err := w.store.SyncPipelineRunStageCleanup(ctx, stage.ID, operation); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func verifyCleanupPlan(ctx context.Context, plan domain.Plan, resolve func(context.Context, int, domain.PlanStep) (domain.PlanStep, error), verify func(context.Context, domain.PlanStep) (domain.HealthReport, error)) bool {
+	if !cleanupStage(plan) {
+		return false
+	}
+	for position, planned := range plan.Steps {
+		step, err := resolve(ctx, position, planned)
+		if err != nil {
+			return false
+		}
+		health, err := verify(ctx, step)
+		if err != nil || health.Status != domain.HealthHealthy {
+			return false
+		}
+	}
+	return true
 }

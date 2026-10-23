@@ -3,7 +3,7 @@ kind: Plugin
 metadata:
   id: io.kubephos.platform.managed
   name: Managed Kubernetes platform
-  version: 0.2.9
+  version: 0.2.10
   description: Installs and verifies the managed service mesh, chaos, autoscaling and cluster support baseline, including cluster-admin Headlamp.
 spec:
   protocol: v1alpha1

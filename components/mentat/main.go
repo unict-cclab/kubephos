@@ -2,6 +2,7 @@ package main
 
 import (
 	"log"
+	"math"
 	"math/rand"
 	"net"
 	"net/http"
@@ -91,6 +92,7 @@ func main() {
 	}, []string{"origin_node", "destination_node"})
 	prometheus.MustRegister(latency, packetLoss, bandwidth, bandwidthFailures)
 
+	startMeshProbes(hostname, configuration)
 	go serveBandwidth(configuration)
 	go probeICMP(hostname, configuration, latency, packetLoss)
 	go probeBandwidth(hostname, configuration, bandwidth, bandwidthFailures)
@@ -165,7 +167,7 @@ func probeBandwidth(hostname string, configuration config, bandwidth *prometheus
 			if err != nil {
 				log.Printf("failed measuring bandwidth to node %q: %s", node.Hostname, err)
 				originNode, destinationNode := bandwidthMetricLabels(hostname, node.Hostname)
-				bandwidth.WithLabelValues(originNode, destinationNode).Set(0)
+				bandwidth.WithLabelValues(originNode, destinationNode).Set(math.NaN())
 				failures.WithLabelValues(originNode, destinationNode).Inc()
 				continue
 			}

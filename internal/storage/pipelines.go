@@ -60,16 +60,19 @@ func (s *Store) CreatePipelineRun(ctx context.Context, run domain.PipelineRun) (
 }
 
 func (s *Store) CreatePipelineExperiment(ctx context.Context, experiment domain.Experiment, runs map[string]domain.PipelineRun) (domain.Experiment, error) {
+	if len(experiment.ConfigurationSnapshot) == 0 {
+		experiment.ConfigurationSnapshot = json.RawMessage(`{}`)
+	}
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return domain.Experiment{}, err
 	}
 	defer tx.Rollback(ctx)
 	err = tx.QueryRow(ctx, `
-		INSERT INTO experiments (id, workspace_id, configuration_id, owner_user_id, kind, name, description, status, result_type, result_version, scheduled_for)
-		VALUES ($1, $2, NULLIF($3, ''), $4, COALESCE(NULLIF($5, ''), 'comparison'), $6, $7, $8, $9, $10, $11)
+		INSERT INTO experiments (id, workspace_id, configuration_id, owner_user_id, kind, name, description, status, result_type, result_version, scheduled_for, configuration_snapshot)
+		VALUES ($1, $2, NULLIF($3, ''), $4, COALESCE(NULLIF($5, ''), 'comparison'), $6, $7, $8, $9, $10, $11, $12)
 		RETURNING created_at, updated_at
-	`, experiment.ID, experiment.WorkspaceID, experiment.ConfigurationID, experiment.OwnerUserID, experiment.Kind, experiment.Name, experiment.Description, domain.OperationQueued, experiment.ResultType, experiment.ResultVersion, experiment.ScheduledFor).Scan(&experiment.CreatedAt, &experiment.UpdatedAt)
+	`, experiment.ID, experiment.WorkspaceID, experiment.ConfigurationID, experiment.OwnerUserID, experiment.Kind, experiment.Name, experiment.Description, domain.OperationQueued, experiment.ResultType, experiment.ResultVersion, experiment.ScheduledFor, experiment.ConfigurationSnapshot).Scan(&experiment.CreatedAt, &experiment.UpdatedAt)
 	if err != nil {
 		return domain.Experiment{}, err
 	}
@@ -147,16 +150,24 @@ func (s *Store) CreatePipelineExperiment(ctx context.Context, experiment domain.
 	return experiment, nil
 }
 
-func (s *Store) ListPipelineRuns(ctx context.Context, limit int) ([]domain.PipelineRun, error) {
-	return s.ListPipelineRunsForUser(ctx, "", limit)
+func (s *Store) ListPipelineRunsForUser(ctx context.Context, userID string, limit int) ([]domain.PipelineRun, error) {
+	return s.readListPipelineRunsForUser(ctx, userID, limit, false)
 }
 
-func (s *Store) ListPipelineRunsForUser(ctx context.Context, userID string, limit int) ([]domain.PipelineRun, error) {
+func (s *Store) ListPipelineRunsVisibleToUser(ctx context.Context, userID string, limit int) ([]domain.PipelineRun, error) {
+	return s.readListPipelineRunsForUser(ctx, userID, limit, true)
+}
+
+func (s *Store) readListPipelineRunsForUser(ctx context.Context, userID string, limit int, shared bool) ([]domain.PipelineRun, error) {
+	visibility := "$1 = '' OR owner_user_id = $1"
+	if shared {
+		visibility = "$1 = '' OR can_view_run($1, id)"
+	}
 	rows, err := s.pool.Query(ctx, `
 		SELECT id, pipeline_id, workspace_id, COALESCE(cluster_resource_id, ''), COALESCE(owner_user_id, ''), isolation_mode, name, status, pipeline_hash, result_type, result_version,
 		       COALESCE(result_artifact_id, ''), cancel_requested, COALESCE(terminal_status, ''), error, created_at, queued_at, scheduled_for, started_at, completed_at
 		FROM pipeline_runs
-		WHERE $1 = '' OR owner_user_id = $1
+		WHERE `+visibility+`
 		ORDER BY created_at DESC
 		LIMIT $2
 	`, userID, limit)
@@ -177,12 +188,16 @@ func (s *Store) ListPipelineRunsForUser(ctx context.Context, userID string, limi
 		return nil, err
 	}
 	rows.Close()
+	runIDs := make([]string, len(result))
 	for index := range result {
-		stages, err := s.listPipelineRunStages(ctx, result[index].ID)
-		if err != nil {
-			return nil, err
-		}
-		result[index].Stages = stages
+		runIDs[index] = result[index].ID
+	}
+	stages, err := s.listPipelineRunStagesForRuns(ctx, runIDs)
+	if err != nil {
+		return nil, err
+	}
+	for index := range result {
+		result[index].Stages = stages[result[index].ID]
 	}
 	return result, nil
 }
@@ -231,6 +246,9 @@ func (s *Store) ListPipelineRunLogs(ctx context.Context, runID string, after int
 }
 
 func (s *Store) GetPipelineRunArtifact(ctx context.Context, runID, outputName string) (domain.Artifact, error) {
+	return s.GetPipelineRunArtifactFromStage(ctx, runID, "", outputName)
+}
+func (s *Store) GetPipelineRunArtifactFromStage(ctx context.Context, runID, stageID, outputName string) (domain.Artifact, error) {
 	var artifact domain.Artifact
 	err := s.pool.QueryRow(ctx, `
 		SELECT artifact.id, artifact.operation_id, run.workspace_id, COALESCE(artifact.step_id, ''), COALESCE(artifact.output_name, ''), artifact.name,
@@ -239,10 +257,10 @@ func (s *Store) GetPipelineRunArtifact(ctx context.Context, runID, outputName st
 		FROM pipeline_runs run
 		JOIN pipeline_run_stages stage ON stage.run_id = run.id
 		JOIN artifacts artifact ON artifact.operation_id = stage.operation_id
-		WHERE run.id = $1 AND artifact.output_name = $2
+		WHERE run.id = $1 AND artifact.output_name = $2 AND ($3 = '' OR stage.stage_id = $3)
 		ORDER BY stage.position, artifact.created_at
 		LIMIT 1
-	`, runID, outputName).Scan(&artifact.ID, &artifact.OperationID, &artifact.WorkspaceID, &artifact.StepID, &artifact.OutputName, &artifact.Name,
+	`, runID, outputName, stageID).Scan(&artifact.ID, &artifact.OperationID, &artifact.WorkspaceID, &artifact.StepID, &artifact.OutputName, &artifact.Name,
 		&artifact.Type, &artifact.Version, &artifact.MediaType, &artifact.StorageKey, &artifact.Digest, &artifact.SizeBytes,
 		&artifact.StorageDigest, &artifact.StoredSizeBytes, &artifact.EncryptionNonce, &artifact.Sensitive, &artifact.VerifiedAt, &artifact.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -286,24 +304,35 @@ func scanPipelineRun(row scanner) (domain.PipelineRun, error) {
 }
 
 func (s *Store) listPipelineRunStages(ctx context.Context, runID string) ([]domain.PipelineRunStage, error) {
+	stages, err := s.listPipelineRunStagesForRuns(ctx, []string{runID})
+	return stages[runID], err
+}
+
+func (s *Store) listPipelineRunStagesForRuns(ctx context.Context, runIDs []string) (map[string][]domain.PipelineRunStage, error) {
+	result := make(map[string][]domain.PipelineRunStage, len(runIDs))
+	for _, runID := range runIDs {
+		result[runID] = []domain.PipelineRunStage{}
+	}
+	if len(runIDs) == 0 {
+		return result, nil
+	}
 	rows, err := s.pool.Query(ctx, `
 		SELECT id, run_id, position, stage_id, plugin_id, title, status, COALESCE(operation_id, ''), spec, error, started_at, completed_at,
 		       COALESCE(cleanup_operation_id, ''), cleanup_status, cleanup_error, cleanup_started_at, cleanup_completed_at
 		FROM pipeline_run_stages
-		WHERE run_id = $1
-		ORDER BY position
-	`, runID)
+		WHERE run_id = ANY($1::text[])
+		ORDER BY run_id, position
+	`, runIDs)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	result := []domain.PipelineRunStage{}
 	for rows.Next() {
 		var stage domain.PipelineRunStage
 		if err := rows.Scan(&stage.ID, &stage.RunID, &stage.Position, &stage.StageID, &stage.PluginID, &stage.Title, &stage.Status, &stage.OperationID, &stage.Spec, &stage.Error, &stage.StartedAt, &stage.CompletedAt, &stage.CleanupOperationID, &stage.CleanupStatus, &stage.CleanupError, &stage.CleanupStartedAt, &stage.CleanupCompletedAt); err != nil {
 			return nil, err
 		}
-		result = append(result, stage)
+		result[stage.RunID] = append(result[stage.RunID], stage)
 	}
 	return result, rows.Err()
 }
@@ -672,7 +701,7 @@ func (s *Store) FailPipelineRun(ctx context.Context, runID, owner, status, messa
 		SET status = $2, error = $3, completed_at = now(), updated_at = now()
 		FROM canceled_runs
 		WHERE trial.pipeline_run_id = canceled_runs.id AND trial.status = $4
-	`, runID, domain.OperationCanceled, "Not started because an earlier sequential run did not complete safely.", domain.OperationQueued)
+	`, runID, domain.OperationCanceled, "Not started because an earlier sequential run failed or was canceled.", domain.OperationQueued)
 	if err != nil {
 		return err
 	}
@@ -766,12 +795,6 @@ func cancelableExperimentStatus(status string) bool {
 	return status == domain.OperationQueued || status == domain.OperationRunning
 }
 
-func (s *Store) PipelineRunCount(ctx context.Context, pipelineID string) (int, error) {
-	var count int
-	err := s.pool.QueryRow(ctx, `SELECT count(*) FROM pipeline_runs WHERE pipeline_id = $1`, pipelineID).Scan(&count)
-	return count, err
-}
-
 func (s *Store) SyncExperimentPipelineRun(ctx context.Context, runID string) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -821,4 +844,16 @@ func (s *Store) SyncExperimentPipelineRun(ctx context.Context, runID string) err
 		return err
 	}
 	return tx.Commit(ctx)
+}
+
+// Keep ownership while a final read-only cleanup health gate contacts the cluster.
+func (s *Store) RenewPipelineRunLease(ctx context.Context, runID, owner string) error {
+	result, err := s.pool.Exec(ctx, `UPDATE pipeline_runs SET lease_until = now() + interval '15 seconds' WHERE id=$1 AND lease_owner=$2 AND lease_until > now() AND status='running'`, runID, owner)
+	if err != nil {
+		return err
+	}
+	if result.RowsAffected() != 1 {
+		return errors.New("pipeline run lease was lost during cleanup verification")
+	}
+	return nil
 }

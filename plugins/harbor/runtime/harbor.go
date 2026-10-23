@@ -11,6 +11,8 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -268,7 +270,10 @@ func (plugin Plugin) Execute(ctx context.Context, step domain.PlanStep, log plug
 	if err := log("info", "Installing the digest-verified managed registry release"); err != nil {
 		return nil, err
 	}
-	output, err := plugin.runner().Run(ctx, target, access, installCommand(input.Marker, target.Address, adminPassword, databasePassword, robotSecret))
+	if err := plugin.prepareBundledImages(ctx, target, access, input.Marker, log); err != nil {
+		return nil, err
+	}
+	output, err := plugin.runner().Run(ctx, target, access, installCommand(input.RegistryName, input.Marker, target.Address, adminPassword, databasePassword, robotSecret))
 	if err != nil {
 		return nil, err
 	}
@@ -333,7 +338,7 @@ func (plugin Plugin) Verify(ctx context.Context, step domain.PlanStep, raw json.
 	if err := validateResult(input, target, value); err != nil {
 		return unhealthy(err.Error(), "artifact", "invalid"), nil
 	}
-	if _, err := plugin.runner().Run(ctx, target, access, readinessCommand(input.Marker, target.Address, value.RegistryManagementCredential.Spec.Password, value.RegistryPushCredential.Spec.Username, value.RegistryPushCredential.Spec.Password)); err != nil {
+	if _, err := plugin.runner().Run(ctx, target, access, readinessCommand(input.RegistryName, input.Marker, target.Address, value.RegistryManagementCredential.Spec.Password, value.RegistryPushCredential.Spec.Username, value.RegistryPushCredential.Spec.Password)); err != nil {
 		return unhealthy("Managed-registry health gate failed: "+err.Error(), "registry", "unhealthy"), nil
 	}
 	if err := log("info", "Registry health, installed version, managed projects, management access and robot token are verified"); err != nil {
@@ -464,7 +469,7 @@ func installPrecheckCommand() string {
 	return strings.Join(commands, "; ")
 }
 
-func installCommand(marker, address, adminPassword, databasePassword, robotSecret string) string {
+func installCommand(nodeName, marker, address, adminPassword, databasePassword, robotSecret string) string {
 	projectRequest := `{"project_name":"` + development + `","metadata":{"public":"false"}}`
 	releasesRequest := `{"project_name":"` + releases + `","metadata":{"public":"false"}}`
 	robotRequest, _ := json.Marshal(map[string]any{
@@ -482,6 +487,7 @@ func installCommand(marker, address, adminPassword, databasePassword, robotSecre
 		"s|^data_volume:.*|data_volume: " + dataPath + "|",
 	}
 	parts := []string{
+		"sudo hostnamectl set-hostname " + shellQuote(nodeName),
 		"sudo apt-get update -q",
 		"sudo DEBIAN_FRONTEND=noninteractive apt-get install -y ca-certificates curl docker.io docker-compose-v2 jq openssl skopeo",
 		"sudo systemctl enable --now docker",
@@ -489,7 +495,7 @@ func installCommand(marker, address, adminPassword, databasePassword, robotSecre
 		"sudo install -d -m 0755 /var/lib/kubephos",
 		"sudo install -d -m 0750 " + dataPath,
 		"printf '%s\\n' " + shellQuote(marker) + " | sudo tee " + markerFile + " >/dev/null",
-		"curl -fsSL " + shellQuote(installerURL) + " -o /tmp/kubephos-harbor.tgz",
+		"curl --retry 5 --retry-delay 2 --retry-max-time 120 --connect-timeout 10 --max-time 60 -fsSL " + shellQuote(installerURL) + " -o /tmp/kubephos-harbor.tgz",
 		"printf '%s  %s\\n' " + shellQuote(installerDigest) + " /tmp/kubephos-harbor.tgz | sha256sum -c -",
 		"sudo tar -xzf /tmp/kubephos-harbor.tgz -C /opt",
 		"sudo install -d -m 0755 " + tlsPath,
@@ -514,26 +520,31 @@ func installCommand(marker, address, adminPassword, databasePassword, robotSecre
 		"sudo systemctl daemon-reload",
 		"sudo systemctl enable --now "+serviceName,
 		"rm -f /tmp/kubephos-harbor.tgz",
-		"{ attempt=0; until curl --connect-timeout 3 --max-time 10 --cacert "+tlsPath+"/ca.crt -fsS https://"+address+"/api/v2.0/health | grep -q '\"status\":\"healthy\"'; do attempt=$((attempt + 1)); test \"$attempt\" -lt 61 || exit 1; sleep 5; done; }",
-		"test \"$(curl --cacert "+tlsPath+"/ca.crt -sS -o /tmp/kubephos-project.json -w '%{http_code}' -u "+shellQuote("admin:"+adminPassword)+" -H 'Content-Type: application/json' -d "+shellQuote(projectRequest)+" https://"+address+"/api/v2.0/projects)\" = 201",
-		"test \"$(curl --cacert "+tlsPath+"/ca.crt -sS -o /tmp/kubephos-releases.json -w '%{http_code}' -u "+shellQuote("admin:"+adminPassword)+" -H 'Content-Type: application/json' -d "+shellQuote(releasesRequest)+" https://"+address+"/api/v2.0/projects)\" = 201",
+		"{ attempt=0; until curl --connect-timeout 3 --max-time 10 --cacert "+tlsPath+"/ca.crt -fsS https://"+address+"/api/v2.0/health | jq -e '.status == \"healthy\"' >/dev/null; do attempt=$((attempt + 1)); test \"$attempt\" -lt 61 || exit 1; sleep 5; done; }",
+		createAPICommand("development project", address, adminPassword, shellQuote(projectRequest), "projects", "/tmp/kubephos-project.json"),
+		createAPICommand("releases project", address, adminPassword, shellQuote(releasesRequest), "projects", "/tmp/kubephos-releases.json"),
 	)
 	parts = append(parts, proxyInstallCommands(address, adminPassword)...)
-	parts = append(parts, managedComponentCopyCommands(address, adminPassword)...)
+	parts = append(parts, managedComponentCopyCommands(address, adminPassword, marker)...)
 	parts = append(parts,
 		"printf '\\n"+robotMarker+"'",
 		"curl --cacert "+tlsPath+"/ca.crt -fsS -u "+shellQuote("admin:"+adminPassword)+" -H 'Content-Type: application/json' -d "+shellQuote(string(robotRequest))+" https://"+address+"/api/v2.0/robots",
 		"printf '\n"+caMarker+"'",
 		"sudo base64 -w0 "+tlsPath+"/ca.crt",
+		"rm -rf "+shellQuote("/tmp/kubephos-images-"+marker),
 	)
-	return strings.Join(parts, " && ")
+	return chainCommands(parts)
 }
 
-func managedComponentCopyCommands(address, adminPassword string) []string {
+func managedComponentCopyCommands(address, adminPassword, marker string) []string {
 	commands := make([]string, 0, len(managedcomponents.Catalog()))
 	for _, component := range managedcomponents.Catalog() {
 		target := managedcomponents.Image(address, component.Name, component.Version)
-		commands = append(commands, "skopeo copy --retry-times 3 --dest-creds "+shellQuote("admin:"+adminPassword)+" "+shellQuote("docker://"+component.SourceImage)+" "+shellQuote("docker://"+target))
+		source := "docker://" + component.SourceImage
+		if _, err := os.Stat(bundledImagePath(component)); err == nil {
+			source = "docker-archive:" + remoteImagePath(marker, component)
+		}
+		commands = append(commands, "skopeo copy --retry-times 3 --dest-creds "+shellQuote("admin:"+adminPassword)+" "+shellQuote(source)+" "+shellQuote("docker://"+target))
 	}
 	return commands
 }
@@ -544,7 +555,7 @@ func proxyInstallCommands(address, adminPassword string) []string {
 	for _, proxy := range proxyTargets {
 		if len(proxy.StaticRepositories) > 0 {
 			projectRequest, _ := json.Marshal(map[string]any{"project_name": proxy.Project, "public": true, "metadata": map[string]string{"public": "true"}})
-			commands = append(commands, "proxy_status=$(curl --cacert "+tlsPath+"/ca.crt -sS -o /tmp/kubephos-static-project.json -w '%{http_code}' -u "+shellQuote("admin:"+adminPassword)+" -H 'Content-Type: application/json' -d "+shellQuote(string(projectRequest))+" "+shellQuote(baseURL+"/projects")+"); { test \"$proxy_status\" = 201 || test \"$proxy_status\" = 409; }")
+			commands = append(commands, createAPICommand(proxy.Project, address, adminPassword, shellQuote(string(projectRequest)), "projects", "/tmp/kubephos-static-project.json"))
 			for _, repository := range proxy.StaticRepositories {
 				source := "docker://" + proxy.Source + "/" + repository + ":" + proxy.Reference
 				target := "docker://" + address + "/" + proxy.Project + "/" + repository + ":" + proxy.Reference
@@ -555,29 +566,30 @@ func proxyInstallCommands(address, adminPassword string) []string {
 		registryName := proxy.Source + "-upstream"
 		registryRequest, _ := json.Marshal(map[string]string{"name": registryName, "url": proxy.Upstream, "type": proxy.Type})
 		commands = append(commands,
-			"proxy_status=$(curl --cacert "+tlsPath+"/ca.crt -sS -o /tmp/kubephos-proxy-registry.json -w '%{http_code}' -u "+shellQuote("admin:"+adminPassword)+" -H 'Content-Type: application/json' -d "+shellQuote(string(registryRequest))+" "+shellQuote(baseURL+"/registries")+"); { test \"$proxy_status\" = 201 || test \"$proxy_status\" = 409; }",
+			createAPICommand(registryName, address, adminPassword, shellQuote(string(registryRequest)), "registries", "/tmp/kubephos-proxy-registry.json"),
 			"proxy_registry_id=$(curl --cacert "+tlsPath+"/ca.crt -fsS -u "+shellQuote("admin:"+adminPassword)+" "+shellQuote(baseURL+"/registries?name="+registryName)+" | jq -er "+shellQuote("map(select(.name == \""+registryName+"\" and .url == \""+proxy.Upstream+"\")) | .[0].id")+")",
 			"proxy_project_payload=$(jq -cn --arg name "+shellQuote(proxy.Project)+" --argjson registry \"$proxy_registry_id\" '{project_name:$name,registry_id:$registry,public:true,metadata:{public:\"true\"}}')",
-			"proxy_status=$(curl --cacert "+tlsPath+"/ca.crt -sS -o /tmp/kubephos-proxy-project.json -w '%{http_code}' -u "+shellQuote("admin:"+adminPassword)+" -H 'Content-Type: application/json' -d \"$proxy_project_payload\" "+shellQuote(baseURL+"/projects")+"); { test \"$proxy_status\" = 201 || test \"$proxy_status\" = 409; }",
+			createAPICommand(proxy.Project, address, adminPassword, "\"$proxy_project_payload\"", "projects", "/tmp/kubephos-proxy-project.json"),
 		)
 	}
 	return commands
 }
 
-func readinessCommand(marker, address, adminPassword, robotName, robotSecret string) string {
+func readinessCommand(nodeName, marker, address, adminPassword, robotName, robotSecret string) string {
 	baseURL := "https://" + address
 	curl := "curl --cacert " + tlsPath + "/ca.crt -fsS"
 	checks := []struct {
 		name    string
 		command string
 	}{
+		{"the registry machine hostname does not match", "test \"$(hostname)\" = " + shellQuote(nodeName)},
 		{"the registry ownership marker does not match", "sudo test \"$(sudo cat " + markerFile + ")\" = " + shellQuote(marker)},
 		{"the registry compose definition is missing", "test -f " + installPath + "/docker-compose.yml"},
 		{"the registry boot service is not enabled", "sudo systemctl is-enabled --quiet " + serviceName},
 		{"the registry boot service is not active", "sudo systemctl is-active --quiet " + serviceName},
 		{"one or more registry containers are not running", "test \"$(sudo docker ps -q --filter label=com.docker.compose.project=harbor | wc -l)\" -ge 8"},
 		{"the registry certificate does not match its IP address", "sudo openssl x509 -checkip " + address + " -noout -in " + tlsPath + "/server.crt"},
-		{"the registry health endpoint is not healthy", curl + " " + baseURL + "/api/v2.0/health | grep -q '\"status\":\"healthy\"'"},
+		{"the registry health endpoint is not healthy", curl + " " + baseURL + "/api/v2.0/health | jq -e '.status == \"healthy\"' >/dev/null"},
 		{"the installed registry version does not match the managed profile", curl + " -u " + shellQuote("admin:"+adminPassword) + " " + baseURL + "/api/v2.0/systeminfo | grep -Fq " + shellQuote(harborVersion)},
 		{"the development project is unavailable to the management identity", curl + " -u " + shellQuote("admin:"+adminPassword) + " '" + baseURL + "/api/v2.0/projects?name=" + development + "' | grep -Fq '\"name\":\"" + development + "\"'"},
 		{"the releases project is unavailable to the management identity", curl + " -u " + shellQuote("admin:"+adminPassword) + " '" + baseURL + "/api/v2.0/projects?name=" + releases + "' | grep -Fq '\"name\":\"" + releases + "\"'"},
@@ -639,7 +651,7 @@ func cleanupPrecheckCommand(marker string) string {
 }
 
 func cleanupCommand(marker string) string {
-	return "if test ! -e " + markerFile + " && test ! -e " + installPath + " && test ! -e " + dataPath + " && test ! -e " + logPath + " && test ! -e " + serviceFile + "; then exit 0; fi && sudo test \"$(sudo cat " + markerFile + ")\" = " + shellQuote(marker) + " && { sudo systemctl disable --now " + serviceName + " >/dev/null 2>&1 || true; } && if test -f " + installPath + "/docker-compose.yml; then cd " + installPath + " && sudo docker compose down -v --remove-orphans; fi && sudo rm -f " + serviceFile + " && sudo systemctl daemon-reload && sudo rm -rf -- " + installPath + " " + dataPath + " " + logPath + " && sudo rm -f " + markerFile
+	return "rm -rf " + shellQuote("/tmp/kubephos-images-"+marker) + " && " + "if test ! -e " + markerFile + " && test ! -e " + installPath + " && test ! -e " + dataPath + " && test ! -e " + logPath + " && test ! -e " + serviceFile + "; then exit 0; fi && sudo test \"$(sudo cat " + markerFile + ")\" = " + shellQuote(marker) + " && { sudo systemctl disable --now " + serviceName + " >/dev/null 2>&1 || true; } && if test -f " + installPath + "/docker-compose.yml; then cd " + installPath + " && sudo docker compose down -v --remove-orphans; fi && sudo rm -f " + serviceFile + " && sudo systemctl daemon-reload && sudo rm -rf -- " + installPath + " " + dataPath + " " + logPath + " && sudo rm -f " + markerFile
 }
 
 func cleanupVerifyCommand() string {
@@ -698,4 +710,70 @@ type sshRunner struct {
 
 func (runner *sshRunner) Run(ctx context.Context, target machine, access machineAccess, command string) (string, error) {
 	return runner.client.Run(ctx, pluginssh.Target{Address: target.Address, Port: target.SSHPort, User: target.SSHUser}, access.Spec.PrivateKey, command)
+}
+
+// Brace groups keep multi-command stages inside the fail-fast AND chain.
+func chainCommands(commands []string) string {
+	groups := make([]string, len(commands))
+	for index, command := range commands {
+		groups[index] = "{ " + command + "; }"
+	}
+	return strings.Join(groups, " && ")
+}
+
+// Registry/project creation is idempotent by name: a retry may return 409.
+func createAPICommand(label, address, password, payload, endpoint, output string) string {
+	request := "curl --connect-timeout 5 --max-time 20 --cacert " + tlsPath + "/ca.crt -sS -o " + output + " -w '%{http_code}' -u " + shellQuote("admin:"+password) + " -H 'Content-Type: application/json' -d " + payload + " " + shellQuote("https://"+address+"/api/v2.0/"+endpoint)
+	return "{ api_attempt=0; while :; do api_status=$(" + request + "); api_exit=$?; " +
+		"if test \"$api_exit\" = 0; then case \"$api_status\" in 201|409) break ;; 429|500|502|503|504) ;; *) printf '%s HTTP %s\\n' " + shellQuote("Harbor "+label+" creation failed:") + " \"$api_status\" >&2; exit 1 ;; esac; fi; " +
+		"api_attempt=$((api_attempt + 1)); if test \"$api_attempt\" -ge 6; then printf '%s HTTP %s\\n' " + shellQuote("Harbor "+label+" creation failed after retries:") + " \"$api_status\" >&2; exit 1; fi; sleep 2; done; }"
+}
+
+func bundledImagePath(component managedcomponents.Component) string {
+	directory := os.Getenv("KUBEPHOS_MANAGED_IMAGE_DIRECTORY")
+	if directory == "" {
+		directory = "/opt/kubephos/managed-images"
+	}
+	return filepath.Join(directory, component.Name+"-"+component.Version+".tar")
+}
+func remoteImagePath(marker string, component managedcomponents.Component) string {
+	return "/tmp/kubephos-images-" + marker + "/" + component.Name + "-" + component.Version + ".tar"
+}
+func (plugin Plugin) prepareBundledImages(ctx context.Context, target machine, access machineAccess, marker string, log plugins.Logger) error {
+	for _, component := range managedcomponents.Catalog() {
+		source := bundledImagePath(component)
+		info, err := os.Stat(source)
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("bundled %s image is not a regular archive", component.Name)
+		}
+		runner, ok := plugin.runner().(interface {
+			Upload(context.Context, machine, machineAccess, string, string) error
+		})
+		if !ok {
+			return errors.New("registry runner cannot transfer bundled images")
+		}
+		if err := log("info", "Transferring bundled "+component.Name+" "+component.Version+" image"); err != nil {
+			return err
+		}
+		if err := runner.Upload(ctx, target, access, source, remoteImagePath(marker, component)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+func (runner *sshRunner) Upload(ctx context.Context, target machine, access machineAccess, source, destination string) error {
+	file, err := os.Open(source)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	command := "umask 077; mkdir -p " + shellQuote(filepath.Dir(destination)) + " && cat > " + shellQuote(destination)
+	_, err = runner.client.RunWithInput(ctx, pluginssh.Target{Address: target.Address, Port: target.SSHPort, User: target.SSHUser}, access.Spec.PrivateKey, command, file)
+	return err
 }

@@ -59,7 +59,7 @@ spec:
 }
 
 func TestValidateRequiresResolvedCatalogEntry(t *testing.T) {
-	input, _ := json.Marshal(specification{ApplicationRef: "app:dev.example.app@1.0.0"})
+	input, _ := json.Marshal(specification{ApplicationRef: "app:dev.example.app"})
 	report := (Plugin{}).Validate(t.Context(), Invocation{Input: input, Catalog: map[string]json.RawMessage{}})
 	if report.Valid {
 		t.Fatal("expected unresolved application to fail")
@@ -207,10 +207,9 @@ spec:
 func TestPlanDeclaresTypedInterfaceArtifacts(t *testing.T) {
 	descriptor := catalog.Descriptor{}
 	descriptor.Metadata.ID = "dev.example.app"
-	descriptor.Metadata.Version = "1.0.0"
 	raw, _ := json.Marshal(descriptor)
-	input, _ := json.Marshal(specification{ApplicationRef: "app:dev.example.app@1.0.0"})
-	plan, err := (Plugin{}).Plan(context.Background(), Invocation{Input: input, Catalog: map[string]json.RawMessage{"app:dev.example.app@1.0.0": raw}})
+	input, _ := json.Marshal(specification{ApplicationRef: "app:dev.example.app"})
+	plan, err := (Plugin{}).Plan(context.Background(), Invocation{Input: input, Catalog: map[string]json.RawMessage{"app:dev.example.app": raw}})
 	if err != nil {
 		t.Fatal(err)
 	}

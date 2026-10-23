@@ -9,8 +9,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"html/template"
 	"net/http"
-	"regexp"
 	"strings"
 	"time"
 
@@ -79,6 +79,7 @@ func adminReadPath(path string) bool {
 
 func userMutationAllowed(path string) bool {
 	return strings.HasPrefix(path, "/api/v1/experiment-configurations") ||
+		path == "/api/v1/experiments/start" ||
 		path == "/api/v1/experiment-instances" ||
 		path == "/api/v1/experiment-suites" ||
 		strings.HasPrefix(path, "/api/v1/experiments") ||
@@ -145,11 +146,11 @@ func (s *Server) authSetup(response http.ResponseWriter, request *http.Request) 
 	}
 	input.Username = strings.ToLower(strings.TrimSpace(input.Username))
 	input.Email = strings.ToLower(strings.TrimSpace(input.Email))
-	if !regexp.MustCompile(`^[a-z][a-z0-9._-]{2,39}$`).MatchString(input.Username) {
+	if auth.ValidateUsername(input.Username) != nil {
 		writeError(response, http.StatusUnprocessableEntity, "invalid_username", "Username must contain 3 to 40 lowercase letters, numbers, dots, dashes or underscores.")
 		return
 	}
-	_, err = auth.HashPassword(input.Password)
+	err = auth.ValidatePassword(input.Password)
 	if err != nil {
 		writeError(response, http.StatusUnprocessableEntity, "invalid_password", err.Error())
 		return
@@ -189,17 +190,17 @@ func (s *Server) authSetup(response http.ResponseWriter, request *http.Request) 
 
 func (s *Server) authLogin(response http.ResponseWriter, request *http.Request) {
 	if s.identity == nil {
-		writeError(response, http.StatusServiceUnavailable, "identity_unavailable", "Keycloak is not configured.")
+		writeSignInError(response, request, http.StatusServiceUnavailable, "identity_unavailable", "Keycloak is not configured.")
 		return
 	}
 	state, err := randomToken(32)
 	if err != nil {
-		writeError(response, http.StatusInternalServerError, "login_error", "Could not start sign in.")
+		writeSignInError(response, request, http.StatusInternalServerError, "login_error", "Could not start sign in.")
 		return
 	}
 	verifier, err := randomToken(48)
 	if err != nil {
-		writeError(response, http.StatusInternalServerError, "login_error", "Could not start sign in.")
+		writeSignInError(response, request, http.StatusInternalServerError, "login_error", "Could not start sign in.")
 		return
 	}
 	digest := sha256.Sum256([]byte(verifier))
@@ -216,22 +217,26 @@ func (s *Server) authCallback(response http.ResponseWriter, request *http.Reques
 	s.clearOIDCCookie(response, request, oidcStateCookie)
 	s.clearOIDCCookie(response, request, oidcVerifierCookie)
 	if stateErr != nil || verifierErr != nil || state == "" || code == "" || subtle.ConstantTimeCompare([]byte(state), []byte(stateCookie.Value)) != 1 {
-		writeError(response, http.StatusBadRequest, "invalid_login", "The sign-in response is invalid or expired.")
+		writeSignInError(response, request, http.StatusBadRequest, "invalid_login", "The sign-in response is invalid or expired.")
+		return
+	}
+	if s.identity == nil {
+		writeSignInError(response, request, http.StatusServiceUnavailable, "identity_unavailable", "Keycloak is not configured.")
 		return
 	}
 	identity, err := s.identity.Exchange(request.Context(), code, verifierCookie.Value)
 	if err != nil {
-		writeError(response, http.StatusBadGateway, "identity_unavailable", "Keycloak could not complete sign in.")
+		writeSignInError(response, request, http.StatusBadGateway, "identity_unavailable", "Keycloak could not complete sign in.")
 		return
 	}
 	user, err := s.store.GetUserByExternalID(request.Context(), identity.Subject)
 	if err != nil {
-		writeError(response, http.StatusForbidden, "user_not_authorized", "This Keycloak account is not enabled in KubePhos.")
+		writeSignInError(response, request, http.StatusForbidden, "user_not_authorized", "This Keycloak account is not enabled in KubePhos.")
 		return
 	}
 	session, token, err := s.issueSession(request.Context(), user)
 	if err != nil {
-		writeError(response, http.StatusInternalServerError, "session_error", "Could not start the session.")
+		writeSignInError(response, request, http.StatusInternalServerError, "session_error", "Could not start the session.")
 		return
 	}
 	s.setSessionCookie(response, request, token, session.ExpiresAt)
@@ -307,4 +312,20 @@ func actorName(request *http.Request) string {
 		return "anonymous"
 	}
 	return user.Username
+}
+
+var signInErrorPage = template.Must(template.New("sign-in-error").Parse(`<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="referrer" content="no-referrer"><title>Sign-in could not be completed · Kubephos</title><link rel="icon" href="/kubephos-icon.svg"><link rel="stylesheet" href="/auth-error.css"></head><body><main><span class="brand">Kubephos</span><h1>Sign-in could not be completed</h1><p>{{.}}</p><a href="/api/v1/auth/login">Try signing in again</a></main></body></html>`))
+
+func writeSignInError(response http.ResponseWriter, request *http.Request, status int, code, message string) {
+	response.Header().Set("Cache-Control", "no-store")
+	response.Header().Set("Referrer-Policy", "no-referrer")
+	response.Header().Add("Vary", "Accept")
+	if !strings.Contains(request.Header.Get("Accept"), "text/html") {
+		writeError(response, status, code, message)
+		return
+	}
+	response.Header().Set("Content-Type", "text/html; charset=utf-8")
+	response.WriteHeader(status)
+	_ = signInErrorPage.Execute(response, message)
 }

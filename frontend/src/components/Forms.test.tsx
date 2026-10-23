@@ -1,72 +1,13 @@
 import {fireEvent, render, screen, waitFor} from '@testing-library/react'
 import {afterEach, beforeAll, describe, expect, it, vi} from 'vitest'
-import type {Artifact, Connection, ManagedResource, Plugin, Workspace} from '../types'
-import {ApplicationDialog, ConnectionDialog, InfrastructureServiceDialog, KubernetesClusterDialog, RuntimeDialog} from './Forms'
-
-const artifacts: Artifact[] = [
-  artifact('art_executor_endpoint', 'op_executor', 'executor-endpoint', 'OCIExecutorEndpoint', false),
-  artifact('art_executor_credential', 'op_executor', 'executor-credential', 'OCIExecutorCredential', true),
-  artifact('art_registry_one', 'op_registry_one', 'registry-one', 'RegistryEndpoint', false),
-  artifact('art_registry_one_pull', 'op_registry_one', 'registry-one-pull', 'RegistryCredential', true),
-  artifact('art_registry_two', 'op_registry_two', 'registry-two', 'RegistryEndpoint', false),
-  artifact('art_registry_two_pull', 'op_registry_two', 'registry-two-pull', 'RegistryCredential', true),
-]
+import type {Connection, ManagedResource, Plugin, Workspace} from '../types'
+import {ApplicationDialog, ConnectionDialog, InfrastructureServiceDialog, KubernetesClusterDialog, MachineTemplateDialog} from './Forms'
 
 afterEach(() => vi.unstubAllGlobals())
 
 beforeAll(() => {
   HTMLDialogElement.prototype.showModal = function () { this.setAttribute('open', '') }
   HTMLDialogElement.prototype.close = function () { this.removeAttribute('open') }
-})
-
-describe('RuntimeDialog', () => {
-  it('validates the resolved profile before activation', async () => {
-    const fetch = vi.fn()
-      .mockResolvedValueOnce(new Response(JSON.stringify({valid: true, message: 'All runtime gates passed.'}), {status: 200, headers: {'Content-Type': 'application/json'}}))
-      .mockResolvedValueOnce(new Response(JSON.stringify({configured: true}), {status: 200, headers: {'Content-Type': 'application/json'}}))
-    vi.stubGlobal('fetch', fetch)
-    const close = vi.fn()
-    const onDone = vi.fn().mockResolvedValue(undefined)
-    render(<RuntimeDialog open close={close} runtime={null} session={{authenticated: true, csrfToken: 'csrf'}} applications={[]} artifacts={artifacts} connections={[]} credentials={[]} onDone={onDone} />)
-
-    fireEvent.change(screen.getByRole('combobox', {name: 'Executor endpoint'}), {target: {value: 'art_executor_endpoint'}})
-    fireEvent.change(screen.getByRole('combobox', {name: 'Registry endpoint'}), {target: {value: 'art_registry_one'}})
-    fireEvent.click(screen.getByRole('button', {name: 'Validate configuration'}))
-
-    await screen.findByText('All runtime gates passed.')
-    expect(fetch).toHaveBeenCalledTimes(1)
-    expect(fetch.mock.calls[0][0]).toBe('/api/v1/plugin-runtime/validate')
-    expect(JSON.parse(fetch.mock.calls[0][1].body)).toEqual({
-      endpointArtifactId: 'art_executor_endpoint',
-      credentialArtifactId: 'art_executor_credential',
-      registries: [{endpointArtifactId: 'art_registry_one', credentialArtifactId: 'art_registry_one_pull'}],
-    })
-
-    fireEvent.click(screen.getByRole('button', {name: 'Activate runtime'}))
-    await waitFor(() => expect(fetch).toHaveBeenCalledTimes(2))
-    expect(fetch.mock.calls[1][0]).toBe('/api/v1/plugin-runtime/activate')
-    expect(close).toHaveBeenCalledOnce()
-    expect(onDone).toHaveBeenCalledWith('Managed OCI runtime activated.')
-  })
-
-  it('does not offer the same registry endpoint twice', () => {
-    render(<RuntimeDialog open close={() => {}} runtime={null} session={{authenticated: true}} applications={[]} artifacts={artifacts} connections={[]} credentials={[]} onDone={async () => {}} />)
-    fireEvent.change(screen.getByRole('combobox', {name: 'Registry endpoint'}), {target: {value: 'art_registry_one'}})
-    fireEvent.click(screen.getByRole('button', {name: 'Add registry +'}))
-    const selectors = screen.getAllByRole('combobox', {name: 'Registry endpoint'})
-    expect(selectors).toHaveLength(2)
-    expect(selectors[1].querySelector('option[value="art_registry_one"]')).not.toBeInTheDocument()
-    expect(selectors[1].querySelector('option[value="art_registry_two"]')).toBeInTheDocument()
-  })
-
-  it('shows unavailable saved artifacts instead of blank runtime selectors', () => {
-    const runtime = {configured: true, status: 'invalid', message: '', profile: {endpointArtifactId: 'art_old_executor', credentialArtifactId: 'art_old_executor_credential', registries: [{endpointArtifactId: 'art_old_registry', credentialArtifactId: 'art_old_pull'}]}}
-    render(<RuntimeDialog open close={() => {}} runtime={runtime} session={{authenticated: true}} applications={[]} artifacts={artifacts} connections={[]} credentials={[]} onDone={async () => {}} />)
-    expect(screen.getByRole('combobox', {name: 'Executor endpoint'})).toHaveValue('art_old_executor')
-    expect(screen.getByRole('option', {name: 'art_old_executor · unavailable'})).toBeInTheDocument()
-    expect(screen.getByRole('combobox', {name: 'Registry endpoint'})).toHaveValue('art_old_registry')
-    expect(screen.getByRole('button', {name: 'Validate configuration'})).toBeDisabled()
-  })
 })
 
 describe('ConnectionDialog', () => {
@@ -115,33 +56,82 @@ describe('InfrastructureServiceDialog', () => {
     }
     const view = render(<InfrastructureServiceDialog {...props} initialKind="nfs" />)
 
-    fireEvent.change(screen.getByRole('textbox', {name: 'Service name'}), {target: {value: 'shared-data'}})
-    expect(screen.getByRole('button', {name: 'Create NFS'})).toBeInTheDocument()
+    fireEvent.change(screen.getByRole('textbox', {name: 'Name'}), {target: {value: 'shared-data'}})
+    expect(screen.getByRole('heading', {name: 'New NFS server'})).toBeInTheDocument()
 
     view.rerender(<InfrastructureServiceDialog {...props} initialKind="nfs" workspaces={[{...workspace}]} connections={[{...connection}]} templates={[{...machineTemplate}]} />)
 
-    await waitFor(() => expect(screen.getByRole('button', {name: 'Create NFS'})).toBeInTheDocument())
-    expect(screen.getByRole('textbox', {name: 'Service name'})).toHaveValue('shared-data')
+    await waitFor(() => expect(screen.getByRole('heading', {name: 'New NFS server'})).toBeInTheDocument())
+    expect(screen.getByRole('textbox', {name: 'Name'})).toHaveValue('shared-data')
+    fireEvent.click(screen.getByRole('button', {name: 'Continue'}))
+    expect(screen.getByRole('heading', {name: 'Resources'})).toBeVisible()
+    fireEvent.change(screen.getByRole('spinbutton', {name: 'CPU cores'}), {target: {value: '3'}})
+    fireEvent.click(screen.getByRole('button', {name: 'Continue'}))
+    expect(screen.getByRole('heading', {name: 'Network'})).toBeVisible()
+    fireEvent.click(screen.getByRole('button', {name: 'Previous'}))
+    expect(screen.getByRole('spinbutton', {name: 'CPU cores'})).toHaveValue(3)
+    fireEvent.click(screen.getByRole('button', {name: 'Previous'}))
+    expect(screen.getByRole('textbox', {name: 'Name'})).toHaveValue('shared-data')
   })
 })
 
 describe('KubernetesClusterDialog', () => {
+  it('creates member clusters and their pools in one multi cluster form and request', async () => {
+    const fetch = vi.fn().mockImplementation((path: string) => Promise.resolve(new Response(JSON.stringify(path.includes('provisioning-suggestions') ? {vmid: 300, address: '10.0.0.10', prefixLength: 24, gateway: '10.0.0.1', dnsServer: '1.1.1.1'} : {id: 'environment_created'}), {status: path.includes('provisioning-suggestions') ? 200 : 202})))
+    vi.stubGlobal('fetch', fetch)
+    const {container} = render(<KubernetesClusterDialog open close={() => {}} workspaces={[workspace]} templates={[machineTemplate]} services={[harborService, nfsService]} session={{authenticated: true, csrfToken: 'csrf'}} applications={[]} artifacts={[]} connections={[connection]} credentials={[]} onDone={async () => {}} />)
+    fireEvent.change(screen.getByRole('combobox', {name: 'Deployment'}), {target: {value: 'multi'}})
+    fireEvent.change(screen.getByRole('textbox', {name: 'Name'}), {target: {value: 'lab'}})
+    fireEvent.click(screen.getByRole('button', {name: 'Add cluster'}))
+    fireEvent.click(screen.getByRole('button', {name: 'Continue'}))
+    await waitFor(() => expect(screen.getByRole('spinbutton', {name: 'First VM ID'})).toHaveValue(300))
+    fireEvent.click(screen.getByRole('button', {name: 'Continue'}))
+    fireEvent.click(screen.getByRole('tab', {name: 'Pools'}))
+    fireEvent.change(screen.getByRole('textbox', {name: 'Labels'}), {target: {value: 'hardware=gpu,tier=frontend'}})
+    fireEvent.click(screen.getByRole('button', {name: 'Continue'}))
+    fireEvent.click(screen.getByRole('button', {name: 'Continue'}))
+    fireEvent.click(screen.getByRole('button', {name: 'Continue'}))
+    expect(container.querySelectorAll('form')).toHaveLength(1)
+    expect(screen.queryByLabelText('Zones')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', {name: 'Create clusters'}))
+    await waitFor(() => expect(fetch.mock.calls.filter(call => call[0] === '/api/v1/kubernetes-clusters')).toHaveLength(1))
+    const call = fetch.mock.calls.find(call => call[0] === '/api/v1/kubernetes-clusters')!
+    const body = JSON.parse(call[1].body)
+    expect(body.mode).toBe('multi')
+    expect(body.members.map((member: {name: string}) => member.name)).toEqual(['lab-cluster-1', 'lab-cluster-2', 'lab-cluster-3'])
+    expect(body.members.map((member: {baseVMID: number}) => member.baseVMID)).toEqual([300, 304, 308])
+    expect(body.members.map((member: {addressStart: string}) => member.addressStart)).toEqual(['10.0.0.10', '10.0.0.14', '10.0.0.18'])
+    expect(body.members[0].applicationPools[0].labels).toEqual({hardware: 'gpu', tier: 'frontend'})
+    expect(body.members[0].machineNodes['lab-cluster-1-control-plane-1']).toBe('pve')
+  }, 15000)
+
   it('submits an independent capacity for every pool', async () => {
     const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({id: 'cluster_created'}), {status: 202, headers: {'Content-Type': 'application/json'}}))
     vi.stubGlobal('fetch', fetch)
     render(<KubernetesClusterDialog open close={() => {}} workspaces={[workspace]} templates={[machineTemplate]} services={[harborService, nfsService]} session={{authenticated: true, csrfToken: 'csrf'}} applications={[]} artifacts={[]} connections={[connection]} credentials={[]} onDone={async () => {}} />)
 
-    fireEvent.change(screen.getByRole('textbox', {name: 'Cluster name'}), {target: {value: 'development'}})
+    fireEvent.change(screen.getByRole('textbox', {name: 'Name'}), {target: {value: 'development'}})
+    fireEvent.click(screen.getByRole('button', {name: 'Continue'}))
+    fireEvent.click(screen.getByRole('tab', {name: 'Pools'}))
+    fireEvent.change(screen.getByRole('spinbutton', {name: 'CPU cores'}), {target: {value: '6'}})
+    fireEvent.click(screen.getByRole('button', {name: 'Continue'}))
     fireEvent.change(screen.getByRole('spinbutton', {name: 'First VM ID'}), {target: {value: '200'}})
     fireEvent.change(screen.getByRole('textbox', {name: 'First node IP'}), {target: {value: '10.10.0.20'}})
     fireEvent.change(screen.getByRole('textbox', {name: 'Gateway'}), {target: {value: '10.10.0.1'}})
-    const cores = screen.getAllByRole('spinbutton', {name: 'CPU cores'})
-    fireEvent.change(cores[2], {target: {value: '6'}})
-    fireEvent.click(screen.getByRole('button', {name: 'Validate and create'}))
+    fireEvent.click(screen.getByText('Monitoring', {selector: 'summary'}))
+    fireEvent.change(screen.getByRole('combobox', {name: 'Scraping period'}), {target: {value: '5s'}})
+    fireEvent.change(screen.getByRole('combobox', {name: 'Metrics retention'}), {target: {value: '15d'}})
+    fireEvent.click(screen.getByRole('button', {name: 'Continue'}))
+    fireEvent.change(screen.getByRole('textbox', {name: 'development-applications-2 · Proxmox server'}), {target: {value: 'pve-2'}})
+    fireEvent.click(screen.getByRole('button', {name: 'Continue'}))
+    fireEvent.click(screen.getByRole('button', {name: 'Create cluster'}))
 
-    await waitFor(() => expect(fetch).toHaveBeenCalledOnce())
-    const body = JSON.parse(fetch.mock.calls[0][1].body)
-    expect(body.controlPlaneCapacity).toEqual({cores: 2, memoryMiB: 4096, diskGiB: 80})
+    await waitFor(() => expect(fetch.mock.calls.some(call => call[0] === '/api/v1/kubernetes-clusters')).toBe(true))
+    const body = JSON.parse(fetch.mock.calls.find(call => call[0] === '/api/v1/kubernetes-clusters')![1].body)
+    expect(body.machineNodes).toEqual({'development-control-plane-1': 'pve', 'development-management-1': 'pve', 'development-applications-1': 'pve', 'development-applications-2': 'pve-2'})
+    expect(body.scrapeInterval).toBe('5s')
+ expect(body.retention).toBe('15d')
+ expect(body.controlPlaneCapacity).toEqual({cores: 2, memoryMiB: 4096, diskGiB: 80})
     expect(body.managementPool.capacity).toEqual({cores: 4, memoryMiB: 8192, diskGiB: 80})
     expect(body.applicationPools).toEqual([{name: 'applications', count: 2, zones: ['zone-a'], capacity: {cores: 6, memoryMiB: 8192, diskGiB: 80}}])
     expect(body).not.toHaveProperty('cores')
@@ -150,7 +140,7 @@ describe('KubernetesClusterDialog', () => {
 
 describe('ApplicationDialog', () => {
   it('imports a validated application descriptor', async () => {
-    const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({reference: 'app:example.application@1.0.0'}), {status: 201, headers: {'Content-Type': 'application/json'}}))
+    const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({reference: 'app:example.application'}), {status: 201, headers: {'Content-Type': 'application/json'}}))
     vi.stubGlobal('fetch', fetch)
     const close = vi.fn()
     const onDone = vi.fn().mockResolvedValue(undefined)
@@ -170,10 +160,6 @@ describe('ApplicationDialog', () => {
     expect(onDone).toHaveBeenCalledWith('Application validated and imported.')
   })
 })
-
-function artifact(id: string, operationId: string, name: string, type: string, sensitive: boolean): Artifact {
-  return {id, operationId, name, type, version: 'v1alpha1', mediaType: 'application/json', digest: 'sha256:test', sizeBytes: 1, sensitive, verifiedAt: '2026-09-10T00:00:00Z'}
-}
 
 const proxmoxPlugin: Plugin = {
   id: 'io.kubephos.infrastructure.proxmox.discovery',
@@ -211,7 +197,19 @@ const workspace: Workspace = {id: 'ws_default', name: 'Default', description: ''
 const connection: Connection = {id: 'conn_proxmox', name: 'Proxmox', provider: 'proxmox', pluginId: proxmoxPlugin.id, createdAt: '2026-09-12T00:00:00Z', updatedAt: '2026-09-12T00:00:00Z'}
 const machineTemplate: ManagedResource = {
   id: 'tmpl_ready', workspaceId: workspace.id, name: 'ubuntu', kind: 'machine-template', provider: 'proxmox', connectionId: connection.id,
-  status: 'ready', validation: {valid: true, issues: []}, spec: {}, createdAt: '2026-09-12T00:00:00Z', updatedAt: '2026-09-12T00:00:00Z'
+  status: 'ready', validation: {valid: true, issues: []}, spec: {node: 'pve'}, createdAt: '2026-09-12T00:00:00Z', updatedAt: '2026-09-12T00:00:00Z'
 }
 const harborService: ManagedResource = {...machineTemplate, id: 'svc_harbor', name: 'harbor', kind: 'harbor', pipelineRunId: 'run_harbor', artifactId: 'art_harbor'}
 const nfsService: ManagedResource = {...machineTemplate, id: 'svc_nfs', name: 'nfs', kind: 'nfs', pipelineRunId: 'run_nfs', artifactId: 'art_nfs'}
+
+it('keeps Cloud image URL visible on the template step and retains it while navigating storage', async () => {
+  vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({}), {status: 200})))
+  const plugin = {...proxmoxPlugin, capabilities: ['infrastructure.machine-template.provision'], schema: {type: 'object' as const, properties: {cloudImageURL: {type: 'string' as const, title: 'Cloud image URL'}, imageStorage: {type: 'string' as const, title: 'Cloud image storage'}}}}
+  render(<MachineTemplateDialog open close={() => {}} plugins={[plugin]} workspaces={[workspace]} connections={[connection]} session={{authenticated: true}} applications={[]} artifacts={[]} credentials={[]} onDone={async () => {}} />)
+  fireEvent.change(screen.getByLabelText('Cloud image URL'), {target: {value: 'https://example.org/image.img'}})
+  fireEvent.change(screen.getByRole('textbox', {name: 'Name'}), {target: {value: 'ubuntu'}})
+  fireEvent.click(screen.getByRole('button', {name: 'Continue'}))
+  expect(screen.getByLabelText('Cloud image storage')).toBeVisible()
+  fireEvent.click(screen.getByRole('button', {name: 'Previous'}))
+  expect(screen.getByLabelText('Cloud image URL')).toHaveValue('https://example.org/image.img')
+})

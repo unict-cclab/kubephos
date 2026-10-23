@@ -36,22 +36,19 @@ func TestReadApplicationTrafficUsesSuccessfulEntrypointRequests(t *testing.T) {
 		if strings.Contains(query, "histogram_quantile") {
 			value = "42.5"
 		}
-		_, _ = w.Write([]byte(`{"status":"success","data":{"result":[{"metric":{"source_workload_namespace":"run"},"value":[1,"` + value + `"]}]}}`))
+		_, _ = w.Write([]byte(`{"status":"success","data":{"result":[{"metric":{"namespace":"run"},"value":[1,"` + value + `"]}]}}`))
 	}))
 	defer prometheus.Close()
 	s := &server{prometheusURL: prometheus.URL, httpClient: prometheus.Client()}
-	values, err := s.readApplicationTraffic(context.Background(), map[string]gatewayTarget{
-		key("run", "gateway-node-a"): {Namespace: "run", Workload: "gateway-node-a"},
-		key("run", "gateway-node-b"): {Namespace: "run", Workload: "gateway-node-b"},
-	})
+	values, err := s.readApplicationTraffic(context.Background(), map[string]bool{"run": true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(values) != 1 || values[0].ThroughputRequestsPerSecond != 8.75 || values[0].P95ResponseTimeMilliseconds != 42.5 {
+	if len(values) != 1 || values[0].ThroughputRequestsPerSecond == nil || *values[0].ThroughputRequestsPerSecond != 8.75 || values[0].P95ResponseTimeMilliseconds == nil || *values[0].P95ResponseTimeMilliseconds != 42.5 {
 		t.Fatalf("unexpected application traffic: %#v", values)
 	}
-	if len(queries) != 2 || !strings.Contains(queries[0], `response_code=~"2..|3.."`) || !strings.Contains(queries[0], `source_workload=~"^(gateway-node-a|gateway-node-b)$"`) {
-		t.Fatalf("throughput query does not select successful entrypoint traffic: %q", queries)
+	if len(queries) != 2 || !strings.Contains(queries[0], `outcome="success"`) || !strings.Contains(queries[0], `namespace=~"^(run)$"`) || strings.Contains(strings.Join(queries, " "), "istio_") {
+		t.Fatalf("throughput query does not select successful Locust traffic: %q", queries)
 	}
 }
 
@@ -121,5 +118,26 @@ func TestNodeRoleUsesManagedRoleLabel(t *testing.T) {
 	}
 	if got := nodeRole(map[string]string{"node-role.kubernetes.io/control-plane": "true", "kubephos.dev/role": "control-plane"}); got != "control-plane" {
 		t.Fatalf("control-plane role = %q", got)
+	}
+}
+
+func TestApplicationTrafficDistinguishesMissingMetricsFromZero(t *testing.T) {
+	prometheus := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"status":"success","data":{"result":[{"metric":{"namespace":"idle"},"value":[1,"0"]},{"metric":{"namespace":"warmup"},"value":[1,"NaN"]}]}}`))
+	}))
+	defer prometheus.Close()
+	s := &server{prometheusURL: prometheus.URL, httpClient: prometheus.Client()}
+	values, err := s.readApplicationTraffic(context.Background(), map[string]bool{"idle": true, "missing": true, "warmup": true})
+	if err != nil || len(values) != 3 {
+		t.Fatalf("traffic: %v %v", values, err)
+	}
+	for _, value := range values {
+		if value.Namespace == "idle" {
+			if value.ThroughputRequestsPerSecond == nil || *value.ThroughputRequestsPerSecond != 0 {
+				t.Fatal("observed zero throughput lost")
+			}
+		} else if value.ThroughputRequestsPerSecond != nil || value.P95ResponseTimeMilliseconds != nil {
+			t.Fatalf("missing values presented as measurements: %+v", value)
+		}
 	}
 }

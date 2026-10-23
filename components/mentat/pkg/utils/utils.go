@@ -15,6 +15,9 @@ const (
 	bandwidthDatagramBytes = 1200
 	bandwidthPayloadBytes  = bandwidthDatagramBytes - bandwidthHeaderBytes
 	bandwidthDoneCopies    = 3
+	// Keep each train below typical UDP receive buffers and delayed qdisc queues.
+	bandwidthTrainBytes   = 64 * 1024
+	bandwidthDrainTimeout = 100 * time.Millisecond
 )
 
 var bandwidthMagic = [4]byte{'K', 'B', 'P', '1'}
@@ -73,6 +76,9 @@ func ServeBandwidth(connection *net.UDPConn, maximumBytes int) error {
 	if maximumBytes < 2*bandwidthPayloadBytes {
 		return fmt.Errorf("bandwidth payload must be at least %d bytes", 2*bandwidthPayloadBytes)
 	}
+	if err := connection.SetReadBuffer(4 * 1024 * 1024); err != nil {
+		return fmt.Errorf("configure bandwidth server receive buffer: %w", err)
+	}
 	maximumPackets := uint32((maximumBytes + bandwidthPayloadBytes - 1) / bandwidthPayloadBytes)
 	request := make([]byte, bandwidthHeaderBytes)
 	for {
@@ -114,6 +120,9 @@ func MeasureBandwidth(address string, payloadBytes int, timeout time.Duration) (
 	if payloadBytes < 2*bandwidthPayloadBytes {
 		return 0, fmt.Errorf("bandwidth payload must be at least %d bytes", 2*bandwidthPayloadBytes)
 	}
+	if payloadBytes > bandwidthTrainBytes {
+		payloadBytes = bandwidthTrainBytes
+	}
 	peer, err := net.ResolveUDPAddr("udp", address)
 	if err != nil {
 		return 0, err
@@ -123,8 +132,11 @@ func MeasureBandwidth(address string, payloadBytes int, timeout time.Duration) (
 		return 0, err
 	}
 	defer connection.Close()
-	_ = connection.SetReadBuffer(4 * 1024 * 1024)
-	if err := connection.SetDeadline(time.Now().Add(timeout)); err != nil {
+	if err := connection.SetReadBuffer(4 * 1024 * 1024); err != nil {
+		return 0, fmt.Errorf("configure bandwidth receive buffer: %w", err)
+	}
+	deadline := time.Now().Add(timeout)
+	if err := connection.SetDeadline(deadline); err != nil {
 		return 0, err
 	}
 
@@ -145,22 +157,37 @@ func MeasureBandwidth(address string, payloadBytes int, timeout time.Duration) (
 	var firstSequence, highestSequence uint32
 	var firstArrival, highestArrival time.Time
 	receivedData := false
+	received := uint32(0)
+	seen := make(map[uint32]bool)
 	for {
 		n, err := connection.Read(buffer)
 		arrival := time.Now()
 		if err != nil {
-			return 0, err
+			if networkError, ok := err.(net.Error); !ok || !networkError.Timeout() || received < (packetCount+1)/2 {
+				return 0, err
+			}
+			break
 		}
 		if n < bandwidthHeaderBytes || !validBandwidthMagic(buffer[:n]) || binary.BigEndian.Uint64(buffer[4:12]) != nonce || binary.BigEndian.Uint32(buffer[16:20]) != packetCount {
 			continue
 		}
 		sequence := binary.BigEndian.Uint32(buffer[12:16])
 		if sequence == packetCount {
-			break
+			// Drain reordered data rather than trusting the completion marker.
+			drainDeadline := time.Now().Add(bandwidthDrainTimeout)
+			if drainDeadline.Before(deadline) {
+				_ = connection.SetReadDeadline(drainDeadline)
+			}
+			continue
 		}
 		if n != bandwidthDatagramBytes || sequence >= packetCount {
 			continue
 		}
+		if seen[sequence] {
+			continue
+		}
+		seen[sequence] = true
+		received++
 		if !receivedData {
 			firstSequence, highestSequence = sequence, sequence
 			firstArrival, highestArrival = arrival, arrival
@@ -170,6 +197,9 @@ func MeasureBandwidth(address string, payloadBytes int, timeout time.Duration) (
 		if sequence > highestSequence {
 			highestSequence = sequence
 			highestArrival = arrival
+		}
+		if received == packetCount {
+			break
 		}
 	}
 	if !receivedData || highestSequence <= firstSequence {

@@ -60,7 +60,7 @@ func TestGeneratedResourcesUseProxyImageAndTargets(t *testing.T) {
 		t.Fatal(err)
 	}
 	descheduler := string(deschedulerManifest)
-	if !strings.Contains(descheduler, testImage) || !strings.Contains(descheduler, `"command":["/bin/descheduler"]`) || !strings.Contains(descheduler, "--descheduling-interval=60s") || !strings.Contains(descheduler, "owner") || !strings.Contains(descheduler, applicationComponentLabel) || !strings.Contains(descheduler, applicationNamespaceLabel) || !strings.Contains(descheduler, "kubephos-application") {
+	if !strings.Contains(descheduler, testImage) || !strings.Contains(descheduler, `"command":["/bin/descheduler"]`) || !strings.Contains(descheduler, "--descheduling-interval=60s") || strings.Contains(descheduler, `"--v=4"`) || !strings.Contains(descheduler, "owner") || !strings.Contains(descheduler, applicationComponentLabel) || !strings.Contains(descheduler, applicationNamespaceLabel) || !strings.Contains(descheduler, "kubephos-application") {
 		t.Fatalf("unexpected descheduler manifest %s", descheduler)
 	}
 	if strings.Contains(descheduler, `"kind":"Namespace"`) || !strings.Contains(descheduler, `"namespace":"kubephos-control-test"`) {
@@ -171,5 +171,42 @@ func TestKubectlRunnerUsesTemporaryKubeconfigFile(t *testing.T) {
 	output, err := (kubectlRunner{}).Run(context.Background(), "verified-kubeconfig", nil, "get", "--raw=/readyz")
 	if err != nil || output != "ready" {
 		t.Fatalf("unexpected kubectl result %q: %v", output, err)
+	}
+}
+
+func TestControllerDeploymentRequiresManagementNode(t *testing.T) {
+	application := applicationDeployment{}
+	application.Spec.Namespace = "kubephos-application"
+	binding := targetBinding{}
+	binding.Spec.Targets = []workloadTarget{{ID: "frontend", APIVersion: "apps/v1", Kind: "Deployment", Name: "frontend"}}
+	raw, err := deschedulerManifest(stepInput{Spec: Spec{Image: testImage, ConfigFile: testDeschedulerPolicy, IntervalSeconds: 60}, Name: "kubephos-test", Namespace: "kubephos-control-test", Marker: "owner"}, application, binding)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployments := 0
+	for _, document := range strings.Split(string(raw), "\n---\n") {
+		var item struct {
+			Kind string `json:"kind"`
+			Spec struct {
+				Template struct {
+					Spec struct {
+						NodeSelector map[string]string `json:"nodeSelector"`
+					} `json:"spec"`
+				} `json:"template"`
+			} `json:"spec"`
+		}
+		if err := json.Unmarshal([]byte(document), &item); err != nil {
+			t.Fatal(err)
+		}
+		if item.Kind != "Deployment" {
+			continue
+		}
+		deployments++
+		if item.Spec.Template.Spec.NodeSelector["kubephos.dev/role"] != "management" {
+			t.Fatal("descheduler deployment is not constrained to management nodes")
+		}
+	}
+	if deployments != 1 {
+		t.Fatalf("expected one dedescheduler deployment, got %d", deployments)
 	}
 }

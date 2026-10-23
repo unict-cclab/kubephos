@@ -76,7 +76,7 @@ func TestValidateExperimentLoadConfigurationRejectsMismatchedGeographicDuration(
 		]
 	}`)
 	plugin := loadSessionPluginAdapter{plugin: loadsession.Plugin{}}
-	report, err := validateExperimentComponentConfiguration(context.Background(), plugin, configuration, "app:dev.kubephos.mubench@1.0.0")
+	report, err := validateExperimentComponentConfiguration(context.Background(), plugin, configuration, "app:dev.kubephos.mubench")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,7 +84,7 @@ func TestValidateExperimentLoadConfigurationRejectsMismatchedGeographicDuration(
 		t.Fatalf("expected the geographic duration mismatch, got %#v", report)
 	}
 	configuration = json.RawMessage(strings.Replace(string(configuration), `"durationSeconds":588`, `"durationSeconds":600`, 1))
-	report, err = validateExperimentComponentConfiguration(context.Background(), plugin, configuration, "app:dev.kubephos.mubench@1.0.0")
+	report, err = validateExperimentComponentConfiguration(context.Background(), plugin, configuration, "app:dev.kubephos.mubench")
 	if err != nil || !report.Valid {
 		t.Fatalf("expected matching timelines to validate, got %#v, %v", report, err)
 	}
@@ -165,6 +165,14 @@ func TestExternalDestinationPipelineOrdersArtifactProducersBeforeConsumers(t *te
 	if len(pipeline.Stages) != 3 || pipeline.Stages[0].ID != "external-destination" || pipeline.Stages[1].ID != "capability-2" || pipeline.Stages[2].ID != "capability-1" {
 		t.Fatalf("unexpected external pipeline order %#v", pipeline.Stages)
 	}
+	var targetSpec map[string]any
+	if err := json.Unmarshal(pipeline.Stages[0].Spec, &targetSpec); err != nil {
+		t.Fatal(err)
+	}
+	parameters, ok := targetSpec["parameters"].(map[string]any)
+	if !ok || len(parameters) != 0 {
+		t.Fatalf("external destination parameters must default to an object, got %#v", targetSpec["parameters"])
+	}
 	positions := map[string]int{}
 	for index, stage := range pipeline.Stages {
 		positions[stage.ID] = index
@@ -196,25 +204,25 @@ func TestManagedMachineCapacityProfiles(t *testing.T) {
 
 func TestDecodeApplicationPreviewIncludesVerifiedLoadScenarios(t *testing.T) {
 	result := []byte(`{"manifestSet":{"metadata":{"digest":"sha256:manifest"},"spec":{"renderer":"plain-yaml","content":"kind: Deployment\n"}},"loadScenarioSet":{"metadata":{"digest":"sha256:scenarios"},"spec":{"scenarios":[{"id":"journey","engine":"locust","targetEndpoint":"http","runtimeImage":"locustio/locust:2.42.6","script":"from locust import HttpUser\n","scriptDigest":"sha256:script"}]}}}`)
-	preview, err := decodeApplicationPreview(result, "app:dev.example@1.0.0")
+	preview, err := decodeApplicationPreview(result, "app:dev.example")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if preview.ApplicationRef != "app:dev.example@1.0.0" || preview.Content == "" || len(preview.LoadScenarios) != 1 || preview.LoadScenarios[0].Script == "" {
+	if preview.ApplicationRef != "app:dev.example" || preview.Content == "" || len(preview.LoadScenarios) != 1 || preview.LoadScenarios[0].Script == "" {
 		t.Fatalf("unexpected application preview %#v", preview)
 	}
 }
 
 func TestDecodeApplicationPreviewRejectsUnverifiedLoadScenario(t *testing.T) {
 	result := []byte(`{"manifestSet":{"metadata":{"digest":"sha256:manifest"},"spec":{"renderer":"plain-yaml","content":"kind: Deployment\n"}},"loadScenarioSet":{"metadata":{"digest":"sha256:scenarios"},"spec":{"scenarios":[{"id":"journey","engine":"locust","targetEndpoint":"http","runtimeImage":"locustio/locust:2.42.6","script":"from locust import HttpUser\n"}]}}}`)
-	if _, err := decodeApplicationPreview(result, "app:dev.example@1.0.0"); err == nil {
+	if _, err := decodeApplicationPreview(result, "app:dev.example"); err == nil {
 		t.Fatal("expected invalid load scenario rejection")
 	}
 }
 
 func TestValidateApplicationPreviewRejectsAnotherApplication(t *testing.T) {
-	preview := applicationPreview{ApplicationRef: "app:dev.example@1.0.0", Digest: "sha256:manifest", Content: "kind: Deployment\n", LoadScenarioDigest: "sha256:scenarios"}
-	if err := validateApplicationPreview(preview, "app:dev.other@1.0.0"); err == nil {
+	preview := applicationPreview{ApplicationRef: "app:dev.example", Digest: "sha256:manifest", Content: "kind: Deployment\n", LoadScenarioDigest: "sha256:scenarios"}
+	if err := validateApplicationPreview(preview, "app:dev.other"); err == nil {
 		t.Fatal("expected cached preview identity rejection")
 	}
 }
@@ -875,5 +883,22 @@ func TestCleanupPlanIncludesFailedMutableStepForRecovery(t *testing.T) {
 	}
 	if len(plan.Steps) != 1 || !plan.Steps[0].Cleanup || plan.Steps[0].Effects[0].Action != "delete" {
 		t.Fatalf("unexpected recovery plan %#v", plan)
+	}
+}
+
+func TestManagedClusterMachinePlacement(t *testing.T) {
+	input := managedKubernetesClusterInput{Name: "dev", ControlPlanes: 1, ManagementPool: managedNodePoolInput{Name: "management", Count: 1}, ApplicationPools: []managedNodePoolInput{{Name: "apps", Count: 2}}, MachineNodes: map[string]string{"dev-apps-2": "pve-2"}}
+	nodes, err := managedClusterMachineNodes(&input, "pve")
+	if err != nil || strings.Join(nodes, ",") != "pve,pve,pve,pve-2" || len(input.MachineNodes) != 4 {
+		t.Fatalf("unexpected placement: %v %v", nodes, err)
+	}
+	input.MachineNodes["unknown"] = "pve"
+	if _, err := managedClusterMachineNodes(&input, "pve"); err == nil {
+		t.Fatal("accepted unknown VM")
+	}
+	delete(input.MachineNodes, "unknown")
+	input.MachineNodes["dev-apps-2"] = ""
+	if _, err := managedClusterMachineNodes(&input, "pve"); err == nil {
+		t.Fatal("accepted empty explicit server")
 	}
 }

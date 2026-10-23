@@ -6,14 +6,15 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	kubeconfigutil "kubephos.dev/kubephos/internal/kubeconfig"
 	"net/http"
 	"net/url"
-	"os"
-	"os/exec"
+
 	"regexp"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"kubephos.dev/kubephos/internal/domain"
@@ -40,7 +41,7 @@ type strategyLogTarget struct {
 
 func (s *Server) listPipelineRunStrategyLogs(response http.ResponseWriter, request *http.Request) {
 	run, err := s.store.GetPipelineRun(request.Context(), request.PathValue("id"))
-	if errors.Is(err, storage.ErrNotFound) || err == nil && !ownsResource(requestUser(request), run.OwnerUserID) {
+	if errors.Is(err, storage.ErrNotFound) || err == nil && !s.canReadResource(request, "pipeline-runs", run.ID) {
 		writeError(response, http.StatusNotFound, "not_found", "Pipeline run not found.")
 		return
 	}
@@ -80,49 +81,74 @@ func (s *Server) listPipelineRunStrategyLogs(response http.ResponseWriter, reque
 	}
 
 	kubeconfig, kubeconfigErr := s.pipelineRunKubeconfig(request.Context(), stages)
-	items := make([]pipelineStrategyLog, 0, len(targets))
-	for _, target := range targets {
-		item := target.pipelineStrategyLog
-		if len(target.Args) == 0 {
-			items = append(items, item)
-			continue
-		}
-		if kubeconfigErr != nil {
-			item.State = "unavailable"
-			item.Message = "The verified cluster connection is unavailable."
-			items = append(items, item)
-			continue
-		}
-		output, logErr := runKubectlWithKubeconfig(request.Context(), kubeconfig, target.Args...)
-		if logErr != nil {
-			start := run.CreatedAt.Add(-30 * time.Second)
-			if run.StartedAt != nil {
-				start = run.StartedAt.Add(-30 * time.Second)
-			}
-			end := time.Now().UTC()
-			if run.CompletedAt != nil {
-				end = run.CompletedAt.Add(30 * time.Second)
-			}
-			lines, historyErr := readLokiRuntimeLogs(request.Context(), kubeconfig, target.LokiQuery, start, end)
-			if historyErr == nil && len(lines) > 0 {
-				item.State = "available"
-				item.Lines = lines
-			} else {
-				item.State = "unavailable"
-				item.Message = "Runtime logs are not available."
-			}
-			items = append(items, item)
-			continue
-		}
-		item.State = "available"
-		item.Lines = nonEmptyLines(output)
-		if len(item.Lines) == 0 {
-			item.Message = "No log entries yet."
-		}
-		items = append(items, item)
+	start := run.CreatedAt.Add(-30 * time.Second)
+	if run.StartedAt != nil {
+		start = run.StartedAt.Add(-30 * time.Second)
 	}
+	end := time.Now().UTC()
+	if run.CompletedAt != nil {
+		end = run.CompletedAt.Add(30 * time.Second)
+	}
+	items := collectStrategyLogs(request.Context(), targets, kubeconfig, kubeconfigErr, start, end, runKubectlWithKubeconfig, readLokiRuntimeLogs)
+
 	response.Header().Set("Cache-Control", "no-store, max-age=0")
 	writeJSON(response, http.StatusOK, map[string]any{"items": items})
+}
+
+// Collect independently so an unavailable strategy does not delay the others.
+// Keep concurrency bounded and preserve the order of the selected strategies.
+func collectStrategyLogs(ctx context.Context, targets []strategyLogTarget, kubeconfig string, connectionErr error, start, end time.Time,
+	run func(context.Context, string, ...string) (string, error),
+	history func(context.Context, string, string, time.Time, time.Time) ([]string, error),
+) []pipelineStrategyLog {
+	items := make([]pipelineStrategyLog, len(targets))
+	slots := make(chan struct{}, 3)
+	var workers sync.WaitGroup
+	for index, target := range targets {
+		items[index] = target.pipelineStrategyLog
+		if len(target.Args) == 0 {
+			continue
+		}
+		if connectionErr != nil {
+			items[index].State = "unavailable"
+			items[index].Message = "The verified cluster connection is unavailable."
+			continue
+		}
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			item := &items[index]
+			item.State = "unavailable"
+			item.Message = "Runtime logs are not available."
+			select {
+			case slots <- struct{}{}:
+				defer func() { <-slots }()
+			case <-ctx.Done():
+				return
+			}
+			liveContext, cancel := context.WithTimeout(ctx, 8*time.Second)
+			output, err := run(liveContext, kubeconfig, append(target.Args, "--pod-running-timeout=2s")...)
+			cancel()
+			if err == nil {
+				item.State, item.Lines, item.Message = "available", nonEmptyLines(output), ""
+				if len(item.Lines) == 0 {
+					item.Message = "No log entries yet."
+				}
+				return
+			}
+			if ctx.Err() != nil || target.LokiQuery == "" {
+				return
+			}
+			historyContext, cancel := context.WithTimeout(ctx, 8*time.Second)
+			defer cancel()
+			lines, err := history(historyContext, kubeconfig, target.LokiQuery, start, end)
+			if err == nil && len(lines) > 0 {
+				item.State, item.Lines, item.Message = "available", lines, ""
+			}
+		}()
+	}
+	workers.Wait()
+	return items
 }
 
 func strategyStages(stages []domain.PipelineRunStage) []domain.PipelineRunStage {
@@ -203,10 +229,13 @@ func strategyLogTargetFromArtifact(kind, title string, raw []byte) (strategyLogT
 		return strategyLogTarget{}, errors.New("invalid strategy deployment artifact")
 	}
 	if kind == "descheduler" {
+		if artifact.Spec.Namespace == "" {
+			return strategyLogTarget{}, errors.New("invalid " + kind + " deployment namespace")
+		}
 		return strategyLogTarget{
-			pipelineStrategyLog: pipelineStrategyLog{Kind: kind, Title: title, Namespace: artifact.Metadata.Name, Resource: "deployment/descheduler", State: "waiting", Lines: []string{}},
-			Args:                []string{"logs", "deployment/descheduler", "-n", artifact.Metadata.Name, "-c", "descheduler", "--tail=200", "--timestamps=true"},
-			LokiQuery:           `{namespace=` + strconv.Quote(artifact.Metadata.Name) + `,container="descheduler"}`,
+			pipelineStrategyLog: pipelineStrategyLog{Kind: kind, Title: title, Namespace: artifact.Spec.Namespace, Resource: "deployment/" + kind, State: "waiting", Lines: []string{}},
+			Args:                []string{"logs", "deployment/" + kind, "-n", artifact.Spec.Namespace, "-c", kind, "--tail=200", "--timestamps=true"},
+			LokiQuery:           `{namespace=` + strconv.Quote(artifact.Spec.Namespace) + `,container=` + strconv.Quote(kind) + `}`,
 		}, nil
 	}
 	if kind != "autoscaler" || artifact.Spec.Namespace == "" || len(artifact.Spec.Targets) == 0 {
@@ -253,27 +282,9 @@ func (s *Server) pipelineRunKubeconfig(ctx context.Context, stages []domain.Pipe
 }
 
 func runKubectlWithKubeconfig(ctx context.Context, kubeconfig string, args ...string) (string, error) {
-	file, err := os.CreateTemp("", "kubephos-runtime-logs-kubeconfig-*")
-	if err != nil {
-		return "", err
-	}
-	path := file.Name()
-	defer os.Remove(path)
-	if err := file.Chmod(0600); err != nil {
-		file.Close()
-		return "", err
-	}
-	if _, err := file.WriteString(kubeconfig); err != nil {
-		file.Close()
-		return "", err
-	}
-	if err := file.Close(); err != nil {
-		return "", err
-	}
 	commandContext, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
-	commandArgs := append([]string{"--kubeconfig", path}, args...)
-	output, err := exec.CommandContext(commandContext, "kubectl", commandArgs...).CombinedOutput()
+	output, err := kubeconfigutil.RunKubectl(commandContext, kubeconfig, nil, append([]string{"--request-timeout=7s"}, args...)...)
 	return string(output), err
 }
 

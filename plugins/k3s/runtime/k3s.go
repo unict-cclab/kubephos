@@ -42,6 +42,12 @@ type Invocation struct {
 }
 
 type Spec struct {
+	Networking            string     `json:"networking,omitempty"`
+	ClusterID             int        `json:"clusterId,omitempty"`
+	PodCIDR               string     `json:"podCIDR,omitempty"`
+	ServiceCIDR           string     `json:"serviceCIDR,omitempty"`
+	Reconcile             bool       `json:"reconcile,omitempty"`
+	PreviousMachineSetRef string     `json:"previousMachineSetRef,omitempty"`
 	MachineSetRef         string     `json:"machineSetRef"`
 	MachineAccessRef      string     `json:"machineAccessRef"`
 	ClusterName           string     `json:"clusterName"`
@@ -53,10 +59,11 @@ type Spec struct {
 }
 
 type NodePool struct {
-	Name  string   `json:"name"`
-	Role  string   `json:"role"`
-	Count int      `json:"count"`
-	Zones []string `json:"zones"`
+	Labels map[string]string `json:"labels,omitempty"`
+	Name   string            `json:"name"`
+	Role   string            `json:"role"`
+	Count  int               `json:"count"`
+	Zones  []string          `json:"zones"`
 }
 
 type machineSet struct {
@@ -141,6 +148,10 @@ type clusterConnectionMetadata struct {
 }
 
 type clusterConnectionSpec struct {
+	PodCIDR      string `json:"podCIDR,omitempty"`
+	ServiceCIDR  string `json:"serviceCIDR,omitempty"`
+	Networking   string `json:"networking,omitempty"`
+	ClusterID    int    `json:"clusterId,omitempty"`
 	Distribution string `json:"distribution"`
 	Server       string `json:"server"`
 	Kubeconfig   string `json:"kubeconfig"`
@@ -199,7 +210,7 @@ func (Plugin) Manifest() plugins.Manifest {
 	return plugins.Manifest{
 		ID: pluginID, Name: "Kubernetes cluster bootstrap", Version: "0.3.2",
 		Description:     "Builds a managed K3s cluster from a verified machine topology.",
-		Schema:          json.RawMessage(`{"type":"object","additionalProperties":false,"required":["machineSetRef","machineAccessRef","clusterName","controlPlanes"],"properties":{"machineSetRef":{"type":"string","title":"Machine topology","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"MachineSet","x-kubephos-artifact-version":"v1alpha1"},"machineAccessRef":{"type":"string","title":"Machine access","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"MachineAccess","x-kubephos-artifact-version":"v1alpha1"},"clusterName":{"type":"string","title":"Cluster name","pattern":"^[a-z0-9][a-z0-9-]{0,31}$","default":"development"},"controlPlanes":{"type":"integer","title":"Control plane nodes","enum":[1,3],"default":1},"controlPlaneZones":{"type":"array","title":"Control plane zones","minItems":1,"maxItems":12,"items":{"type":"string","pattern":"^[a-z0-9][a-z0-9-]{0,31}$"}},"nodePools":{"type":"array","title":"Node pools","maxItems":12,"items":{"type":"object","additionalProperties":false,"required":["name","role","count","zones"],"properties":{"name":{"type":"string","pattern":"^[a-z0-9][a-z0-9-]{0,31}$"},"role":{"type":"string","enum":["management","application"]},"count":{"type":"integer","minimum":1,"maximum":12},"zones":{"type":"array","minItems":1,"maxItems":12,"items":{"type":"string","pattern":"^[a-z0-9][a-z0-9-]{0,31}$"}}}}},"registryEndpointRef":{"type":"string","title":"Managed registry","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"RegistryEndpoint","x-kubephos-artifact-version":"v1alpha1"},"registryCredentialRef":{"type":"string","title":"Registry pull credential","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"RegistryCredential","x-kubephos-artifact-version":"v1alpha1"}}}`),
+		Schema:          json.RawMessage(`{"type":"object","additionalProperties":false,"required":["machineSetRef","machineAccessRef","clusterName","controlPlanes"],"properties":{"machineSetRef":{"type":"string","title":"Machine topology","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"MachineSet","x-kubephos-artifact-version":"v1alpha1"},"machineAccessRef":{"type":"string","title":"Machine access","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"MachineAccess","x-kubephos-artifact-version":"v1alpha1"},"clusterName":{"type":"string","title":"Cluster name","pattern":"^[a-z0-9][a-z0-9-]{0,31}$","default":"development"},"controlPlanes":{"type":"integer","title":"Control plane nodes","enum":[1,3],"default":1},"controlPlaneZones":{"type":"array","title":"Control plane zones","minItems":1,"maxItems":12,"items":{"type":"string","pattern":"^[a-z0-9][a-z0-9-]{0,31}$"}},"nodePools":{"type":"array","title":"Node pools","maxItems":12,"items":{"type":"object","additionalProperties":false,"required":["name","role","count","zones"],"properties":{"name":{"type":"string","pattern":"^[a-z0-9][a-z0-9-]{0,31}$"},"role":{"type":"string","enum":["management","application"]},"count":{"type":"integer","minimum":1,"maximum":12},"zones":{"type":"array","minItems":1,"maxItems":12,"items":{"type":"string","pattern":"^[a-z0-9][a-z0-9-]{0,31}$"}},"labels":{"type":"object","additionalProperties":true}}}},"registryEndpointRef":{"type":"string","title":"Managed registry","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"RegistryEndpoint","x-kubephos-artifact-version":"v1alpha1"},"registryCredentialRef":{"type":"string","title":"Registry pull credential","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"RegistryCredential","x-kubephos-artifact-version":"v1alpha1"},"reconcile":{"type":"boolean"},"previousMachineSetRef":{"type":"string","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"MachineSet","x-kubephos-artifact-version":"v1alpha1"},"networking":{"type":"string","enum":["flannel","cilium"]},"clusterId":{"type":"integer","minimum":1,"maximum":255},"podCIDR":{"type":"string"},"serviceCIDR":{"type":"string"}}}`),
 		ArtifactInputs:  []domain.ArtifactContract{{Type: "MachineSet", Version: "v1alpha1"}, {Type: "MachineAccess", Version: "v1alpha1"}, {Type: "RegistryEndpoint", Version: "v1alpha1"}, {Type: "RegistryCredential", Version: "v1alpha1"}},
 		ArtifactOutputs: []domain.ArtifactContract{{Type: "ClusterConnection", Version: "v1alpha1"}, {Type: "ClusterInventory", Version: "v1alpha1"}},
 		Capabilities:    []string{"cluster.bootstrap", "cluster.preflight", "cluster.cleanup", "lifecycle.cleanup", "lifecycle.cleanup.compatible"},
@@ -228,6 +239,9 @@ func (Plugin) Validate(ctx context.Context, invocation Invocation) domain.Valida
 	if spec.ControlPlanes != 1 && spec.ControlPlanes != 3 {
 		return invalid(report, "controlPlanes", "Use one or three control plane nodes.")
 	}
+	if err := validateNetworking(spec); err != nil {
+		return invalid(report, "networking", err.Error())
+	}
 	if err := validatePoolConfiguration(spec); err != nil {
 		return invalid(report, "nodePools", err.Error())
 	}
@@ -249,6 +263,9 @@ func (Plugin) Plan(ctx context.Context, raw json.RawMessage) (domain.Plan, error
 	inputs := []domain.ArtifactInput{
 		{Name: "machines", Type: "MachineSet", Version: "v1alpha1", ArtifactID: spec.MachineSetRef},
 		{Name: "machine-access", Type: "MachineAccess", Version: "v1alpha1", ArtifactID: spec.MachineAccessRef},
+	}
+	if spec.Reconcile {
+		inputs = append(inputs, domain.ArtifactInput{Name: "previous-machines", Type: "MachineSet", Version: "v1alpha1", ArtifactID: spec.PreviousMachineSetRef})
 	}
 	if spec.RegistryEndpointRef != "" {
 		inputs = append(inputs,
@@ -288,7 +305,7 @@ func (p Plugin) Precheck(ctx context.Context, step domain.PlanStep, log plugins.
 		return domain.HealthReport{}, err
 	}
 	command := "sudo -n true && command -v curl >/dev/null && test ! -x /usr/local/bin/k3s"
-	if step.Cleanup {
+	if step.Cleanup || spec.Reconcile {
 		command = "sudo -n true"
 	}
 	if err := runAll(ctx, p.runner(), machines.Spec.Machines, access, func(machine, int) string { return command }); err != nil {
@@ -307,6 +324,9 @@ func (p Plugin) Execute(ctx context.Context, step domain.PlanStep, log plugins.L
 	spec, machines, access, err := resolve(step)
 	if err != nil {
 		return nil, err
+	}
+	if spec.Reconcile {
+		return p.reconcile(ctx, step, spec, machines, access, log)
 	}
 	tokenBytes := make([]byte, 32)
 	if _, err := rand.Read(tokenBytes); err != nil {
@@ -335,7 +355,7 @@ func (p Plugin) Execute(ctx context.Context, step domain.PlanStep, log plugins.L
 	if err := log("info", fmt.Sprintf("Installing K3s %s on the first control plane", k3sVersion)); err != nil {
 		return nil, err
 	}
-	if _, err := runner.Run(ctx, primary, access, installCommandWithLabels("server", primary.Name, server, token, true, machineLabels(spec, 0))); err != nil {
+	if _, err := runner.Run(ctx, primary, access, installCommandForSpec(spec, "server", managedNodeName(spec, 0), server, token, true, machineLabels(spec, 0))); err != nil {
 		return nil, fmt.Errorf("install first control plane: %w", err)
 	}
 	if err := waitForAPI(ctx, runner, primary, access, 5*time.Minute); err != nil {
@@ -351,16 +371,21 @@ func (p Plugin) Execute(ctx context.Context, step domain.PlanStep, log plugins.L
 			if index+1 < spec.ControlPlanes {
 				role = "server"
 			}
-			return installCommandWithLabels(role, machine.Name, server, token, false, machineLabels(spec, index+1))
+			return installCommandForSpec(spec, role, managedNodeName(spec, index+1), server, token, false, machineLabels(spec, index+1))
 		}); err != nil {
 			return nil, fmt.Errorf("join Kubernetes nodes: %w", err)
+		}
+	}
+	if spec.Networking == "cilium" {
+		if err := installCilium(ctx, runner, primary, access, spec); err != nil {
+			return nil, err
 		}
 	}
 	inventory, err := waitForInventory(ctx, runner, primary, access, spec.ClusterName, len(machines.Spec.Machines), 5*time.Minute)
 	if err != nil {
 		return nil, err
 	}
-	if err := validateInventoryTopology(inventory, machines.Spec.Machines, spec.ControlPlanes); err != nil {
+	if err := validateInventoryTopology(inventory, machines.Spec.Machines, spec); err != nil {
 		return nil, err
 	}
 	if err := validateInventoryPools(inventory, spec); err != nil {
@@ -389,7 +414,7 @@ func (p Plugin) Execute(ctx context.Context, step domain.PlanStep, log plugins.L
 		registryHost = registry.Endpoint.Spec.Host
 	}
 	result := clusterResult{
-		ClusterConnection: clusterConnection{APIVersion: clusterAPIVersion, Kind: "ClusterConnection", Metadata: clusterConnectionMetadata{Name: spec.ClusterName, Version: k3sVersion}, Spec: clusterConnectionSpec{Distribution: "k3s", Server: server, Kubeconfig: kubeconfig, RegistryHost: registryHost}},
+		ClusterConnection: clusterConnection{APIVersion: clusterAPIVersion, Kind: "ClusterConnection", Metadata: clusterConnectionMetadata{Name: spec.ClusterName, Version: k3sVersion}, Spec: clusterConnectionSpec{PodCIDR: spec.PodCIDR, ServiceCIDR: spec.ServiceCIDR, Networking: spec.Networking, ClusterID: spec.ClusterID, Distribution: "k3s", Server: server, Kubeconfig: kubeconfig, RegistryHost: registryHost}},
 		ClusterInventory:  inventory,
 	}
 	return json.Marshal(result)
@@ -429,7 +454,7 @@ func (p Plugin) Verify(ctx context.Context, step domain.PlanStep, raw json.RawMe
 	if err := validateInventory(inventory, len(machines.Spec.Machines)); err != nil {
 		return unhealthy(err.Error(), "nodes", "unhealthy"), nil
 	}
-	if err := validateInventoryTopology(inventory, machines.Spec.Machines, spec.ControlPlanes); err != nil {
+	if err := validateInventoryTopology(inventory, machines.Spec.Machines, spec); err != nil {
 		return unhealthy(err.Error(), "nodes", "mismatch"), nil
 	}
 	if err := validateInventoryPools(inventory, spec); err != nil {
@@ -598,12 +623,33 @@ func registryVerificationCommands(profile registryProfile) []string {
 		"curl --connect-timeout 5 --max-time 15 --cacert /etc/rancher/k3s/kubephos-registry-ca.crt -fsS -u " + shellQuote(profile.Credential.Spec.Username+":"+profile.Credential.Spec.Password) + " " + shellQuote(profile.Endpoint.Spec.URL+"/v2/") + " >/dev/null",
 	}
 	for _, mirror := range profile.Endpoint.Spec.Mirrors {
-		commands = append(commands, "sudo k3s crictl pull "+shellQuote(mirror.Source+"/"+mirror.Probe)+" >/dev/null")
+		commands = append(commands, registryPullCommand(mirror.Source+"/"+mirror.Probe))
 	}
 	for _, component := range managedcomponents.Catalog() {
-		commands = append(commands, "sudo k3s crictl pull "+shellQuote(managedcomponents.Image(profile.Endpoint.Spec.Host, component.Name, component.Version))+" >/dev/null")
+		commands = append(commands, registryPullCommand(managedcomponents.Image(profile.Endpoint.Spec.Host, component.Name, component.Version)))
 	}
 	return commands
+}
+
+// Each pull runs in a subshell so retry state cannot affect the other probes.
+// Retry transport failures while preserving permanent registry errors and exit codes.
+func registryPullCommand(image string) string {
+	return `(attempt=1; while :; do
+  if pull_output=$(sudo k3s crictl pull ` + shellQuote(image) + ` 2>&1); then
+    exit 0
+  else
+    pull_status=$?
+  fi
+  printf '%s\n' "$pull_output" >&2
+  case "$pull_output" in
+    *"code = Unavailable"*|*"EOF"*|*"connection refused"*|*"connection reset"*|*"context deadline exceeded"*|*"i/o timeout"*) ;;
+    *) exit "$pull_status" ;;
+  esac
+  if [ "$attempt" -ge 5 ]; then exit "$pull_status"; fi
+  printf 'Transient image pull failure; retrying attempt %s/5\n' "$((attempt + 1))" >&2
+  sleep "$((attempt * 5))"
+  attempt=$((attempt + 1))
+done)`
 }
 
 func validateMachineArtifacts(machines machineSet, access machineAccess) error {
@@ -644,8 +690,14 @@ func validatePoolConfiguration(spec Spec) error {
 	seenPools := map[string]bool{}
 	management := 0
 	for _, pool := range spec.NodePools {
-		if !label.MatchString(pool.Name) || seenPools[pool.Name] {
+		if !validPoolLabels(pool.Labels) {
+			return fmt.Errorf("node pool %q has invalid or reserved labels", pool.Name)
+		}
+		if !label.MatchString(pool.Name) || pool.Name == "control-plane" || seenPools[pool.Name] {
 			return fmt.Errorf("node pool name %q is invalid or duplicated", pool.Name)
+		}
+		if len(fmt.Sprintf("%s-%s-%d", spec.ClusterName, pool.Name, pool.Count)) > 63 {
+			return fmt.Errorf("cluster and node pool names produce Kubernetes node names longer than 63 characters")
 		}
 		seenPools[pool.Name] = true
 		if pool.Role != "management" && pool.Role != "application" {
@@ -690,16 +742,35 @@ func machineLabels(spec Spec, position int) map[string]string {
 		return nil
 	}
 	if position < spec.ControlPlanes {
-		return map[string]string{"kubephos.dev/pool": "control-plane", "kubephos.dev/role": "control-plane", "topology.kubernetes.io/zone": spec.ControlPlaneZones[position%len(spec.ControlPlaneZones)]}
+		return ciliumPoolLabels(spec, map[string]string{"kubephos.dev/pool": "control-plane", "kubephos.dev/role": "control-plane", "topology.kubernetes.io/zone": spec.ControlPlaneZones[position%len(spec.ControlPlaneZones)]}, nil)
 	}
 	worker := position - spec.ControlPlanes
 	for _, pool := range spec.NodePools {
 		if worker < pool.Count {
-			return map[string]string{"kubephos.dev/pool": pool.Name, "kubephos.dev/role": pool.Role, "topology.kubernetes.io/zone": pool.Zones[worker%len(pool.Zones)]}
+			return ciliumPoolLabels(spec, map[string]string{"kubephos.dev/pool": pool.Name, "kubephos.dev/role": pool.Role, "topology.kubernetes.io/zone": pool.Zones[worker%len(pool.Zones)]}, pool.Labels)
 		}
 		worker -= pool.Count
 	}
 	return nil
+}
+
+func managedNodeName(spec Spec, position int) string {
+	pool := "control-plane"
+	index := position + 1
+	if position >= spec.ControlPlanes {
+		pool = "worker"
+		index = position - spec.ControlPlanes + 1
+		worker := position - spec.ControlPlanes
+		for _, candidate := range spec.NodePools {
+			if worker < candidate.Count {
+				pool = candidate.Name
+				index = worker + 1
+				break
+			}
+			worker -= candidate.Count
+		}
+	}
+	return fmt.Sprintf("%s-%s-%d", spec.ClusterName, pool, index)
 }
 
 func validateInventoryPools(inventory clusterInventory, spec Spec) error {
@@ -872,7 +943,7 @@ func readInventory(ctx context.Context, runner commandRunner, primary machine, a
 				ready = true
 			}
 		}
-		nodes = append(nodes, clusterNode{Name: item.Metadata.Name, Role: role, Pool: item.Metadata.Labels["kubephos.dev/pool"], Zone: item.Metadata.Labels["topology.kubernetes.io/zone"], Ready: ready, Version: item.Status.NodeInfo.KubeletVersion})
+		nodes = append(nodes, clusterNode{Name: item.Metadata.Name, Role: role, Pool: item.Metadata.Labels["kubephos.dev/pool"], Zone: nodePlacementLabel(item.Metadata.Labels), Ready: ready, Version: item.Status.NodeInfo.KubeletVersion})
 	}
 	sort.Slice(nodes, func(i, j int) bool { return nodes[i].Name < nodes[j].Name })
 	return clusterInventory{APIVersion: clusterAPIVersion, Kind: "ClusterInventory", Metadata: clusterInventoryMetadata{Name: name}, Spec: clusterInventorySpec{Distribution: "k3s", Version: k3sVersion, Nodes: nodes}}, nil
@@ -890,14 +961,14 @@ func validateInventory(inventory clusterInventory, count int) error {
 	return nil
 }
 
-func validateInventoryTopology(inventory clusterInventory, machines []machine, controlPlanes int) error {
+func validateInventoryTopology(inventory clusterInventory, machines []machine, spec Spec) error {
 	expected := make(map[string]string, len(machines))
-	for index, value := range machines {
+	for index := range machines {
 		role := "worker"
-		if index < controlPlanes {
+		if index < spec.ControlPlanes {
 			role = "control-plane"
 		}
-		expected[value.Name] = role
+		expected[managedNodeName(spec, index)] = role
 	}
 	for _, node := range inventory.Spec.Nodes {
 		role, ok := expected[node.Name]

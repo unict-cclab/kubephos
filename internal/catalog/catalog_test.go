@@ -15,7 +15,6 @@ kind: Application
 metadata:
   id: dev.kubephos.test-app
   name: Test app
-  version: 1.0.0
 spec:
   package:
     type: git
@@ -53,6 +52,38 @@ spec:
   defaults:
     replicas: 1
 `
+
+func TestCatalogComputeResourcesAreOptionalWithoutDefaults(t *testing.T) {
+	apps, err := LoadDirectory("../../catalog/applications")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, app := range apps {
+		t.Run(app.Reference, func(t *testing.T) {
+			var descriptor Descriptor
+			if err := json.Unmarshal(app.Descriptor, &descriptor); err != nil {
+				t.Fatal(err)
+			}
+			properties := descriptor.Spec.ValuesSchema["properties"].(map[string]any)
+			for _, field := range []string{"cpuRequest", "cpuLimit", "memoryRequest", "memoryLimit"} {
+				if _, exists := descriptor.Spec.Defaults[field]; exists {
+					t.Errorf("catalog sets a default for %s", field)
+				}
+				property := properties[field].(map[string]any)
+				if _, exists := property["default"]; exists {
+					t.Errorf("schema sets a default for %s", field)
+				}
+				if required, ok := descriptor.Spec.ValuesSchema["required"].([]any); ok {
+					for _, name := range required {
+						if name == field {
+							t.Errorf("%s is required", field)
+						}
+					}
+				}
+			}
+		})
+	}
+}
 
 func TestParseValidDescriptor(t *testing.T) {
 	application, err := Parse([]byte(validDescriptor), "imported")
@@ -247,17 +278,17 @@ func TestParseValidatesImageMappings(t *testing.T) {
 }
 
 func TestApplicationReferenceRoundTrip(t *testing.T) {
-	value := Reference("dev.kubephos.test-app", "1.0.0")
-	applicationID, version, err := ParseReference(value)
+	value := Reference("dev.kubephos.test-app")
+	applicationID, err := ParseReference(value)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if applicationID != "dev.kubephos.test-app" || version != "1.0.0" {
-		t.Fatalf("unexpected reference values: %s %s", applicationID, version)
+	if applicationID != "dev.kubephos.test-app" {
+		t.Fatalf("unexpected reference value: %s", applicationID)
 	}
 }
 
-func TestLoadDirectoryRejectsDuplicateVersion(t *testing.T) {
+func TestLoadDirectoryRejectsDuplicateID(t *testing.T) {
 	root := t.TempDir()
 	for _, directory := range []string{"one", "two"} {
 		path := filepath.Join(root, directory)
@@ -269,7 +300,7 @@ func TestLoadDirectoryRejectsDuplicateVersion(t *testing.T) {
 		}
 	}
 	if _, err := LoadDirectory(root); err == nil {
-		t.Fatal("expected duplicate version to be rejected")
+		t.Fatal("expected duplicate ID to be rejected")
 	}
 }
 
@@ -278,14 +309,14 @@ func TestBuiltInCatalog(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(applications) != 5 {
+	if len(applications) != 7 {
 		t.Fatalf("unexpected built-in catalog: %#v", applications)
 	}
 	byID := map[string]domain.CatalogApplication{}
 	for _, application := range applications {
 		byID[application.ID] = application
 	}
-	for _, applicationID := range []string{"dev.kubephos.bank-of-anthos", "dev.kubephos.bookinfo", "dev.kubephos.mubench", "dev.kubephos.online-boutique", "dev.kubephos.train-ticket"} {
+	for _, applicationID := range []string{"dev.kubephos.bank-of-anthos", "dev.kubephos.bookinfo", "dev.kubephos.mubench", "dev.kubephos.localai", "dev.kubephos.online-boutique", "dev.kubephos.train-ticket", "dev.kubephos.redis-cluster"} {
 		if byID[applicationID].ID == "" {
 			t.Fatalf("built-in application %s is missing", applicationID)
 		}
@@ -321,5 +352,17 @@ func TestBuiltInCatalog(t *testing.T) {
 	}
 	if len(descriptor.Spec.Interface.Components) != 64 || descriptor.Spec.Interface.Group != "train-ticket" || len(descriptor.Spec.Package.AdditionalEntrypoints) != 2 || len(descriptor.Spec.StorageClassMappings) != 1 || len(descriptor.Spec.ImageMappings) != 1 {
 		t.Fatalf("train ticket contract is incomplete: %#v", descriptor.Spec)
+	}
+}
+
+func TestApplicationReferenceRejectsVersion(t *testing.T) {
+	if _, err := ParseReference("app:dev.kubephos.test-app@1.0.0"); err == nil {
+		t.Fatal("expected versioned reference rejection")
+	}
+}
+
+func TestApplicationDescriptorRejectsVersion(t *testing.T) {
+	if _, err := Parse([]byte(strings.Replace(validDescriptor, "metadata:\n", "metadata:\n  version: 1.0.0\n", 1)), "imported"); err == nil {
+		t.Fatal("expected version field rejection")
 	}
 }

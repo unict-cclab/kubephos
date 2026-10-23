@@ -282,6 +282,7 @@ type topologyServerState struct {
 }
 
 type topologyServerMachine struct {
+	node        string
 	exists      bool
 	name        string
 	status      string
@@ -354,6 +355,14 @@ func newTopologyServer(t *testing.T, failVMID int) (*httptest.Server, *topologyS
 		state.lock.Lock()
 		defer state.lock.Unlock()
 		response.Header().Set("Content-Type", "application/json")
+		if id := topologyRequestVMID(request.URL.Path); id >= 9000 {
+			if machine := state.machines[id]; machine != nil && machine.exists && !strings.HasPrefix(request.URL.Path, "/api2/json/nodes/"+machine.node+"/qemu/") {
+				t.Errorf("VM %d request went to the wrong server: %s (expected %s)", id, request.URL.Path, machine.node)
+				http.Error(response, "wrong server", http.StatusBadRequest)
+				return
+			}
+		}
+
 		if request.Method != http.MethodGet {
 			state.writes = append(state.writes, request.Method+" "+request.URL.Path)
 		}
@@ -362,15 +371,15 @@ func newTopologyServer(t *testing.T, failVMID int) (*httptest.Server, *topologyS
 			items := []map[string]any{{"vmid": 8000, "name": "template", "node": "pve", "status": "stopped", "type": "qemu", "template": 1}}
 			for id, machine := range state.machines {
 				if machine.exists {
-					items = append(items, map[string]any{"vmid": id, "name": machine.name, "node": "pve", "status": machine.status, "type": "qemu", "template": 0})
+					items = append(items, map[string]any{"vmid": id, "name": machine.name, "node": machine.node, "status": machine.status, "type": "qemu", "template": 0})
 				}
 			}
 			value, _ := json.Marshal(map[string]any{"data": items})
 			_, _ = response.Write(value)
 		case request.Method == http.MethodGet && request.URL.Path == "/api2/json/nodes":
-			_, _ = response.Write([]byte(`{"data":[{"node":"pve","status":"online"}]}`))
+			_, _ = response.Write([]byte(`{"data":[{"node":"pve","status":"online"},{"node":"pve-2","status":"online"},{"node":"pve-3","status":"online"}]}`))
 		case request.Method == http.MethodGet && request.URL.Path == "/api2/json/access/permissions":
-			_, _ = response.Write([]byte(`{"data":{"/":{"Datastore.AllocateSpace":1,"VM.Allocate":1,"VM.Clone":1,"VM.Config.CPU":1,"VM.Config.Disk":1,"VM.Config.Memory":1,"VM.Config.Options":1,"VM.GuestAgent.Unrestricted":1,"VM.PowerMgmt":1}}}`))
+			_, _ = response.Write([]byte(`{"data":{"/":{"Datastore.AllocateSpace":1,"VM.Allocate":1,"VM.Clone":1,"VM.Config.CPU":1,"VM.Config.Disk":1,"VM.Config.Memory":1,"VM.Config.Options":1,"VM.GuestAgent.Unrestricted":1,"VM.PowerMgmt":1,"VM.Migrate":1}}}`))
 		case request.Method == http.MethodGet && request.URL.Path == "/api2/json/nodes/pve/qemu/8000/config":
 			_, _ = response.Write([]byte(`{"data":{"name":"template","boot":"order=scsi0;ide2","scsi0":"local-lvm:base-8000-disk-0,size=8G"}}`))
 		case request.Method == http.MethodPost && request.URL.Path == "/api2/json/nodes/pve/qemu/8000/clone":
@@ -383,9 +392,20 @@ func newTopologyServer(t *testing.T, failVMID int) (*httptest.Server, *topologyS
 			machine := state.machines[id]
 			machine.exists = true
 			machine.name = request.Form.Get("name")
+			machine.node = request.Form.Get("target")
+			if machine.node == "" {
+				machine.node = "pve"
+			}
 			machine.status = "stopped"
 			machine.disk = "local-lvm:vm-disk,size=8G"
 			_, _ = response.Write([]byte(`{"data":"UPID:pve:clone"}`))
+		case request.Method == http.MethodPost && strings.HasSuffix(request.URL.Path, "/migrate"):
+			_ = request.ParseForm()
+			if request.Form.Get("online") != "1" || request.Form.Get("with-local-disks") != "1" {
+				t.Error("migration must be live with local disks")
+			}
+			state.machines[topologyRequestVMID(request.URL.Path)].node = request.Form.Get("target")
+			_, _ = response.Write([]byte(`{"data":"UPID:pve:migrate"}`))
 		case request.Method == http.MethodPost && strings.HasSuffix(request.URL.Path, "/config"):
 			id := topologyRequestVMID(request.URL.Path)
 			machine := state.machines[id]
@@ -486,4 +506,90 @@ func topologyRequestVMID(path string) int {
 		}
 	}
 	return 0
+}
+
+func TestTopologyPlansStableServiceNames(t *testing.T) {
+	for _, role := range []string{"harbor", "nfs"} {
+		t.Run(role, func(t *testing.T) {
+			spec := json.RawMessage(fmt.Sprintf(`{"connectionRef":"conn_test","node":"pve","templateVMID":8000,"baseVMID":9000,"addressStart":"10.10.0.10","prefixLength":24,"gateway":"10.10.0.1","dnsServer":"1.1.1.1","namePrefix":"dev","machineNames":["dev-%s"],"machineCount":1,"cores":2,"memoryMiB":4096,"diskGiB":32,"sshUser":"ubuntu","cleanupAfterTest":false}`, role))
+			invocation := Invocation{Input: spec, Connections: map[string]json.RawMessage{"conn_test": json.RawMessage(`{"endpoint":"https://proxmox.test","credentialRef":"cred_test","verifyTLS":false}`)}}
+			for attempt := 0; attempt < 2; attempt++ {
+				plan, err := (TopologyPlugin{}).Plan(context.Background(), invocation)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var input topologyStepInput
+				if err := json.Unmarshal(plan.Steps[0].Input, &input); err != nil {
+					t.Fatal(err)
+				}
+				want := "dev-" + role
+				if input.Machines[0].Name != want || plan.Steps[0].Effects[0].Name != want {
+					t.Fatalf("unexpected machine name: %#v", input.Machines)
+				}
+			}
+		})
+	}
+}
+
+func TestTopologyCleanupAllowsRenamedOwnedVM(t *testing.T) {
+	input := topologyStepInput{Marker: "marker"}
+	planned := plannedMachine{VMID: 110, Name: "original"}
+	if !cleanupOwnedTopology(vmConfig{Name: "renamed", Description: topologyDescription(input.Marker)}, input, planned) {
+		t.Fatal("VM identified by ID and ownership marker must remain removable after rename")
+	}
+	if cleanupOwnedTopology(vmConfig{Name: "renamed", Description: topologyDescription("another")}, input, planned) {
+		t.Fatal("reused VM ID must not authorize deletion of another owner")
+	}
+}
+
+func TestTopologyAcrossMultipleProxmoxServers(t *testing.T) {
+	server, _ := newTopologyServer(t, 0)
+	defer server.Close()
+	invocation, _ := topologyInvocation(server.URL, true)
+	var spec map[string]any
+	_ = json.Unmarshal(invocation.Input, &spec)
+	spec["machineNodes"] = []string{"pve-2", "pve", "pve-3"}
+	invocation.Input, _ = json.Marshal(spec)
+	plugin := TopologyPlugin{SSH: fakeSSHAccess{}}
+	if report := plugin.Validate(context.Background(), invocation); !report.Valid {
+		t.Fatalf("validation: %+v", report.Issues)
+	}
+	plan, err := plugin.Plan(context.Background(), invocation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	log := func(string, string) error { return nil }
+	for _, step := range plan.Steps {
+		health, err := plugin.Precheck(context.Background(), step, invocation.Secrets, invocation.Connections, log)
+		if err != nil || health.Status != domain.HealthHealthy {
+			t.Fatalf("precheck: %+v %v", health, err)
+		}
+		result, err := plugin.Execute(context.Background(), step, invocation.Secrets, invocation.Connections, log)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if step.ID == "provision-topology" {
+			var output topologyResult
+			if err := json.Unmarshal(result, &output); err != nil {
+				t.Fatal(err)
+			}
+			for index, node := range []string{"pve-2", "pve", "pve-3"} {
+				if output.MachineSet.Spec.Machines[index].Node != node {
+					t.Fatalf("unexpected VM placement: %+v", output.MachineSet.Spec.Machines)
+				}
+			}
+		}
+		health, err = plugin.Verify(context.Background(), step, result, invocation.Secrets, invocation.Connections, log)
+		if err != nil || health.Status != domain.HealthHealthy {
+			t.Fatalf("verify: %+v %v", health, err)
+		}
+	}
+	// Offline and malformed destinations are rejected before any VM is created.
+	for _, nodes := range [][]string{{"pve"}, {"pve", "bad/node", "pve"}, {"pve", "offline", "pve"}} {
+		spec["machineNodes"] = nodes
+		invocation.Input, _ = json.Marshal(spec)
+		if report := plugin.Validate(context.Background(), invocation); report.Valid {
+			t.Fatalf("accepted invalid servers: %v", nodes)
+		}
+	}
 }

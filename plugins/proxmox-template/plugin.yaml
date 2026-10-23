@@ -64,7 +64,7 @@ spec:
         default: ubuntu-24.04
       cloudImageURL:
         type: string
-        title: Custom cloud image URL
+        title: Cloud image URL
         default: ""
       storage:
         type: string
@@ -73,7 +73,7 @@ spec:
         maxLength: 64
       imageStorage:
         type: string
-        title: Image staging storage
+        title: Cloud image storage
         minLength: 1
         maxLength: 64
       bridge:
@@ -90,7 +90,6 @@ spec:
       address:
         type: string
         title: Temporary address
-        description: Leave empty to use DHCP.
         default: ""
       prefixLength:
         type: integer

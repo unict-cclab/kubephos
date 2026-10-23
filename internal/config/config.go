@@ -47,7 +47,7 @@ func Load() Config {
 		PublicURL:                      publicURL,
 		WorkerConcurrency:              integer("KUBEPHOS_WORKER_CONCURRENCY", 4),
 		WorkerPoll:                     duration("KUBEPHOS_WORKER_POLL_INTERVAL", time.Second),
-		InstanceID:                     value("KUBEPHOS_INSTANCE_ID", "local"),
+		InstanceID:                     value("KUBEPHOS_INSTANCE_ID", value("HOSTNAME", "local")),
 		PluginRuntimeHost:              value("KUBEPHOS_PLUGIN_RUNTIME_HOST", ""),
 		PluginRuntimeCA:                value("KUBEPHOS_PLUGIN_RUNTIME_CA", ""),
 		PluginRuntimeCert:              value("KUBEPHOS_PLUGIN_RUNTIME_CERT", ""),
@@ -57,9 +57,9 @@ func Load() Config {
 		KeycloakPublicURL:              strings.TrimRight(keycloakPublicURL, "/"),
 		KeycloakRealm:                  value("KUBEPHOS_KEYCLOAK_REALM", "kubephos"),
 		KeycloakClientID:               value("KUBEPHOS_KEYCLOAK_CLIENT_ID", "kubephos"),
-		KeycloakClientSecret:           value("KUBEPHOS_KEYCLOAK_CLIENT_SECRET", "kubephos-dev-client-secret"),
+		KeycloakClientSecret:           os.Getenv("KUBEPHOS_KEYCLOAK_CLIENT_SECRET"),
 		KeycloakManagementClientID:     value("KUBEPHOS_KEYCLOAK_MANAGEMENT_CLIENT_ID", "kubephos-management"),
-		KeycloakManagementClientSecret: value("KUBEPHOS_KEYCLOAK_MANAGEMENT_CLIENT_SECRET", "kubephos-management-dev-client-secret"),
+		KeycloakManagementClientSecret: os.Getenv("KUBEPHOS_KEYCLOAK_MANAGEMENT_CLIENT_SECRET"),
 	}
 }
 

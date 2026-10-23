@@ -3,7 +3,7 @@ kind: Plugin
 metadata:
   id: io.kubephos.descheduler.kubernetes.managed
   name: Managed descheduler
-  version: 0.2.0
+  version: 0.3.0
   description: Runs a catalogued descheduler image in the experiment control namespace with a validated policy against selected application workloads.
 spec:
   protocol: v1alpha1

@@ -127,11 +127,11 @@ func testArtifacts() map[string]domain.ResolvedArtifact {
 	key := base64.StdEncoding.EncodeToString([]byte("private-key"))
 	kubeconfig := "apiVersion: v1\nkind: Config\ncurrent-context: managed\nclusters:\n- name: managed\n  cluster:\n    server: https://10.10.0.10:6443\ncontexts:\n- name: managed\n  context:\n    cluster: managed\n    user: admin\nusers:\n- name: admin\n  user:\n    client-certificate-data: " + certificate + "\n    client-key-data: " + key + "\n"
 	cluster, _ := json.Marshal(map[string]any{"apiVersion": artifactAPI, "kind": "ClusterConnection", "metadata": map[string]string{"name": "development", "version": "v1.36.0+k3s1"}, "spec": map[string]string{"distribution": "k3s", "server": "https://10.10.0.10:6443", "kubeconfig": kubeconfig}})
-	deployment, _ := json.Marshal(map[string]any{"apiVersion": artifactAPI, "kind": "ApplicationDeployment", "metadata": map[string]string{"name": "kubephos-app-one", "version": "v1alpha1", "ownershipMarker": "application-marker"}, "spec": map[string]any{"applicationRef": "app:dev.example.app@1.0.0", "clusterServer": "https://10.10.0.10:6443", "namespace": "kubephos-app-one", "workloads": []map[string]any{{"name": "gateway", "traits": []string{"traffic-entrypoint"}}}}})
+	deployment, _ := json.Marshal(map[string]any{"apiVersion": artifactAPI, "kind": "ApplicationDeployment", "metadata": map[string]string{"name": "kubephos-app-one", "version": "v1alpha1", "ownershipMarker": "application-marker"}, "spec": map[string]any{"applicationRef": "app:dev.example.app", "clusterServer": "https://10.10.0.10:6443", "namespace": "kubephos-app-one", "workloads": []map[string]any{{"name": "gateway", "traits": []string{"traffic-entrypoint"}}}}})
 	capability, _ := json.Marshal(map[string]any{"apiVersion": artifactAPI, "kind": "ObservabilityCapability", "metadata": map[string]string{"name": "managed-observability", "version": "86.0.0"}, "spec": map[string]any{"clusterServer": "https://10.10.0.10:6443", "namespace": "kubephos-observability", "scrapeInterval": "15s", "retention": "7d", "metricsAPI": "prometheus-v1", "endpoints": []map[string]any{{"name": "prometheus", "serviceName": "kubephos-prometheus", "port": 9090, "scheme": "http"}}}})
 	started := time.Date(2026, 9, 10, 9, 59, 0, 0, time.UTC)
 	completed := time.Date(2026, 9, 10, 10, 0, 0, 0, time.UTC)
-	load, _ := json.Marshal(map[string]any{"apiVersion": artifactAPI, "kind": "LoadSession", "metadata": map[string]string{"name": "kubephos-app-one/journey", "version": "v1alpha1"}, "spec": map[string]any{"applicationRef": "app:dev.example.app@1.0.0", "clusterServer": "https://10.10.0.10:6443", "namespace": "kubephos-app-one", "scenarioId": "journey", "state": "completed", "durationSeconds": 60, "startedAt": started, "completedAt": completed, "steps": []map[string]any{{"type": "constant", "durationSeconds": 60, "rps": 20}}}})
+	load, _ := json.Marshal(map[string]any{"apiVersion": artifactAPI, "kind": "LoadSession", "metadata": map[string]string{"name": "kubephos-app-one/journey", "version": "v1alpha1"}, "spec": map[string]any{"applicationRef": "app:dev.example.app", "clusterServer": "https://10.10.0.10:6443", "namespace": "kubephos-app-one", "scenarioId": "journey", "state": "completed", "durationSeconds": 60, "startedAt": started, "completedAt": completed, "steps": []map[string]any{{"type": "constant", "durationSeconds": 60, "rps": 20}}}})
 	return map[string]domain.ResolvedArtifact{"cluster-connection": {Value: cluster}, "application-deployment": {Value: deployment}, "observability-capability": {Value: capability}, "load-session": {Value: load}}
 }
 
@@ -166,11 +166,11 @@ func TestConfiguredLoadSeriesDoesNotAliasSinusoidalProfile(t *testing.T) {
 	}
 }
 
-func TestLoadMetricsUseTheSourceProxy(t *testing.T) {
+func TestLoadMetricsUseLocustClient(t *testing.T) {
 	definitions := metricDefinitions("experiment", "^(?:gateway)$")
 	for _, definition := range definitions[:4] {
-		if !strings.Contains(definition.Query, `reporter="source"`) || !strings.Contains(definition.Query, `source_workload_namespace="experiment"`) || !strings.Contains(definition.Query, `source_workload=~"^(?:gateway)$"`) {
-			t.Fatalf("load query must identify the load driver at the source proxy: %s", definition.Query)
+		if !strings.Contains(definition.Query, "kubephos_load_") || !strings.Contains(definition.Query, `namespace="experiment"`) || strings.Contains(definition.Query, "istio_") {
+			t.Fatalf("load query must use the Locust client: %s", definition.Query)
 		}
 	}
 }
@@ -308,4 +308,81 @@ func (runner *fakeRunner) callCount() int {
 	runner.mu.Lock()
 	defer runner.mu.Unlock()
 	return runner.calls
+}
+
+func TestNativeRedisMetricsDoNotDependOnIstio(t *testing.T) {
+	var deployment applicationDeployment
+	if err := json.Unmarshal([]byte(`{"spec":{"namespace":"redis-experiment","endpoints":[{"protocol":"tcp"}]}}`), &deployment); err != nil {
+		t.Fatal(err)
+	}
+	definitions := deploymentMetricDefinitions(deployment)
+	seen := map[string]bool{}
+	for _, definition := range definitions {
+		seen[definition.ID] = true
+		if strings.Contains(definition.Query, "istio_") {
+			t.Fatalf("native metric depends on Envoy: %s", definition.Query)
+		}
+		if strings.HasPrefix(definition.ID, "load.") || strings.HasPrefix(definition.ID, "redis.") {
+			if !strings.Contains(definition.Query, `namespace="redis-experiment"`) || !strings.Contains(definition.Query, "kubephos_load_") {
+				t.Fatalf("native metric is not isolated: %s", definition.Query)
+			}
+		}
+		if definition.ID == "deployment.ready_replicas" && !strings.Contains(definition.Query, "kube_statefulset_status_replicas_ready") {
+			t.Fatal("Redis readiness must use StatefulSets")
+		}
+	}
+	for _, metric := range []string{"load.successful_rps", "load.failed_rps", "load.failure_percentage", "load.p95_response_time", "redis.operation_rps", "redis.operation_p95_response_time", "cpu.cores", "memory.working_set"} {
+		if !seen[metric] {
+			t.Fatalf("missing %s", metric)
+		}
+	}
+}
+
+func TestNativeCollectorProducesVerifiedDatasetAndSLO(t *testing.T) {
+	now := time.Date(2026, 9, 10, 10, 0, 0, 0, time.UTC)
+	runner := &fakeRunner{now: now}
+	plugin := Plugin{Runner: runner, Clock: func() time.Time { return now }}
+	step := testStep(t)
+	var deployment map[string]any
+	if err := json.Unmarshal(step.ResolvedInputs["application-deployment"].Value, &deployment); err != nil {
+		t.Fatal(err)
+	}
+	spec := deployment["spec"].(map[string]any)
+	spec["endpoints"] = []any{map[string]any{"protocol": "tcp"}}
+	spec["workloads"] = []any{map[string]any{"name": "redis-primary-1", "traits": []any{"schedulable"}}}
+	raw, _ := json.Marshal(deployment)
+	step.ResolvedInputs["application-deployment"] = domain.ResolvedArtifact{Value: raw}
+	if health, err := plugin.Precheck(context.Background(), step, discardLog); err != nil || health.Status != domain.HealthHealthy {
+		t.Fatalf("native precheck: %+v %v", health, err)
+	}
+	result, err := plugin.Execute(context.Background(), step, discardLog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if health, err := plugin.Verify(context.Background(), step, result, discardLog); err != nil || health.Status != domain.HealthHealthy {
+		t.Fatalf("native dataset: %+v %v", health, err)
+	}
+	if !strings.Contains(string(result), "redis.operation_rps") || !strings.Contains(string(result), "load.slo_violation_percentage") {
+		t.Fatal("native operation/SLO series missing")
+	}
+}
+
+func TestEndToEndMetricsAlwaysUseLocustAndKeepServiceMetricsOnIstio(t *testing.T) {
+	for _, definitions := range [][]metricDefinition{metricDefinitions("run", "gateway"), nativeMetricDefinitions("run")} {
+		loadMetrics := 0
+		for _, definition := range definitions {
+			if strings.HasPrefix(definition.ID, "load.") {
+				loadMetrics++
+				if !strings.Contains(definition.Query, "kubephos_load_") || strings.Contains(definition.Query, "istio_") || !strings.Contains(definition.Query, `namespace="run"`) || !strings.Contains(definition.Query, "[1m]") {
+					t.Fatalf("end-to-end metric is not client-side and isolated: %+v", definition)
+				}
+			}
+			if strings.HasPrefix(definition.ID, "application.") && !strings.Contains(definition.Query, `reporter="destination"`) {
+				t.Fatalf("service metric lost destination measurement: %+v", definition)
+			}
+		}
+		if loadMetrics != 4 {
+			t.Fatalf("expected four Locust end-to-end metrics, got %d", loadMetrics)
+		}
+	}
 }

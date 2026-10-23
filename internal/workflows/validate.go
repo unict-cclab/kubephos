@@ -271,8 +271,8 @@ func mutatingPlan(plan domain.Plan) bool {
 }
 
 func normalize(definition domain.PipelineDefinition) (domain.PipelineDefinition, error) {
-	if len(definition.Stages) < 1 || len(definition.Stages) > 32 {
-		return domain.PipelineDefinition{}, errors.New("a pipeline requires between 1 and 32 stages")
+	if len(definition.Stages) < 1 || len(definition.Stages) > 128 {
+		return domain.PipelineDefinition{}, errors.New("a pipeline requires between 1 and 128 stages")
 	}
 	seen := map[string]bool{}
 	for index := range definition.Stages {

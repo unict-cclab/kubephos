@@ -9,7 +9,7 @@ RUN npm run build
 
 FROM docker:29.8.0-cli AS dockercli
 
-FROM golang:1.25.5-alpine3.23 AS build
+FROM golang:1.26.10-alpine3.23 AS build
 
 WORKDIR /src
 COPY go.mod go.sum ./
@@ -28,6 +28,15 @@ RUN set -eu; \
       CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o "${target}/${executable}" "./cmd/${executable}"; \
       cp "${manifest}" "${target}/plugin.yaml"; \
     done
+RUN set -eu; \
+    mkdir -p /out/managed-images; \
+    for component in cluster-lens:ClusterLensVersion mon-agent:MonAgentVersion mentat:MentatVersion; do \
+      name="${component%:*}"; constant="${component#*:}"; \
+      version=$(awk -v key="${constant}" '$1 == key && $2 == "=" {gsub(/"/, "", $3); print $3}' internal/managedcomponents/components.go); \
+      test -n "${version}"; \
+      cp "managed-images/${name}-${version}.tar" /out/managed-images/; \
+    done; \
+    chmod 0644 /out/managed-images/*.tar
 
 FROM alpine:3.23
 
@@ -36,9 +45,11 @@ RUN apk add --no-cache ca-certificates curl git skopeo tzdata && case "${TARGETA
 COPY --from=build /out/kubephos /usr/local/bin/kubephos
 COPY --from=dockercli /usr/local/bin/docker /usr/local/bin/docker
 COPY --from=build /out/plugins /opt/kubephos/plugins
+COPY --from=build /out/managed-images /opt/kubephos/managed-images
 COPY catalog/applications /opt/kubephos/catalog/applications
 COPY migrations /opt/kubephos/migrations
 COPY --from=web /src/frontend/dist /opt/kubephos/web
+COPY LICENSE THIRD_PARTY_NOTICES.md /usr/share/doc/kubephos/
 USER 10001:10001
 EXPOSE 8080
 ENTRYPOINT ["/usr/local/bin/kubephos"]

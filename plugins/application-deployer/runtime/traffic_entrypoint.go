@@ -409,3 +409,13 @@ func encodeManifestResources(resources []map[string]any) (string, error) {
 	}
 	return output.String(), nil
 }
+
+func gatewayResourceName(value string) string {
+	value = dnsLabel(value)
+	// Cilium prefixes the generated Service name with "cilium-gateway-".
+	if len(value) <= 48 {
+		return value
+	}
+	digest := sha256.Sum256([]byte(value))
+	return strings.Trim(value[:35], "-") + "-" + hex.EncodeToString(digest[:])[:12]
+}

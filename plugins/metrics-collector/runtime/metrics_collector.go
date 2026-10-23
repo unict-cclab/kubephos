@@ -2,21 +2,18 @@ package metricscollector
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	kubeconfigutil "kubephos.dev/kubephos/internal/kubeconfig"
 	"math"
 	"net/url"
-	"os"
-	"os/exec"
+
 	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
-
-	"gopkg.in/yaml.v3"
 
 	"kubephos.dev/kubephos/internal/domain"
 	"kubephos.dev/kubephos/internal/plugins"
@@ -37,13 +34,16 @@ type Invocation struct {
 }
 
 type Spec struct {
-	ClusterConnectionRef       string `json:"clusterConnectionRef"`
-	ApplicationDeploymentRef   string `json:"applicationDeploymentRef"`
-	ObservabilityCapabilityRef string `json:"observabilityCapabilityRef"`
-	LoadSessionRef             string `json:"loadSessionRef"`
-	Window                     string `json:"window"`
-	Resolution                 string `json:"resolution"`
-	SLOMilliseconds            int    `json:"sloMilliseconds,omitempty"`
+	Peers                      []ClusterPeer `json:"peers,omitempty"`
+	ClusterName                string        `json:"clusterName,omitempty"`
+	PeerOnly                   bool          `json:"peerOnly,omitempty"`
+	ClusterConnectionRef       string        `json:"clusterConnectionRef"`
+	ApplicationDeploymentRef   string        `json:"applicationDeploymentRef"`
+	ObservabilityCapabilityRef string        `json:"observabilityCapabilityRef"`
+	LoadSessionRef             string        `json:"loadSessionRef"`
+	Window                     string        `json:"window"`
+	Resolution                 string        `json:"resolution"`
+	SLOMilliseconds            int           `json:"sloMilliseconds,omitempty"`
 }
 
 type clusterConnection struct {
@@ -69,11 +69,17 @@ type applicationDeployment struct {
 		OwnershipMarker string `json:"ownershipMarker"`
 	} `json:"metadata"`
 	Spec struct {
-		ApplicationRef string `json:"applicationRef"`
-		External       bool   `json:"external,omitempty"`
-		ClusterServer  string `json:"clusterServer"`
-		Namespace      string `json:"namespace"`
-		Workloads      []struct {
+		ControlMetrics *controlMetricsScope `json:"controlMetrics,omitempty"`
+		ClusterName    string               `json:"clusterName,omitempty"`
+		Networking     string               `json:"networking,omitempty"`
+		ApplicationRef string               `json:"applicationRef"`
+		External       bool                 `json:"external,omitempty"`
+		ClusterServer  string               `json:"clusterServer"`
+		Namespace      string               `json:"namespace"`
+		Endpoints      []struct {
+			Protocol string `json:"protocol"`
+		} `json:"endpoints"`
+		Workloads []struct {
 			Name   string   `json:"name"`
 			Traits []string `json:"traits"`
 		} `json:"workloads"`
@@ -157,16 +163,20 @@ type datasetMetadata struct {
 }
 
 type datasetSpec struct {
-	ApplicationRef  string         `json:"applicationRef"`
-	ClusterServer   string         `json:"clusterServer"`
-	Namespace       string         `json:"namespace"`
-	Start           time.Time      `json:"start"`
-	End             time.Time      `json:"end"`
-	StepSeconds     int            `json:"stepSeconds"`
-	SLOMilliseconds int            `json:"sloMilliseconds,omitempty"`
-	Source          datasetSource  `json:"source"`
-	Series          []metricSeries `json:"series"`
-	Summary         datasetSummary `json:"summary"`
+	Clusters          []string               `json:"clusters,omitempty"`
+	EndToEndSource    string                 `json:"endToEndSource,omitempty"`
+	WorkloadStartedAt *time.Time             `json:"workloadStartedAt,omitempty"`
+	ControlMetrics    []controlMetricSummary `json:"controlMetrics,omitempty"`
+	ApplicationRef    string                 `json:"applicationRef"`
+	ClusterServer     string                 `json:"clusterServer"`
+	Namespace         string                 `json:"namespace"`
+	Start             time.Time              `json:"start"`
+	End               time.Time              `json:"end"`
+	StepSeconds       int                    `json:"stepSeconds"`
+	SLOMilliseconds   int                    `json:"sloMilliseconds,omitempty"`
+	Source            datasetSource          `json:"source"`
+	Series            []metricSeries         `json:"series"`
+	Summary           datasetSummary         `json:"summary"`
 }
 
 type datasetSource struct {
@@ -217,9 +227,9 @@ type commandRunner interface {
 
 func (Plugin) Manifest() plugins.Manifest {
 	return plugins.Manifest{
-		ID: pluginID, Name: "Kubernetes metrics collector", Version: "0.3.4",
+		ID: pluginID, Name: "Kubernetes metrics collector", Version: "0.7.0",
 		Description:     "Collects a normalized workload dataset through a compatible metrics capability.",
-		Schema:          json.RawMessage(`{"type":"object","additionalProperties":false,"required":["clusterConnectionRef","applicationDeploymentRef","observabilityCapabilityRef","loadSessionRef","window","resolution"],"properties":{"clusterConnectionRef":{"type":"string","title":"Kubernetes cluster","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ClusterConnection","x-kubephos-artifact-version":"v1alpha1"},"applicationDeploymentRef":{"type":"string","title":"Application deployment","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ApplicationDeployment","x-kubephos-artifact-version":"v1alpha1"},"observabilityCapabilityRef":{"type":"string","title":"Metrics service","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ObservabilityCapability","x-kubephos-artifact-version":"v1alpha1"},"loadSessionRef":{"type":"string","title":"Completed load session","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"LoadSession","x-kubephos-artifact-version":"v1alpha1"},"window":{"type":"string","title":"Metrics fallback window","x-kubephos-hidden":true,"enum":["5m","15m","30m","1h"],"default":"15m"},"resolution":{"type":"string","title":"Data resolution","enum":["5s","15s","30s","1m"],"default":"15s"},"sloMilliseconds":{"type":"integer","title":"Response time SLO (optional, ms)","description":"Leave empty to omit the SLO target line and violation metrics.","minimum":1,"maximum":600000}}}`),
+		Schema:          json.RawMessage(`{"type":"object","additionalProperties":false,"required":["clusterConnectionRef","applicationDeploymentRef","observabilityCapabilityRef","loadSessionRef","window","resolution"],"properties":{"clusterConnectionRef":{"type":"string","title":"Kubernetes cluster","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ClusterConnection","x-kubephos-artifact-version":"v1alpha1"},"applicationDeploymentRef":{"type":"string","title":"Application deployment","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ApplicationDeployment","x-kubephos-artifact-version":"v1alpha1"},"observabilityCapabilityRef":{"type":"string","title":"Metrics service","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ObservabilityCapability","x-kubephos-artifact-version":"v1alpha1"},"loadSessionRef":{"type":"string","title":"Completed load session","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"LoadSession","x-kubephos-artifact-version":"v1alpha1"},"window":{"type":"string","title":"Metrics fallback window","x-kubephos-hidden":true,"enum":["5m","15m","30m","1h"],"default":"15m"},"resolution":{"type":"string","title":"Data resolution","enum":["5s","15s","30s","1m"],"default":"15s"},"sloMilliseconds":{"type":"integer","title":"Response time SLO (optional, ms)","minimum":1,"maximum":600000},"clusterName":{"type":"string","x-kubephos-hidden":true},"peers":{"type":"array","minItems":1,"maxItems":5,"x-kubephos-hidden":true,"items":{"type":"object","required":["name","clusterConnectionRef","applicationDeploymentRef","observabilityCapabilityRef"],"additionalProperties":false,"properties":{"name":{"type":"string"},"clusterConnectionRef":{"type":"string","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ClusterConnection","x-kubephos-artifact-version":"v1alpha1"},"applicationDeploymentRef":{"type":"string","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ApplicationDeployment","x-kubephos-artifact-version":"v1alpha1"},"observabilityCapabilityRef":{"type":"string","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ObservabilityCapability","x-kubephos-artifact-version":"v1alpha1"}}}}}}`),
 		ArtifactInputs:  []domain.ArtifactContract{{Type: "ClusterConnection", Version: "v1alpha1"}, {Type: "ApplicationDeployment", Version: "v1alpha1"}, {Type: "ObservabilityCapability", Version: "v1alpha1"}, {Type: "LoadSession", Version: "v1alpha1"}},
 		ArtifactOutputs: []domain.ArtifactContract{{Type: "TimeSeriesDataset", Version: "v1alpha1"}},
 		Capabilities:    []string{"metrics.timeseries.collect", "metrics.timeseries.preflight"},
@@ -278,7 +288,7 @@ func (Plugin) Plan(ctx context.Context, raw json.RawMessage) (domain.Plan, error
 	if err != nil {
 		return domain.Plan{}, err
 	}
-	return domain.Plan{PluginID: pluginID, Steps: []domain.PlanStep{{
+	plan := domain.Plan{PluginID: pluginID, Steps: []domain.PlanStep{{
 		ID: "collect-workload-metrics", Name: "Collect normalized workload metrics", Input: input,
 		ArtifactInputs: []domain.ArtifactInput{
 			{Name: "cluster-connection", Type: "ClusterConnection", Version: "v1alpha1", ArtifactID: spec.ClusterConnectionRef},
@@ -287,11 +297,13 @@ func (Plugin) Plan(ctx context.Context, raw json.RawMessage) (domain.Plan, error
 			{Name: "load-session", Type: "LoadSession", Version: "v1alpha1", ArtifactID: spec.LoadSessionRef},
 		},
 		Outputs: []domain.ArtifactOutput{{Name: "time-series-dataset", Type: "TimeSeriesDataset", Version: "v1alpha1", MediaType: "application/json", Source: "/dataset"}},
-	}}}, nil
+	}}}
+	plan.Steps[0].ArtifactInputs = append(plan.Steps[0].ArtifactInputs, peerInputs(spec.Peers)...)
+	return plan, nil
 }
 
-func (plugin Plugin) Precheck(ctx context.Context, step domain.PlanStep, log plugins.Logger) (domain.HealthReport, error) {
-	_, cluster, deployment, capability, endpoint, err := resolve(step)
+func (plugin Plugin) precheckSingle(ctx context.Context, step domain.PlanStep, log plugins.Logger) (domain.HealthReport, error) {
+	spec, cluster, deployment, capability, endpoint, err := resolve(step)
 	if err != nil {
 		return unhealthy(err.Error(), "artifacts", "invalid"), nil
 	}
@@ -299,7 +311,7 @@ func (plugin Plugin) Precheck(ctx context.Context, step domain.PlanStep, log plu
 		return unhealthy(err.Error(), "artifacts", "invalid"), nil
 	}
 	load, err := resolveLoadSession(step)
-	if err != nil || validateLoadSession(load, cluster, deployment) != nil {
+	if err != nil || !spec.PeerOnly && validateLoadSession(load, cluster, deployment) != nil {
 		return unhealthy("Completed load session is unavailable or invalid", "loadSession", "invalid"), nil
 	}
 	if err := log("info", "Validating cluster readiness, application scope, proxy authorization and metrics API"); err != nil {
@@ -330,7 +342,7 @@ func (plugin Plugin) Precheck(ctx context.Context, step domain.PlanStep, log plu
 	return domain.HealthReport{Status: domain.HealthHealthy, Summary: "Metrics collection inputs are valid and ready", Checks: map[string]string{"api": "ready", "application": "owned", "authorization": "allowed", "metricsAPI": "ready"}}, nil
 }
 
-func (plugin Plugin) Execute(ctx context.Context, step domain.PlanStep, log plugins.Logger) (json.RawMessage, error) {
+func (plugin Plugin) executeSingle(ctx context.Context, step domain.PlanStep, log plugins.Logger) (json.RawMessage, error) {
 	spec, cluster, deployment, capability, endpoint, err := resolve(step)
 	if err != nil {
 		return nil, err
@@ -342,6 +354,9 @@ func (plugin Plugin) Execute(ctx context.Context, step domain.PlanStep, log plug
 	}
 	start, end := metricWindow(load, plugin.now().UTC(), windows()[spec.Window])
 	definitions := deploymentMetricDefinitions(deployment)
+	if spec.PeerOnly {
+		definitions = ciliumMetricDefinitions(deployment, true)
+	}
 	type queryResult struct {
 		definition metricDefinition
 		series     []metricSeries
@@ -363,7 +378,10 @@ func (plugin Plugin) Execute(ctx context.Context, step domain.PlanStep, log plug
 			results <- queryResult{definition: definition, series: series, err: queryErr}
 		}()
 	}
-	allSeries := []metricSeries{configuredLoadSeries(load, start, end, resolution)}
+	allSeries := []metricSeries{}
+	if !spec.PeerOnly {
+		allSeries = append(allSeries, configuredLoadSeries(load, start, end, resolution))
+	}
 	for range definitions {
 		collected := <-results
 		if collected.err != nil {
@@ -380,7 +398,7 @@ func (plugin Plugin) Execute(ctx context.Context, step domain.PlanStep, log plug
 		}
 		allSeries = append(allSeries, collected.series...)
 	}
-	if spec.SLOMilliseconds > 0 {
+	if spec.SLOMilliseconds > 0 && !spec.PeerOnly {
 		for _, series := range allSeries {
 			if series.Metric == "load.p95_response_time" {
 				allSeries = append(allSeries, sloViolationSeries(series, spec.SLOMilliseconds))
@@ -388,6 +406,12 @@ func (plugin Plugin) Execute(ctx context.Context, step domain.PlanStep, log plug
 			}
 		}
 	}
+	controlStart := start
+	if scope := deployment.Spec.ControlMetrics; scope != nil && !scope.StartedAt.IsZero() && scope.StartedAt.Before(start) && end.Sub(scope.StartedAt) <= 24*time.Hour {
+		controlStart = scope.StartedAt.UTC().Truncate(time.Second)
+	}
+	controlSeries, controlSummaries := plugin.collectControlMetrics(ctx, cluster, deployment, capability, endpoint, controlStart, end, resolution)
+	allSeries = append(allSeries, controlSeries...)
 	sort.Slice(allSeries, func(i, j int) bool {
 		if allSeries[i].Metric != allSeries[j].Metric {
 			return allSeries[i].Metric < allSeries[j].Metric
@@ -399,14 +423,19 @@ func (plugin Plugin) Execute(ctx context.Context, step domain.PlanStep, log plug
 		samples += len(series.Points)
 	}
 	metricCount := len(definitions) + 1
+	controlMetricIDs := map[string]bool{}
+	for _, series := range controlSeries {
+		controlMetricIDs[series.Metric] = true
+	}
+	metricCount += len(controlMetricIDs)
 	if spec.SLOMilliseconds > 0 {
 		metricCount++
 	}
 	dataset := timeSeriesDataset{
 		APIVersion: artifactAPI, Kind: "TimeSeriesDataset", Metadata: datasetMetadata{Name: deployment.Spec.Namespace + "/workload-overview", Version: "v1alpha1"},
 		Spec: datasetSpec{
-			ApplicationRef: deployment.Spec.ApplicationRef, ClusterServer: cluster.Spec.Server, Namespace: deployment.Spec.Namespace,
-			Start: start, End: end, StepSeconds: int(resolution.Seconds()), SLOMilliseconds: spec.SLOMilliseconds,
+			EndToEndSource: "locust", ApplicationRef: deployment.Spec.ApplicationRef, ClusterServer: cluster.Spec.Server, Namespace: deployment.Spec.Namespace,
+			Start: controlStart, WorkloadStartedAt: &start, ControlMetrics: controlSummaries, End: end, StepSeconds: int(resolution.Seconds()), SLOMilliseconds: spec.SLOMilliseconds,
 			Source: datasetSource{Kind: capability.Spec.MetricsAPI, Version: capability.Metadata.Version, Profile: "kubephos-experiment-evidence/v2"},
 			Series: allSeries, Summary: datasetSummary{Metrics: metricCount, Series: len(allSeries), Samples: samples},
 		},
@@ -571,9 +600,7 @@ func validateArtifacts(cluster clusterConnection, deployment applicationDeployme
 	if deployment.APIVersion != artifactAPI || deployment.Kind != "ApplicationDeployment" || deployment.Metadata.Name == "" || deployment.Metadata.Version != "v1alpha1" || deployment.Metadata.OwnershipMarker == "" || deployment.Spec.ApplicationRef == "" || deployment.Spec.ClusterServer != cluster.Spec.Server || deployment.Spec.Namespace != deployment.Metadata.Name {
 		return errors.New("application deployment identity is invalid")
 	}
-	if trafficEntryPointMatcher(deployment) == "^(?:)$" {
-		return errors.New("application deployment must declare a traffic-entrypoint workload")
-	}
+
 	if capability.APIVersion != artifactAPI || capability.Kind != "ObservabilityCapability" || capability.Metadata.Name == "" || capability.Metadata.Version == "" || capability.Spec.ClusterServer != cluster.Spec.Server || capability.Spec.Namespace == "" || capability.Spec.ScrapeInterval == "" || capability.Spec.Retention == "" || capability.Spec.MetricsAPI != "prometheus-v1" {
 		return errors.New("observability capability identity or cluster binding is invalid")
 	}
@@ -584,56 +611,7 @@ func validateArtifacts(cluster clusterConnection, deployment applicationDeployme
 }
 
 func validateKubeconfig(value, server string) error {
-	var config struct {
-		APIVersion     string `yaml:"apiVersion"`
-		Kind           string `yaml:"kind"`
-		CurrentContext string `yaml:"current-context"`
-		Clusters       []struct {
-			Name    string `yaml:"name"`
-			Cluster struct {
-				Server string `yaml:"server"`
-			} `yaml:"cluster"`
-		} `yaml:"clusters"`
-		Contexts []struct {
-			Name    string `yaml:"name"`
-			Context struct {
-				Cluster string `yaml:"cluster"`
-				User    string `yaml:"user"`
-			} `yaml:"context"`
-		} `yaml:"contexts"`
-		Users []struct {
-			Name string `yaml:"name"`
-			User struct {
-				Certificate string `yaml:"client-certificate-data"`
-				Key         string `yaml:"client-key-data"`
-			} `yaml:"user"`
-		} `yaml:"users"`
-	}
-	if err := yaml.Unmarshal([]byte(value), &config); err != nil || config.APIVersion != "v1" || config.Kind != "Config" || config.CurrentContext == "" {
-		return errors.New("cluster kubeconfig is invalid")
-	}
-	var clusterName, userName string
-	for _, item := range config.Contexts {
-		if item.Name == config.CurrentContext {
-			clusterName, userName = item.Context.Cluster, item.Context.User
-		}
-	}
-	clusterOK := false
-	for _, item := range config.Clusters {
-		clusterOK = clusterOK || item.Name == clusterName && item.Cluster.Server == server
-	}
-	userOK := false
-	for _, item := range config.Users {
-		if item.Name == userName {
-			certificate, certificateErr := base64.StdEncoding.DecodeString(item.User.Certificate)
-			key, keyErr := base64.StdEncoding.DecodeString(item.User.Key)
-			userOK = certificateErr == nil && keyErr == nil && len(certificate) > 0 && len(key) > 0
-		}
-	}
-	if !clusterOK || !userOK {
-		return errors.New("cluster kubeconfig target or client identity is invalid")
-	}
-	return nil
+	return kubeconfigutil.ValidateClientIdentity(value, server)
 }
 
 func trafficEntryPointMatcher(deployment applicationDeployment) string {
@@ -650,27 +628,41 @@ func trafficEntryPointMatcher(deployment applicationDeployment) string {
 	return "^(?:" + strings.Join(names, "|") + ")$"
 }
 
-func metricDefinitions(namespace, trafficEntryPoints string) []metricDefinition {
+func metricDefinitions(namespace, _ string) []metricDefinition {
 	selector := strconv.Quote(namespace)
-	entrypoints := strconv.Quote(trafficEntryPoints)
-	return []metricDefinition{
-		{ID: "load.successful_rps", Unit: "requests_per_second", Aggregation: "sum", Query: `sum(rate(istio_requests_total{reporter="source",source_workload_namespace=` + selector + `,source_workload=~` + entrypoints + `,response_code=~"2..|3.."}[1m]))`},
-		{ID: "load.failed_rps", Unit: "requests_per_second", Aggregation: "sum", Query: `sum(rate(istio_requests_total{reporter="source",source_workload_namespace=` + selector + `,source_workload=~` + entrypoints + `}[1m])) - sum(rate(istio_requests_total{reporter="source",source_workload_namespace=` + selector + `,source_workload=~` + entrypoints + `,response_code=~"2..|3.."}[1m]))`},
-		{ID: "load.failure_percentage", Unit: "percent", Aggregation: "mean", Query: `100 * (sum(rate(istio_requests_total{reporter="source",source_workload_namespace=` + selector + `,source_workload=~` + entrypoints + `}[1m])) - sum(rate(istio_requests_total{reporter="source",source_workload_namespace=` + selector + `,source_workload=~` + entrypoints + `,response_code=~"2..|3.."}[1m]))) / clamp_min(sum(rate(istio_requests_total{reporter="source",source_workload_namespace=` + selector + `,source_workload=~` + entrypoints + `}[1m])), 0.000001)`},
-		{ID: "load.p95_response_time", Unit: "milliseconds", Aggregation: "mean", Query: `histogram_quantile(0.95, sum by (le) (rate(istio_request_duration_milliseconds_bucket{reporter="source",source_workload_namespace=` + selector + `,source_workload=~` + entrypoints + `}[1m])))`},
+	return append(locustMetricDefinitions(namespace), []metricDefinition{
 		{ID: "application.request_rps", Unit: "requests_per_second", Aggregation: "sum", Query: `sum by (destination_workload) (rate(istio_requests_total{reporter="destination",destination_workload_namespace=` + selector + `}[1m]))`},
 		{ID: "application.p95_response_time", Unit: "milliseconds", Aggregation: "mean", Query: `histogram_quantile(0.95, sum by (destination_workload, le) (rate(istio_request_duration_milliseconds_bucket{reporter="destination",destination_workload_namespace=` + selector + `}[1m])))`},
-		{ID: "cpu.cores", Unit: "cores", Aggregation: "sum", Query: `sum by (pod) (rate(container_cpu_usage_seconds_total{namespace=` + selector + `,container!="",container!="POD"}[1m]))`},
-		{ID: "memory.working_set", Unit: "bytes", Aggregation: "sum", Query: `sum by (pod) (container_memory_working_set_bytes{namespace=` + selector + `,container!="",container!="POD"})`},
-		{ID: "pod.restarts", Unit: "count", Aggregation: "sum", Query: `sum by (pod) (kube_pod_container_status_restarts_total{namespace=` + selector + `})`},
-		{ID: "deployment.ready_replicas", Unit: "replicas", Aggregation: "sum", Query: `max by (deployment) (kube_deployment_status_replicas_ready{namespace=` + selector + `})`},
+		{ID: "cpu.cores", Unit: "cores", Aggregation: "sum", Query: `sum by (pod) (rate(container_cpu_usage_seconds_total{namespace=` + selector + `,container!="",container!="POD",pod!~"kubephos-pod-scheduling-.*"}[1m]))`},
+		{ID: "memory.working_set", Unit: "bytes", Aggregation: "sum", Query: `sum by (pod) (container_memory_working_set_bytes{namespace=` + selector + `,container!="",container!="POD",pod!~"kubephos-pod-scheduling-.*"})`},
+		{ID: "pod.restarts", Unit: "count", Aggregation: "sum", Query: `sum by (pod) (kube_pod_container_status_restarts_total{namespace=` + selector + `,pod!~"kubephos-pod-scheduling-.*"})`},
+		{ID: "deployment.ready_replicas", Unit: "replicas", Aggregation: "sum", Query: `max by (deployment) (kube_deployment_status_replicas_ready{namespace=` + selector + `,deployment!="kubephos-pod-scheduling"})`},
 		{ID: "network.rtt", Unit: "milliseconds", Aggregation: "mean", Query: `1000 * sum by (origin_node, destination_node) (rate(node_latency_sum[1m])) / sum by (origin_node, destination_node) (rate(node_latency_count[1m]))`},
 		{ID: "network.packet_loss", Unit: "percent", Aggregation: "mean", Query: `100 * avg_over_time(node_packet_loss_ratio[1m])`},
 		{ID: "network.bandwidth", Unit: "bytes_per_second", Aggregation: "mean", Query: `node_bandwidth_bytes_per_second`},
+	}...)
+}
+
+func nativeTCPDeployment(deployment applicationDeployment) bool {
+	if len(deployment.Spec.Endpoints) == 0 {
+		return false
 	}
+	for _, endpoint := range deployment.Spec.Endpoints {
+		if endpoint.Protocol != "tcp" {
+			return false
+		}
+	}
+	return true
 }
 
 func deploymentMetricDefinitions(deployment applicationDeployment) []metricDefinition {
+	if deployment.Spec.Networking == "cilium" {
+		return ciliumMetricDefinitions(deployment, false)
+	}
+	if nativeTCPDeployment(deployment) {
+		return nativeMetricDefinitions(deployment.Spec.Namespace)
+	}
+
 	definitions := metricDefinitions(deployment.Spec.Namespace, trafficEntryPointMatcher(deployment))
 	if !deployment.Spec.External {
 		return definitions
@@ -683,6 +675,41 @@ func deploymentMetricDefinitions(deployment applicationDeployment) []metricDefin
 		filtered = append(filtered, definition)
 	}
 	return filtered
+}
+
+// Locust measures all end-to-end requests at the load generator.
+func locustMetricDefinitions(namespace string) []metricDefinition {
+	selector := `namespace=` + strconv.Quote(namespace)
+	requests := `kubephos_load_requests_total{` + selector
+	success := `sum(rate(` + requests + `,outcome="success"}[1m]))`
+	failed := `sum(rate(` + requests + `,outcome="failure"}[1m]))`
+	total := `sum(rate(` + requests + `}[1m]))`
+	return []metricDefinition{
+		{ID: "load.successful_rps", Unit: "requests_per_second", Aggregation: "sum", Query: success},
+		{ID: "load.failed_rps", Unit: "requests_per_second", Aggregation: "sum", Query: failed},
+		{ID: "load.failure_percentage", Unit: "percent", Aggregation: "mean", Query: `100 * ` + failed + ` / clamp_min(` + total + `, 0.000001)`},
+		{ID: "load.p95_response_time", Unit: "milliseconds", Aggregation: "mean", Query: `histogram_quantile(0.95, sum by (le) (rate(kubephos_load_duration_milliseconds_bucket{` + selector + `}[1m])))`},
+	}
+}
+
+// Native protocol latency includes Redis redirects, without an HTTP proxy.
+func nativeMetricDefinitions(namespace string) []metricDefinition {
+	selector := `namespace=` + strconv.Quote(namespace)
+	requests := `kubephos_load_requests_total{` + selector
+	definitions := append(locustMetricDefinitions(namespace), []metricDefinition{
+		{ID: "redis.operation_rps", Unit: "requests_per_second", Aggregation: "sum", Query: `sum by (operation) (rate(` + requests + `}[1m]))`},
+		{ID: "redis.operation_p95_response_time", Unit: "milliseconds", Aggregation: "mean", Query: `histogram_quantile(0.95, sum by (operation, le) (rate(kubephos_load_duration_milliseconds_bucket{` + selector + `}[1m])))`},
+	}...)
+	for _, definition := range metricDefinitions(namespace, "") {
+		if strings.HasPrefix(definition.ID, "load.") || strings.HasPrefix(definition.ID, "application.") {
+			continue
+		}
+		if definition.ID == "deployment.ready_replicas" {
+			definition.Query = `max by (statefulset) (kube_statefulset_status_replicas_ready{` + selector + `})`
+		}
+		definitions = append(definitions, definition)
+	}
+	return definitions
 }
 
 func sloViolationSeries(responseTime metricSeries, sloMilliseconds int) metricSeries {
@@ -791,6 +818,19 @@ func validateDataset(dataset timeSeriesDataset, spec Spec, cluster clusterConnec
 	for _, definition := range deploymentMetricDefinitions(deployment) {
 		expected[definition.ID] = false
 	}
+	controlIDs := map[string]bool{}
+	for _, summary := range dataset.Spec.ControlMetrics {
+		if deployment.Spec.ControlMetrics == nil || controlIDs[summary.Metric] || (summary.Metric == "scheduler.pod_scheduling_latency" && !deployment.Spec.ControlMetrics.PodScheduling) {
+			return errors.New("unexpected control metric summary")
+		}
+		if err := validateControlSummary(summary); err != nil {
+			return err
+		}
+		controlIDs[summary.Metric] = true
+		if summary.Status == "available" {
+			expected[summary.Metric] = false
+		}
+	}
 	samples := 0
 	for _, series := range dataset.Spec.Series {
 		if _, ok := expected[series.Metric]; !ok || series.Unit == "" || (series.Aggregation != "sum" && series.Aggregation != "mean") || len(series.Points) == 0 {
@@ -863,17 +903,7 @@ func (plugin Plugin) now() time.Time {
 type localRunner struct{}
 
 func (localRunner) Run(ctx context.Context, kubeconfig string, args ...string) (string, error) {
-	directory, err := os.MkdirTemp("", "kubephos-cluster-")
-	if err != nil {
-		return "", err
-	}
-	defer os.RemoveAll(directory)
-	path := directory + "/kubeconfig"
-	if err := os.WriteFile(path, []byte(kubeconfig), 0600); err != nil {
-		return "", err
-	}
-	command := exec.CommandContext(ctx, "kubectl", append([]string{"--kubeconfig", path}, args...)...)
-	output, err := command.CombinedOutput()
+	output, err := kubeconfigutil.RunKubectl(ctx, kubeconfig, nil, args...)
 	if err != nil {
 		return "", fmt.Errorf("kubectl %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(string(output)))
 	}

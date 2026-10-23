@@ -350,8 +350,8 @@ func validateValue(rule map[string]any, value any, path string) []Issue {
 				issues = append(issues, Issue{Path: path, Message: "Value must reference a stored provider connection."})
 			}
 		case "kubephos-application-ref":
-			if !strings.HasPrefix(current, "app:") || !strings.Contains(strings.TrimPrefix(current, "app:"), "@") {
-				issues = append(issues, Issue{Path: path, Message: "Value must reference a catalog application version."})
+			if !strings.HasPrefix(current, "app:") || strings.TrimPrefix(current, "app:") == "" || strings.Contains(current, "@") {
+				issues = append(issues, Issue{Path: path, Message: "Value must reference a catalog application."})
 			}
 		case "kubephos-artifact-ref":
 			if !strings.HasPrefix(current, "art_") {

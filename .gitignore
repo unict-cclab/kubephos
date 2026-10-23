@@ -6,3 +6,16 @@ node_modules/
 tmp/
 .kubephos/
 *kubeconfig*.yaml
+
+managed-images/*.tar
+*.orig
+.agents/
+.codex/
+.aws/
+credentials.json
+.install-lock/
+.installer-managed
+__pycache__/
+*.pyc
+.env.*
+!.env.example

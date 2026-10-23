@@ -1,0 +1,13 @@
+# Optional remote OCI runtime. Add with -f after the installation compose.yaml.
+x-plugin-runtime: &plugin-runtime
+  KUBEPHOS_PLUGIN_RUNTIME_HOST: ${KUBEPHOS_PLUGIN_RUNTIME_HOST:-}
+  KUBEPHOS_PLUGIN_RUNTIME_CA: ${KUBEPHOS_PLUGIN_RUNTIME_CA:-}
+  KUBEPHOS_PLUGIN_RUNTIME_CERT: ${KUBEPHOS_PLUGIN_RUNTIME_CERT:-}
+  KUBEPHOS_PLUGIN_RUNTIME_KEY: ${KUBEPHOS_PLUGIN_RUNTIME_KEY:-}
+  KUBEPHOS_PLUGIN_ALLOWED_REGISTRIES: ${KUBEPHOS_PLUGIN_ALLOWED_REGISTRIES:-}
+  KUBEPHOS_BUILD_ALLOWED_GIT_HOSTS: ${KUBEPHOS_BUILD_ALLOWED_GIT_HOSTS:-github.com}
+services:
+  app:
+    environment: *plugin-runtime
+  worker:
+    environment: *plugin-runtime

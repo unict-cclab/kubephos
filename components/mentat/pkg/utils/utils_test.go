@@ -1,6 +1,7 @@
 package utils
 
 import (
+	"encoding/binary"
 	"errors"
 	"net"
 	"testing"
@@ -57,5 +58,58 @@ func TestProbeHostRejectsInvalidInput(t *testing.T) {
 	}
 	if _, err := ProbeHost("127.0.0.1", 0, time.Second); err == nil {
 		t.Fatal("ProbeHost() accepted zero attempts")
+	}
+}
+
+// Exercise missing completion, reordered completion, and insufficient samples.
+func TestBandwidthCompletionLoss(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		sequences   []uint32
+		markerFirst bool
+		wantError   bool
+	}{
+		{"all data without marker", []uint32{0, 1, 2, 3}, false, false},
+		{"partial data without marker", []uint32{0, 1, 3}, false, false},
+		{"marker before data", []uint32{0, 1, 2, 3}, true, false},
+		{"insufficient data", []uint32{0}, false, true},
+		{"duplicate data", []uint32{0, 0, 0}, false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1")})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer server.Close()
+			done := make(chan struct{})
+			defer func() { <-done }()
+			go func() {
+				defer close(done)
+				request := make([]byte, bandwidthHeaderBytes)
+				_, peer, err := server.ReadFromUDP(request)
+				if err != nil {
+					return
+				}
+				if tc.markerFirst {
+					binary.BigEndian.PutUint32(request[12:16], 4)
+					server.WriteToUDP(request, peer)
+				}
+				for _, seq := range tc.sequences {
+					packet := make([]byte, bandwidthDatagramBytes)
+					copy(packet, request)
+					binary.BigEndian.PutUint32(packet[12:16], seq)
+					server.WriteToUDP(packet, peer)
+					time.Sleep(time.Millisecond)
+				}
+			}()
+			value, err := MeasureBandwidth(server.LocalAddr().String(), 4*bandwidthPayloadBytes, 150*time.Millisecond)
+			if tc.wantError {
+				if err == nil {
+					t.Fatalf("accepted insufficient data: %v", value)
+				}
+			} else if err != nil || value <= 0 {
+				t.Fatalf("valid data rejected: %v %v", value, err)
+			}
+		})
 	}
 }

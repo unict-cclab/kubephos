@@ -33,3 +33,24 @@ func TestReadVerifiedChecksDigestAndSize(t *testing.T) {
 		t.Fatal("expected size mismatch")
 	}
 }
+
+func TestDeleteRetriesMissingObjectsAndRejectsStorageRoots(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "DELETE" || r.URL.Query().Get("recursive") != "true" {
+			t.Error("expected recursive DELETE")
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+	client := New(server.URL)
+	for _, key := range []string{"/kubephos/operations/op_test/", "/experiments/exp_test/figures/a.png"} {
+		if err := client.Delete(context.Background(), key); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, key := range []string{"/", "/kubephos/", "/kubephos/operations/", "/kubephos/operations/op_test/../../", "/experiments/exp_test?recursive=true"} {
+		if err := client.Delete(context.Background(), key); err == nil {
+			t.Fatalf("unsafe deletion accepted: %s", key)
+		}
+	}
+}

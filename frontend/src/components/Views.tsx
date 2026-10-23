@@ -1,16 +1,18 @@
+import {ResourceListAction, ResourceListHeading, ResourceListPage} from './ResourceListHeading'
+import {ActionIcon} from './ActionIcon'
 import {useEffect, useState} from 'react'
-import {formatDate, shortID} from '../lib'
+import {formatDate} from '../lib'
 import {useDetailRoute} from '../detailRoute'
 import type {Application, Artifact, AuditEvent, CatalogStrategy, ClusterUserAssignment, Connection, Credential, Experiment, ExperimentConfiguration, InfrastructureResource, ManagedResource, Operation, Pipeline, PipelineRun, Plugin, PluginImportJob, PluginPackage, PluginRuntimeStatus, Session, SystemStatus, User, View, Workspace} from '../types'
 import {ExperimentConfigurationsView} from './ExperimentConfigurationsView'
 import {ExperimentsHistoryView} from './ExperimentsHistoryView'
-import {SuitesView} from './SuitesView'
 import {ResourceDetailsPage} from './ResourceDetailsDialog'
 import {StrategyCatalog} from './StrategyCatalog'
+import {ModelCatalogContent, useCatalogModels} from './ModelCatalog'
+import {ResourceListTable} from './ResourceListTable'
 import {ApplicationDetailsPage} from './ApplicationDetailsDialog'
 import {ConnectionDetailsPage} from './ConnectionDetailsPage'
 import {SectionIcon, type SectionIconKind} from './SectionIcon'
-import {KubernetesLogo} from './KubernetesLogo'
 import {ResourceAction} from './ResourceAction'
 import {UsersView} from './UsersView'
 
@@ -43,19 +45,10 @@ interface ViewProps {
   changed: () => Promise<void>
   isAdmin: boolean
   navigate: (view: View) => void
-  createWorkspace: () => void
-  createPipeline: () => void
-  createOperation: (workspace: Workspace) => void
-  openWorkspace: (workspace: Workspace) => void
   openOperation: (id: string) => void
   openPipelineRun?: (id: string) => void
   importApplication: () => void
   deleteApplication: (application: Application) => Promise<boolean>
-  importPlugin: () => void
-  configureRuntime: () => void
-  activatePlugin: (pluginPackage: PluginPackage) => Promise<void>
-  deactivatePlugin: (pluginPackage: PluginPackage) => Promise<void>
-  addCredential: () => void
   addConnection: () => void
   addMachineTemplate: () => void
   addInfrastructureService: (kind: 'harbor' | 'nfs') => void
@@ -66,43 +59,32 @@ interface ViewProps {
   deleteKubernetesCluster: (id: string, name: string) => Promise<void>
   recreateKubernetesCluster: (id: string, name: string) => Promise<void>
   clusterActions: Record<string, {pending: boolean; message: string; error: boolean}>
-  openInfrastructureCapability: (workspace: Workspace, pluginID: string) => void
-  openTerminal: (workspace: Workspace) => void
 }
 
 export function Views(props: ViewProps) {
   return <>
-    <section className={`view ${props.view === 'overview' ? 'active' : ''}`}>
+    {props.view === 'overview' && <section className="view active">
       <Overview {...props} />
-    </section>
-    <section className={`view ${props.view === 'results' ? 'active' : ''}`}>
+    </section>}
+    {props.view === 'results' && <section className="view active">
       <ExperimentsHistoryView experiments={props.experiments} configurations={props.experimentConfigurations} artifacts={props.artifacts} operations={props.operations} workspaces={props.workspaces} session={props.session} changed={props.changed} openOperation={props.openOperation} openPipelineRun={props.openPipelineRun} />
-    </section>
-    <section className={`view ${props.view === 'catalog' ? 'active' : ''}`}>
+    </section>}
+    {props.view === 'catalog' && <section className="view active">
       <CatalogView {...props} />
-    </section>
-    <section className={`view ${props.view === 'infrastructure' ? 'active' : ''}`}>
+    </section>}
+    {props.view === 'infrastructure' && <section className="view active">
       <Infrastructure {...props} />
-    </section>
-    <section className={`view ${props.view === 'kubernetes' ? 'active' : ''}`}>
+    </section>}
+    {props.view === 'kubernetes' && <section className="view active">
       <Kubernetes {...props} />
-    </section>
-    <section className={`view ${props.view === 'experiments' ? 'active' : ''}`}>
+    </section>}
+    {props.view === 'experiments' && <section className="view active">
       <ExperimentConfigurationsView items={props.experimentConfigurations} experiments={props.experiments} artifacts={props.artifacts} operations={props.operations} clusters={props.kubernetesClusters} workspaces={props.workspaces} applications={props.applications} plugins={props.plugins} strategies={props.strategies} session={props.session} isAdmin={props.isAdmin} changed={props.changed} openOperation={props.openOperation} openExperiment={id => {window.location.hash = `results/instance/${encodeURIComponent(id)}`} } />
-    </section>
-    <section className={`view ${props.view === 'suites' ? 'active' : ''}`}>
-      <SuitesView configurations={props.experimentConfigurations} applications={props.applications} experiments={props.experiments} clusters={props.kubernetesClusters} session={props.session} isAdmin={props.isAdmin} changed={props.changed} navigate={id => {window.location.hash = `results/instance/${encodeURIComponent(id)}`} } />
-    </section>
-    <section className={`view ${props.view === 'users' ? 'active' : ''}`}>
+    </section>}
+    {props.view === 'users' && <section className="view active">
       {props.isAdmin && <UsersView users={props.users} assignments={props.clusterAssignments} clusters={props.kubernetesClusters} session={props.session} changed={props.changed} />}
-    </section>
+    </section>}
   </>
-}
-
-function PluginImportRow({item}: {item: PluginImportJob}) {
-  const title = item.pluginId ? `${item.pluginId}${item.version ? ` · ${item.version}` : ''}` : `Package ${shortID(item.id)}`
-  const detail = item.error || item.message
-  return <article className="credential-row import-row"><span className="feature-icon">⇣</span><div><h3>{title}</h3><p>{detail}</p><div className="import-progress" role="progressbar" aria-label={`${title} import progress`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={item.progress}><span style={{width: `${item.progress}%`}} /></div></div><Status value={item.status} /></article>
 }
 
 function Overview(props: ViewProps) {
@@ -111,14 +93,14 @@ function Overview(props: ViewProps) {
   const completed = props.experiments.filter(item => item.status === 'succeeded').length
   const activity = buildRecentActivity({experiments: props.experiments, configurations: props.experimentConfigurations, connections: props.connections, resources: [...props.machineTemplates, ...props.infrastructureServices, ...props.kubernetesClusters], applications: props.applications})
   return <>
-    <div className="section-heading overview-heading"><div><SectionIcon kind="overview" /><h2>Clusters and experiments</h2></div></div>
+    <div className="section-heading overview-heading"><div><h2>Overview</h2></div></div>
     <div className="stats-grid">
       <Stat label="Ready clusters" value={clusters} />
       <Stat label="Configurations" value={props.experimentConfigurations.length} />
       <Stat label="In progress" value={active} />
       <Stat label="Completed" value={completed} />
     </div>
-    <Heading title="Recent activity" icon="activity" />
+    <div className="section-heading"><div><SectionIcon kind="activity" /><h2>Recent activity</h2></div></div>
     <RecentActivity items={activity} />
   </>
 }
@@ -127,8 +109,8 @@ function Stat({label, value}: {label: string; value?: number}) {
   return <article className="stat-card"><span>{label}</span><strong>{value ?? '—'}</strong></article>
 }
 
-function Heading({title, action, icon}: {eyebrow?: string; title: string; action?: React.ReactNode; icon: SectionIconKind}) {
-  return <div className="section-heading"><div><SectionIcon kind={icon} /><h2>{title}</h2></div>{action}</div>
+function Heading({title, action, icon}: {title: string; action?: React.ReactNode; icon: SectionIconKind}) {
+  return <ResourceListHeading title={title} icon={icon} action={action} />
 }
 
 export interface RecentActivityItem {
@@ -146,6 +128,8 @@ export function buildRecentActivity({experiments, configurations, connections, r
     pending: label => `Preparing ${label.toLowerCase()}`,
     provisioning: label => `Creating ${label.toLowerCase()}`,
     ready: label => `${label} ready`,
+    maintaining: label => `Maintaining ${label.toLowerCase()}`,
+    'maintenance-failed': label => `${label} maintenance failed`,
     recreating: label => `Recreating ${label.toLowerCase()}`,
     deleting: label => `Deleting ${label.toLowerCase()}`,
     failed: label => `${label} failed`,
@@ -160,67 +144,48 @@ export function buildRecentActivity({experiments, configurations, connections, r
     }),
     ...configurations.map(item => ({id: `configuration-${item.id}`, title: 'Experiment configuration updated', detail: item.name, status: item.validation.valid ? 'validated' : 'invalid', createdAt: item.updatedAt || item.createdAt, href: `experiments/configuration/${encodeURIComponent(item.id)}`})),
     ...connections.map(item => ({id: `connection-${item.id}`, title: 'Proxmox connection added', detail: item.name, status: 'ready', createdAt: item.updatedAt || item.createdAt, href: `infrastructure/connection/${encodeURIComponent(item.id)}`})),
-    ...applications.filter(item => item.updatedAt || item.createdAt).map(item => ({id: `application-${item.reference}`, title: 'Application added to catalog', detail: `${item.name} ${item.version}`, status: 'ready', createdAt: item.updatedAt || item.createdAt || '', href: `catalog/application/${encodeURIComponent(item.reference)}`}))
+    ...applications.filter(item => item.updatedAt || item.createdAt).map(item => ({id: `application-${item.reference}`, title: 'Application added to catalog', detail: item.name, status: 'ready', createdAt: item.updatedAt || item.createdAt || '', href: `catalog/application/${encodeURIComponent(item.reference)}`}))
   ]
   return values.filter(item => item.createdAt).sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt)).slice(0, 6)
 }
 
 function RecentActivity({items}: {items: RecentActivityItem[]}) {
-  if (!items.length) return <Empty title="No activity yet">Resources and experiments will appear here.</Empty>
+  if (!items.length) return <Empty title="No activity yet">Create a configuration or prepare a cluster to see your first activity here.</Empty>
   return <div className="operation-list">{items.map(item => {
     return <button className="operation-row" key={item.id} onClick={() => {window.location.hash = item.href}}>
       <div><h3>{item.title}</h3><p>{item.detail}</p></div>
       <Status value={item.status} />
       <span className="date">{formatDate(item.createdAt)}</span>
-      <span className="operation-arrow">›</span>
+      <span className="operation-arrow"><ActionIcon name="right" /></span>
     </button>
   })}</div>
 }
 
-function WorkspaceGrid({items, createOperation, openWorkspace}: {items: Workspace[]; createOperation: (workspace: Workspace) => void; openWorkspace: (workspace: Workspace) => void}) {
-  if (!items.length) return <Empty title="No workspace created">Workspaces keep development and experiments independent.</Empty>
-  return <div className="workspace-grid">{items.map(workspace => <article className="workspace-card" key={workspace.id}>
-    <span className="workspace-icon">{workspace.name.slice(0, 1).toUpperCase()}</span>
-    <h3>{workspace.name}</h3>
-    <div className="card-footer"><time>{formatDate(workspace.createdAt)}</time><div className="card-actions"><button className="text-button" onClick={() => createOperation(workspace)}>Advanced</button><button className="button primary compact" onClick={() => openWorkspace(workspace)}>Open workspace</button></div></div>
-  </article>)}</div>
-}
-
-function PluginGrid({items}: {items: Plugin[]}) {
-  if (!items.length) return <Empty title="No plugins installed">Add a conforming plugin to provide a capability.</Empty>
-  return <div className="workspace-grid">{items.map(plugin => {
-    const inputs = plugin.artifactInputs ?? []
-    const outputs = plugin.artifactOutputs ?? []
-    const runtime = plugin.runtime.kind === 'oci' ? `Isolated · ${plugin.runtime.digest?.slice(0, 12)}` : 'Built in'
-    return <article className="feature-card" key={plugin.id}>
-      <span className="feature-icon">⌘</span><div><h3>{plugin.name}</h3><p>{plugin.id} · {plugin.version}</p>{!!(inputs.length || outputs.length) && <small>{inputs.length} typed inputs · {outputs.length} typed outputs</small>}</div><span className="planned">{runtime}</span>
-    </article>
-  })}</div>
-}
-
 function CatalogView(props: ViewProps) {
+  const modelCatalog = useCatalogModels()
   const detail = useDetailRoute('catalog')
-  const [activeTab, setActiveTab] = useState<'application' | CatalogStrategy['kind']>('application')
+  const [activeTab, setActiveTab] = useState<'application' | 'model' | CatalogStrategy['kind']>('application')
   const visibleApplications = props.applications.filter(item => item.origin !== 'generated').filter((item, index, items) => items.findIndex(candidate => candidate.id === item.id) === index)
   const application = detail.route?.kind === 'application' ? props.applications.find(item => item.reference === detail.route?.id) : undefined
   const selectedStrategy = detail.route?.kind === 'strategy' ? props.strategies.find(item => item.id === detail.route?.id) : undefined
   useEffect(() => {
     if (application) setActiveTab('application')
+    if (detail.route?.kind === 'model') setActiveTab('model')
     if (selectedStrategy) setActiveTab(selectedStrategy.kind)
-  }, [application?.reference, selectedStrategy?.id, selectedStrategy?.kind])
+  }, [application?.reference, selectedStrategy?.id, selectedStrategy?.kind, detail.route?.kind])
   if (application) return <ApplicationDetailsPage application={application} close={detail.close} canDelete={props.isAdmin} remove={async item => {const removed = await props.deleteApplication(item); if (removed) detail.close(); return removed}} />
-  const strategies = <StrategyCatalog kind={selectedStrategy?.kind ?? (activeTab === 'application' ? 'scheduler' : activeTab)} items={props.strategies} workspaces={props.workspaces} session={props.session} isAdmin={props.isAdmin} changed={props.changed} openOperation={props.openOperation} />
+  const strategies = <StrategyCatalog kind={selectedStrategy?.kind ?? (activeTab === 'application' || activeTab === 'model' ? 'scheduler' : activeTab)} items={props.strategies} workspaces={props.workspaces} session={props.session} isAdmin={props.isAdmin} changed={props.changed} openOperation={props.openOperation} />
   if (detail.route?.kind === 'strategy') return strategies
-  return <><Heading eyebrow="CATALOG" title="Catalog" icon="catalog" action={activeTab === 'application' && props.isAdmin ? <ResourceAction action="create" label="Import application" onClick={props.importApplication} /> : undefined} /><nav className="resource-tabs" aria-label="Catalog items">{([['application', 'Applications', visibleApplications.length], ['scheduler', 'Schedulers', props.strategies.filter(item => item.kind === 'scheduler').length], ['descheduler', 'Deschedulers', props.strategies.filter(item => item.kind === 'descheduler').length], ['autoscaler', 'Autoscalers', props.strategies.filter(item => item.kind === 'autoscaler').length]] as const).map(([tab, label, count]) => <button key={tab} className={activeTab === tab ? 'active' : ''} aria-current={activeTab === tab ? 'page' : undefined} onClick={() => setActiveTab(tab)}>{label}<span>{count}</span></button>)}</nav>{activeTab === 'application' ? <ApplicationGrid items={visibleApplications} isAdmin={props.isAdmin} remove={props.deleteApplication} open={item => detail.open('application', item.reference)} /> : strategies}</>
+  if (detail.route?.kind === 'model') return <ModelCatalogContent catalog={modelCatalog} session={props.session} isAdmin={props.isAdmin} changed={props.changed} />
+  return <ResourceListPage title="Catalog" icon="catalog"><nav className="resource-tabs" aria-label="Catalog items">{([['application', 'Applications', visibleApplications.length], ['scheduler', 'Schedulers', props.strategies.filter(item => item.kind === 'scheduler').length], ['descheduler', 'Deschedulers', props.strategies.filter(item => item.kind === 'descheduler').length], ['autoscaler', 'Autoscalers', props.strategies.filter(item => item.kind === 'autoscaler').length], ['model', 'AI models', modelCatalog.loading ? '…' : modelCatalog.error ? '?' : modelCatalog.models.length]] as const).map(([tab, label, count]) => <button key={tab} className={activeTab === tab ? 'active' : ''} aria-current={activeTab === tab ? 'page' : undefined} onClick={() => setActiveTab(tab)}>{label}{count !== null && <span>{count}</span>}</button>)}</nav>{activeTab === 'application' && props.isAdmin && <ResourceListAction><ResourceAction action="create" label="Import application" onClick={props.importApplication} /></ResourceListAction>}{activeTab === 'application' ? <ApplicationTable items={visibleApplications} isAdmin={props.isAdmin} remove={props.deleteApplication} open={item => detail.open('application', item.reference)} /> : activeTab === 'model' ? <ModelCatalogContent catalog={modelCatalog} session={props.session} isAdmin={props.isAdmin} changed={props.changed} /> : strategies}</ResourceListPage>
 }
 
-function ApplicationGrid({items, isAdmin, remove, open}: {items: Application[]; isAdmin: boolean; remove: (application: Application) => Promise<boolean>; open: (application: Application) => void}) {
-  if (!items.length) return <Empty title="No applications available">Import a versioned descriptor that implements the application contract.</Empty>
-  return <div className="catalog-grid">{items.map(application => <article className="application-card" key={application.reference}>
-      <div className="application-card-header"><span className="application-icon">{application.name.slice(0, 1).toUpperCase()}</span><Status value={application.origin} /></div>
-      <h3>{application.name}</h3>
-      <div className="managed-actions"><ResourceAction action="view" label={`View ${application.name} details`} onClick={() => open(application)} />{isAdmin && <ResourceAction action="delete" label={`Delete ${application.name}`} onClick={() => void remove(application)} />}</div>
-    </article>)}</div>
+function ApplicationTable({items, isAdmin, remove, open}: {items: Application[]; isAdmin: boolean; remove: (application: Application) => Promise<boolean>; open: (application: Application) => void}) {
+  return <ResourceListTable editable items={items.map(item => ({...item, createdAt: item.createdAt ?? '', updatedAt: item.updatedAt ?? ''}))} label="Applications" searchText={item => `${item.name} ${item.description}`} columns={[
+    {label: 'Name', render: item => <h3>{item.name}</h3>},
+    {label: 'Source', render: item => item.origin === 'built-in' ? 'Included' : 'Imported'},
+    {label: 'Services', render: item => item.descriptor.spec?.valuesSchema?.['x-kubephos-dynamic-topology'] ? 'Configurable' : item.descriptor.spec?.interface?.components?.length ?? 0}
+  ]} actions={item => <><ResourceAction action="view" label={`View ${item.name} details`} onClick={() => open(item)} />{isAdmin && <ResourceAction action="delete" label={`Delete ${item.name}`} onClick={() => void remove(item)} />}</>} />
 }
 
 function Infrastructure(props: ViewProps) {
@@ -238,11 +203,12 @@ function Infrastructure(props: ViewProps) {
   if (selectedConnection) return <ConnectionDetailsPage connection={selectedConnection} session={props.session} close={detail.close} />
   if (resource) return <ResourceDetailsPage resource={resource} close={detail.close} connections={props.connections} workspaces={props.workspaces} resources={managedResources} runs={props.pipelineRuns} pipelines={props.pipelines} session={props.session} openOperation={props.openOperation} openPipelineRun={props.openPipelineRun} />
   return <>
-    <Heading eyebrow="INFRASTRUCTURE" title="Infrastructure" icon="infrastructure" action={props.isAdmin && (activeTab === 'connections' ? <ResourceAction action="create" label="New connection" onClick={props.addConnection} /> : activeTab === 'templates' ? <ResourceAction action="create" label="New VM template" disabled={!props.connections.length} onClick={props.addMachineTemplate} /> : <ResourceAction action="create" label={activeTab === 'harbor' ? 'New Harbor' : 'New NFS'} disabled={!props.machineTemplates.some(item => item.status === 'ready')} onClick={() => props.addInfrastructureService(activeTab)} />)} />
+    <Heading title="Infrastructure" icon="infrastructure" action={props.isAdmin && (activeTab === 'connections' ? <ResourceAction action="create" label="New Proxmox connection" onClick={props.addConnection} /> : activeTab === 'templates' ? <ResourceAction action="create" label="New VM template" disabled={!props.connections.length} onClick={props.addMachineTemplate} /> : <ResourceAction action="create" label={activeTab === 'harbor' ? 'New Harbor' : 'New NFS'} disabled={!props.machineTemplates.some(item => item.status === 'ready')} onClick={() => props.addInfrastructureService(activeTab)} />)} />
     <nav className="resource-tabs" aria-label="Infrastructure resources">{([['connections', 'Proxmox connections', props.connections.length], ['templates', 'VM templates', props.machineTemplates.length], ['harbor', 'Harbor', props.infrastructureServices.filter(item => item.kind === 'harbor').length], ['nfs', 'NFS', props.infrastructureServices.filter(item => item.kind === 'nfs').length]] as const).map(([tab, label, count]) => <button key={tab} className={activeTab === tab ? 'active' : ''} onClick={() => setActiveTab(tab)} aria-current={activeTab === tab ? 'page' : undefined}>{label}<span>{count}</span></button>)}</nav>
-    {activeTab === 'connections' && <div className="credential-list">{props.connections.length ? props.connections.map(item => <article className="credential-row" key={item.id}><h3>{item.name}</h3><div className="resource-row-side"><Status value="ready" /><div className="card-actions"><ResourceAction action="view" label={`View ${item.name} details`} onClick={() => detail.open('connection', item.id)} />{props.isAdmin && <ResourceAction action="delete" label={`Delete ${item.name}`} onClick={() => void props.deleteConnection(item.id, item.name)} />}</div></div></article>) : <Empty title="No Proxmox connection">Add a connection to continue.</Empty>}</div>}
-    {activeTab === 'templates' && <div className="credential-list">{props.machineTemplates.length ? props.machineTemplates.map(item => <article className="credential-row" key={item.id}><div><h3>{item.name}</h3><p>{props.connections.find(connection => connection.id === item.connectionId)?.name ?? '—'}</p></div><div className="resource-row-side"><Status value={item.status} /><div className="card-actions"><ResourceAction action="view" label={`View ${item.name} details`} onClick={() => detail.open('resource', item.id)} />{props.isAdmin && <ResourceAction action="delete" label={`Delete ${item.name}`} disabled={item.status !== 'ready'} onClick={() => void props.deleteMachineTemplate(item.id, item.name)} />}</div></div></article>) : <Empty title="No VM template">Create a VM template first.</Empty>}</div>}
-    {(activeTab === 'harbor' || activeTab === 'nfs') && <div className="credential-list">{selectedServices.length ? selectedServices.map(item => <article className="credential-row" key={item.id}><div><h3>{item.name}</h3><p>{props.connections.find(connection => connection.id === item.connectionId)?.name ?? '—'}</p></div><div className="resource-row-side"><Status value={item.status} /><div className="card-actions"><ResourceAction action="view" label={`View ${item.name} details`} onClick={() => detail.open('resource', item.id)} />{props.isAdmin && <ResourceAction action="delete" label={`Delete ${item.name}`} disabled={item.status !== 'ready' && item.status !== 'failed'} onClick={() => void props.deleteInfrastructureService(item.id, item.name)} />}</div></div></article>) : <Empty title={`No ${activeTab === 'harbor' ? 'Harbor registry' : 'NFS server'}`}>Create one from a ready VM template.</Empty>}</div>}
+    {activeTab === 'connections' && (props.connections.length ? <ResourceListTable editable items={props.connections} label="Proxmox connections" searchText={item => item.name} columns={[{label: 'Name', render: item => <h3>{item.name}</h3>}]} actions={item => <><ResourceAction action="view" label={`View ${item.name} details`} onClick={() => detail.open('connection', item.id)} />{props.isAdmin && <ResourceAction action="delete" label={`Delete ${item.name}`} onClick={() => void props.deleteConnection(item.id,item.name)} />}</>} /> : <Empty title="No Proxmox connections">Add a connection to provision machines.</Empty>)}
+    {activeTab === 'templates' && (props.machineTemplates.length ? <ResourceListTable editable items={props.machineTemplates} label="VM templates" searchText={item => `${item.name} ${item.status}`} columns={[{label: 'Name', render: item => <h3>{item.name}</h3>}, {label: 'Proxmox connection', render: item => props.connections.find(connection => connection.id === item.connectionId)?.name ?? '—'}, {label: 'Status', render: item => <Status value={item.status} />}]} actions={item => <><ResourceAction action="view" label={`View ${item.name} details`} onClick={() => detail.open('resource',item.id)} />{props.isAdmin && <ResourceAction action="delete" label={`Delete ${item.name}`} disabled={item.status !== 'ready'} onClick={() => void props.deleteMachineTemplate(item.id,item.name)} />}</>} /> : <Empty title="No VM templates">Create a template to provision clusters.</Empty>)}
+    {(activeTab === 'harbor' || activeTab === 'nfs') && (selectedServices.length ? <ResourceListTable editable items={selectedServices} label={activeTab === 'harbor' ? 'Harbor registries' : 'NFS servers'} searchText={item => `${item.name} ${item.status}`} columns={[{label: 'Name', render: item => <h3>{item.name}</h3>}, {label: 'Proxmox connection', render: item => props.connections.find(connection => connection.id === item.connectionId)?.name ?? '—'}, {label: 'Status', render: item => <Status value={item.status} />}]} actions={item => <><ResourceAction action="view" label={`View ${item.name} details`} onClick={() => detail.open('resource',item.id)} />{props.isAdmin && <ResourceAction action="delete" label={`Delete ${item.name}`} disabled={!['ready','failed'].includes(item.status)} onClick={() => void props.deleteInfrastructureService(item.id,item.name)} />}</>} /> : <Empty title={`No ${activeTab === 'harbor' ? 'Harbor registries' : 'NFS servers'}`}>Create one from a VM template.</Empty>)}
+
   </>
 }
 
@@ -253,24 +219,20 @@ function Kubernetes(props: ViewProps) {
   const resource = detail.route?.kind === 'resource' ? props.kubernetesClusters.find(item => item.id === detail.route?.id) : undefined
   if (resource) return <ResourceDetailsPage resource={resource} close={detail.close} connections={props.connections} workspaces={props.workspaces} resources={[...props.machineTemplates, ...props.infrastructureServices, ...props.kubernetesClusters]} runs={props.pipelineRuns} pipelines={props.pipelines} session={props.session} openOperation={props.openOperation} openPipelineRun={props.openPipelineRun} recreate={() => props.recreateKubernetesCluster(resource.id, resource.name)} recreation={props.clusterActions[resource.id]} />
   return <>
-    <Heading eyebrow="MANAGED CLUSTERS" title="Kubernetes clusters" icon="kubernetes" action={props.isAdmin && <ResourceAction action="create" label="New cluster" disabled={!canCreate} onClick={props.addKubernetesCluster} />} />
-    <div className="stats-grid infrastructure-stats"><Stat label="Clusters" value={props.kubernetesClusters.length} /><Stat label="Ready" value={props.kubernetesClusters.filter(item => item.status === 'ready').length} /><Stat label="Nodes" value={props.kubernetesClusters.reduce((total, item) => total + clusterNodeCount(item), 0)} /></div>
-    <div className="managed-grid">{props.kubernetesClusters.length ? props.kubernetesClusters.map(item => {
-      const action = props.clusterActions[item.id]
-      const connection = props.connections.find(connection => connection.id === item.connectionId)?.name ?? 'Unavailable'
-      return <article className="managed-card cluster-card" key={item.id}>
-        <div className="managed-card-head"><KubernetesLogo /><Status value={action?.pending ? 'validating' : item.status} /></div>
-        <h3>{item.name}</h3><p>{connection}</p>
-        {item.error && <p className="managed-error">{item.error}</p>}
-        {action && <p className={action.error ? 'managed-error' : 'managed-feedback'}>{action.message}</p>}
-        <div className="managed-actions"><ResourceAction action="view" label={`View ${item.name} details`} onClick={() => detail.open('resource', item.id)} />{props.isAdmin && <ResourceAction action="delete" label={`Delete ${item.name}`} disabled={action?.pending || !canDeleteKubernetesCluster(item.status)} onClick={() => void props.deleteKubernetesCluster(item.id, item.name)} />}</div>
-      </article>
-    }) : <Empty title="No Kubernetes cluster">Create Harbor and NFS first.</Empty>}</div>
+    <Heading title="Kubernetes clusters" icon="kubernetes" action={props.isAdmin && <ResourceAction action="create" label="New cluster" disabled={!canCreate} onClick={props.addKubernetesCluster} />} />
+    {props.kubernetesClusters.length ? <ResourceListTable editable items={props.kubernetesClusters} label="Kubernetes clusters" searchText={item => [item.name, item.status, props.connections.find(connection => connection.id === item.connectionId)?.name].filter(Boolean).join(' ')} columns={[
+      {label: 'Name', render: item => <><h3>{item.name}</h3>{item.error && <p className="managed-error">{item.error}</p>}{props.clusterActions[item.id]?.message && <p className={props.clusterActions[item.id].error ? 'managed-error' : 'managed-feedback'}>{props.clusterActions[item.id].message}</p>}</>},
+      {label: 'Proxmox connection', render: item => props.connections.find(connection => connection.id === item.connectionId)?.name ?? '—'},
+      {label: 'Type', render: item => item.spec.mode === 'multi' ? 'Multi' : 'Single'},
+      {label: 'Nodes', render: item => clusterNodeCount(item)},
+      {label: 'Status', render: item => <Status value={props.clusterActions[item.id]?.pending ? 'validating' : item.status} />},
+    ]} actions={item => <><ResourceAction action="view" label={`View ${item.name} details`} onClick={() => detail.open('resource', item.id)} />{props.isAdmin && <ResourceAction action="delete" label={`Delete ${item.name}`} disabled={props.clusterActions[item.id]?.pending || !canDeleteKubernetesCluster(item.status)} onClick={() => void props.deleteKubernetesCluster(item.id, item.name)} />}</>} /> : <Empty title="No Kubernetes cluster">Prepare a ready Harbor registry and NFS server in Infrastructure, then create your first cluster.</Empty>}
+
   </>
 }
 
 export function canDeleteKubernetesCluster(status: string): boolean {
-  return ['ready', 'failed', 'recreation-failed', 'deletion-failed'].includes(status)
+  return ['ready', 'failed', 'recreation-failed', 'maintenance-failed', 'deletion-failed'].includes(status)
 }
 
 function poolCount(resource: ManagedResource, field: string): number {
@@ -284,22 +246,15 @@ function applicationPoolCount(resource: ManagedResource): number {
 }
 
 function clusterNodeCount(resource: ManagedResource): number {
+ if (resource.spec?.mode === 'multi' && Array.isArray(resource.spec.members)) return resource.spec.members.reduce((total: number, member) => total + (member && typeof member === 'object' ? clusterNodeCount({...resource, spec: member}) : 0), 0)
   const controlPlanes = Number(resource.spec?.controlPlanes ?? 0)
   return controlPlanes + poolCount(resource, 'managementPool') + applicationPoolCount(resource)
-}
-
-export function infrastructureControls(plugins: Plugin[]): Plugin[] {
-  return plugins.filter(plugin => (plugin.capabilities ?? []).some(capability => capability.startsWith('infrastructure.') && capability.endsWith('.control')))
-}
-
-function InfoRow({icon, title, detail, status}: {icon: string; title: string; detail: string; status: string}) {
-  return <article className="credential-row"><span className="feature-icon">{icon}</span><div><h3>{title}</h3><p>{detail}</p></div><Status value={status} /></article>
 }
 
 export function Status({value}: {value: string}) {
   const label = ({
     'built-in': 'Included', imported: 'Imported', pending: 'Preparing', provisioning: 'Creating',
-    prechecking: 'Checking', verifying: 'Checking', validating: 'Checking', queued: 'Waiting',
+    prechecking: 'Checking', verifying: 'Checking', validating: 'Checking', queued: 'Queued', ready: 'Ready', running: 'Running', failed: 'Failed', deleting: 'Deleting', recreating: 'Recreating', maintaining: 'Maintaining', 'maintenance-failed': 'Maintenance failed', validated: 'Validated', invalid: 'Needs review', unavailable: 'Unavailable', available: 'Available', waiting: 'Waiting',
     succeeded: 'Completed', canceled: 'Stopped', cancelled: 'Stopped',
     'recreation-failed': 'Recreation failed', 'deletion-failed': 'Deletion failed'
   } as Record<string, string>)[value.toLowerCase()] ?? value.replaceAll('-', ' ')

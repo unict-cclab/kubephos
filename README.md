@@ -1,180 +1,97 @@
 # KubePhos
 
-KubePhos is a web platform for creating Kubernetes environments on Proxmox, deploying applications and scheduling strategies, generating controlled load, and running reproducible experiments.
+KubePhos is a web platform for reproducible Kubernetes scheduling experiments on
+Proxmox. Provision infrastructure, configure workloads and network conditions,
+compare placement strategies, and inspect the results from one interface.
 
-It can also be used as a development environment: create a cluster, export its kubeconfig, deploy an application, inspect logs and dashboards, start or stop load, and iterate on schedulers, deschedulers, or autoscalers.
+## What it does
 
-## Features
+- Provisions VM templates, Harbor, NFS and K3s clusters on Proxmox.
+- Supports scheduler, descheduler, autoscaler integrations.
+- Provides an application catalog and Locust load generation, including external
+  HTTP destinations and Redis Cluster workloads.
+- Runs experiments and comparison suites with sequential repetitions.
+- Collects response times, throughput, resource usage and scheduling metrics.
+- Compares strategies and exports datasets and publication-quality figures.
+- Keeps configurations and experiments private, with explicit read sharing.
 
-- Manage Proxmox connections and VM templates.
-- Provision Harbor registries and NFS servers on dedicated VMs.
-- Create, recreate, inspect, and delete K3s clusters with zonal node pools.
-- Install the managed Kubernetes platform, observability, service mesh, chaos injection, storage, and experiment components.
-- Export kubeconfig files for external development tools.
-- Use a versioned application catalog without adding application-specific logic to the core.
-- Import scheduler, descheduler, and autoscaler images and mirror them through Harbor.
-- Define temporal and geographic load profiles with an input preview.
-- Run reusable Locust workload configurations against external HTTP or HTTPS destinations without deploying a catalog application.
-- Configure zonal network injection and experiment monitoring.
-- Run experiments and comparison suites in background workers.
-- Create users, assign Kubernetes clusters, and isolate configurations and experiments by owner.
-- Repeat runs sequentially and calculate aggregate statistics.
-- Inspect live progress, logs, metrics, application topology, and cluster topology.
-- Export plots and application graphs as publication-quality PNG or PDF files.
-- Preserve experiment configurations, run history, results, and artifacts.
+Multi cluster provisioning supports Cilium ClusterMesh. Experiment execution on
+multi cluster groups is not yet available.
 
-Every lifecycle step is validated before execution. KubePhos verifies preconditions, waits for the expected health state, and checks postconditions before continuing.
+## Install on Linux
 
-## Workflow
+Requirements: Linux, Bash, OpenSSL, Docker Engine and Docker Compose **2.23.1 or
+newer**. The host needs network access to Proxmox, the provisioned VMs and the image
+registries used by your experiments. The installer does not modify Docker or your
+host's package configuration.
 
-1. Add a Proxmox connection.
-2. Create a Proxmox VM template.
-3. Provision Harbor and NFS services.
-4. Create a Kubernetes cluster and its node pools.
-5. Select or import an application.
-6. Create an experiment configuration.
-7. Run an experiment or a comparison suite.
-8. Inspect and export results.
-
-Applications, infrastructure providers, deployment components, and experiment strategies use versioned plugin contracts. New integrations should not require changes to the KubePhos core.
-
-## Requirements
-
-- Linux server
-- Docker Engine
-- Docker Compose
-- Network access from the KubePhos server to Proxmox and the provisioned VMs
-
-## Quick start
-
-### 1. Copy Compose
-
-Copy `compose.yaml` to the server that will run KubePhos:
+From a release archive or a checkout:
 
 ```bash
-mkdir -p /opt/kubephos
-scp compose.yaml user@server:/opt/kubephos/compose.yaml
+git clone https://github.com/unict-cclab/kubephos.git
+cd kubephos
+./install.sh
 ```
 
-### 2. Configure
-
-Create `/opt/kubephos/.env`:
-
-```dotenv
-KUBEPHOS_IMAGE=ghcr.io/unict-cclab/kubephos
-KUBEPHOS_VERSION=latest
-KUBEPHOS_PORT=8080
-KUBEPHOS_BIND_ADDRESS=0.0.0.0
-KUBEPHOS_URL=http://SERVER_IP:8080
-KUBEPHOS_WORKER_CONCURRENCY=4
-KUBEPHOS_WORKER_POLL_INTERVAL=500ms
-POSTGRES_PASSWORD=replace-with-a-strong-password
-KUBEPHOS_KEYCLOAK_CLIENT_SECRET=replace-with-a-strong-secret
-KUBEPHOS_KEYCLOAK_MANAGEMENT_CLIENT_SECRET=replace-with-another-strong-secret
-KUBEPHOS_KEYCLOAK_ADMIN_PASSWORD=replace-with-a-strong-password
-```
-
-Use a release tag such as `v1.0.0` instead of `latest` when a fixed deployment version is required.
-
-### 3. Start
+Enter the administrator email when prompted. The installer creates a separate installation in `~/.local/share/kubephos`,
+generates unique credentials, creates the initial `admin` account and starts the
+services. Open **http://localhost:8080**. Read your generated login credentials:
 
 ```bash
-cd /opt/kubephos
-docker compose pull
-docker compose up -d
-docker compose ps
+cat ~/.local/share/kubephos/credentials.json
 ```
 
-### 4. Open KubePhos
+To install for a server URL or select a published release:
 
-Open `http://SERVER_IP:8080` and create the initial administrator account.
+```bash
+./install.sh --url http://SERVER_IP:8080 --version <release-tag>
+```
 
-Use a TLS reverse proxy or restrict access to a trusted network when KubePhos is reachable outside the local machine.
+The first account is created before the application port is published. Repeating
+`./install.sh` resumes the installation without rotating secrets or deleting data.
+For an existing installation with a custom path, repeat the same `--directory`.
+
+See [installation and operations](docs/installation.md) for HTTPS, updates, backups
+and troubleshooting. Published releases are available on
+[GitHub Releases](https://github.com/unict-cclab/kubephos/releases).
 
 ## First experiment
 
-From the web interface:
+1. Add a Proxmox connection under **Infrastructure**.
+2. Create a VM template, Harbor registry and NFS server.
+3. Create a Kubernetes cluster and wait for it to become ready.
+4. Create a configuration with an application, load profile and optional strategies.
+5. Run the configuration or combine configurations in a comparison suite.
+6. Inspect **Experiments → Statistics / Plots** and export the results.
 
-1. Open **Infrastructure** and add a Proxmox connection.
-2. Create a VM template, Harbor registry, and NFS server.
-3. Open **Kubernetes** and create a cluster.
-4. Wait until every cluster component is healthy.
-5. Open **Configurations** and create an experiment configuration.
-6. Select the cluster, application, load profile, and optional strategies.
-7. Run the configuration and choose the number of sequential runs.
-8. Open **Experiments** to follow progress and inspect results.
-
-### External destination experiment
-
-In **Configurations**, select **External destination** instead of a catalog application. Provide the HTTP or HTTPS base URL, the Locust runtime image, a Locust file template, optional string parameters, and the temporal workload pattern. Each parameter is exposed to the Locust process both in the `KUBEPHOS_PARAMETERS` JSON object and as a deterministic `KUBEPHOS_PARAM_<NAME>` environment variable.
-
-Each run creates an isolated, service-mesh-enabled namespace containing only the load driver. KubePhos does not deploy or modify the external application. Results include the configured throughput and telemetry observed from the load-driver sidecar; per-service application metrics are omitted because the external destination does not expose a verified Kubernetes workload topology.
-
-## Update
-
-Set `KUBEPHOS_VERSION` in `/opt/kubephos/.env`, then run:
-
-```bash
-cd /opt/kubephos
-docker compose pull
-docker compose up -d
-docker compose ps
-```
-
-Database changes are applied automatically by Liquibase before the application starts.
-
-## Maintenance
-
-```bash
-docker compose ps
-docker compose logs -f app worker
-docker compose exec app kubephos doctor
-docker compose restart app worker
-docker compose down
-```
-
-PostgreSQL data, SeaweedFS objects, credentials, and migration state are stored in Docker volumes. Do not remove the volumes unless all KubePhos data should be deleted.
-
-## Architecture
-
-- **Application image**: API server, React frontend, CLI, built-in plugins, application catalog, and database changesets.
-- **Worker**: executes validated operations and experiments in the background.
-- **PostgreSQL**: stores configuration, lifecycle state, logs, and experiment history.
-- **SeaweedFS**: stores manifests, results, plots, and other artifacts.
-- **Keycloak**: provides authentication under `/auth`.
-- **Plugins**: provide infrastructure, application, strategy, load, monitoring, and lifecycle capabilities.
-
-The application and worker use the same versioned KubePhos image. PostgreSQL and SeaweedFS use tagged images defined in `compose.yaml`.
+An experiment records its execution configuration. Later edits to a reusable
+configuration do not rewrite the settings of completed runs.
 
 ## Development
 
-Run the test suites:
+Development is separate from an installation:
 
 ```bash
-make test
-```
-
-Build and start a local image:
-
-```bash
-make build
 make up
 ```
 
-Useful commands:
+This builds the local image and uses `compose.dev.yaml` with `deploy/dev.env`,
+public development credentials, the `kubephos-dev` Compose project and separate
+volumes. Open **http://127.0.0.1:8088** and create a local administrator in the UI.
+Do not apply the development override to an installed instance.
 
-```bash
-make ps
-make logs
-make doctor
-make down
-```
+## Documentation
 
-## Release
+- [Installation, updates and backups](docs/installation.md)
+- [Development and checks](docs/development.md)
+- [Architecture and configuration](docs/architecture.md)
+- [Experiments, applications and metrics](docs/experiments.md)
+- [Repository review and verification](docs/review.md)
+- [Contributing](CONTRIBUTING.md)
+- [Security reporting](SECURITY.md)
+- [Third-party notices](THIRD_PARTY_NOTICES.md)
 
-Pushing a `v*` Git tag publishes KubePhos and its managed component images. New Harbor installations copy the managed components into the local registry automatically.
+## License
 
-```bash
-git tag v1.0.0
-git push origin v1.0.0
-```
+Original KubePhos code is licensed under the [MIT License](LICENSE). Dependencies
+and upstream applications retain their respective licenses.

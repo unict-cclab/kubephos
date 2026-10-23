@@ -1,11 +1,15 @@
+import {ResourceListAction} from './ResourceListHeading'
+import {FormDisclosure} from './FormDisclosure'
+import {ResourceListTable} from './ResourceListTable'
+import {ResourceAttribution} from './ResourceAttribution'
+import {useDeleteConfirmation} from './ConfirmationDialog'
 import {useEffect, useState, type FormEvent} from 'react'
 import {request} from '../api'
 import {useDetailRoute} from '../detailRoute'
 import type {CatalogStrategy, Session, Workspace} from '../types'
 import {DetailBreadcrumb} from './DetailBreadcrumb'
 import {Dialog} from './Dialog'
-import {InputData} from './InputData'
-import {SectionIcon} from './SectionIcon'
+import {InputData, hasInputData} from './InputData'
 import {ResourceAction} from './ResourceAction'
 
 interface Props {
@@ -19,13 +23,14 @@ interface Props {
 }
 
 export function StrategyCatalog(props: Props) {
+  const {confirmDelete, confirmationDialog} = useDeleteConfirmation()
   const detail = useDetailRoute('catalog')
   const [open, setOpen] = useState(false)
+  const [editing, setEditing] = useState<CatalogStrategy>()
   const [error, setError] = useState('')
-  const visible = props.items.filter(item => item.kind === props.kind)
-  const title = {scheduler: 'Custom schedulers', descheduler: 'Custom deschedulers', autoscaler: 'Custom autoscalers'}[props.kind]
+  const catalogItems = props.items.filter(item => item.kind === props.kind)
   const remove = async (item: CatalogStrategy) => {
-    if (!window.confirm(`Remove ${item.name} from the catalog? Previous experiment results will be retained.`)) return
+    if (!await confirmDelete(`Remove ${item.name} from the catalog? Previous experiment results will be retained.`)) return
     setError('')
     try {
       await request(`/catalog/strategies/${encodeURIComponent(item.id)}`, {method: 'DELETE'}, props.session.csrfToken)
@@ -34,27 +39,37 @@ export function StrategyCatalog(props: Props) {
       setError(cause instanceof Error ? cause.message : 'Could not remove the catalog image.')
     }
   }
+  const edit = (item: CatalogStrategy) => { setEditing(item); setOpen(true) }
+  const editor = <StrategyDialog key={editing?.id ?? 'new'} editing={editing} open={open} kind={props.kind} close={() => setOpen(false)} workspaces={props.workspaces} session={props.session} changed={props.changed} failed={setError} />
   const selected = detail.route?.kind === 'strategy' ? props.items.find(item => item.id === detail.route?.id) : undefined
-  if (selected) return <div className="detail-page"><DetailBreadcrumb parent="Catalog" current={selected.name} back={detail.close} /><div className="detail-page-heading"><div><h2>{selected.name}</h2><p>{selected.kind}</p></div><span className={`status ${selected.status}`}>{selected.status}</span></div><article className="detail-page-card">
-    <div className="details-summary"><div><span>Type</span><strong>{selected.kind}</strong></div><div><span>Environment</span><strong>{props.workspaces.find(item => item.id === selected.workspaceId)?.name ?? 'Default'}</strong></div><div><span>Docker image</span><strong>{selected.sourceImage}</strong></div></div>
-    <section className="details-section"><div className="details-heading"><strong>Default settings</strong></div><InputData value={selected.defaultConfiguration} /></section>
+  if (selected) return <>{editor}{error && <p className="form-error">{error}</p>}<div className="detail-page"><DetailBreadcrumb parent="Catalog" current={selected.name} back={detail.close} /><div className="detail-page-heading"><div><h2>{selected.name}</h2></div></div><ResourceAttribution resource={selected} editable /><article className="detail-page-card">
+    <div className="details-summary"><div><span>Status</span><strong>{strategyStatus(selected.status)}</strong></div><div><span>Type</span><strong>{selected.kind}</strong></div><div><span>Image</span><strong>{selected.sourceImage}</strong></div></div>
+    {hasInputData(selected.defaultConfiguration) && <section className="details-section"><div className="details-heading"><strong>Default settings</strong></div><StrategyDefaults value={selected.defaultConfiguration} /></section>}
     {selected.error && <p className="managed-error">{selected.error}</p>}
-    <div className="managed-actions">{selected.operationId && <button className="button secondary compact" onClick={() => props.openOperation(selected.operationId!)}>Activity</button>}<button className="button primary compact" onClick={() => navigator.clipboard.writeText(selected.sourceImage)}>Copy image</button></div>
-  </article></div>
+    <div className="managed-actions">{props.isAdmin && <button className="button secondary compact" disabled={!['succeeded', 'failed', 'canceled'].includes(selected.status)} onClick={() => edit(selected)}>Edit settings</button>}{selected.operationId && <button className="button secondary compact" onClick={() => props.openOperation(selected.operationId!)}>Activity</button>}<button className="button primary compact" onClick={() => navigator.clipboard.writeText(selected.sourceImage)}>Copy image</button></div>
+  </article></div></>
   return <>
-    <div className="section-heading"><div><SectionIcon kind={props.kind} /><h2>{title}</h2></div>{props.isAdmin && <ResourceAction action="create" label={`Add ${props.kind}`} onClick={() => setOpen(true)} />}</div>
+    {confirmationDialog}
+    {props.isAdmin && <ResourceListAction><ResourceAction action="create" label={`Add ${props.kind}`} onClick={() => { setEditing(undefined); setOpen(true) }} /></ResourceListAction>}
     {error && <p className="form-error page-error">{error}</p>}
-    <div className="catalog-grid strategy-grid">{visible.length ? visible.map(item => <article className="application-card" key={item.id}>
-      <div className="application-card-header"><span className="application-icon">{item.kind.slice(0, 1).toUpperCase()}</span><span className={`status ${item.status}`}>{item.status}</span></div>
-      <h3>{item.name}</h3><p>{item.kind}</p>
-      {item.error && <p className="managed-error">{item.error}</p>}
-      <div className="managed-actions"><ResourceAction action="view" label={`View ${item.name} details`} onClick={() => detail.open('strategy', item.id)} />{props.isAdmin && <ResourceAction action="delete" label={`Delete ${item.name}`} disabled={!['succeeded', 'failed', 'canceled'].includes(item.status)} onClick={() => void remove(item)} />}</div>
-    </article>) : <div className="empty-state"><div><strong>No custom {props.kind} yet</strong></div></div>}</div>
-    <StrategyDialog open={open} kind={props.kind} close={() => setOpen(false)} workspaces={props.workspaces} session={props.session} changed={props.changed} failed={setError} />
+    <ResourceListTable items={catalogItems} label={`${props.kind.charAt(0).toUpperCase()}${props.kind.slice(1)}s`} editable searchText={item => `${item.name} ${item.sourceImage}`} columns={[
+      {label: 'Name', render: item => <h3>{item.name}</h3>},
+      {label: 'Status', render: item => <span className={`status ${item.status}`}>{strategyStatus(item.status)}</span>}
+    ]} actions={item => <><ResourceAction action="view" label={`View ${item.name} details`} onClick={() => detail.open('strategy', item.id)} />{props.isAdmin && <ResourceAction action="edit" label={`Edit ${item.name} settings`} disabled={!['succeeded', 'failed', 'canceled'].includes(item.status)} onClick={() => edit(item)} />}{props.isAdmin && <ResourceAction action="delete" label={`Delete ${item.name}`} disabled={!['succeeded', 'failed', 'canceled'].includes(item.status)} onClick={() => void remove(item)} />}</>} />
+    {editor}
   </>
 }
 
-function StrategyDialog({open, kind, close, workspaces, session, changed, failed}: {open: boolean; kind: CatalogStrategy['kind']; close: () => void; workspaces: Workspace[]; session: Session; changed: () => Promise<void>; failed: (value: string) => void}) {
+function strategyStatus(status: string) {
+  return status === 'succeeded' ? 'Ready' : status.charAt(0).toUpperCase() + status.slice(1)
+}
+
+function StrategyDefaults({value}: {value: Record<string, unknown>}) {
+  const {configFile, parameters, requiredReplicas: _requiredReplicas, startupEvent: _startupEvent, ...settings} = value
+  return <div className="form-stack"><InputData value={settings} />{hasInputData(configFile ?? parameters) && <FormDisclosure title="Configuration"><InputData value={configFile ?? parameters} /></FormDisclosure>}</div>
+}
+
+function StrategyDialog({editing, open, kind, close, workspaces, session, changed, failed}: {editing?: CatalogStrategy; open: boolean; kind: CatalogStrategy['kind']; close: () => void; workspaces: Workspace[]; session: Session; changed: () => Promise<void>; failed: (value: string) => void}) {
   const [workspaceId, setWorkspaceId] = useState(workspaces[0]?.id ?? '')
   const [pending, setPending] = useState(false)
   useEffect(() => {
@@ -64,7 +79,7 @@ function StrategyDialog({open, kind, close, workspaces, session, changed, failed
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     const values = new FormData(event.currentTarget)
-    let configuration: Record<string, unknown> = {}
+    let configuration: Record<string, unknown> = editing?.defaultConfiguration ?? {}
     if (kind === 'scheduler') configuration = {configFile: values.get('configFile')}
     if (kind === 'descheduler') configuration = {configFile: values.get('configFile'), intervalSeconds: Number(values.get('intervalSeconds'))}
     if (kind === 'autoscaler') {
@@ -80,7 +95,7 @@ function StrategyDialog({open, kind, close, workspaces, session, changed, failed
     setPending(true)
     failed('')
     try {
-      await request('/catalog/strategies', {method: 'POST', body: JSON.stringify({workspaceId, name: values.get('name'), kind, sourceImage: values.get('sourceImage'), defaultConfiguration: configuration})}, session.csrfToken)
+      await request(editing ? `/catalog/strategies/${encodeURIComponent(editing.id)}` : '/catalog/strategies', {method: editing ? 'PUT' : 'POST', body: JSON.stringify({workspaceId, name: values.get('name'), kind, sourceImage: values.get('sourceImage'), defaultConfiguration: configuration})}, session.csrfToken)
       close()
       await changed()
     } catch (cause) {
@@ -89,15 +104,14 @@ function StrategyDialog({open, kind, close, workspaces, session, changed, failed
       setPending(false)
     }
   }
-  return <Dialog open={open} onClose={close} title={`Add ${kind}`} className="template-modal">
-    <form onSubmit={submit}>
-      {workspaces.length > 1 ? <label>Environment<select value={workspaceId} onChange={event => setWorkspaceId(event.target.value)}>{workspaces.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label> : <input type="hidden" value={workspaceId} readOnly />}
-      <label>Name<input name="name" pattern="[a-z0-9][a-z0-9-]{0,62}" placeholder={`my-${kind}`} required /></label>
-      <label>Docker image<input name="sourceImage" placeholder="ghcr.io/team/scheduler:v1.2.0" required autoFocus /></label>
-      <details className="advanced-fields"><summary>Default settings</summary>
-        {kind === 'scheduler' && <label>Scheduler configuration<textarea name="configFile" rows={12} defaultValue={schedulerConfiguration} spellCheck={false} required /></label>}
-        {kind === 'descheduler' && <><label>Descheduler policy<textarea name="configFile" rows={12} defaultValue={deschedulerConfiguration} spellCheck={false} required /></label><label>Interval in seconds<input name="intervalSeconds" type="number" min={10} max={86400} defaultValue={60} required /></label></>}
-        {kind === 'autoscaler' && <><div className="field-row"><label>Evaluation interval<input name="intervalSeconds" type="number" min={5} max={3600} defaultValue={15} required /></label><label>Minimum replicas<input name="minReplicas" type="number" min={1} max={1000} defaultValue={1} required /></label><label>Maximum replicas<input name="maxReplicas" type="number" min={1} max={1000} defaultValue={10} required /></label></div><label>Autoscaler parameters<textarea name="parameters" rows={10} defaultValue="{}" spellCheck={false} required /></label></>}
+  return <Dialog open={open} onClose={close} title={editing ? `Edit ${editing.name}` : `Add ${kind}`} className="template-modal" presentation="page">
+    <form className="form-stack" key={`${open}-${editing?.sourceImage ?? 'new'}`} onSubmit={submit}>
+      <label>Name<input defaultValue={editing?.name} name="name" pattern="[a-z0-9][a-z0-9-]{0,62}" placeholder={`my-${kind}`} required /></label>
+      <label>Image<input name="sourceImage" defaultValue={editing?.sourceImage} placeholder={`ghcr.io/team/${kind}:v1.2.0`} required autoFocus /></label>
+      <details className="advanced-fields" open={!!editing}><summary>Default settings</summary>
+        {kind === 'scheduler' && <label>Configuration<textarea className="strategy-config-editor" name="configFile" rows={20} defaultValue={String(editing?.defaultConfiguration.configFile ?? schedulerConfiguration)} spellCheck={false} required /></label>}
+        {kind === 'descheduler' && <><label>Configuration<textarea className="strategy-config-editor" name="configFile" rows={20} defaultValue={String(editing?.defaultConfiguration.configFile ?? deschedulerConfiguration)} spellCheck={false} required /></label><label>Interval (s)<input name="intervalSeconds" type="number" min={10} max={86400} defaultValue={Number(editing?.defaultConfiguration.intervalSeconds ?? 60)} required /></label></>}
+        {kind === 'autoscaler' && <><div className="field-row"><label>Interval (s)<input name="intervalSeconds" type="number" min={5} max={3600} defaultValue={Number(editing?.defaultConfiguration.intervalSeconds ?? 15)} required /></label><label>Minimum replicas<input name="minReplicas" type="number" min={1} max={1000} defaultValue={Number(editing?.defaultConfiguration.minReplicas ?? 1)} required /></label><label>Maximum replicas<input name="maxReplicas" type="number" min={1} max={1000} defaultValue={Number(editing?.defaultConfiguration.maxReplicas ?? 10)} required /></label></div><label>Configuration<textarea className="strategy-config-editor" name="parameters" rows={20} defaultValue={typeof editing?.defaultConfiguration.parameters === 'string' ? editing.defaultConfiguration.parameters : JSON.stringify(editing?.defaultConfiguration.parameters ?? {}, null, 2)} spellCheck={false} required /></label></>}
       </details>
       <div className="modal-actions"><button type="button" className="button secondary" onClick={close}>Cancel</button><button className="button primary" disabled={pending}>{pending ? 'Validating…' : 'Validate and save'}</button></div>
     </form>
@@ -133,7 +147,3 @@ profiles:
       deschedule:
         enabled:
           - NetworkAware`
-
-function shortDigest(value?: string): string {
-  return value ? value.replace('sha256:', '').slice(0, 12) : '—'
-}

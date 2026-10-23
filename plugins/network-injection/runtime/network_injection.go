@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"net"
 	"net/url"
 	"os"
 	"os/exec"
@@ -35,22 +36,24 @@ type Invocation struct {
 }
 
 type Spec struct {
-	ClusterConnectionRef     string         `json:"clusterConnectionRef"`
-	ApplicationDeploymentRef string         `json:"applicationDeploymentRef"`
-	ManagedPlatformRef       string         `json:"managedPlatformRef"`
-	NodeGroupLabel           string         `json:"nodeGroupLabel"`
-	NodeSelector             string         `json:"nodeSelector,omitempty"`
-	NetworkInterface         string         `json:"networkInterface"`
-	HostNetwork              bool           `json:"hostNetwork"`
-	EnableLatency            bool           `json:"enableLatency"`
-	LatencyMilliseconds      int            `json:"latencyMilliseconds"`
-	JitterMilliseconds       int            `json:"jitterMilliseconds"`
-	CorrelationPercent       float64        `json:"correlationPercent"`
-	EnableBandwidth          bool           `json:"enableBandwidth"`
-	BandwidthBytesPerSecond  int64          `json:"bandwidthBytesPerSecond"`
-	EnablePacketLoss         bool           `json:"enablePacketLoss"`
-	PacketLossPercent        float64        `json:"packetLossPercent"`
-	LinkOverrides            []LinkOverride `json:"linkOverrides,omitempty"`
+	ClusterName              string            `json:"clusterName,omitempty"`
+	ClusterNetworks          map[string]string `json:"clusterNetworks,omitempty"`
+	ClusterConnectionRef     string            `json:"clusterConnectionRef"`
+	ApplicationDeploymentRef string            `json:"applicationDeploymentRef"`
+	ManagedPlatformRef       string            `json:"managedPlatformRef"`
+	NodeGroupLabel           string            `json:"nodeGroupLabel"`
+	NodeSelector             string            `json:"nodeSelector,omitempty"`
+	NetworkInterface         string            `json:"networkInterface"`
+	HostNetwork              bool              `json:"hostNetwork"`
+	EnableLatency            bool              `json:"enableLatency"`
+	LatencyMilliseconds      int               `json:"latencyMilliseconds"`
+	JitterMilliseconds       int               `json:"jitterMilliseconds"`
+	CorrelationPercent       float64           `json:"correlationPercent"`
+	EnableBandwidth          bool              `json:"enableBandwidth"`
+	BandwidthBytesPerSecond  int64             `json:"bandwidthBytesPerSecond"`
+	EnablePacketLoss         bool              `json:"enablePacketLoss"`
+	PacketLossPercent        float64           `json:"packetLossPercent"`
+	LinkOverrides            []LinkOverride    `json:"linkOverrides,omitempty"`
 }
 
 type LinkOverride struct {
@@ -159,7 +162,7 @@ func (Plugin) Manifest() plugins.Manifest {
 	return plugins.Manifest{
 		ID: pluginID, Name: "Inter-zone network injection", Version: "0.3.1",
 		Description:     "Applies latency, jitter, bandwidth and packet loss to directed links between application zones.",
-		Schema:          json.RawMessage(`{"type":"object","additionalProperties":false,"required":["clusterConnectionRef","applicationDeploymentRef","managedPlatformRef","nodeGroupLabel","networkInterface","hostNetwork","enableLatency","latencyMilliseconds","jitterMilliseconds","correlationPercent","enableBandwidth","bandwidthBytesPerSecond","enablePacketLoss","packetLossPercent"],"properties":{"clusterConnectionRef":{"type":"string","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ClusterConnection","x-kubephos-artifact-version":"v1alpha1"},"applicationDeploymentRef":{"type":"string","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ApplicationDeployment","x-kubephos-artifact-version":"v1alpha1"},"managedPlatformRef":{"type":"string","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ManagedPlatformCapability","x-kubephos-artifact-version":"v1alpha1"},"nodeGroupLabel":{"type":"string","title":"Node group label","default":"topology.kubernetes.io/zone"},"nodeSelector":{"type":"string","title":"Affected node selector","default":"kubephos.dev/role=application"},"networkInterface":{"type":"string","title":"Network interface","default":"flannel.1"},"hostNetwork":{"type":"boolean","title":"Shape host-network traffic","default":false},"enableLatency":{"type":"boolean","title":"Inject latency","default":true},"latencyMilliseconds":{"type":"integer","title":"Latency in ms","minimum":1,"maximum":60000,"default":50},"jitterMilliseconds":{"type":"integer","title":"Jitter in ms","minimum":0,"maximum":60000,"default":0},"correlationPercent":{"type":"number","title":"Correlation %","minimum":0,"maximum":100,"default":0},"enableBandwidth":{"type":"boolean","title":"Limit bandwidth","default":false},"bandwidthBytesPerSecond":{"type":"integer","title":"Bandwidth bytes / second","minimum":1,"maximum":1000000000000,"default":12500000},"enablePacketLoss":{"type":"boolean","title":"Inject packet loss","default":false},"packetLossPercent":{"type":"number","title":"Packet loss %","minimum":0,"maximum":100,"default":0},"linkOverrides":{"type":"array","title":"Directed zone overrides","maxItems":225,"items":{"type":"object"}}}}`),
+		Schema:          json.RawMessage(`{"type":"object","additionalProperties":false,"required":["clusterConnectionRef","applicationDeploymentRef","managedPlatformRef","nodeGroupLabel","networkInterface","hostNetwork","enableLatency","latencyMilliseconds","jitterMilliseconds","correlationPercent","enableBandwidth","bandwidthBytesPerSecond","enablePacketLoss","packetLossPercent"],"properties":{"clusterConnectionRef":{"type":"string","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ClusterConnection","x-kubephos-artifact-version":"v1alpha1"},"applicationDeploymentRef":{"type":"string","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ApplicationDeployment","x-kubephos-artifact-version":"v1alpha1"},"managedPlatformRef":{"type":"string","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ManagedPlatformCapability","x-kubephos-artifact-version":"v1alpha1"},"nodeGroupLabel":{"type":"string","title":"Node group label","default":"topology.kubernetes.io/zone"},"nodeSelector":{"type":"string","title":"Affected node selector","default":"kubephos.dev/role=application"},"networkInterface":{"type":"string","title":"Network interface","default":"flannel.1"},"hostNetwork":{"type":"boolean","title":"Shape host-network traffic","default":false},"enableLatency":{"type":"boolean","title":"Inject latency","default":true},"latencyMilliseconds":{"type":"integer","title":"Latency in ms","minimum":1,"maximum":60000,"default":50},"jitterMilliseconds":{"type":"integer","title":"Jitter in ms","minimum":0,"maximum":60000,"default":0},"correlationPercent":{"type":"number","title":"Correlation %","minimum":0,"maximum":100,"default":0},"enableBandwidth":{"type":"boolean","title":"Limit bandwidth","default":false},"bandwidthBytesPerSecond":{"type":"integer","title":"Bandwidth bytes / second","minimum":1,"maximum":1000000000000,"default":12500000},"enablePacketLoss":{"type":"boolean","title":"Inject packet loss","default":false},"packetLossPercent":{"type":"number","title":"Packet loss %","minimum":0,"maximum":100,"default":0},"linkOverrides":{"type":"array","title":"Directed zone overrides","maxItems":225,"items":{"type":"object"}},"clusterName":{"type":"string","x-kubephos-hidden":true},"clusterNetworks":{"type":"object","additionalProperties":true,"x-kubephos-hidden":true}}}`),
 		ArtifactInputs:  []domain.ArtifactContract{{Type: "ClusterConnection", Version: "v1alpha1"}, {Type: "ApplicationDeployment", Version: "v1alpha1"}, {Type: "ManagedPlatformCapability", Version: "v1alpha1"}},
 		ArtifactOutputs: []domain.ArtifactContract{{Type: "NetworkInjection", Version: "v1alpha1"}},
 		Capabilities:    []string{"chaos.network.zones", "chaos.network.preflight", "chaos.network.cleanup", "lifecycle.cleanup"}, Permissions: []string{"cluster.admin"},
@@ -452,10 +455,26 @@ func discoverNodes(ctx context.Context, runner commandRunner, kubeconfig string,
 		if value.Name == "" || value.Zone == "" || value.InternalIP == "" || value.PodCIDR == "" {
 			return nil, nil, fmt.Errorf("node %s requires a name, %s label, InternalIP and PodCIDR", item.Metadata.Name, spec.NodeGroupLabel)
 		}
+		if len(spec.ClusterNetworks) > 0 && value.Zone != spec.ClusterName {
+			return nil, nil, errors.New("node cluster labels do not match the selected member")
+		}
 		nodes = append(nodes, value)
 		zones[value.Zone] = true
 	}
-	if len(nodes) < 2 || len(zones) < 2 {
+	if len(spec.ClusterNetworks) > 0 {
+		for name, cidr := range spec.ClusterNetworks {
+			if !regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,31}$`).MatchString(name) {
+				return nil, nil, errors.New("invalid remote cluster name")
+			}
+			if _, _, err := net.ParseCIDR(cidr); err != nil {
+				return nil, nil, errors.New("invalid remote cluster network")
+			}
+			zones[name] = true
+		}
+		if !zones[spec.ClusterName] || len(nodes) < 1 || len(zones) < 2 {
+			return nil, nil, errors.New("Cilium shaping requires local nodes and remote cluster networks")
+		}
+	} else if len(nodes) < 2 || len(zones) < 2 {
 		return nil, nil, errors.New("at least two selected nodes in two different zones are required")
 	}
 	zoneNames := make([]string, 0, len(zones))
@@ -545,6 +564,9 @@ func profileDimensions(nodes []node, zones []string, spec Spec) (int, int) {
 
 func networkManifest(application applicationDeployment, nodes []node, spec Spec) ([]byte, error) {
 	byZone := map[string][]string{}
+	for name, cidr := range spec.ClusterNetworks {
+		byZone[name] = []string{cidr}
+	}
 	for _, item := range nodes {
 		network := item.PodCIDR
 		if spec.HostNetwork {
@@ -665,6 +687,9 @@ type trafficQdisc struct {
 
 func verifyAppliedProfile(ctx context.Context, runner commandRunner, kubeconfig string, application applicationDeployment, nodes []node, zones []string, spec Spec) error {
 	byZone := map[string][]string{}
+	for name, cidr := range spec.ClusterNetworks {
+		byZone[name] = []string{cidr}
+	}
 	for _, item := range nodes {
 		network := item.PodCIDR
 		if spec.HostNetwork {

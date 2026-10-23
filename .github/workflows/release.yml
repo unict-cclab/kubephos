@@ -10,7 +10,36 @@ env:
   IMAGE_NAME: ${{ github.repository }}
 
 jobs:
+  checks:
+    uses: ./.github/workflows/checks.yml
+    permissions:
+      contents: read
+
+  component-matrix:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.components.outputs.matrix }}
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6.0.3
+      - id: components
+        name: Read runtime component versions
+        run: |
+          python3 - <<'PYTHON'
+          import json, os, re
+          from pathlib import Path
+          if not re.fullmatch(r'v[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?', os.environ['GITHUB_REF_NAME']):
+              raise SystemExit('Invalid release tag')
+          source = Path('internal/managedcomponents/components.go').read_text()
+          components = [('cluster-lens', 'ClusterLensVersion'), ('mon-agent', 'MonAgentVersion'), ('mentat', 'MentatVersion')]
+          matrix = {'include': [{'name': name, 'version': re.search(r'\b' + constant + r'\s*=\s*"([^"]+)"', source).group(1), 'context': 'components/' + name} for name, constant in components]}
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write('matrix=' + json.dumps(matrix, separators=(',', ':')) + '\n')
+          PYTHON
+
   build-and-push:
+    needs: [checks, component-matrix]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -27,6 +56,9 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Bundle managed component images
+        run: make managed-image-archives
+
       - name: Docker metadata
         id: meta
         uses: docker/metadata-action@v6.1.0
@@ -34,7 +66,7 @@ jobs:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
             type=ref,event=tag
-            type=raw,value=latest
+            type=raw,value=latest,enable=${{ !contains(github.ref_name, '-') }}
 
       - name: Build and push image
         uses: docker/build-push-action@v7.2.0
@@ -51,18 +83,9 @@ jobs:
     permissions:
       contents: read
       packages: write
+    needs: [checks, component-matrix]
     strategy:
-      matrix:
-        include:
-          - name: cluster-lens
-            version: v1.2.5
-            context: components/cluster-lens
-          - name: mon-agent
-            version: v0.0.8
-            context: components/mon-agent
-          - name: mentat
-            version: v0.3.5
-            context: components/mentat
+      matrix: ${{ fromJson(needs.component-matrix.outputs.matrix) }}
 
     steps:
       - name: Checkout code
@@ -75,9 +98,62 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Protect published component versions
+        id: published
+        env:
+          COMPONENT: ${{ matrix.name }}
+          IMAGE: ${{ env.REGISTRY }}/${{ github.repository_owner }}/kubephos-${{ matrix.name }}:${{ matrix.version }}
+        run: |
+          tree=$(git rev-parse "HEAD:components/$COMPONENT")
+          echo "tree=$tree" >> "$GITHUB_OUTPUT"
+          if docker manifest inspect "$IMAGE" > /dev/null 2> /tmp/component-manifest-error; then
+            docker pull "$IMAGE"
+            published_tree=$(docker image inspect --format '{{index .Config.Labels "io.kubephos.source-tree"}}' "$IMAGE")
+            if [[ "$published_tree" != "$tree" ]]; then
+              echo "Component version already published with different or unverified source. Increment its version."
+              exit 1
+            fi
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+          elif grep -qiE 'manifest unknown|not found' /tmp/component-manifest-error; then
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          else
+            cat /tmp/component-manifest-error >&2
+            exit 1
+          fi
+
       - name: Build and push managed component
+        if: steps.published.outputs.publish == 'true'
         uses: docker/build-push-action@v7.2.0
         with:
           context: ${{ matrix.context }}
           push: true
           tags: ${{ env.REGISTRY }}/${{ github.repository_owner }}/kubephos-${{ matrix.name }}:${{ matrix.version }}
+          labels: |
+            io.kubephos.source-tree=${{ steps.published.outputs.tree }}
+            org.opencontainers.image.revision=${{ github.sha }}
+
+  release-bundle:
+    needs: [build-and-push, build-and-push-components]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6.0.3
+      - name: Build installer archive
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          python3 scripts/package_release.py "$RELEASE_TAG" dist
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          args=()
+          if [[ "$RELEASE_TAG" == *-* ]]; then args+=(--prerelease); fi
+          if [[ -f "docs/releases/$RELEASE_TAG.md" ]]; then
+            args+=(--notes-file "docs/releases/$RELEASE_TAG.md")
+          else
+            args+=(--generate-notes)
+          fi
+          gh release create "$RELEASE_TAG" dist/kubephos-*.tar.gz dist/SHA256SUMS --verify-tag "${args[@]}"

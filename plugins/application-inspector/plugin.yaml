@@ -3,7 +3,7 @@ kind: Plugin
 metadata:
   id: io.kubephos.applications.inspect
   name: Application package materializer
-  version: 0.4.3
+  version: 0.4.4
   description: Resolves, materializes and verifies a pinned application package and its declared interface.
 spec:
   protocol: v1alpha1
@@ -26,7 +26,7 @@ spec:
       applicationRef:
         type: string
         title: Application
-        description: Immutable application version from the catalog.
+        description: Application from the catalog.
         format: kubephos-application-ref
       values:
         type: object

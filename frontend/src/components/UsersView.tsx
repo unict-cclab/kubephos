@@ -1,6 +1,10 @@
+import {ResourceListHeading} from './ResourceListHeading'
+import {ResourceListTable} from './ResourceListTable'
+import {ResourceAttribution} from './ResourceAttribution'
+import {ResourceAction} from './ResourceAction'
+import {useDeleteConfirmation} from './ConfirmationDialog'
 import {useEffect, useMemo, useState, type FormEvent} from 'react'
 import {request} from '../api'
-import {formatDate} from '../lib'
 import type {ClusterUserAssignment, ManagedResource, Session, User} from '../types'
 import {DetailBreadcrumb} from './DetailBreadcrumb'
 import {Dialog} from './Dialog'
@@ -11,8 +15,13 @@ export function UsersView({users, assignments, clusters, session, changed}: {use
   const selected = users.find(user => user.id === selectedID)
   if (selected) return <UserDetailsPage user={selected} close={() => setSelectedID(null)} assignments={assignments} clusters={clusters} session={session} changed={changed} />
   return <>
-    <div className="section-heading"><div><h2>Users</h2></div><button className="button primary icon-button" aria-label="Create user" title="Create user" onClick={() => setCreating(true)}>+</button></div>
-    <div className="table-card users-table-card"><table className="users-table"><thead><tr><th scope="col">User</th><th scope="col">Role</th><th scope="col">Clusters</th><th scope="col" aria-label="Actions" /></tr></thead><tbody>{users.length ? users.map(user => <tr key={user.id}><td><span className="user-identity"><strong>{user.username}</strong>{user.email && <small>{user.email}</small>}</span></td><td><span className={`user-role ${user.role}`}>{user.role === 'admin' ? 'Administrator' : 'User'}</span></td><td><span className="user-cluster-count">{assignments.filter(item => item.userId === user.id).length}</span></td><td className="users-table-action"><button className="icon-button subtle" aria-label={`View ${user.username}`} title="View" onClick={() => setSelectedID(user.id)}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z"/><circle cx="12" cy="12" r="2.7"/></svg></button></td></tr>) : <tr><td className="users-table-empty" colSpan={4}>No users.</td></tr>}</tbody></table></div>
+    <ResourceListHeading title="Users" action={<ResourceAction action="create" label="Create user" onClick={() => setCreating(true)} />} />
+    <ResourceListTable items={users.map(user => ({...user, createdAt: user.createdAt ?? '', updatedAt: user.updatedAt ?? ''}))} label="Users" editable searchText={user => `${user.username} ${user.email ?? ''} ${user.role}`} columns={[
+      {label: 'Username', render: user => <span className="user-identity">{user.username}</span>},
+      {label: 'Email', render: user => user.email || '—'},
+      {label: 'Role', render: user => <span className={`user-role ${user.role}`}>{user.role === 'admin' ? 'Administrator' : 'User'}</span>},
+      {label: 'Clusters', render: user => <span className="user-cluster-count">{user.role === 'admin' ? 'All' : assignments.filter(item => item.userId === user.id).length}</span>}
+    ]} actions={user => <ResourceAction action="view" label={`View ${user.username}`} onClick={() => setSelectedID(user.id)} />} />
     <CreateUserDialog open={creating} close={() => setCreating(false)} session={session} changed={changed} />
   </>
 }
@@ -35,10 +44,11 @@ function CreateUserDialog({open, close, session, changed}: {open: boolean; close
       setPending(false)
     }
   }
-  return <Dialog open={open} onClose={close} title="Create user"><form onSubmit={submit}><label>Username<input name="username" minLength={3} maxLength={40} required autoFocus /></label><label>Email<input name="email" type="email" /></label><label>Password<input name="password" type="password" minLength={12} maxLength={128} required /></label><label>Role<select name="role" defaultValue="user"><option value="user">User</option><option value="admin">Administrator</option></select></label><p className="form-error">{error}</p><div className="dialog-actions"><button className="button secondary" type="button" onClick={close}>Cancel</button><button className="button primary" disabled={pending}>{pending ? 'Creating…' : 'Create'}</button></div></form></Dialog>
+  return <Dialog open={open} onClose={close} title="Create user"><form className="form-stack" onSubmit={submit}><div className="field-row"><label>Username<input name="username" minLength={3} maxLength={40} required autoFocus /></label><label>Email<input name="email" type="email" /></label></div><div className="field-row"><label>Password<input name="password" type="password" minLength={12} maxLength={128} required /></label><label>Role<select name="role" defaultValue="user"><option value="user">User</option><option value="admin">Administrator</option></select></label></div><p className="form-error">{error}</p><div className="dialog-actions"><button className="button secondary" type="button" onClick={close}>Cancel</button><button className="button primary" disabled={pending}>{pending ? 'Creating…' : 'Create'}</button></div></form></Dialog>
 }
 
 function UserDetailsPage({user, close, assignments, clusters, session, changed}: {user: User; close: () => void; assignments: ClusterUserAssignment[]; clusters: ManagedResource[]; session: Session; changed: () => Promise<void>}) {
+  const {confirmDelete, confirmationDialog} = useDeleteConfirmation()
   const initial = useMemo(() => assignments.filter(item => item.userId === user.id).map(item => item.clusterResourceId), [assignments, user.id])
   const [selected, setSelected] = useState(initial)
   const [pending, setPending] = useState(false)
@@ -57,7 +67,7 @@ function UserDetailsPage({user, close, assignments, clusters, session, changed}:
     }
   }
   const remove = async () => {
-    if (!window.confirm(`Delete user ${user.username}?`)) return
+    if (!await confirmDelete(`Delete user ${user.username}?`)) return
     setPending(true)
     setError('')
     try {
@@ -70,7 +80,7 @@ function UserDetailsPage({user, close, assignments, clusters, session, changed}:
       setPending(false)
     }
   }
-  return <div className="detail-page"><DetailBreadcrumb parent="Users" current={user.username} back={close} /><div className="detail-page-heading"><h2>{user.username}</h2><div className="detail-page-actions">{user.role === 'user' && <><button className="button danger" disabled={pending} onClick={() => void remove()}>Delete</button><button className="button primary" disabled={pending} onClick={() => void save()}>{pending ? 'Saving…' : 'Save'}</button></>}</div></div><article className="detail-page-card simple-resource-detail"><dl className="simple-detail-grid"><div><dt>Username</dt><dd>{user.username}</dd></div><div><dt>Email</dt><dd>{user.email || '—'}</dd></div><div><dt>Role</dt><dd>{user.role}</dd></div><div><dt>Status</dt><dd>{user.enabled ? 'Enabled' : 'Disabled'}</dd></div><div><dt>Created</dt><dd>{user.createdAt ? formatDate(user.createdAt) : '—'}</dd></div><div><dt>Updated</dt><dd>{user.updatedAt ? formatDate(user.updatedAt) : '—'}</dd></div></dl>{user.role === 'user' && <section className="details-section user-cluster-assignment"><div className="details-heading"><strong>Assigned clusters</strong><span>{selected.length} of {clusters.length}</span></div><div className="cluster-assignment-list">{clusters.length ? clusters.map(cluster => {
+  return <div className="detail-page">{confirmationDialog}<DetailBreadcrumb parent="Users" current={user.username} back={close} /><div className="detail-page-heading"><h2>{user.username}</h2><div className="detail-page-actions">{user.role === 'user' && <><ResourceAction action="delete" label={`Delete user ${user.username}`} disabled={pending} onClick={() => void remove()} /><button className="button primary" disabled={pending} onClick={() => void save()}>{pending ? 'Saving…' : 'Save'}</button></>}</div></div><ResourceAttribution resource={user} editable /><article className="detail-page-card simple-resource-detail"><dl className="simple-detail-grid"><div><dt>Username</dt><dd>{user.username}</dd></div><div><dt>Email</dt><dd>{user.email || '—'}</dd></div><div><dt>Role</dt><dd>{user.role}</dd></div><div><dt>Status</dt><dd>{user.enabled ? 'Enabled' : 'Disabled'}</dd></div></dl>{user.role === 'user' && <section className="details-section user-cluster-assignment"><div className="details-heading"><strong>Assigned clusters</strong><span>{selected.length} of {clusters.length}</span></div><div className="cluster-assignment-list">{clusters.length ? clusters.map(cluster => {
     const checked = selected.includes(cluster.id)
     return <label className={`cluster-assignment-row${checked ? ' selected' : ''}`} key={cluster.id}><input type="checkbox" checked={checked} onChange={event => setSelected(items => event.target.checked ? [...items, cluster.id] : items.filter(id => id !== cluster.id))} /><span className="cluster-assignment-check" aria-hidden="true"><svg viewBox="0 0 16 16"><path d="m3.5 8.2 2.7 2.7 6.3-6.1" /></svg></span><span className="cluster-assignment-name">{cluster.name}</span><span className={`status ${cluster.status}`}>{cluster.status}</span></label>
   }) : <p className="cluster-assignment-empty">No Kubernetes clusters available.</p>}</div></section>}{error && <p className="form-error">{error}</p>}</article></div>

@@ -1,6 +1,8 @@
+import {ReadoutTable} from './ReadoutTable'
+import {ResourceAttribution} from './ResourceAttribution'
+import {ResourceAction} from './ResourceAction'
 import {useEffect, useState} from 'react'
 import {request} from '../api'
-import {formatDate} from '../lib'
 import type {Application} from '../types'
 import {ApplicationTopologyGraph} from './ApplicationTopologyGraph'
 import {DetailBreadcrumb} from './DetailBreadcrumb'
@@ -44,7 +46,7 @@ export function ApplicationDetailsPage({application, close, canDelete, remove}: 
     setManifestLoading(true)
     setManifestError('')
     try {
-      const result = await request<ApplicationPreview>(`/catalog/applications/${encodeURIComponent(application.id)}/${encodeURIComponent(application.version)}/manifest${refresh ? '?refresh=true' : ''}`)
+      const result = await request<ApplicationPreview>(`/catalog/applications/${encodeURIComponent(application.id)}/manifest${refresh ? '?refresh=true' : ''}`)
       setManifest(result.content)
       setMaterializedScenarios(result.loadScenarios ?? [])
       if (scenarioID) {
@@ -68,7 +70,7 @@ export function ApplicationDetailsPage({application, close, canDelete, remove}: 
     const url = URL.createObjectURL(new Blob([manifest], {type: 'application/yaml;charset=utf-8'}))
     const link = document.createElement('a')
     link.href = url
-    link.download = `${application.name.toLowerCase().replaceAll(/[^a-z0-9]+/g, '-').replaceAll(/(^-|-$)/g, '') || 'application'}-${application.version}.yml`
+    link.download = `${application.name.toLowerCase().replaceAll(/[^a-z0-9]+/g, '-').replaceAll(/(^-|-$)/g, '') || 'application'}.yml`
     link.click()
     URL.revokeObjectURL(url)
   }
@@ -90,25 +92,26 @@ export function ApplicationDetailsPage({application, close, canDelete, remove}: 
     const scenarioID = String(scenarios[0]?.id ?? '')
     if (open && scenarioID && !selectedScenario && !manifestLoading) void showScenario(scenarioID)
   }
-  return <div className="detail-page"><DetailBreadcrumb parent="Catalog" current={application.name} back={close} /><div className="detail-page-heading"><div><h2>{application.name}</h2><p>Version {application.version}</p></div><div className="detail-page-actions">{canDelete && <button className="button danger" onClick={() => remove(application)}>Delete from catalog</button>}</div></div><article className="detail-page-card">
+  return <div className="detail-page"><DetailBreadcrumb parent="Catalog" current={application.name} back={close} /><div className="detail-page-heading"><div><h2>{application.name}</h2></div><div className="detail-page-actions">{canDelete && <ResourceAction action="delete" label={`Delete ${application.name} from catalog`} onClick={() => remove(application)} />}</div></div><ResourceAttribution resource={application} editable /><article className="detail-page-card">
+
     <div className="details-summary">
-      <div><span>Version</span><strong>{application.version}</strong></div>
+      {application.description && <div><span>Description</span><strong>{application.description}</strong></div>}
       <div><span>Source</span><strong>{application.origin === 'built-in' ? 'Included' : 'Imported'}</strong></div>
-      <div><span>Services</span><strong>{dynamicTopology ? 'Configurable' : components.length}</strong></div>
-      <div><span>Created</span><strong>{application.createdAt ? formatDate(application.createdAt) : '—'}</strong></div>
-      <div><span>Updated</span><strong>{application.updatedAt ? formatDate(application.updatedAt) : '—'}</strong></div>
+      {!dynamicTopology && <div><span>Services</span><strong>{components.length}</strong></div>}
+
+
       <div><span>Load scenarios</span><strong>{scenarios.length}</strong></div>
     </div>
-    {!dynamicTopology && <ApplicationTopologyGraph components={components} />}
-    {!dynamicTopology && <section className="details-section"><div className="details-heading"><strong>Services</strong><span>{components.length}</span></div><div className="application-details-list">{orderedComponents.map(component => <article key={component.id}><div><strong>{component.id}</strong><span>{component.workload ? `${component.workload.kind ?? 'Workload'} · ${component.workload.name ?? component.id}` : 'Workload'}</span></div><div className="application-component-meta"><div className="trait-list">{(component.traits ?? []).map(trait => <span key={trait}>{trait}</span>)}</div></div></article>)}</div></section>}
+    {!dynamicTopology && <section className="details-section"><div className="details-heading"><strong>Topology</strong></div><ApplicationTopologyGraph components={components} /></section>}
+    {!dynamicTopology && <section className="details-section"><div className="details-heading"><strong>Services</strong></div><ReadoutTable label="Services" data={{headers: ['Name', 'Workload type', 'Workload name', 'Traits'], rows: orderedComponents.map(component => [component.id, component.workload?.kind ?? '—', component.workload?.name ?? '—', component.traits?.join(', ') || '—'])}} /></section>}
     <div className="application-file-selectors">
       <details className="technical-disclosure application-file-disclosure" onToggle={event => openDeploymentFiles(event.currentTarget.open)}>
-        <summary><strong>Deployment files</strong></summary>
-        <div className="application-file-content"><div className="details-heading"><strong>Manifest YAML</strong><div className="chart-export-actions">{manifest && <button type="button" onClick={downloadManifest}>Download .yml</button>}<button type="button" disabled={manifestLoading} onClick={() => void loadPreview(undefined, Boolean(manifest))}>{manifestLoading ? 'Preparing…' : manifest ? 'Refresh' : 'Load'}</button></div></div>{manifestError && <p className="form-error">{manifestError}</p>}{manifest && <pre aria-label="Deployment manifest YAML">{manifest}</pre>}</div>
+        <summary><strong>{dynamicTopology ? 'Example deployment files' : 'Deployment files'}</strong></summary>
+        <div className="application-file-content">{dynamicTopology && <p className="details-copy">Example deployment manifests generated using the application defaults. Experiment manifests are generated from the selected configuration.</p>}<div className="details-heading"><strong>Manifest YAML</strong><div className="chart-export-actions">{manifest && <button className="button secondary compact" type="button" onClick={downloadManifest}>Download .yml</button>}<button className="button secondary compact" type="button" disabled={manifestLoading} onClick={() => void loadPreview(undefined, Boolean(manifest))}>{manifestLoading ? 'Preparing…' : manifest ? 'Refresh' : 'Load'}</button></div></div>{manifestError && <p className="form-error">{manifestError}</p>}{manifest && <pre aria-label="Deployment manifest YAML">{manifest}</pre>}</div>
       </details>
       <details className="technical-disclosure application-file-disclosure" onToggle={event => openLocustFile(event.currentTarget.open)}>
-        <summary><strong>Locust file</strong></summary>
-        <div className="application-file-content">{scenarios.length ? <>{scenarios.length > 1 && <label>Scenario<select value={selectedScenarioID} onChange={event => void showScenario(event.target.value)}>{scenarios.map((scenario, index) => <option key={String(scenario.id ?? index)} value={String(scenario.id ?? index)}>{scenarioLabel(index, scenarios.length)}</option>)}</select></label>}{manifestError && <p className="form-error">{manifestError}</p>}{selectedScenario && <><div className="details-heading"><strong>{selectedScenarioLabel}.py</strong><div className="chart-export-actions"><button type="button" onClick={downloadScenario}>Download .py</button></div></div><pre aria-label={`Locust file for ${selectedScenarioLabel}`}>{selectedScenario.script}</pre></>}</> : <p className="details-copy">No Locust file available.</p>}</div>
+        <summary><strong>{dynamicTopology ? 'Example Locust file' : 'Locust file'}</strong></summary>
+        <div className="application-file-content">{dynamicTopology && <p className="details-copy">Example Locust script generated using the application defaults. The experiment script is generated from the selected configuration.</p>}{scenarios.length ? <>{scenarios.length > 1 && <label>Scenario<select value={selectedScenarioID} onChange={event => void showScenario(event.target.value)}>{scenarios.map((scenario, index) => <option key={String(scenario.id ?? index)} value={String(scenario.id ?? index)}>{scenarioLabel(index, scenarios.length)}</option>)}</select></label>}{manifestError && <p className="form-error">{manifestError}</p>}{selectedScenario && <><div className="details-heading"><strong>{selectedScenarioLabel}.py</strong><div className="chart-export-actions"><button className="button secondary compact" type="button" onClick={downloadScenario}>Download .py</button></div></div><pre aria-label={`Locust file for ${selectedScenarioLabel}`}>{selectedScenario.script}</pre></>}</> : <p className="details-copy">No Locust file available.</p>}</div>
       </details>
     </div>
   </article></div>

@@ -3,6 +3,8 @@ package mubench
 import (
 	"context"
 	"encoding/json"
+	"gopkg.in/yaml.v3"
+	"io"
 	"slices"
 	"strings"
 	"testing"
@@ -134,4 +136,93 @@ func materializerInvocation(t *testing.T, applicationRef string, descriptor cata
 
 func discardLog(string, string) error {
 	return nil
+}
+
+func TestMaterializerResourcesAreOptionalAndIndependent(t *testing.T) {
+	applicationRef, descriptor := builtInApplication(t)
+	for _, values := range []map[string]any{{}, {"cpuLimit": "1"}, {"memoryRequest": "512Mi", "memoryLimit": "1Gi"}} {
+		inv := materializerInvocation(t, applicationRef, descriptor, values)
+		spec, resolved, config, err := resolveMaterializer(inv)
+		if err != nil {
+			t.Fatal(err)
+		}
+		result, _, _, err := materialize(materializerInput{ApplicationRef: spec.ApplicationRef, Values: spec.Values, Descriptor: resolved}, config)
+		if err != nil {
+			t.Fatal(err)
+		}
+		decoder := yaml.NewDecoder(strings.NewReader(result.ManifestSet.Spec.Content))
+		found := false
+		for {
+			var doc map[string]any
+			err := decoder.Decode(&doc)
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if doc["kind"] != "Deployment" || doc["metadata"].(map[string]any)["name"] != "s0" {
+				continue
+			}
+			found = true
+			container := doc["spec"].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)["containers"].([]any)[0].(map[string]any)
+			resources, exists := container["resources"]
+			if len(values) == 0 && exists {
+				t.Fatal("default service must omit requests and limits")
+			}
+			if len(values) > 0 && !exists {
+				t.Fatal("explicit resources missing")
+			}
+			if values["cpuLimit"] != nil && resources.(map[string]any)["requests"] != nil {
+				t.Fatal("limits must not inject generator requests")
+			}
+		}
+		if !found {
+			t.Fatal("generated service missing")
+		}
+	}
+	if report := (MaterializerPlugin{}).Validate(context.Background(), materializerInvocation(t, applicationRef, descriptor, map[string]any{"cpuRequest": "2", "cpuLimit": "1"})); report.Valid {
+		t.Fatal("request greater than limit accepted")
+	}
+}
+
+func TestMaterializerSupportsResourceOverrides(t *testing.T) {
+	applicationRef, descriptor := builtInApplication(t)
+	inv := materializerInvocation(t, applicationRef, descriptor, map[string]any{"cpuRequest": "250m", "resourceOverrides": map[string]any{"s0": map[string]any{"cpuRequest": "500m", "memoryLimit": "1Gi"}}})
+	spec, resolved, config, err := resolveMaterializer(inv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, _, _, err := materialize(materializerInput{ApplicationRef: spec.ApplicationRef, Values: spec.Values, Descriptor: resolved}, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoder := yaml.NewDecoder(strings.NewReader(result.ManifestSet.Spec.Content))
+	for {
+		var doc map[string]any
+		err := decoder.Decode(&doc)
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if doc["kind"] != "Deployment" {
+			continue
+		}
+		name := doc["metadata"].(map[string]any)["name"].(string)
+		if name != "s0" && name != "s1" {
+			continue
+		}
+		container := doc["spec"].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)["containers"].([]any)[0].(map[string]any)
+		resources := container["resources"].(map[string]any)
+		cpu := resources["requests"].(map[string]any)["cpu"]
+		if name == "s0" && cpu != "500m" || name == "s1" && cpu != "250m" {
+			t.Fatalf("incorrect resources for %s: %v", name, resources)
+		}
+	}
+	inv = materializerInvocation(t, applicationRef, descriptor, map[string]any{"resourceOverrides": map[string]any{"s99": map[string]any{"cpuLimit": "1"}}})
+	if report := (MaterializerPlugin{}).Validate(context.Background(), inv); report.Valid {
+		t.Fatal("unknown service override accepted")
+	}
 }

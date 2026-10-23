@@ -4,25 +4,25 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
-	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"gopkg.in/yaml.v3"
 	"io"
+	kubeconfigutil "kubephos.dev/kubephos/internal/kubeconfig"
 	"net/url"
-	"os"
-	"os/exec"
+
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 
-	"gopkg.in/yaml.v3"
-
 	"kubephos.dev/kubephos/internal/domain"
 	"kubephos.dev/kubephos/internal/plugins"
+	"kubephos.dev/kubephos/internal/podscheduling"
 )
 
 const (
@@ -70,6 +70,7 @@ type clusterConnection struct {
 		Version string `json:"version"`
 	} `json:"metadata"`
 	Spec struct {
+		Networking   string `json:"networking,omitempty"`
 		Distribution string `json:"distribution"`
 		Server       string `json:"server"`
 		Kubeconfig   string `json:"kubeconfig"`
@@ -129,15 +130,25 @@ type applicationDeploymentMetadata struct {
 	OwnershipMarker string `json:"ownershipMarker"`
 }
 
+type controlMetricsScope struct {
+	PodScheduling bool      `json:"podScheduling,omitempty"`
+	StartedAt     time.Time `json:"startedAt"`
+	SchedulerName string    `json:"schedulerName"`
+	Namespace     string    `json:"namespace,omitempty"`
+}
+
 type applicationDeploymentSpec struct {
-	ApplicationRef   string            `json:"applicationRef"`
-	Prepared         bool              `json:"prepared,omitempty"`
-	ClusterServer    string            `json:"clusterServer"`
-	Namespace        string            `json:"namespace"`
-	ControlNamespace string            `json:"controlNamespace,omitempty"`
-	ManifestDigest   string            `json:"manifestDigest"`
-	Workloads        []workloadTarget  `json:"workloads"`
-	Endpoints        []serviceEndpoint `json:"endpoints"`
+	ClusterName      string               `json:"clusterName,omitempty"`
+	Networking       string               `json:"networking,omitempty"`
+	ControlMetrics   *controlMetricsScope `json:"controlMetrics,omitempty"`
+	ApplicationRef   string               `json:"applicationRef"`
+	Prepared         bool                 `json:"prepared,omitempty"`
+	ClusterServer    string               `json:"clusterServer"`
+	Namespace        string               `json:"namespace"`
+	ControlNamespace string               `json:"controlNamespace,omitempty"`
+	ManifestDigest   string               `json:"manifestDigest"`
+	Workloads        []workloadTarget     `json:"workloads"`
+	Endpoints        []serviceEndpoint    `json:"endpoints"`
 }
 
 type result struct {
@@ -150,7 +161,7 @@ type commandRunner interface {
 
 func (Plugin) Manifest() plugins.Manifest {
 	return plugins.Manifest{
-		ID: pluginID, Name: "Kubernetes application deployer", Version: "0.4.0",
+		ID: pluginID, Name: "Kubernetes application deployer", Version: "0.7.0",
 		Description:     "Deploys any validated application package into an isolated Kubernetes namespace and prepares shared experiment control resources when requested.",
 		Schema:          json.RawMessage(`{"type":"object","additionalProperties":false,"required":["clusterConnectionRef","manifestSetRef","workloadTargetsRef","serviceEndpointsRef"],"properties":{"clusterConnectionRef":{"type":"string","title":"Kubernetes cluster","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ClusterConnection","x-kubephos-artifact-version":"v1alpha1"},"manifestSetRef":{"type":"string","title":"Application manifests","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ManifestSet","x-kubephos-artifact-version":"v1alpha1"},"workloadTargetsRef":{"type":"string","title":"Application workloads","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"WorkloadTargets","x-kubephos-artifact-version":"v1alpha1"},"serviceEndpointsRef":{"type":"string","title":"Application endpoints","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ServiceEndpoints","x-kubephos-artifact-version":"v1alpha1"},"mode":{"type":"string","enum":["prepare","deploy"]},"schedulerName":{"type":"string"},"schedulerInclude":{"type":"array","items":{"type":"string"}},"schedulerExclude":{"type":"array","items":{"type":"string"}},"podDisruptionBudgetMinAvailable":{"type":"integer","title":"Minimum available replicas","description":"PDB minAvailable generated for every deschedulable workload.","minimum":1,"maximum":20},"controlNamespace":{"type":"boolean","x-kubephos-hidden":true}}}`),
 		ArtifactInputs:  []domain.ArtifactContract{{Type: "ClusterConnection", Version: "v1alpha1"}, {Type: "ManifestSet", Version: "v1alpha1"}, {Type: "WorkloadTargets", Version: "v1alpha1"}, {Type: "ServiceEndpoints", Version: "v1alpha1"}},
@@ -296,7 +307,7 @@ func (plugin Plugin) Precheck(ctx context.Context, step domain.PlanStep, log plu
 	if err := validateManifestIsolation([]byte(manifests.Spec.Content), clusterScoped); err != nil {
 		return unhealthy(err.Error(), "isolation", "rejected"), nil
 	}
-	runtimeManifest, effectiveWorkloads, proxyNodes, err := prepareRuntimePackage(ctx, runner, cluster.Spec.Kubeconfig, manifests.Spec.Content, workloads, endpoints, input.PodDisruptionBudgetMinAvailable)
+	runtimeManifest, effectiveWorkloads, endpoints, proxyNodes, err := prepareNetworkPackage(ctx, runner, cluster, manifests.Spec.Content, workloads, endpoints, input.PodDisruptionBudgetMinAvailable)
 	if err != nil {
 		return unhealthy(err.Error(), "trafficEntrypoints", "rejected"), nil
 	}
@@ -324,8 +335,9 @@ func (plugin Plugin) Execute(ctx context.Context, step domain.PlanStep, log plug
 	if err != nil {
 		return nil, err
 	}
+	startedAt := time.Now().UTC()
 	runner := plugin.runner()
-	runtimeManifest, effectiveWorkloads, proxyNodes, err := prepareRuntimePackage(ctx, runner, cluster.Spec.Kubeconfig, manifests.Spec.Content, workloads, endpoints, input.PodDisruptionBudgetMinAvailable)
+	runtimeManifest, effectiveWorkloads, endpoints, proxyNodes, err := prepareNetworkPackage(ctx, runner, cluster, manifests.Spec.Content, workloads, endpoints, input.PodDisruptionBudgetMinAvailable)
 	if err != nil {
 		return nil, err
 	}
@@ -335,7 +347,11 @@ func (plugin Plugin) Execute(ctx context.Context, step domain.PlanStep, log plug
 			return nil, err
 		}
 	}
-	namespaceManifest, _ := json.Marshal(map[string]any{"apiVersion": "v1", "kind": "Namespace", "metadata": map[string]any{"name": input.Namespace, "annotations": map[string]string{ownershipKey: input.Marker}, "labels": map[string]string{"app.kubernetes.io/managed-by": "kubephos", "istio-injection": "enabled", "kubephos.dev/monitored": "true", "kubephos.dev/application": input.Namespace}}})
+	injection := "enabled"
+	if nativeTCPEndpoints(endpoints) || cluster.Spec.Networking == "cilium" {
+		injection = "disabled"
+	}
+	namespaceManifest, _ := json.Marshal(map[string]any{"apiVersion": "v1", "kind": "Namespace", "metadata": map[string]any{"name": input.Namespace, "annotations": map[string]string{ownershipKey: input.Marker}, "labels": map[string]string{"app.kubernetes.io/managed-by": "kubephos", "istio-injection": injection, "kubephos.dev/monitored": "true", "kubephos.dev/application": input.Namespace}}})
 	if _, err := runner.Run(ctx, cluster.Spec.Kubeconfig, namespaceManifest, "apply", "-f", "-"); err != nil {
 		return nil, fmt.Errorf("create isolated namespace: %w", err)
 	}
@@ -345,6 +361,29 @@ func (plugin Plugin) Execute(ctx context.Context, step domain.PlanStep, log plug
 			return nil, fmt.Errorf("create shared experiment control namespace: %w", err)
 		}
 	}
+	observeScheduling := false
+	if input.Mode != "prepare" {
+		var targets []podscheduling.Target
+		for _, target := range effectiveWorkloads {
+			if len(target.Selector) > 0 && (slices.Contains(target.Traits, "schedulable") || slices.Contains(target.Traits, "scalable")) {
+				targets = append(targets, podscheduling.Target{Name: target.Name, Selector: target.Selector})
+			}
+		}
+		if len(targets) > 0 {
+			observer, err := podscheduling.Manifest(input.Namespace, input.Marker, targets)
+			if err != nil {
+				return nil, err
+			}
+			if _, err := runner.Run(ctx, cluster.Spec.Kubeconfig, observer, "apply", "--namespace", input.Namespace, "-f", "-"); err != nil {
+				return nil, fmt.Errorf("start pod scheduling observer: %w", err)
+			}
+			if _, err := runner.Run(ctx, cluster.Spec.Kubeconfig, nil, "rollout", "status", "deployment/"+podscheduling.Name, "--namespace", input.Namespace, "--timeout=90s"); err != nil {
+				return nil, fmt.Errorf("pod scheduling observer readiness: %w", err)
+			}
+			observeScheduling = true
+		}
+	}
+
 	if input.Mode != "prepare" {
 		message := "Applying the immutable manifest set to the isolated namespace"
 		if proxyNodes > 0 {
@@ -353,14 +392,27 @@ func (plugin Plugin) Execute(ctx context.Context, step domain.PlanStep, log plug
 		if err := log("info", message); err != nil {
 			return nil, err
 		}
-		if _, err := runner.Run(ctx, cluster.Spec.Kubeconfig, []byte(runtimeManifest), "apply", "--namespace", input.Namespace, "-f", "-"); err != nil {
-			return nil, fmt.Errorf("apply application manifests: %w", err)
+		if err := applyRuntimeManifest(ctx, runner, cluster.Spec.Kubeconfig, input.Namespace, runtimeManifest, effectiveWorkloads, log); err != nil {
+			return nil, err
 		}
+	}
+	if input.Mode != "prepare" {
+		if err := verifyCiliumGateways(ctx, runner, cluster, input.Namespace, endpoints); err != nil {
+			return nil, err
+		}
+	}
+	var metricsScope *controlMetricsScope
+	if input.Mode != "prepare" {
+		scheduler := input.SchedulerName
+		if scheduler == "" {
+			scheduler = "default-scheduler"
+		}
+		metricsScope = &controlMetricsScope{PodScheduling: observeScheduling, StartedAt: startedAt, SchedulerName: scheduler, Namespace: input.ControlNamespace}
 	}
 	value := result{ApplicationDeployment: applicationDeployment{
 		APIVersion: artifactAPI, Kind: "ApplicationDeployment",
 		Metadata: applicationDeploymentMetadata{Name: input.Namespace, Version: "v1alpha1", OwnershipMarker: input.Marker},
-		Spec:     applicationDeploymentSpec{ApplicationRef: manifests.Metadata.ApplicationRef, Prepared: input.Mode == "prepare", ClusterServer: cluster.Spec.Server, Namespace: input.Namespace, ControlNamespace: input.ControlNamespace, ManifestDigest: manifests.Metadata.Digest, Workloads: effectiveWorkloads, Endpoints: endpoints},
+		Spec:     applicationDeploymentSpec{ClusterName: cluster.Metadata.Name, Networking: cluster.Spec.Networking, ControlMetrics: metricsScope, ApplicationRef: manifests.Metadata.ApplicationRef, Prepared: input.Mode == "prepare", ClusterServer: cluster.Spec.Server, Namespace: input.Namespace, ControlNamespace: input.ControlNamespace, ManifestDigest: manifests.Metadata.Digest, Workloads: effectiveWorkloads, Endpoints: endpoints},
 	}}
 	return json.Marshal(value)
 }
@@ -394,7 +446,7 @@ func (plugin Plugin) Verify(ctx context.Context, step domain.PlanStep, raw json.
 	if err := json.Unmarshal(raw, &value); err != nil {
 		return domain.HealthReport{}, err
 	}
-	_, effectiveWorkloads, proxyNodes, err := prepareRuntimePackage(ctx, runner, cluster.Spec.Kubeconfig, manifests.Spec.Content, workloads, endpoints, input.PodDisruptionBudgetMinAvailable)
+	runtimeManifest, effectiveWorkloads, endpoints, proxyNodes, err := prepareNetworkPackage(ctx, runner, cluster, manifests.Spec.Content, workloads, endpoints, input.PodDisruptionBudgetMinAvailable)
 	if err != nil {
 		return unhealthy(err.Error(), "trafficEntrypoints", "unhealthy"), nil
 	}
@@ -419,6 +471,9 @@ func (plugin Plugin) Verify(ctx context.Context, step domain.PlanStep, raw json.
 	}
 	if err := plugin.verifyStableWorkloads(ctx, runner, cluster.Spec.Kubeconfig, input.Namespace, effectiveWorkloads, log); err != nil {
 		return unhealthy(err.Error(), "workloads", "unhealthy"), nil
+	}
+	if err := verifyBootstrapJobs(ctx, runner, cluster.Spec.Kubeconfig, input.Namespace, runtimeManifest); err != nil {
+		return unhealthy(err.Error(), "bootstrap", "unhealthy"), nil
 	}
 	if input.SchedulerName != "" {
 		if err := verifySchedulerAssignments(ctx, runner, cluster.Spec.Kubeconfig, input.Namespace, effectiveWorkloads, input.SchedulerName, input.SchedulerInclude, input.SchedulerExclude); err != nil {
@@ -479,7 +534,7 @@ func (plugin Plugin) Cleanup(ctx context.Context, step domain.PlanStep, _ json.R
 		if err := log("warning", "Removing only the owned isolated application namespace"); err != nil {
 			return err
 		}
-		if _, err = runner.Run(ctx, cluster.Spec.Kubeconfig, nil, "delete", "namespace", input.Namespace, "--ignore-not-found", "--wait=true", "--timeout=10m"); err != nil {
+		if err = deleteNamespace(ctx, runner, cluster.Spec.Kubeconfig, input.Namespace, log, 10*time.Minute, 5*time.Second); err != nil {
 			return err
 		}
 	}
@@ -493,7 +548,7 @@ func (plugin Plugin) Cleanup(ctx context.Context, step domain.PlanStep, _ json.R
 	if err := log("warning", "Removing the owned shared experiment control namespace"); err != nil {
 		return err
 	}
-	_, err = runner.Run(ctx, cluster.Spec.Kubeconfig, nil, "delete", "namespace", input.ControlNamespace, "--ignore-not-found", "--wait=true", "--timeout=10m")
+	err = deleteNamespace(ctx, runner, cluster.Spec.Kubeconfig, input.ControlNamespace, log, 10*time.Minute, 5*time.Second)
 	return err
 }
 
@@ -573,56 +628,7 @@ func validateArtifacts(cluster clusterConnection, manifests manifestSet, workloa
 }
 
 func validateKubeconfig(value, server string) error {
-	var config struct {
-		APIVersion     string `yaml:"apiVersion"`
-		Kind           string `yaml:"kind"`
-		CurrentContext string `yaml:"current-context"`
-		Clusters       []struct {
-			Name    string `yaml:"name"`
-			Cluster struct {
-				Server string `yaml:"server"`
-			} `yaml:"cluster"`
-		} `yaml:"clusters"`
-		Contexts []struct {
-			Name    string `yaml:"name"`
-			Context struct {
-				Cluster string `yaml:"cluster"`
-				User    string `yaml:"user"`
-			} `yaml:"context"`
-		} `yaml:"contexts"`
-		Users []struct {
-			Name string `yaml:"name"`
-			User struct {
-				ClientCertificateData string `yaml:"client-certificate-data"`
-				ClientKeyData         string `yaml:"client-key-data"`
-			} `yaml:"user"`
-		} `yaml:"users"`
-	}
-	if err := yaml.Unmarshal([]byte(value), &config); err != nil || config.APIVersion != "v1" || config.Kind != "Config" || config.CurrentContext == "" {
-		return errors.New("cluster kubeconfig is invalid")
-	}
-	var clusterName, userName string
-	for _, item := range config.Contexts {
-		if item.Name == config.CurrentContext {
-			clusterName, userName = item.Context.Cluster, item.Context.User
-		}
-	}
-	clusterOK := false
-	for _, item := range config.Clusters {
-		clusterOK = clusterOK || item.Name == clusterName && item.Cluster.Server == server
-	}
-	userOK := false
-	for _, item := range config.Users {
-		if item.Name == userName {
-			certificate, certificateErr := base64.StdEncoding.DecodeString(item.User.ClientCertificateData)
-			key, keyErr := base64.StdEncoding.DecodeString(item.User.ClientKeyData)
-			userOK = certificateErr == nil && keyErr == nil && len(certificate) > 0 && len(key) > 0
-		}
-	}
-	if !clusterOK || !userOK {
-		return errors.New("cluster kubeconfig target or client identity is invalid")
-	}
-	return nil
+	return kubeconfigutil.ValidateClientIdentity(value, server)
 }
 
 func clusterScopedKinds(ctx context.Context, runner commandRunner, kubeconfig string) (map[string]bool, error) {
@@ -703,8 +709,9 @@ func namespaceOwnership(ctx context.Context, runner commandRunner, kubeconfig, n
 }
 
 func verifyWorkloads(ctx context.Context, runner commandRunner, kubeconfig, namespace string, workloads []workloadTarget, log plugins.Logger) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	type workloadResult struct {
-		id  string
 		err error
 	}
 	results := make(chan workloadResult, len(workloads))
@@ -716,28 +723,41 @@ func verifyWorkloads(ctx context.Context, runner commandRunner, kubeconfig, name
 			defer group.Done()
 			resource := strings.ToLower(workload.Kind) + "/" + workload.Name
 			if _, err := runner.Run(ctx, kubeconfig, nil, "get", resource, "-n", namespace, "-o", "name"); err != nil {
-				results <- workloadResult{workload.ID, fmt.Errorf("declared workload %s is unavailable: %w", workload.ID, err)}
+				results <- workloadResult{fmt.Errorf("declared workload %s is unavailable: %w", workload.ID, err)}
 				return
 			}
 			selector := selectorValue(workload.Selector)
-			pods, err := runner.Run(ctx, kubeconfig, nil, "get", "pods", "-n", namespace, "-l", selector, "-o", "name")
-			if err != nil || strings.TrimSpace(pods) == "" {
-				results <- workloadResult{workload.ID, fmt.Errorf("declared workload %s has no selected pods", workload.ID)}
+			if _, err := waitSelectedPodsReady(ctx, runner, kubeconfig, namespace, selector); err != nil {
+				results <- workloadResult{fmt.Errorf("declared workload %s did not become ready: %w", workload.ID, err)}
 				return
 			}
 			if workload.NodeName != "" {
-				assigned, err := runner.Run(ctx, kubeconfig, nil, "get", "pods", "-n", namespace, "-l", selector, "-o", "jsonpath={range .items[*]}{.spec.nodeName}{'\\n'}{end}")
-				nodes := strings.Fields(assigned)
-				if err != nil || len(nodes) != 1 || nodes[0] != workload.NodeName {
-					results <- workloadResult{workload.ID, fmt.Errorf("traffic entrypoint %s is not uniquely pinned to node %s", workload.Name, workload.NodeName)}
+				assigned, err := runner.Run(ctx, kubeconfig, nil, "get", "pods", "-n", namespace, "-l", selector, "-o", "json")
+				if err != nil {
+					results <- workloadResult{fmt.Errorf("read traffic entrypoint %s pod assignments: %w", workload.Name, err)}
+					return
+				}
+				var pods struct {
+					Items []struct {
+						Spec struct {
+							NodeName string `json:"nodeName"`
+						} `json:"spec"`
+					} `json:"items"`
+				}
+				if err := json.Unmarshal([]byte(assigned), &pods); err != nil {
+					results <- workloadResult{fmt.Errorf("decode traffic entrypoint %s pod assignments: %w", workload.Name, err)}
+					return
+				}
+				nodes := make([]string, 0, len(pods.Items))
+				for _, pod := range pods.Items {
+					nodes = append(nodes, pod.Spec.NodeName)
+				}
+				if len(nodes) != 1 || nodes[0] != workload.NodeName {
+					results <- workloadResult{fmt.Errorf("traffic entrypoint %s is not uniquely pinned to node %s: observed assignments %q", workload.Name, workload.NodeName, nodes)}
 					return
 				}
 			}
-			if _, err := runner.Run(ctx, kubeconfig, nil, "wait", "--for=condition=Ready", "pod", "-n", namespace, "-l", selector, "--timeout=10m"); err != nil {
-				results <- workloadResult{workload.ID, fmt.Errorf("declared workload %s did not become ready: %w", workload.ID, err)}
-				return
-			}
-			results <- workloadResult{id: workload.ID}
+			results <- workloadResult{}
 		}()
 	}
 	done := make(chan struct{})
@@ -745,6 +765,7 @@ func verifyWorkloads(ctx context.Context, runner commandRunner, kubeconfig, name
 		group.Wait()
 		close(done)
 	}()
+	lastSnapshot := ""
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 	for {
@@ -753,22 +774,32 @@ func verifyWorkloads(ctx context.Context, runner commandRunner, kubeconfig, name
 			close(results)
 			goto completed
 		case <-ticker.C:
-			pods, err := runner.Run(ctx, kubeconfig, nil, "get", "pods", "-n", namespace, "-o", "wide")
+			pods, err := runner.Run(ctx, kubeconfig, nil, "get", "pods", "-n", namespace, "-o", "json")
 			if err != nil {
 				if logErr := log("warning", "Workload readiness diagnostics failed: "+err.Error()); logErr != nil {
 					return logErr
 				}
 				continue
 			}
-			if logErr := log("info", "Workload readiness snapshot:\n"+strings.TrimSpace(pods)); logErr != nil {
-				return logErr
+			snapshot, _, decodeErr := workloadReadinessSummary(pods)
+			if decodeErr != nil {
+				continue
+			}
+			if snapshot != lastSnapshot {
+				if logErr := log("info", snapshot); logErr != nil {
+					return logErr
+				}
+				lastSnapshot = snapshot
 			}
 		case <-ctx.Done():
-			return ctx.Err()
+			return workloadReadinessFailure(ctx, runner, kubeconfig, namespace, ctx.Err())
 		}
 	}
 
 completed:
+	if err := ctx.Err(); err != nil {
+		return workloadReadinessFailure(ctx, runner, kubeconfig, namespace, err)
+	}
 	issues := []string{}
 	for result := range results {
 		if result.err != nil {
@@ -777,9 +808,56 @@ completed:
 	}
 	if len(issues) > 0 {
 		sort.Strings(issues)
-		return errors.New(strings.Join(issues, "; "))
+		return workloadReadinessFailure(ctx, runner, kubeconfig, namespace, errors.New(strings.Join(issues, "; ")))
 	}
 	return nil
+}
+
+// kubectl wait follows the pods selected at command start. A descheduler eviction
+// can delete those pods while their controller creates healthy replacements.
+func waitSelectedPodsReady(ctx context.Context, runner commandRunner, kubeconfig, namespace, selector string) (string, error) {
+	return waitSelectedPodsCondition(ctx, runner, kubeconfig, namespace, selector, "Ready")
+}
+
+func waitSelectedPodsCondition(ctx context.Context, runner commandRunner, kubeconfig, namespace, selector, condition string) (string, error) {
+	waitCtx, cancel := context.WithTimeout(ctx, 10*time.Minute)
+	defer cancel()
+	deadline, _ := waitCtx.Deadline()
+	for {
+		if err := waitCtx.Err(); err != nil {
+			return "", err
+		}
+		remaining := time.Until(deadline).Round(time.Millisecond)
+		output, err := runner.Run(waitCtx, kubeconfig, nil, "wait", "--for=condition="+condition, "pod", "-n", namespace, "-l", selector, "--timeout="+remaining.String())
+		if err == nil {
+			return output, nil
+		}
+		// Controllers may not have created any pods yet, or a selected pod may
+		// disappear during eviction. Retry these transitions within one deadline.
+		message := output + " " + err.Error()
+		missingPod := strings.Contains(message, "Error from server (NotFound): pods ") && strings.Contains(message, "not found")
+		if !missingPod && !strings.HasSuffix(strings.TrimSpace(message), "error: no matching resources found") {
+			return output, err
+		}
+		// The next wait selects the current pods instead of the evicted names.
+		// Allow the controller time to create replacements, within the same budget.
+		for {
+			timer := time.NewTimer(time.Second)
+			select {
+			case <-waitCtx.Done():
+				timer.Stop()
+				return "", waitCtx.Err()
+			case <-timer.C:
+			}
+			pods, listErr := runner.Run(waitCtx, kubeconfig, nil, "get", "pods", "-n", namespace, "-l", selector, "-o", "name")
+			if listErr != nil {
+				return "", listErr
+			}
+			if strings.TrimSpace(pods) != "" {
+				break
+			}
+		}
+	}
 }
 
 func verifyEndpoints(ctx context.Context, runner commandRunner, kubeconfig, namespace string, endpoints []serviceEndpoint) error {
@@ -843,22 +921,12 @@ func (plugin Plugin) runner() commandRunner {
 type localRunner struct{}
 
 func (localRunner) Run(ctx context.Context, kubeconfig string, stdin []byte, args ...string) (string, error) {
-	directory, err := os.MkdirTemp("", "kubephos-cluster-*")
-	if err != nil {
-		return "", err
-	}
-	defer os.RemoveAll(directory)
-	path := directory + "/kubeconfig"
-	if err := os.WriteFile(path, []byte(kubeconfig), 0600); err != nil {
-		return "", err
-	}
-	command := exec.CommandContext(ctx, "kubectl", append([]string{"--kubeconfig", path}, args...)...)
-	if stdin != nil {
-		command.Stdin = bytes.NewReader(stdin)
-	}
-	output, err := command.CombinedOutput()
+	output, err := kubeconfigutil.RunKubectl(ctx, kubeconfig, stdin, args...)
 	message := strings.TrimSpace(string(output))
 	if err != nil {
+		if ctx.Err() != nil {
+			return "", fmt.Errorf("kubectl interrupted: %w", ctx.Err())
+		}
 		if message == "" {
 			message = err.Error()
 		}
@@ -868,4 +936,39 @@ func (localRunner) Run(ctx context.Context, kubeconfig string, stdin []byte, arg
 		return "", fmt.Errorf("kubectl %s: %s", strings.Join(args, " "), message)
 	}
 	return message, nil
+}
+
+func nativeTCPEndpoints(endpoints []serviceEndpoint) bool {
+	if len(endpoints) == 0 {
+		return false
+	}
+	for _, endpoint := range endpoints {
+		if endpoint.Protocol != "tcp" {
+			return false
+		}
+	}
+	return true
+}
+
+// Explicit bootstrap Jobs gate readiness after pods are running and before any load begins.
+func verifyBootstrapJobs(ctx context.Context, runner commandRunner, kubeconfig, namespace, content string) error {
+	resources, err := decodeManifestResources(content)
+	if err != nil {
+		return err
+	}
+	for _, resource := range resources {
+		if resource["kind"] != "Job" {
+			continue
+		}
+		metadata, _ := resource["metadata"].(map[string]any)
+		annotations, _ := metadata["annotations"].(map[string]any)
+		if annotations["kubephos.dev/bootstrap"] != "true" {
+			continue
+		}
+		name, _ := metadata["name"].(string)
+		if _, err := runner.Run(ctx, kubeconfig, nil, "wait", "--for=condition=Complete", "job/"+name, "-n", namespace, "--timeout=10m"); err != nil {
+			return fmt.Errorf("bootstrap Job %s failed: %w", name, err)
+		}
+	}
+	return nil
 }

@@ -30,6 +30,11 @@ func New() *Client {
 }
 
 func (c *Client) Run(ctx context.Context, target Target, privateKey, command string) (string, error) {
+	return c.RunWithInput(ctx, target, privateKey, command, nil)
+}
+
+// RunWithInput streams a payload over the authenticated SSH session.
+func (c *Client) RunWithInput(ctx context.Context, target Target, privateKey, command string, input io.Reader) (string, error) {
 	client, err := c.connect(ctx, target, privateKey)
 	if err != nil {
 		return "", err
@@ -40,6 +45,7 @@ func (c *Client) Run(ctx context.Context, target Target, privateKey, command str
 		return "", err
 	}
 	defer session.Close()
+	session.Stdin = input
 	type result struct {
 		value []byte
 		err   error
@@ -182,5 +188,5 @@ func (c *Client) connect(ctx context.Context, target Target, privateKey string) 
 }
 
 func cancellableCommand(command string) string {
-	return "trap 'trap - TERM INT HUP; /usr/bin/kill -TERM -- -$$' TERM INT HUP; ( " + command + " ) & kubephos_remote_pid=$!; wait \"$kubephos_remote_pid\""
+	return "trap 'trap - TERM INT HUP; /usr/bin/kill -TERM -- -$$' TERM INT HUP; ( " + command + " ) <&0 & kubephos_remote_pid=$!; wait \"$kubephos_remote_pid\""
 }

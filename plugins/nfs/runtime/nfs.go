@@ -193,7 +193,7 @@ func (plugin Plugin) Execute(ctx context.Context, step domain.PlanStep, log plug
 	if err := log("info", "Installing the managed shared-storage profile"); err != nil {
 		return nil, err
 	}
-	version, err := plugin.runner().Run(ctx, target, access, installCommand(input.Marker, machines.Spec.NetworkCIDR))
+	version, err := plugin.runner().Run(ctx, target, access, installCommand(input.StorageName, input.Marker, machines.Spec.NetworkCIDR))
 	if err != nil {
 		return nil, err
 	}
@@ -229,7 +229,7 @@ func (plugin Plugin) Verify(ctx context.Context, step domain.PlanStep, raw json.
 	if endpoint.APIVersion != artifactAPI || endpoint.Kind != "SharedStorageEndpoint" || endpoint.Metadata.Name != input.StorageName || endpoint.Metadata.Version == "" || endpoint.Spec.Protocol != "nfs" || endpoint.Spec.Server != target.Address || endpoint.Spec.ExportPath != exportPath || endpoint.Spec.ClientCIDR != machines.Spec.NetworkCIDR {
 		return unhealthy("Shared-storage endpoint does not match the validated plan", "artifact", "invalid"), nil
 	}
-	if _, err := plugin.runner().Run(ctx, target, access, readinessCommand(input.Marker)); err != nil {
+	if _, err := plugin.runner().Run(ctx, target, access, readinessCommand(input.StorageName, input.Marker)); err != nil {
 		return unhealthy("Shared-storage health gate failed: "+err.Error(), "service", "unhealthy"), nil
 	}
 	if err := log("info", "NFS service, managed export, ownership marker and package version are verified"); err != nil {
@@ -304,9 +304,10 @@ func validateArtifacts(machines machineSet, access machineAccess) error {
 	return nil
 }
 
-func installCommand(marker, network string) string {
+func installCommand(nodeName, marker, network string) string {
 	export := exportPath + " " + network + "(rw,sync,no_subtree_check,root_squash)"
 	return strings.Join([]string{
+		"sudo hostnamectl set-hostname " + shellQuote(nodeName),
 		"sudo apt-get update -q",
 		"sudo DEBIAN_FRONTEND=noninteractive apt-get install -y nfs-kernel-server",
 		"sudo install -d -m 0755 /var/lib/kubephos",
@@ -320,8 +321,8 @@ func installCommand(marker, network string) string {
 	}, " && ")
 }
 
-func readinessCommand(marker string) string {
-	return "sudo test \"$(sudo cat " + markerFile + ")\" = " + shellQuote(marker) + " && sudo systemctl is-active --quiet nfs-kernel-server && sudo exportfs -v | grep -F " + shellQuote(exportPath)
+func readinessCommand(nodeName, marker string) string {
+	return "test \"$(hostname)\" = " + shellQuote(nodeName) + " && sudo test \"$(sudo cat " + markerFile + ")\" = " + shellQuote(marker) + " && sudo systemctl is-active --quiet nfs-kernel-server && sudo exportfs -v | grep -F " + shellQuote(exportPath)
 }
 
 func cleanupPrecheckCommand(marker string) string {

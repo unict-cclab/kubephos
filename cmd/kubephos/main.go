@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -19,7 +20,6 @@ import (
 	"kubephos.dev/kubephos/internal/catalog"
 	"kubephos.dev/kubephos/internal/config"
 	"kubephos.dev/kubephos/internal/engine"
-	"kubephos.dev/kubephos/internal/keycloak"
 	"kubephos.dev/kubephos/internal/pluginimports"
 	"kubephos.dev/kubephos/internal/pluginruntime"
 	"kubephos.dev/kubephos/internal/plugins"
@@ -43,12 +43,12 @@ func run() error {
 	}
 	configValue := config.Load()
 	switch command {
+	case "setup-admin":
+		return setupAdministrator(configValue)
 	case "serve":
 		return serve(configValue)
 	case "worker":
 		return work(configValue)
-	case "status":
-		return status(configValue)
 	case "doctor":
 		return doctor(configValue)
 	case "catalog":
@@ -57,6 +57,8 @@ func run() error {
 		return pluginMaintenance(configValue)
 	case "release":
 		return releaseMaintenance(configValue)
+	case "maintenance":
+		return experimentMaintenance(configValue)
 	case "version":
 		fmt.Println(version)
 		return nil
@@ -97,7 +99,7 @@ func catalogMaintenance(configValue config.Config) error {
 	if err != nil {
 		return err
 	}
-	fmt.Printf("PASS %d application versions\n", len(applications))
+	fmt.Printf("PASS %d applications\n", len(applications))
 	return nil
 }
 
@@ -134,11 +136,7 @@ func serve(configValue config.Config) error {
 		slog.Error("load installed plugins", "error", err)
 	}
 	go watchInstalledPlugins(ctx, store, registry, loader)
-	identity := keycloak.New(keycloak.Config{
-		InternalURL: configValue.KeycloakInternalURL, PublicURL: configValue.KeycloakPublicURL, ApplicationURL: configValue.PublicURL,
-		Realm: configValue.KeycloakRealm, ClientID: configValue.KeycloakClientID, ClientSecret: configValue.KeycloakClientSecret,
-		ManagementClientID: configValue.KeycloakManagementClientID, ManagementClientSecret: configValue.KeycloakManagementClientSecret,
-	})
+	identity := configuredIdentity(configValue)
 	handler, err := api.NewServer(store, registry, artifactStore, vault, runtime, loader, identity, configValue.PublicURL, version, configValue.WebDirectory)
 	if err != nil {
 		return err
@@ -275,42 +273,38 @@ func connectionRuntime(store *storage.Store) plugins.ConnectionResolver {
 
 func catalogRuntime(store *storage.Store) plugins.CatalogResolver {
 	return func(ctx context.Context, reference string) (json.RawMessage, error) {
-		applicationID, version, err := catalog.ParseReference(reference)
+		applicationID, err := catalog.ParseReference(reference)
 		if err != nil {
 			return nil, err
 		}
-		return store.GetCatalogApplicationDescriptor(ctx, applicationID, version)
+		return store.GetCatalogApplicationDescriptor(ctx, applicationID)
 	}
 }
 
-func status(configValue config.Config) error {
-	client := &http.Client{Timeout: 5 * time.Second}
-	response, err := client.Get(configValue.PublicURL + "/api/v1/system")
+func localAPIURL(address string) (string, error) {
+	host, port, err := net.SplitHostPort(address)
 	if err != nil {
-		return err
+		return "", fmt.Errorf("invalid HTTP listener: %w", err)
 	}
-	defer response.Body.Close()
-	if response.StatusCode != http.StatusOK {
-		return fmt.Errorf("api returned %s", response.Status)
+	switch host {
+	case "", "0.0.0.0":
+		host = "127.0.0.1"
+	case "::":
+		host = "::1"
 	}
-	var value any
-	if err := json.NewDecoder(response.Body).Decode(&value); err != nil {
-		return err
-	}
-	output, err := json.MarshalIndent(value, "", "  ")
-	if err != nil {
-		return err
-	}
-	fmt.Println(string(output))
-	return nil
+	return "http://" + net.JoinHostPort(host, port), nil
 }
 
 func doctor(configValue config.Config) error {
+	baseURL, err := localAPIURL(configValue.HTTPAddress)
+	if err != nil {
+		return err
+	}
 	client := &http.Client{Timeout: 5 * time.Second}
 	checks := []string{"/health/live", "/health/ready", "/api/v1/auth/status"}
 	failed := false
 	for _, path := range checks {
-		response, err := client.Get(configValue.PublicURL + path)
+		response, err := client.Get(baseURL + path)
 		if err != nil {
 			fmt.Printf("FAIL %s: %v\n", path, err)
 			failed = true

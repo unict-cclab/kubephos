@@ -252,3 +252,91 @@ databaseChangeLog:
             path: changes/036-multi-user-keycloak.sql
             relativeToChangelogFile: true
             splitStatements: false
+  - changeSet:
+      id: 037-clusterless-external-experiments
+      author: kubephos
+      changes:
+        - sqlFile:
+            path: changes/037-clusterless-external-experiments.sql
+            relativeToChangelogFile: true
+  - changeSet:
+      id: 038-cluster-required-for-experiments
+      author: kubephos
+      changes:
+        - sqlFile:
+            path: changes/038-cluster-required-for-experiments.sql
+            relativeToChangelogFile: true
+            splitStatements: false
+  - changeSet:
+      id: 039-unversioned-catalog-applications
+      author: kubephos
+      changes:
+        - sqlFile:
+            path: changes/039-unversioned-catalog-applications.sql
+            relativeToChangelogFile: true
+  - changeSet:
+      id: 040-comparative-configurations
+      author: kubephos
+      changes:
+        - sqlFile:
+            path: changes/040-comparative-configurations.sql
+            relativeToChangelogFile: true
+            splitStatements: false
+  - changeSet:
+      id: 041-model-catalog
+      author: kubephos
+      changes:
+        - sqlFile:
+            path: changes/041-model-catalog.sql
+            relativeToChangelogFile: true
+  - changeSet:
+      id: 042-resource-attribution
+      author: kubephos
+      changes:
+        - sqlFile:
+            path: changes/042-resource-attribution.sql
+            relativeToChangelogFile: true
+  - changeSet:
+      id: 043-resource-sharing
+      author: kubephos
+      changes:
+        - sqlFile:
+            path: changes/043-resource-sharing.sql
+            relativeToChangelogFile: true
+            splitStatements: false
+  - changeSet:
+      id: 044-cluster-maintenance-guard
+      author: kubephos
+      changes:
+        - sqlFile:
+            path: changes/044-cluster-maintenance-guard.sql
+            relativeToChangelogFile: true
+            splitStatements: false
+  - changeSet:
+      id: 045-catalog-orchestrators
+      author: kubephos
+      changes:
+        - sqlFile:
+            path: changes/045-catalog-orchestrators.sql
+            relativeToChangelogFile: true
+  - changeSet:
+      id: 046-trade-runtime-requirements
+      author: kubephos
+      changes:
+        - sqlFile:
+            path: changes/046-trade-runtime-requirements.sql
+            relativeToChangelogFile: true
+  - changeSet:
+      id: 047-artifact-deletions
+      author: kubephos
+      changes:
+        - sqlFile:
+            path: changes/047-artifact-deletions.sql
+            relativeToChangelogFile: true
+  - changeSet:
+      id: 048-retire-placement-controllers
+      author: kubephos
+      changes:
+        - sqlFile:
+            path: changes/048-retire-placement-controllers.sql
+            relativeToChangelogFile: true

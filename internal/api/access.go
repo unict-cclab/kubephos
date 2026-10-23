@@ -18,7 +18,11 @@ func (s *Server) authorizeExperiment(response http.ResponseWriter, request *http
 		writeError(response, http.StatusNotFound, "not_found", "Experiment not found.")
 		return false
 	}
-	if !ownsResource(requestUser(request), ownerID) {
+	allowed := ownsResource(requestUser(request), ownerID)
+	if request.Method == http.MethodGet || request.Method == http.MethodHead {
+		allowed = s.canReadResource(request, "experiments", experimentID)
+	}
+	if !allowed {
 		writeError(response, http.StatusNotFound, "not_found", "Experiment not found.")
 		return false
 	}
@@ -31,6 +35,9 @@ func (s *Server) authorizeOperation(response http.ResponseWriter, request *http.
 		return true
 	}
 	owned, err := s.store.UserOwnsOperation(request.Context(), user.ID, operationID)
+	if request.Method == http.MethodGet || request.Method == http.MethodHead {
+		owned, err = s.store.CanViewResource(request.Context(), "operations", operationID, user.ID)
+	}
 	if err != nil {
 		writeError(response, http.StatusInternalServerError, "database_error", "Could not verify operation access.")
 		return false

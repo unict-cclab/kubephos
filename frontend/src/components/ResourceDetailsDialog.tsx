@@ -1,9 +1,12 @@
+import {ReadoutTable} from './ReadoutTable'
+import {ClusterMaintenance} from './ClusterMaintenance'
+import {ResourceAttribution} from './ResourceAttribution'
+import {ActionIcon} from './ActionIcon'
 import {useState} from 'react'
 import {request} from '../api'
-import {formatDate} from '../lib'
 import type {Connection, ManagedResource, Pipeline, PipelineRun, Session, Workspace} from '../types'
 import {DetailBreadcrumb} from './DetailBreadcrumb'
-import {InputData} from './InputData'
+import {InputData, hasInputData} from './InputData'
 import {ExecutionProgressGraph} from './ExecutionProgressGraph'
 import {KubernetesLogo} from './KubernetesLogo'
 
@@ -23,10 +26,9 @@ interface Props {
 }
 
 export function ResourceDetailsPage({resource, close, connections, workspaces, resources, runs, pipelines, session, openPipelineRun, recreate, recreation}: Props) {
-  const [tab, setTab] = useState<'overview' | 'access' | 'activity' | 'configuration'>(['pending', 'provisioning', 'recreating', 'deleting'].includes(resource?.status ?? '') ? 'activity' : 'overview')
+  const [tab, setTab] = useState<'overview' | 'access' | 'activity' | 'configuration'>(['pending', 'provisioning', 'recreating', 'maintaining', 'deleting'].includes(resource?.status ?? '') ? 'activity' : 'overview')
   if (!resource) return null
   if (['machine-template', 'harbor', 'nfs'].includes(resource.kind)) return <SimpleResourceDetails resource={resource} connections={connections} resources={resources} close={close} />
-  const workspace = workspaces.find(item => item.id === resource.workspaceId)?.name ?? resource.workspaceId
   const connection = connections.find(item => item.id === resource.connectionId)?.name ?? resource.connectionId ?? '—'
   const dependencies = dependencyEntries(resource).map(item => ({...item, name: resources.find(candidate => candidate.id === item.id)?.name ?? item.id}))
   const references = Object.fromEntries([...resources.map(item => [item.id, item.name]), ...connections.map(item => [item.id, item.name]), ...workspaces.map(item => [item.id, item.name])])
@@ -40,16 +42,15 @@ export function ResourceDetailsPage({resource, close, connections, workspaces, r
   const endpoints = managedEndpoints(resource)
   const cluster = resource.kind === 'kubernetes-cluster'
   const completedStages = run?.stages.filter(stage => stage.status === 'succeeded').length ?? 0
-  return <div className="detail-page"><DetailBreadcrumb parent={cluster ? 'Kubernetes' : 'Infrastructure'} current={resource.name} back={close} /><div className="detail-page-heading"><div className={cluster ? 'cluster-detail-title' : undefined}>{cluster && <KubernetesLogo />}<div><h2>{resource.name}</h2>{!cluster && <p>{resourceLabel(resource.kind)} · {workspace}</p>}</div></div><div className="detail-page-actions">{recreate && session.user?.role === 'admin' && <button className="button secondary" disabled={recreation?.pending || resource.status !== 'ready' && resource.status !== 'recreation-failed'} onClick={() => void recreate()}>{recreation?.pending ? 'Recreating…' : 'Recreate cluster'}</button>}<span className={`status-pill ${resource.status}`}>{resource.status}</span></div></div>{recreation?.message && <p className={recreation.error ? 'managed-error' : 'managed-feedback'}>{recreation.message}</p>}<nav className="detail-tabs" aria-label="Resource details"><button className={tab === 'overview' ? 'active' : ''} aria-current={tab === 'overview' ? 'page' : undefined} onClick={() => setTab('overview')}>Overview</button><button className={tab === 'access' ? 'active' : ''} aria-current={tab === 'access' ? 'page' : undefined} onClick={() => setTab('access')}>Access</button><button className={tab === 'activity' ? 'active' : ''} aria-current={tab === 'activity' ? 'page' : undefined} onClick={() => setTab('activity')}>Activity</button><button className={tab === 'configuration' ? 'active' : ''} aria-current={tab === 'configuration' ? 'page' : undefined} onClick={() => setTab('configuration')}>Configuration</button></nav><article className={`detail-page-card ${cluster ? 'cluster-detail-card' : ''}`}>
+  return <div className="detail-page"><DetailBreadcrumb parent={cluster ? 'Kubernetes' : 'Infrastructure'} current={resource.name} back={close} /><div className="detail-page-heading"><div className={cluster ? 'cluster-detail-title' : undefined}>{cluster && <KubernetesLogo />}<div><h2>{resource.name}</h2>{!cluster && <p>{resourceLabel(resource.kind)}</p>}</div></div><div className="detail-page-actions">{cluster && resource.spec.mode !== 'multi' && <ClusterMaintenance key={resource.id} resource={resource} runs={runs} session={session} />}{recreate && session.user?.role === 'admin' && <button className="button secondary" disabled={recreation?.pending || resource.status !== 'ready' && resource.status !== 'recreation-failed' && resource.status !== 'maintenance-failed'} onClick={() => void recreate()}>{recreation?.pending ? 'Recreating…' : 'Recreate cluster'}</button>}<span className={`status-pill ${resource.status}`}>{resource.status}</span></div></div>{recreation?.message && <p className={recreation.error ? 'managed-error' : 'managed-feedback'}>{recreation.message}</p>}<ResourceAttribution resource={resource} editable={cluster} />{dependencies.length > 0 && <div className="cluster-resource-summary"><ReadoutTable label="Cluster resources" data={{headers: dependencies.map(item => item.relation), rows: [dependencies.map(item => item.name)]}} /></div>}<nav className="detail-tabs" aria-label="Resource details"><button className={tab === 'overview' ? 'active' : ''} aria-current={tab === 'overview' ? 'page' : undefined} onClick={() => setTab('overview')}>Overview</button><button className={tab === 'access' ? 'active' : ''} aria-current={tab === 'access' ? 'page' : undefined} onClick={() => setTab('access')}>Access</button><button className={tab === 'activity' ? 'active' : ''} aria-current={tab === 'activity' ? 'page' : undefined} onClick={() => setTab('activity')}>Activity</button><button className={tab === 'configuration' ? 'active' : ''} aria-current={tab === 'configuration' ? 'page' : undefined} onClick={() => setTab('configuration')}>Configuration</button></nav><article className={`detail-page-card ${cluster ? 'cluster-detail-card' : ''}`}>
     {tab === 'overview' && <><div className={`details-summary${cluster ? ' cluster-summary' : ''}`}>
-      <div><span>Status</span><strong>{resource.status}</strong></div>
       {!cluster && <div><span>Type</span><strong>{resourceLabel(resource.kind)}</strong></div>}
-      {!cluster && <div><span>Environment</span><strong>{workspace}</strong></div>}
+      {cluster && <><div><span>Prometheus scraping period</span><strong>{String(resource.spec.scrapeInterval ?? '—')}</strong></div><div><span>Metrics retention</span><strong>{String(resource.spec.retention ?? '—')}</strong></div></>}
       <div><span>Proxmox connection</span><strong>{connection}</strong></div>
-      <div><span>Created</span><strong>{formatDate(resource.createdAt)}</strong></div>
-      <div><span>Updated</span><strong>{formatDate(resource.updatedAt)}</strong></div>
+
+
     </div>
-    {dependencies.length > 0 && <section className="details-section"><div className="details-heading"><strong>Dependencies</strong></div><div className="details-dependencies">{dependencies.map(item => <div key={`${item.relation}-${item.id}`}><span>{item.relation}</span><strong>{item.name}</strong></div>)}</div></section>}
+
     {cluster && <section className="details-section"><div className="details-heading"><strong>Topology</strong></div><Topology resource={resource} /></section>}
     {endpoints.length > 0 && <section className="details-section"><div className="details-heading"><strong>Dashboards</strong></div><div className="details-endpoints">{endpoints.map(endpoint => <a key={endpoint.name} href={endpoint.url} target="_blank" rel="noreferrer"><span>{endpoint.name}</span><strong>{endpoint.label}</strong></a>)}</div></section>}</>}
     {tab === 'access' && <>{resource.kind === 'kubernetes-cluster' && resource.status === 'ready' && <section className="details-section"><div className="details-heading"><strong>Kubernetes access</strong></div><a className="button secondary compact" href={`/api/v1/kubernetes-clusters/${resource.id}/kubeconfig`}>Download kubeconfig</a></section>}<AccessPanel key={resource.id} resource={resource} session={session} /></>}
@@ -57,7 +58,7 @@ export function ResourceDetailsPage({resource, close, connections, workspaces, r
     <section className="details-section activity-status"><div><span>Status</span><strong className={`status-pill ${resource.status}`}>{resource.status}</strong></div>{run && <div><span>Progress</span><strong>{completedStages}/{run.stages.length}</strong></div>}</section>
     {run && <section className="details-section"><ExecutionProgressGraph nodes={progressNodes} label={`${resource.name} lifecycle progress`} showLogs={openPipelineRun ? () => openPipelineRun(run.id) : undefined} /></section>}
     </>}
-    {tab === 'configuration' && (cluster ? <ClusterConfiguration spec={resource.spec} references={references} /> : <section className="details-section"><div className="details-heading"><strong>Resource settings</strong></div><InputData value={resource.spec} references={references} /></section>)}
+    {tab === 'configuration' && (cluster ? <ClusterConfiguration spec={resource.spec} references={references} /> : hasInputData(resource.spec) && <section className="details-section"><div className="details-heading"><strong>Resource settings</strong></div><InputData value={resource.spec} references={references} /></section>)}
   </article></div>
 }
 
@@ -71,7 +72,7 @@ function SimpleResourceDetails({resource, connections, resources, close}: {resou
         if (name === 'connectionId') return [[name, connectionId]]
         return name in resource.spec ? [[name, resource.spec[name]]] : []
       }))
-  return <div className="detail-page"><DetailBreadcrumb parent="Infrastructure" current={resource.name} back={close} /><div className="detail-page-heading"><div><h2>{resource.name}</h2></div><span className={`status-pill ${resource.status}`}>{resource.status}</span></div><article className="detail-page-card simple-resource-detail"><InputData value={fields} references={references} /></article></div>
+  return <div className="detail-page"><DetailBreadcrumb parent="Infrastructure" current={resource.name} back={close} /><div className="detail-page-heading"><div><h2>{resource.name}</h2></div><span className={`status-pill ${resource.status}`}>{resource.status}</span></div><ResourceAttribution resource={resource} editable /><article className="detail-page-card simple-resource-detail"><InputData value={fields} references={references} /></article></div>
 }
 
 type AccessIdentity = {name: string; role: string; username: string; password: string}
@@ -122,8 +123,8 @@ function AccessPanel({resource, session}: {resource: ManagedResource; session: S
         const key = `${endpointIndex}-${identityIndex}`
         const usernameLabel = `${item.name} ${identity.name} username`
         const passwordLabel = `${item.name} ${identity.name} password`
-        return <div key={key}><div className="managed-identity-title"><strong>{identity.name}</strong><span>{identity.role || 'access'}</span></div><button className="copy-value" onClick={() => void copyValue(identity.username, usernameLabel)}><span>Username</span><code>{identity.username}</code><b>{copied === usernameLabel ? 'Copied' : 'Copy'}</b></button><div className="secret-value"><span>Password</span><input aria-label={passwordLabel} type={visible[key] ? 'text' : 'password'} value={identity.password} readOnly /><button onClick={() => setVisible(current => ({...current, [key]: !current[key]}))}>{visible[key] ? 'Hide' : 'Show'}</button><button onClick={() => void copyValue(identity.password, passwordLabel)}>{copied === passwordLabel ? 'Copied' : 'Copy'}</button></div></div>
-      })}</div> : <div className="no-login"><span>✓</span><strong>No login required</strong></div>}
+        return <div key={key}><div className="managed-identity-title"><strong>{identity.name}</strong><span>{identity.role || 'access'}</span></div><button className="copy-value" onClick={() => void copyValue(identity.username, usernameLabel)}><span>Username</span><code>{identity.username}</code><b>{copied === usernameLabel ? 'Copied' : 'Copy'}</b></button><div className="secret-value"><span>Password</span><input aria-label={passwordLabel} type={visible[key] ? 'text' : 'password'} value={identity.password} readOnly /><button className="text-button" onClick={() => setVisible(current => ({...current, [key]: !current[key]}))}>{visible[key] ? 'Hide' : 'Show'}</button><button className="text-button" onClick={() => void copyValue(identity.password, passwordLabel)}>{copied === passwordLabel ? 'Copied' : 'Copy'}</button></div></div>
+      })}</div> : <div className="no-login"><span><ActionIcon name="check" /></span><strong>No login required</strong></div>}
     </article>}) : <p className="details-copy">No access available</p>}</div>}
   </section>
 }
@@ -150,6 +151,7 @@ function dependencyEntries(resource: ManagedResource): Array<{relation: string; 
 }
 
 function managedEndpoints(resource: ManagedResource): Array<{name: string; label: string; url: string}> {
+ if (resource.spec.mode === 'multi' && Array.isArray(resource.spec.members)) return resource.spec.members.flatMap(member => member && typeof member === 'object' ? managedEndpoints({...resource,spec:member}).map(endpoint => ({...endpoint,name: `${member.name} · ${endpoint.name}`})) : [])
   if (resource.status !== 'ready' || resource.kind !== 'kubernetes-cluster' || typeof resource.spec?.managedProfile !== 'string') return []
   const address = String(resource.spec.addressStart ?? '')
   if (!address) return []
@@ -161,32 +163,39 @@ function managedEndpoints(resource: ManagedResource): Array<{name: string; label
     ['Loki API', 32099, ''],
     ['Jaeger', 30002, ''],
     ['Kiali', 30001, '/kiali'],
-    ['Headlamp', 30003, '']
-  ].map(([name, port, path]) => ({name: String(name), label: `${address}:${port}`, url: `http://${address}:${port}${path}`}))
+    ['Headlamp', 30003, ''],
+    ...(resource.spec.networking === 'cilium' ? [['Hubble', 31235, '']] : [])
+  ].filter(([name]) => resource.spec.networking !== 'cilium' || name !== 'Kiali').map(([name, port, path]) => ({name: String(name), label: `${address}:${port}`, url: `http://${address}:${port}${path}`}))
 }
 
 function Topology({resource}: {resource: ManagedResource}) {
+ if (resource.spec.mode === 'multi' && Array.isArray(resource.spec.members)) return <>{resource.spec.members.map((member,index) => member && typeof member === 'object' && <section className="details-section" key={index}><div className="details-heading"><strong>{String(member.name)}</strong></div><Topology resource={{...resource,spec:member}} /></section>)}</>
   const controlPlane: Record<string, unknown> = {name: 'control-plane', role: 'Control plane', count: Number(resource.spec.controlPlanes ?? 0), zones: resource.spec.controlPlaneZones, capacity: resource.spec.controlPlaneCapacity}
   const management: Record<string, unknown> | null = resource.spec.managementPool && typeof resource.spec.managementPool === 'object' ? {...resource.spec.managementPool as Record<string, unknown>, role: 'Management'} : null
   const applications: Array<Record<string, unknown>> = Array.isArray(resource.spec.applicationPools) ? resource.spec.applicationPools.map(pool => ({...(pool as Record<string, unknown>), role: 'Application'})) : []
   const pools: Array<Record<string, unknown>> = [controlPlane, ...(management ? [management] : []), ...applications]
-  return <div className="details-topology">{pools.map((pool, index) => {
+  const showZones = resource.spec.networking !== 'cilium'
+  return <ReadoutTable label="Cluster topology" data={{headers: ['Pool', 'Role', 'Nodes', ...(showZones ? ['Zones'] : []), 'CPU (cores)', 'Memory (MiB)', 'Disk (GiB)'], rows: pools.map(pool => {
     const capacity = pool.capacity && typeof pool.capacity === 'object' ? pool.capacity as Record<string, unknown> : {}
-    const zones = Array.isArray(pool.zones) ? pool.zones.join(', ') : '—'
-    return <article key={`${String(pool.name)}-${index}`}><div><strong>{String(pool.name)}</strong><span>{String(pool.role)} · {String(pool.count)} node(s)</span></div><dl><div><dt>Zones</dt><dd>{zones}</dd></div><div><dt>CPU</dt><dd>{String(capacity.cores ?? '—')}</dd></div><div><dt>Memory</dt><dd>{capacity.memoryMiB ? `${String(capacity.memoryMiB)} MiB` : '—'}</dd></div><div><dt>Disk</dt><dd>{capacity.diskGiB ? `${String(capacity.diskGiB)} GiB` : '—'}</dd></div></dl></article>
-  })}</div>
+    const zones = Array.isArray(pool.zones) && pool.zones.length ? pool.zones.join(', ') : '—'
+    return [String(pool.name), String(pool.role), String(pool.count), ...(showZones ? [zones] : []), ...['cores', 'memoryMiB', 'diskGiB'].map(key => String(capacity[key] ?? '—'))]
+  })}} />
 }
 
 function ClusterConfiguration({spec, references}: {spec: Record<string, unknown>; references: Record<string, string>}) {
-  const grouped = new Set(['controlPlaneZones', 'controlPlaneCapacity', 'managementPool', 'applicationPools'])
+ if (spec.mode === 'multi' && Array.isArray(spec.members)) return <>{spec.members.map((member,index) => member && typeof member === 'object' && <section className="details-section" key={index}><div className="details-heading"><strong>{String(member.name)}</strong></div><ClusterConfiguration spec={member} references={references} /></section>)}</>
+  const grouped = new Set(['machineNodes', 'controlPlaneZones', 'controlPlaneCapacity', 'managementPool', 'applicationPools', 'scrapeInterval', 'retention', 'mode', 'members'])
   const settings = Object.fromEntries(Object.entries(spec).filter(([key]) => !grouped.has(key)))
-  const controlPlane = Object.fromEntries(['controlPlaneZones', 'controlPlaneCapacity'].filter(key => key in spec).map(key => [key, spec[key]]))
-  const pools = Array.isArray(spec.applicationPools) ? spec.applicationPools : []
+  const controlPlane = Object.fromEntries((spec.networking === 'cilium' ? ['controlPlaneCapacity'] : ['controlPlaneZones', 'controlPlaneCapacity']).filter(key => key in spec).map(key => [key, spec[key]]))
+  const poolSettings = (value: unknown) => spec.networking === 'cilium' && value && typeof value === 'object' ? Object.fromEntries(Object.entries(value).filter(([key]) => key !== 'zones')) : value
+  const pools = Array.isArray(spec.applicationPools) ? spec.applicationPools.map(poolSettings) : []
   return <>
-    <section className="details-section"><div className="details-heading"><strong>Cluster settings</strong></div><InputData value={settings} references={references} /></section>
-    {Object.keys(controlPlane).length > 0 && <section className="details-section"><div className="details-heading"><strong>Control plane</strong></div><InputData value={controlPlane} references={references} /></section>}
-    {'managementPool' in spec && <section className="details-section"><div className="details-heading"><strong>Management pool</strong></div><InputData value={spec.managementPool} references={references} /></section>}
-    {'applicationPools' in spec && <section className="details-section"><div className="details-heading"><strong>Application pools</strong></div>{pools.length ? <div className="cluster-configuration-pools">{pools.map((pool, index) => <article key={index}><strong>{typeof pool === 'object' && pool !== null && 'name' in pool ? String(pool.name) : `Pool ${index + 1}`}</strong><InputData value={pool} references={references} /></article>)}</div> : <p className="details-copy">None</p>}</section>}
+    {hasInputData(settings) && <section className="details-section"><div className="details-heading"><strong>Cluster settings</strong></div><InputData value={settings} references={references} /></section>}
+    {hasInputData([spec.scrapeInterval, spec.retention]) && <section className="details-section"><div className="details-heading"><strong>Prometheus</strong></div><InputData value={{scrapeInterval: spec.scrapeInterval, retention: spec.retention}} /></section>}
+    {hasInputData(controlPlane) && <section className="details-section"><div className="details-heading"><strong>Control plane</strong></div><InputData value={controlPlane} references={references} /></section>}
+    {hasInputData(spec.machineNodes) && <section className="details-section"><div className="details-heading"><strong>VM placement</strong></div><div className="resource-list-table-wrap"><table className="resource-list-table" aria-label="VM placement"><thead><tr><th scope="col">VM name</th><th scope="col">Proxmox server</th></tr></thead><tbody>{Object.entries(spec.machineNodes as Record<string, unknown>).sort(([left], [right]) => left.localeCompare(right, undefined, {numeric: true})).map(([name, node]) => <tr key={name}><td><code>{name}</code></td><td>{typeof node === 'string' ? node : '—'}</td></tr>)}</tbody></table></div></section>}
+    {hasInputData(spec.managementPool) && <section className="details-section"><div className="details-heading"><strong>Management pool</strong></div><InputData value={poolSettings(spec.managementPool)} references={references} /></section>}
+    {hasInputData(spec.applicationPools) && <section className="details-section"><div className="details-heading"><strong>Pools</strong></div>{pools.length ? <div className="cluster-configuration-pools">{pools.map((pool, index) => <article key={index}><strong>{typeof pool === 'object' && pool !== null && 'name' in pool ? String(pool.name) : `Pool ${index + 1}`}</strong><InputData value={pool} references={references} /></article>)}</div> : <p className="details-copy">None</p>}</section>}
   </>
 }
 

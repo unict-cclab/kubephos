@@ -1,12 +1,15 @@
+import {ResourceListHeading} from './ResourceListHeading'
+import {ResourceSharing, canManageResource} from './ResourceSharing'
+import {ResourceListTable} from './ResourceListTable'
+import {useDeleteConfirmation} from './ConfirmationDialog'
 import {useState} from 'react'
-import {SectionIcon} from './SectionIcon'
 import {request} from '../api'
-import {formatDate, isTerminalExperiment} from '../lib'
+import {experimentDeletionMessage, experimentDisplayStatus, isTerminalExperiment} from '../lib'
 import {useDetailRoute} from '../detailRoute'
 import type {Artifact, Experiment, ExperimentConfiguration, Operation, Session, Workspace} from '../types'
-import {ResultsView} from './ResultsView'
+import {ResultsView} from './LazyResultsView'
 import {ResourceAction} from './ResourceAction'
-import {ExperimentInstanceDialog} from './ExperimentInstanceDialog'
+import {ExperimentExecutionDialog} from './ExperimentExecutionDialog'
 
 import {OwnerFilter, ownerLabel} from './OwnerFilter'
 interface Props {
@@ -24,6 +27,7 @@ interface Props {
 type Filter = 'all' | 'active' | 'completed'
 
 export function ExperimentsHistoryView(props: Props) {
+  const {confirmDelete, confirmationDialog} = useDeleteConfirmation()
   const detail = useDetailRoute('results')
   const [filter, setFilter] = useState<Filter>('all')
   const [deleting, setDeleting] = useState<string | null>(null)
@@ -31,7 +35,7 @@ export function ExperimentsHistoryView(props: Props) {
   const [error, setError] = useState('')
   const [owner, setOwner] = useState('')
   const remove = async (item: Experiment) => {
-    if (!window.confirm(`Delete experiment ${item.name}? Runs, logs and collected results will be retained.`)) return
+    if (!await confirmDelete(experimentDeletionMessage(item))) return
     setDeleting(item.id)
     setError('')
     try {
@@ -48,21 +52,15 @@ export function ExperimentsHistoryView(props: Props) {
 
   const items = props.experiments.filter(item => (!owner || item.ownerUserId === owner) && (filter === 'all' || (filter === 'active' ? ['queued', 'running'].includes(item.status) : ['succeeded', 'failed', 'canceled'].includes(item.status))))
   return <>
-    <div className="section-heading"><div><SectionIcon kind="experiments" /><h2>Experiments</h2></div><div className="section-heading-actions"><OwnerFilter items={props.experiments} value={owner} onChange={setOwner} />{props.session.user?.role === 'admin' && <ResourceAction action="create" label="New experiment" disabled={!props.configurations.some(item => item.validation.valid)} onClick={() => setCreating(true)} />}</div></div>
+    {confirmationDialog}
+    <ResourceListHeading title="Experiments" icon="experiments" action={<>{Boolean(props.session.user) && <ResourceAction action="create" label="New experiment" disabled={!props.configurations.some(item => item.validation.valid && canManageResource(props.session,item.ownerUserId))} onClick={() => setCreating(true)} />}</>} />
     {error && <p className="form-error page-error">{error}</p>}
     <div className="history-filters" role="group" aria-label="Filter experiments">{(['all', 'active', 'completed'] as Filter[]).map(value => <button key={value} type="button" className={filter === value ? 'active' : ''} aria-pressed={filter === value} onClick={() => setFilter(value)}>{value === 'all' ? 'All' : value === 'active' ? 'In progress' : 'Completed'}</button>)}</div>
-    <div className="experiment-history-list">{items.length ? items.map(item => {
-      const configuration = props.configurations.find(value => value.id === item.configurationId)
-      const trials = item.variants.flatMap(variant => variant.trials)
-      const finished = trials.filter(trial => ['succeeded', 'failed', 'canceled'].includes(trial.status)).length
-      return <article className="experiment-history-row" key={item.id}>
-        <span className={`status-dot ${item.status}`} aria-hidden="true" />
-        <span className="history-row-main"><strong>{item.name}</strong><small>{item.kind === 'suite' ? `${item.variants.length} strategies` : configuration?.name ?? 'Experiment'} · {finished}/{trials.length} runs · Created by {ownerLabel(item)}</small></span>
-        <span className="history-row-date">{formatDate(item.createdAt)}</span>
-        <span className={`status ${item.status}`}>{item.status}</span>
-        <span className="history-row-actions"><ResourceAction action="view" label={`View ${item.name} details`} onClick={() => detail.open('instance', item.id)} />{props.session.user?.role === 'admin' && <ResourceAction action="delete" label={`Delete ${item.name}`} disabled={!isTerminalExperiment(item.status) || deleting === item.id} onClick={() => void remove(item)} />}</span>
-      </article>
-    }) : <div className="empty-state"><div><strong>{filter === 'all' ? 'No experiments yet' : 'No matching experiments'}</strong>{filter === 'all' ? 'Create one from a validated configuration.' : 'Try another filter.'}</div></div>}</div>
-    <ExperimentInstanceDialog open={creating} configurations={props.configurations} close={() => setCreating(false)} session={props.session} changed={props.changed} onCreated={id => detail.open('instance', id)} />
+    <ResourceListTable filters={<OwnerFilter items={props.experiments} value={owner} onChange={setOwner} />} empty={<><strong>{filter === 'all' && !owner ? 'No experiments yet' : 'No matching experiments'}</strong><p>{filter === 'all' && !owner ? 'Run an experiment from a validated configuration to start collecting results.' : 'Choose another status or owner filter.'}</p></>} searchText={item => `${item.name} ${ownerLabel(item)} ${item.kind} ${experimentDisplayStatus(item)}`} items={items} label="Experiments" columns={[
+      {label: 'Name', render: item => <><h3>{item.name}</h3><small>{item.kind === 'suite' ? `Comparative · ${item.variants.length} configurations` : item.variants[0]?.name ?? props.configurations.find(value => value.id === item.configurationId)?.name ?? 'Single experiment'}</small></>},
+      {label: 'Runs', render: item => {const trials = item.variants.flatMap(variant => variant.trials); return `${trials.filter(trial => ['succeeded', 'failed', 'canceled'].includes(trial.status)).length}/${trials.length}`}},
+      {label: 'Status', render: item => <span className={`status ${experimentDisplayStatus(item)}`}>{experimentDisplayStatus(item)}</span>}
+    ]} actions={item => <><ResourceSharing kind="experiments" id={item.id} name={item.name} ownerUserId={item.ownerUserId} session={props.session} changed={props.changed} /><ResourceAction action="view" label={`View ${item.name} details`} onClick={() => detail.open('instance', item.id)} />{canManageResource(props.session, item.ownerUserId) && <ResourceAction action="delete" label={`Delete ${item.name}`} disabled={!isTerminalExperiment(item.status) || deleting === item.id} onClick={() => void remove(item)} />}</>} />
+    <ExperimentExecutionDialog open={creating} configurations={props.configurations.filter(item => canManageResource(props.session,item.ownerUserId))} close={() => setCreating(false)} session={props.session} changed={props.changed} onCreated={id => detail.open('instance', id)} />
   </>
 }

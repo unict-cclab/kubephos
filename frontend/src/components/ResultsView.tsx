@@ -1,13 +1,20 @@
-import {useEffect, useMemo, useRef, useState, type FormEvent} from 'react'
+import {ResponsiveTable} from './ResponsiveTable'
+import {ResourceSharing, canManageResource} from './ResourceSharing'
+import {ResourceAction} from './ResourceAction'
+import {ActionIcon} from './ActionIcon'
+import {downloadBlob, exportChart, niceAxis, timeAxis} from '../charts'
+export {figureDimensions, niceAxis, setPNGResolution, svgToPDF} from '../charts'
+import {useDeleteConfirmation} from './ConfirmationDialog'
+import {useEffect, useMemo, useRef, useState, Fragment, type FormEvent, type CSSProperties} from 'react'
 import {request} from '../api'
-import {formatBytes, formatDate, isTerminalExperiment} from '../lib'
+import {experimentDeletionMessage, experimentDisplayStatus, formatBytes, formatDate, isTerminalExperiment} from '../lib'
 import type {Artifact, Experiment, ExperimentFigure, ExperimentTrial, MetricPoint, Operation, Session, TimeSeriesDataset, Workspace} from '../types'
 import {Dialog} from './Dialog'
 import {DetailBreadcrumb} from './DetailBreadcrumb'
 import {LoadProfilePreview, loadProfileSteps, type LoadProfileStep} from './LoadProfileEditor'
-import {ownerLabel} from './OwnerFilter'
+import {ResourceAttribution} from './ResourceAttribution'
 
-interface Props {
+export interface ResultsViewProps {
   artifacts: Artifact[]
   experiments: Experiment[]
   operations: Operation[]
@@ -36,57 +43,53 @@ export interface AggregateSeries {
   color?: string
 }
 
-const colors = ['#1f77b4', '#d55e00', '#009e73', '#cc79a7', '#e69f00', '#56b4e9', '#000000']
-const dashPatterns = ['', '10 6', '10 4 2 4', '2 5']
-const priorityMetrics = ['load.successful_rps', 'load.failure_percentage', 'load.p95_response_time', 'load.slo_violation_percentage', 'deployment.ready_replicas']
+type ResultsTab = 'statistics' | 'charts' | 'downloads'
 
-type ResultsTab = 'overview' | 'charts' | 'statistics' | 'downloads'
-
-export function ResultsView({artifacts, experiments, operations, workspaces, session, changed, openOperation, openPipelineRun, focusedExperiment, onBack}: Props) {
+export function ResultsView({artifacts, experiments, operations, workspaces, session, changed, openOperation, openPipelineRun, focusedExperiment, onBack}: ResultsViewProps) {
+  const {confirmDelete, confirmAction, confirmationDialog} = useDeleteConfirmation()
   const available = useMemo(() => artifacts.filter(item => !item.sensitive && item.type === 'TimeSeriesDataset' && item.version === 'v1alpha1').sort((left, right) => right.verifiedAt.localeCompare(left.verifiedAt)), [artifacts])
+  const datasetCache = useRef(new Map<string, TimeSeriesDataset>())
+  const availableByID = useMemo(() => new Map(available.map(item => [item.id, item])), [available])
   const focusedArtifactIDs = focusedExperiment?.variants.flatMap(variant => variant.trials.map(trial => trial.resultArtifactId)).filter(Boolean) ?? []
   const selectable = focusedExperiment ? available.filter(item => focusedArtifactIDs.includes(item.id)) : available
   const focusedKey = focusedArtifactIDs.join('|')
   const availableKey = available.map(item => `${item.id}:${item.digest}`).join('|')
   const knownFocusedIDs = useRef(selectable.map(item => item.id))
-  const [selected, setSelected] = useState<string[]>(() => focusedArtifactIDs.filter(id => available.some(item => item.id === id)).slice(0, 20))
+  const [selected, setSelected] = useState<string[]>(() => focusedArtifactIDs.filter(id => availableByID.has(id)).slice(0, 20))
   const [loaded, setLoaded] = useState<LoadedDataset[]>([])
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
+  const [printPending, setPrintPending] = useState(false)
   const [activeExperiment, setActiveExperiment] = useState<string | null>(focusedExperiment?.id ?? null)
-  const [activeTab, setActiveTab] = useState<ResultsTab>('overview')
+  const [activeTab, setActiveTab] = useState<ResultsTab>('statistics')
   const [runTab, setRunTab] = useState('summary')
-  const [printSummaryPending, setPrintSummaryPending] = useState(false)
-  const [metricGroup, setMetricGroup] = useState('Load')
   const [initialized, setInitialized] = useState(Boolean(focusedExperiment))
+  useEffect(() => {
+    if (!printPending || activeTab !== 'statistics') return
+    const frame = requestAnimationFrame(() => {window.print(); setPrintPending(false)})
+    return () => cancelAnimationFrame(frame)
+  }, [printPending, activeTab])
   const [deleting, setDeleting] = useState(false)
   const [stopping, setStopping] = useState(false)
-  const [stopRequested, setStopRequested] = useState(false)
+  const [stopRequestedId, setStopRequestedId] = useState<string | null>(null)
+  const stopRequested = Boolean(focusedExperiment && (focusedExperiment.cancelRequested || stopRequestedId === focusedExperiment.id))
   const [actionError, setActionError] = useState('')
-  const [figures, setFigures] = useState<ExperimentFigure[]>([])
   const focusedRuns = focusedExperiment?.variants.flatMap(variant => variant.trials.map(trial => ({variant, trial}))) ?? []
   const activeRun = focusedRuns.find(item => item.trial.id === runTab)
   const liveRun = focusedRuns.find(item => item.trial.status === 'running')
-  const viewSelected = activeRun ? activeRun.trial.resultArtifactId && available.some(item => item.id === activeRun.trial.resultArtifactId) ? [activeRun.trial.resultArtifactId] : [] : selected
-  const selectedKey = viewSelected.join('|')
+  const viewSelected = activeRun ? activeRun.trial.resultArtifactId && availableByID.has(activeRun.trial.resultArtifactId) ? [activeRun.trial.resultArtifactId] : [] : selected
+  const selectedKey = viewSelected.map(id => `${id}:${availableByID.get(id)?.digest ?? ''}:${responseTimeSLO(focusedExperiment, id) ?? ''}`).join('|')
 
   useEffect(() => {setRunTab('summary')}, [focusedExperiment?.id])
 
   useEffect(() => {
-    if (!focusedExperiment || isTerminalExperiment(focusedExperiment.status)) setStopRequested(false)
+    if (!focusedExperiment || isTerminalExperiment(focusedExperiment.status)) setStopRequestedId(null)
   }, [focusedExperiment?.id, focusedExperiment?.status])
 
-  const canAccessExperimentData = !focusedExperiment?.ownerUserId || session.user?.role === 'admin' || focusedExperiment.ownerUserId === session.user?.id
   useEffect(() => {
-    if (!printSummaryPending || activeTab !== 'overview') return
-    const frame = requestAnimationFrame(() => {setPrintSummaryPending(false); window.print()})
-    return () => cancelAnimationFrame(frame)
-  }, [activeTab, printSummaryPending])
-
-  useEffect(() => {
-    setSelected(current => current.filter(id => available.some(item => item.id === id)))
+    setSelected(current => current.filter(id => availableByID.has(id)))
   }, [availableKey])
 
   useEffect(() => {
@@ -113,77 +116,67 @@ export function ResultsView({artifacts, experiments, operations, workspaces, ses
     if (!viewSelected.length) {
       setLoaded([])
       setError('')
+      setLoading(false)
       return
     }
     const controller = new AbortController()
     setLoading(true)
     setError('')
     Promise.all(viewSelected.map(async id => {
-      const artifact = available.find(item => item.id === id)
+      const artifact = availableByID.get(id)
       if (!artifact) throw new Error('A selected run is no longer available.')
-      const dataset = await request<TimeSeriesDataset>(`/artifacts/${id}/download`, {}, undefined, controller.signal)
-      addDerivedMetrics(dataset, responseTimeSLO(focusedExperiment, id))
-      validateDataset(dataset)
+      const slo = responseTimeSLO(focusedExperiment, id)
+      const cacheKey = `${id}:${artifact.digest}:${slo ?? ''}`
+      let dataset = datasetCache.current.get(cacheKey)
+      if (!dataset) {
+        dataset = await request<TimeSeriesDataset>(`/artifacts/${id}/download`, {}, undefined, controller.signal)
+        if (controller.signal.aborted) throw new DOMException('Aborted', 'AbortError')
+        addDerivedMetrics(dataset, slo)
+        validateDataset(dataset)
+        // Keep memory bounded when navigating between many runs.
+        if (datasetCache.current.size >= 20) datasetCache.current.delete(datasetCache.current.keys().next().value!)
+        datasetCache.current.set(cacheKey, dataset)
+      }
       return {artifact, dataset, label: ''}
-    })).then(values => setLoaded(values)).catch(cause => {
+    })).then(values => {if (!controller.signal.aborted) setLoaded(values)}).catch(cause => {
       if (!controller.signal.aborted) setError(cause instanceof Error ? cause.message : 'Could not load the selected runs.')
     }).finally(() => {
       if (!controller.signal.aborted) setLoading(false)
     })
     return () => controller.abort()
-  }, [availableKey, selectedKey])
-
-  useEffect(() => {
-    if (!focusedExperiment || !canAccessExperimentData) {
-      setFigures([])
-      return
-    }
-    const controller = new AbortController()
-    request<{items: ExperimentFigure[]}>(`/experiments/${focusedExperiment.id}/figures`, {}, undefined, controller.signal)
-      .then(result => setFigures(result.items))
-      .catch(cause => { if (!controller.signal.aborted) setActionError(cause instanceof Error ? cause.message : 'Could not load saved figures.') })
-    return () => controller.abort()
-  }, [focusedExperiment?.id, canAccessExperimentData])
+  }, [selectedKey])
 
   const toggle = (id: string) => {
     if (!focusedExperiment) setActiveExperiment(null)
-    setActiveTab('overview')
+    setActiveTab('statistics')
     setNotice('')
     setSelected(current => current.includes(id) ? current.filter(item => item !== id) : current.length < (focusedExperiment ? 20 : 8) ? [...current, id] : current)
   }
   const experiment = focusedExperiment ?? experiments.find(item => item.id === activeExperiment)
-  const experimentPresentation = new Map<string, {label: string; color?: string}>()
-  for (const variant of experiment?.variants ?? []) for (const trial of variant.trials) if (trial.resultArtifactId) experimentPresentation.set(trial.resultArtifactId, {label: `${variant.alias || variant.name} · Run ${trial.position}`, color: variant.color})
-  const displayed = loaded.map(item => ({...item, label: experimentPresentation.get(item.artifact.id)?.label ?? datasetLabel(item.artifact, operations, workspaces), color: experimentPresentation.get(item.artifact.id)?.color}))
-  const metrics = [...new Set(displayed.flatMap(item => item.dataset.spec.series.map(series => series.metric)))].filter(metric => !['load.mean_response_time', 'load.p50_response_time', 'load.p99_response_time'].includes(metric) && !metric.startsWith('application.')).sort()
-  const outcomeMetrics = metrics
-  const groups = groupMetrics(metrics)
-  const activeMetricGroup = groups.has(metricGroup) ? metricGroup : groups.keys().next().value ?? ''
-  const visibleMetrics = groups.get(activeMetricGroup) ?? []
-  const preferredMetrics = priorityMetrics.filter(metric => outcomeMetrics.includes(metric))
-  const overviewMetrics = preferredMetrics
-  const visibleFigures = activeRun ? figures.filter(figure => figure.sourceArtifactIds.includes(activeRun.trial.resultArtifactId)) : figures
-  const samples = displayed.reduce((total, item) => total + item.dataset.spec.summary.samples, 0)
-  const selectedWorkspaceID = available.find(item => item.id === selected[0])?.workspaceId
-  const saveFigure = async (metric: string, format: 'pdf' | 'png', value: Uint8Array, sourceIDs: string[]) => {
-    if (!focusedExperiment) return
-    const saved = await request<ExperimentFigure>(`/experiments/${focusedExperiment.id}/figures?metric=${encodeURIComponent(metric)}&format=${format}`, {
-      method: 'POST',
-      headers: {'Content-Type': format === 'pdf' ? 'application/pdf' : 'image/png', 'X-KubePhos-Source-Artifacts': sourceIDs.join(',')},
-      body: new Blob([value.buffer as ArrayBuffer])
-    }, session.csrfToken)
-    setFigures(items => [saved, ...items])
-  }
+  const experimentPresentation = useMemo(() => {
+    const presentation = new Map<string, {label: string; color?: string}>()
+    for (const variant of experiment?.variants ?? []) for (const trial of variant.trials) if (trial.resultArtifactId) presentation.set(trial.resultArtifactId, {label: `${variant.alias || variant.name} · Run ${trial.position}`, color: variant.color})
+    return presentation
+  }, [experiment])
+  const displayed = useMemo(() => loaded.map(item => ({...item, label: experimentPresentation.get(item.artifact.id)?.label ?? datasetLabel(item.artifact, operations), color: experimentPresentation.get(item.artifact.id)?.color})), [loaded, experimentPresentation, operations, workspaces])
+  const metrics = useMemo(() => [...new Set(displayed.flatMap(item => [...item.dataset.spec.series.map(series => series.metric), ...(item.dataset.spec.controlMetrics ?? []).filter(summary => summary.status !== 'not_configured').map(summary => summary.metric)]))].filter(metric => !['load.mean_response_time', 'load.p50_response_time', 'load.p99_response_time'].includes(metric) && (!metric.startsWith('application.') || metric === 'application.p95_response_time')).sort(), [displayed])
+  const statisticsMetrics = [...new Set([...metrics, ...displayed.flatMap(item => item.dataset.spec.controlMetrics?.map(summary => summary.metric) ?? [])])].filter(metric => !['application.p95_response_time', 'redis.operation_p95_response_time'].includes(metric))
+  const visibleMetrics = [...groupMetrics(metrics.filter(metric => !isControlMetric(metric))).values()].flat()
+  const plotHeight = activeTab === 'charts' ? sharedChartHeight(displayed, visibleMetrics, activeRun ? undefined : experiment) : 465
+
+
+
+  const selectedWorkspaceID = availableByID.get(selected[0])?.workspaceId
   const openExperiment = (item: Experiment) => {
     const artifactIDs = item.variants.flatMap(variant => variant.trials.map(trial => trial.resultArtifactId)).filter(id => available.some(artifact => artifact.id === id))
     setActiveExperiment(item.id)
-    setActiveTab('overview')
+    setActiveTab('statistics')
     setSelected(artifactIDs.slice(0, 20))
     setNotice(artifactIDs.length > 20 ? 'Showing the first twenty runs.' : artifactIDs.length === 0 && item.status === 'succeeded' ? 'This experiment has no plottable metrics.' : '')
   }
   const removeExperiment = async () => {
     const label = experiment?.kind === 'suite' ? 'suite' : 'experiment'
-    if (!experiment || !isTerminalExperiment(experiment.status) || !window.confirm(`Delete ${label} ${experiment.name}? Runs, operations, logs and collected artifacts will be retained.`)) return
+    if (!experiment || !isTerminalExperiment(experiment.status) || !await confirmDelete(experimentDeletionMessage(experiment))) return
     setDeleting(true)
     setActionError('')
     try {
@@ -203,12 +196,12 @@ export function ResultsView({artifacts, experiments, operations, workspaces, ses
   const stopExperiment = async () => {
     if (!focusedExperiment || !['queued', 'running'].includes(focusedExperiment.status)) return
     const label = focusedExperiment.kind === 'suite' ? 'suite' : 'experiment'
-    if (!window.confirm(`Stop ${label} ${focusedExperiment.name}? The active run will be interrupted safely and all remaining runs will be canceled.`)) return
+    if (!await confirmAction(`Stop ${label} ${focusedExperiment.name}? The current run will stop and the remaining runs will be canceled.`, {title: 'Stop experiment', label: 'Stop'})) return
     setStopping(true)
     setActionError('')
     try {
       await request(`/experiments/${focusedExperiment.id}/cancel`, {method: 'POST', body: '{}'}, session.csrfToken)
-      setStopRequested(true)
+      setStopRequestedId(focusedExperiment.id)
       await changed()
     } catch (cause) {
       setActionError(cause instanceof Error ? cause.message : `Could not stop the ${label}.`)
@@ -216,25 +209,27 @@ export function ResultsView({artifacts, experiments, operations, workspaces, ses
       setStopping(false)
     }
   }
+  const displayStatus = focusedExperiment ? experimentDisplayStatus({...focusedExperiment, cancelRequested: stopRequested}) : ''
   const canStop = Boolean(focusedExperiment && ['queued', 'running'].includes(focusedExperiment.status))
   const stopLabel = focusedExperiment?.kind === 'suite' ? 'suite' : 'experiment'
   return <>
+    {confirmationDialog}
     {focusedExperiment && onBack && <DetailBreadcrumb parent="Experiments" current={focusedExperiment.name} back={onBack} />}
-    <div className={`results-heading ${focusedExperiment ? 'focused' : ''}`}><div><h2>{focusedExperiment?.name ?? 'Results'}</h2>{focusedExperiment && <p>Created by {ownerLabel(focusedExperiment)}</p>}</div><div className="results-detail-actions">{focusedExperiment && <span className={`status ${focusedExperiment.status}`}>{focusedExperiment.status}</span>}{focusedExperiment && session.user?.role === 'admin' && canStop && <button className="button danger" disabled={stopping || stopRequested} onClick={stopExperiment}>{stopping || stopRequested ? `Stopping ${stopLabel}…` : `Stop ${stopLabel}`}</button>}{focusedExperiment && session.user?.role === 'admin' && <button className="button danger" disabled={deleting || !isTerminalExperiment(focusedExperiment.status)} title={isTerminalExperiment(focusedExperiment.status) ? '' : `Stop this ${stopLabel} before deleting it`} onClick={removeExperiment}>{deleting ? 'Deleting…' : `Delete ${stopLabel}`}</button>}{!focusedExperiment && <div className="results-count" aria-label={`${selectable.length} datasets`}><strong>{selectable.length}</strong><span>datasets</span></div>}</div></div>
+    <div className={`results-heading ${focusedExperiment ? 'focused' : ''}`}><div><h2>{focusedExperiment?.name ?? 'Results'}</h2></div><div className="results-detail-actions">{focusedExperiment && <ResourceSharing kind="experiments" id={focusedExperiment.id} name={focusedExperiment.name} ownerUserId={focusedExperiment.ownerUserId} session={session} changed={changed} />}{focusedExperiment && <span className={`status ${activeRun?.trial.status ?? displayStatus}`}>{activeRun?.trial.status ?? displayStatus}</span>}{focusedExperiment && canManageResource(session,focusedExperiment.ownerUserId) && canStop && <button className="button danger" disabled={stopping || stopRequested} onClick={stopExperiment}>{stopping || stopRequested ? `Stopping ${stopLabel}…` : `Stop ${stopLabel}`}</button>}{focusedExperiment && canManageResource(session,focusedExperiment.ownerUserId) && <ResourceAction action="delete" label={deleting ? 'Deleting…' : `Delete ${stopLabel}`} disabled={deleting || !isTerminalExperiment(focusedExperiment.status)} title={isTerminalExperiment(focusedExperiment.status) ? undefined : `Stop this ${stopLabel} before deleting it`} onClick={removeExperiment} />}{!focusedExperiment && <div className="results-count" aria-label={`${selectable.length} datasets`}><strong>{selectable.length}</strong><span>datasets</span></div>}</div></div>
+    {focusedExperiment && <ResourceAttribution resource={focusedExperiment} />}
     {actionError && <div className="validation-item error">{actionError}</div>}
-    {!focusedExperiment && experiments.length > 0 && <div className="experiment-history"><div className="experiment-history-title"><span><b>1</b><strong>Choose an experiment</strong></span><span>{experiments.length} saved</span></div><div className="experiment-cards">{experiments.map(item => <button key={item.id} className={activeExperiment === item.id ? 'active' : ''} onClick={() => openExperiment(item)}><span className={`status-dot ${item.status}`} /><span><strong>{item.name}</strong><small>{item.status === 'queued' && item.scheduledFor && new Date(item.scheduledFor).getTime() > Date.now() ? `Scheduled ${formatDate(item.scheduledFor)}` : `${item.status} · ${item.variants.length} strategies · ${item.variants.reduce((total, variant) => total + variant.trials.length, 0)} runs`}</small></span><b>›</b></button>)}</div></div>}
-    {focusedExperiment && <nav className="experiment-run-tabs" aria-label="Experiment runs"><button className="run-tab summary" aria-current={runTab === 'summary' ? 'page' : undefined} data-active={runTab === 'summary'} onClick={() => {setRunTab('summary'); setActiveTab('overview')}}><span className="run-tab-label">Run summary</span></button>{focusedRuns.map(({variant, trial}) => <button key={trial.id} className={`run-tab ${trial.status}`} aria-current={runTab === trial.id ? 'page' : undefined} data-active={runTab === trial.id} onClick={() => {setRunTab(trial.id); setActiveTab('overview')}}><span className={`status-dot ${trial.status}`} /><span className="run-tab-label">{variant.name} · Run {trial.position}</span></button>)}</nav>}
-    {experiment && (!activeRun ? <>{experiment.status !== 'succeeded' && <ExperimentProgress experiment={experiment} />}{liveRun && <RunLoadProgress name={`${liveRun.variant.name} · Run ${liveRun.trial.position}`} trial={liveRun.trial} configuration={liveRun.variant.configuration} operation={operations.find(item => item.id === liveRun.trial.operationId)} />}</> : <><RunDiagnostics status={activeRun.trial.status} error={activeRun.trial.error} pipelineRunId={activeRun.trial.pipelineRunId} operationId={activeRun.trial.operationId} openPipelineRun={canAccessExperimentData ? openPipelineRun : undefined} openOperation={canAccessExperimentData ? openOperation : undefined} /><RunLoadProgress trial={activeRun.trial} configuration={activeRun.variant.configuration} operation={operations.find(item => item.id === activeRun.trial.operationId)} /></>)}
+    {!focusedExperiment && experiments.length > 0 && <div className="experiment-history"><div className="experiment-history-title"><span><b>1</b><strong>Choose an experiment</strong></span><span>{experiments.length} saved</span></div><div className="experiment-cards">{experiments.map(item => <button key={item.id} className={activeExperiment === item.id ? 'active' : ''} onClick={() => openExperiment(item)}><span className={`status-dot ${experimentDisplayStatus(item)}`} /><span><strong>{item.name}</strong><small>{item.status === 'queued' && item.scheduledFor && new Date(item.scheduledFor).getTime() > Date.now() ? `Scheduled ${formatDate(item.scheduledFor)}` : `${experimentDisplayStatus(item)} · ${item.variants.length} strategies · ${item.variants.reduce((total, variant) => total + variant.trials.length, 0)} runs`}</small></span><ActionIcon name="right" /></button>)}</div></div>}
+    {focusedExperiment && <nav className="experiment-run-tabs" aria-label="Experiment runs"><button className="run-tab summary" aria-current={runTab === 'summary' ? 'page' : undefined} data-active={runTab === 'summary'} onClick={() => {setRunTab('summary'); setActiveTab('statistics')}}><span className="run-tab-label">All runs</span></button>{focusedRuns.map(({variant, trial}) => <button key={trial.id} className={`run-tab ${trial.status}`} aria-current={runTab === trial.id ? 'page' : undefined} data-active={runTab === trial.id} onClick={() => {setRunTab(trial.id); setActiveTab('statistics')}}><span className={`status-dot ${trial.status}`} /><span className="run-tab-label">{variant.name} · Run {trial.position}</span></button>)}</nav>}
+    {experiment && (!activeRun ? <>{experiment.status !== 'succeeded' && <ExperimentProgress experiment={experiment} />}{liveRun && <RunLoadProgress name={`${liveRun.variant.name} · Run ${liveRun.trial.position}`} trial={liveRun.trial} configuration={liveRun.variant.configuration} operation={operations.find(item => item.id === liveRun.trial.operationId)} />}</> : <><RunDiagnostics status={activeRun.trial.status} error={activeRun.trial.error} pipelineRunId={activeRun.trial.pipelineRunId} operationId={activeRun.trial.operationId} openPipelineRun={openPipelineRun} openOperation={openOperation} /><RunLoadProgress trial={activeRun.trial} configuration={activeRun.variant.configuration} operation={operations.find(item => item.id === activeRun.trial.operationId)} /></>)}
     {!selectable.length || activeRun && !viewSelected.length ? <EmptyResults experiment={experiment} runStatus={activeRun?.trial.status} /> : <div className={`results-layout ${focusedExperiment ? 'focused' : ''}`}>
-      {focusedExperiment && !activeRun && selectable.length > 1 ? <details className="results-run-filter"><summary><span><strong>Included runs</strong><small>{selected.length} of {selectable.length}</small></span><b>Change</b></summary><div className="results-run-filter-body"><button type="button" className="text-button" onClick={() => setSelected(selectable.map(item => item.id).slice(0, 20))}>Select all</button><div className="results-run-filter-options">{selectable.map(artifact => <button type="button" className={selected.includes(artifact.id) ? 'active' : ''} aria-pressed={selected.includes(artifact.id)} key={artifact.id} onClick={() => toggle(artifact.id)}><span className="dataset-check">{selected.includes(artifact.id) ? '✓' : ''}</span><strong>{experimentPresentation.get(artifact.id)?.label ?? artifact.name}</strong></button>)}</div></div></details> : !focusedExperiment ? <aside className="dataset-picker" aria-label="Available datasets">
+      {focusedExperiment && !activeRun && selectable.length > 1 ? <details className="results-run-filter"><summary><span><strong>Included runs</strong><small>{selected.length} of {selectable.length}</small></span><b>Change</b></summary><div className="results-run-filter-body"><button type="button" className="text-button" onClick={() => setSelected(selectable.map(item => item.id).slice(0, 20))}>Select all</button><div className="results-run-filter-options">{selectable.map(artifact => <button type="button" className={selected.includes(artifact.id) ? 'active' : ''} aria-pressed={selected.includes(artifact.id)} aria-label={`Include ${experimentPresentation.get(artifact.id)?.label ?? artifact.name}`} key={artifact.id} onClick={() => toggle(artifact.id)}><span className="dataset-check">{selected.includes(artifact.id) ? <ActionIcon name="check" /> : null}</span><strong>{experimentPresentation.get(artifact.id)?.label ?? artifact.name}</strong></button>)}</div></div></details> : !focusedExperiment ? <aside className="dataset-picker" aria-label="Available datasets">
         <div className="dataset-picker-title"><strong>{focusedExperiment ? 'Runs' : 'Select runs'}</strong><span>{selected.length} selected</span></div>
         {selectable.map(artifact => {
           const operation = operations.find(item => item.id === artifact.operationId)
-          const workspace = workspaces.find(item => item.id === artifact.workspaceId)
           const active = selected.includes(artifact.id)
           const incompatibleWorkspace = Boolean(selectedWorkspaceID && artifact.workspaceId !== selectedWorkspaceID)
           return <button className={`dataset-option ${active ? 'active' : ''}`} key={artifact.id} onClick={() => toggle(artifact.id)} disabled={!active && (selected.length >= 8 || incompatibleWorkspace)} aria-pressed={active}>
-            <span className="dataset-check">{active ? '✓' : ''}</span><span><strong>{operation?.title ?? artifact.name}</strong><small>{workspace?.name ?? 'Workspace'} · {formatDate(artifact.verifiedAt)}</small><small>{formatBytes(artifact.sizeBytes)} · verified</small></span>
+            <span className="dataset-check">{active ? <ActionIcon name="check" /> : null}</span><span><strong>{operation?.title ?? artifact.name}</strong><small>{formatDate(artifact.verifiedAt)}</small><small>{formatBytes(artifact.sizeBytes)} · verified</small></span>
           </button>
         })}
       </aside> : null}
@@ -245,31 +240,17 @@ export function ResultsView({artifacts, experiments, operations, workspaces, ses
         {error && <div className="validation-item error">{error}</div>}
         {!loading && !error && loaded.length > 0 && <>
           {!focusedExperiment && <div className="results-workbench-head">
-            <div><h3>{activeRun ? `${activeRun.variant.name} · Run ${activeRun.trial.position}` : focusedExperiment ? 'Aggregated results' : experiment?.name ?? displayed[0].label}</h3><p>{displayed.length} run{displayed.length === 1 ? '' : 's'} · {metrics.length} plot{metrics.length === 1 ? '' : 's'}</p></div>
-            <div className="results-heading-actions"><button className="button secondary" onClick={() => setActiveTab('downloads')}>Export</button>{!focusedExperiment && <button className="button primary" disabled={selected.length < 2} onClick={() => setSaving(true)}>Save comparison</button>}</div>
+            <div><h3>{activeRun ? `${activeRun.variant.name} · Run ${activeRun.trial.position}` : focusedExperiment ? 'Aggregated results' : experiment?.name ?? displayed[0].label}</h3><p>{displayed.length} run{displayed.length === 1 ? '' : 's'} · {metrics.length} metric{metrics.length === 1 ? '' : 's'}</p></div>
+            <div className="results-heading-actions">{!focusedExperiment && <button className="button primary" disabled={selected.length < 2} onClick={() => setSaving(true)}>Save comparison</button>}</div>
           </div>}
-          <nav className="results-tabs" aria-label="Result sections">{(['overview', 'charts', 'statistics', 'downloads'] as ResultsTab[]).map(tab => <button key={tab} className={activeTab === tab ? 'active' : ''} onClick={() => setActiveTab(tab)}>{({overview: 'Summary', charts: 'Plots', statistics: 'Statistics', downloads: 'Export'} as Record<ResultsTab, string>)[tab]}</button>)}</nav>
-          {activeTab === 'overview' && <>
-            {!focusedExperiment && <div className="results-stats">
-              <ResultStat label="Runs" value={displayed.length} />
-              <ResultStat label="Duration" value={formatDuration(Math.max(...displayed.map(item => new Date(item.dataset.spec.end).getTime() - new Date(item.dataset.spec.start).getTime())))} />
-              <ResultStat label="Samples" value={samples.toLocaleString()} />
-              <ResultStat label="Metrics" value={metrics.length} />
-            </div>}
-            <section className="result-summary"><div className="result-section-heading"><div><h3>Key outcomes</h3></div></div><div className="key-metrics">{overviewMetrics.map(metric => <KeyMetric key={metric} metric={metric} series={aggregateMetric(displayed, metric)} />)}</div></section>
-          </>}
-          {activeTab === 'charts' && <><div className="metric-groups">{[...groups.keys()].map(group => <button key={group} className={activeMetricGroup === group ? 'active' : ''} onClick={() => setMetricGroup(group)}>{group}<span>{groups.get(group)?.length}</span></button>)}</div><div className="chart-grid">{visibleMetrics.map(metric => <MetricChart key={metric} metric={metric} series={aggregateMetric(displayed, metric)} onSave={focusedExperiment ? saveFigure : undefined} />)}</div></>}
-          {activeTab === 'statistics' && <StatisticsTable datasets={displayed} metrics={outcomeMetrics} experiment={activeRun ? undefined : experiment} />}
-          {activeTab === 'downloads' && <section className="results-download-panel">
-            <div><h3>Export results</h3></div>
-            <div className="results-export-actions"><button className="button secondary" onClick={() => exportStatisticsCSV(displayed, outcomeMetrics, activeRun ? undefined : experiment)}>Statistics CSV</button><button className="button secondary" onClick={() => {setPrintSummaryPending(true); setActiveTab('overview')}}>Print summary</button></div>
-            {visibleFigures.length > 0 && <div className="saved-figures"><strong>Saved figures</strong><div className="dataset-downloads">{visibleFigures.map(figure => <a key={figure.id} href={`/api/v1/figures/${figure.id}/download`}><span>↓</span><span><strong>{metricTitle(figure.metric)} · {figure.format.toUpperCase()}</strong><small>{figure.sourceArtifactIds.length} runs · {formatDate(figure.createdAt)}</small></span></a>)}</div></div>}
-            <div className="results-raw-data"><strong>Complete run data</strong><div className="dataset-downloads">{displayed.map(item => <a key={item.artifact.id} href={`/api/v1/artifacts/${item.artifact.id}/download`}><span>↓</span><span><strong>{item.label}</strong><small>Metric samples</small></span></a>)}</div></div>
-          </section>}
+          <nav className="results-tabs" aria-label="Result sections">{(['statistics', 'charts', 'downloads'] as ResultsTab[]).map(tab => <button key={tab} className={activeTab === tab ? 'active' : ''} aria-current={activeTab === tab ? 'page' : undefined} onClick={() => setActiveTab(tab)}>{({statistics: 'Statistics', charts: 'Plots', downloads: 'Export'} as Record<ResultsTab, string>)[tab]}</button>)}</nav>
+          {activeTab === 'charts' && <div className="chart-grid" style={{'--plot-aspect-ratio': plotHeight / 860} as CSSProperties}>{visibleMetrics.map(metric => <Fragment key={metric}>{!['application.p95_response_time', 'redis.operation_rps', 'redis.operation_p95_response_time'].includes(metric) && <MetricChart metric={metric} series={aggregateMetric(displayed, metric)} canvasHeight={plotHeight} />}{serviceStatisticsMetrics.includes(metric) && <ServiceMetricChart metric={metric} datasets={displayed} experiment={activeRun ? undefined : experiment} canvasHeight={plotHeight} />}</Fragment>)}</div>}
+          {activeTab === 'statistics' && <><StatisticsTable datasets={displayed} metrics={statisticsMetrics} experiment={activeRun ? undefined : experiment} /></>}
+          {activeTab === 'downloads' && <ResultsExport datasets={displayed} metrics={statisticsMetrics} experiment={experiment} activeRun={Boolean(activeRun)} onPrint={() => {setActiveTab('statistics'); setPrintPending(true)}} />}
         </>}
       </div>
     </div>}
-    <SaveExperimentDialog open={saving} close={() => setSaving(false)} selected={selected.map(id => available.find(item => item.id === id)).filter((item): item is Artifact => Boolean(item))} operations={operations} workspaces={workspaces} session={session} changed={changed} />
+    <SaveExperimentDialog open={saving} close={() => setSaving(false)} selected={selected.map(id => availableByID.get(id)).filter((item): item is Artifact => Boolean(item))} operations={operations} workspaces={workspaces} session={session} changed={changed} />
   </>
 }
 
@@ -288,8 +269,9 @@ function ExperimentProgress({experiment}: {experiment: Experiment}) {
 function RunDiagnostics({status, error, pipelineRunId, operationId, openPipelineRun, openOperation}: {status: string; error?: string; pipelineRunId?: string; operationId: string; openPipelineRun?: (id: string) => void; openOperation?: (id: string) => void}) {
   const running = ['running', 'starting', 'prechecking', 'verifying'].includes(status)
   const failed = ['failed', 'canceled'].includes(status)
+  const label = status === 'queued' ? 'Run waiting to start' : status === 'canceled' ? 'Run canceled' : failed ? 'Run needs attention' : running ? 'Run in progress' : status === 'succeeded' ? 'Run completed' : 'Run status unavailable'
   if (!error && !running && !failed && !(pipelineRunId && openPipelineRun)) return null
-  return <div className={`run-diagnostics ${failed ? 'failed' : ''}`}><div><strong>{failed ? 'Run needs attention' : running ? 'Run in progress' : 'Run completed'}</strong>{error && <p>{error}</p>}</div>{pipelineRunId && openPipelineRun ? <button className="button secondary compact" onClick={() => openPipelineRun(pipelineRunId)}>{running ? 'Live process logs' : 'Process logs'}</button> : operationId && openOperation ? <button className="button secondary compact" onClick={() => openOperation(operationId)}>{running ? 'Live logs' : 'Error logs'}</button> : null}</div>
+  return <div className={`run-diagnostics ${failed ? 'failed' : ''}`}><div><strong>{label}</strong>{error && <p>{error}</p>}</div>{pipelineRunId && openPipelineRun ? <button className="button secondary compact" onClick={() => openPipelineRun(pipelineRunId)}>{running ? 'Live process logs' : 'Process logs'}</button> : operationId && openOperation ? <button className="button secondary compact" onClick={() => openOperation(operationId)}>{running ? 'Live logs' : 'Error logs'}</button> : null}</div>
 }
 
 function RunLoadProgress({trial, configuration, operation, name}: {trial: ExperimentTrial; configuration: Record<string, unknown>; operation?: Operation; name?: string}) {
@@ -416,51 +398,58 @@ function SaveExperimentDialog({open, close, selected, operations, workspaces, se
   </Dialog>
 }
 
+const colors = ['#1f77b4', '#d55e00', '#009e73', '#cc79a7', '#e69f00', '#56b4e9', '#000000']
+const dashPatterns = ['', '10 6', '10 4 2 4', '2 5']
+
 function groupMetrics(metrics: string[]): Map<string, string[]> {
   const values = new Map<string, string[]>()
   for (const metric of metrics) {
-    const group = metric.startsWith('load.') ? 'Load' : metric.startsWith('application.') ? 'Application' : metric.startsWith('network.') ? 'Network' : ['cpu', 'memory'].includes(metric.split('.')[0]) ? 'Resources' : 'Kubernetes'
+    const group = metric.startsWith('load.') || metric === 'application.p95_response_time' ? 'Load' : metric.startsWith('application.') ? 'Application' : metric.startsWith('redis.') ? 'Redis' : metric.startsWith('network.') ? 'Network' : ['cpu', 'memory'].includes(metric.split('.')[0]) ? 'Resources' : 'Kubernetes'
     values.set(group, [...(values.get(group) ?? []), metric])
   }
-  return new Map(['Load', 'Application', 'Kubernetes', 'Resources', 'Network'].flatMap(group => values.has(group) ? [[group, values.get(group)!] as [string, string[]]] : []))
+  return new Map(['Load', 'Application', 'Redis', 'Kubernetes', 'Resources', 'Network'].flatMap(group => values.has(group) ? [[group, values.get(group)!] as [string, string[]]] : []))
 }
 
-function KeyMetric({metric, series}: {metric: string; series: AggregateSeries[]}) {
-  const values = series.map(item => {
-    const summary = summarize(item.points.map(point => point.value))
-    return {label: item.label, value: summary.mean, peak: summary.max, last: item.points.at(-1)?.value ?? 0, unit: item.unit}
+function chartLegendLayout(labels: string[], left: number, right: number, symbolWidth: number, fontSize: number) {
+  let x = left
+  let row = 0
+  const entries = labels.map(label => {
+    const width = symbolWidth + compactLabel(label).length * fontSize * .6 + 18
+    if (x > left && x + width > right) { x = left; row++ }
+    const entry = {x, row}
+    x += width
+    return entry
   })
-  const first = values[0]
-  const low = Math.min(...values.map(item => item.value))
-  const high = Math.max(...values.map(item => item.value))
-  const slo = series.find(item => item.sloMilliseconds)?.sloMilliseconds
-  const detail = !first ? '' : series.length > 1 ? `Mean range across ${series.length} runs` : metric === 'deployment.ready_replicas' ? `Peak ${formatMetric(first.peak, first.unit)} · final ${formatMetric(first.last, first.unit)}` : metric === 'load.slo_violation_percentage' ? `Windows above${slo ? ` the ${formatMetric(slo, 'milliseconds')}` : ''} SLO` : metric === 'load.p95_response_time' ? `Mean P95 per window${slo ? ` · SLO ${formatMetric(slo, 'milliseconds')}` : ''}` : metric === 'load.successful_rps' ? 'Mean successful requests during the run' : 'Mean during the run'
-  return <article><span>{metricTitle(metric)}</span><strong>{first ? series.length === 1 ? formatMetric(first.value, first.unit) : `${formatMetric(low, first.unit)}–${formatMetric(high, first.unit)}` : '—'}</strong><small>{detail}</small></article>
+  return {entries, rows: labels.length ? row + 1 : 0}
 }
 
-export function niceAxis(maximum: number, integer = false): {upper: number; ticks: number[]} {
-  if (!Number.isFinite(maximum) || maximum <= 0) maximum = 1
-  const rawStep = maximum / 5
-  const magnitude = 10 ** Math.floor(Math.log10(rawStep))
-  const normalized = rawStep / magnitude
-  const candidates = [1, 1.25, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10]
-  let step = (candidates.find(candidate => candidate >= normalized * .98) ?? 10) * magnitude
-  if (integer) step = Math.max(1, Math.ceil(step))
-  const ticks = Array.from({length: 6}, (_, index) => index * step)
-  let upper = Math.max(ticks[5], maximum)
-  if (Math.abs(upper - maximum) <= maximum * .001) upper += step * .25
-  return {upper, ticks}
+function sharedChartHeight(datasets: LoadedDataset[], metrics: string[], experiment?: Experiment) {
+  let height = 465
+  for (const metric of metrics) {
+    const series = aggregateMetric(datasets, metric)
+    if (series.length > 1) height = Math.max(height, 465 + chartLegendLayout(series.map(item => item.label), 112, 832, 37, 15).rows * 21)
+    if (!['deployment.ready_replicas', 'cpu.cores', 'memory.working_set', 'application.p95_response_time', 'redis.operation_rps', 'redis.operation_p95_response_time'].includes(metric)) continue
+    const {rows} = serviceMetricStatistics(datasets, metric, experiment)
+    if (!rows.length) continue
+    const services = [...new Set(rows.map(row => row.service))]
+    const labels = [...new Set(rows.map(row => row.group))]
+    const width = 860
+    const labelHeight = Math.max(...services.map(service => service.length)) * 7 + 25
+    height = Math.max(height, 383 + labelHeight + 20 + chartLegendLayout(labels, 110, width - 64, 22, 14).rows * 21 + 12)
+  }
+  return height
 }
 
-function MetricChart({metric, series, onSave}: {metric: string; series: AggregateSeries[]; onSave?: (metric: string, format: 'pdf' | 'png', value: Uint8Array, sources: string[]) => Promise<void>}) {
-  const [saving, setSaving] = useState(false)
-  const [saveError, setSaveError] = useState('')
-  const width = 700
+
+function MetricChart({metric, series, canvasHeight}: {metric: string; series: AggregateSeries[]; canvasHeight: number}) {
+  const width = 860
   const multiple = series.length > 1
-  const legendRows = multiple ? Math.ceil(series.length / 2) : 0
-  const plotBottom = 383
-  const height = plotBottom + (multiple ? 102 + legendRows * 25 : 82)
-  const padding = {top: 28, right: 28, bottom: height - plotBottom, left: 112}
+  const legend = chartLegendLayout(series.map(item => item.label), 112, width - 28, 37, 15)
+  const legendRows = multiple ? legend.rows : 0
+  const footerHeight = multiple ? 82 + legendRows * 21 : 72
+  const height = Math.max(canvasHeight, 383 + footerHeight)
+  const plotBottom = height - footerHeight
+  const padding = {top: 16, right: 64, bottom: footerHeight, left: 96}
   const allPoints = series.flatMap(item => item.points)
   const timestamps = allPoints.map(point => new Date(point.timestamp).getTime())
   const values = allPoints.map(point => point.value)
@@ -468,52 +457,85 @@ function MetricChart({metric, series, onSave}: {metric: string; series: Aggregat
   const sloMilliseconds = metric === 'load.p95_response_time' ? series.find(item => item.sloMilliseconds)?.sloMilliseconds : undefined
   const maxY = Math.max(0, ...values, sloMilliseconds ?? 0)
   const unit = series[0]?.unit ?? ''
-  const xAxis = niceAxis(maxX)
+  const xAxis = timeAxis(maxX, true)
   const yAxis = niceAxis(maxY, unit === 'replicas' || unit === 'count')
   const plotRight = width - padding.right
   const x = (value: number) => padding.left + (value / xAxis.upper) * (plotRight - padding.left)
   const y = (value: number) => plotBottom - (value / yAxis.upper) * (plotBottom - padding.top)
   const chartID = `chart-${metric.replaceAll(/[^a-zA-Z0-9]/g, '-')}`
-  const save = async (format: 'pdf' | 'png') => {
-    if (!onSave) return
-    setSaving(true)
-    setSaveError('')
-    try {
-      await exportChart(chartID, metric, format, value => onSave(metric, format, value, series.map(item => item.artifactID)))
-    } catch (cause) {
-      setSaveError(cause instanceof Error ? cause.message : 'Could not save the figure.')
-    } finally {
-      setSaving(false)
-    }
-  }
   return <article className="metric-card">
-    <div className="metric-card-header"><div><h3>{metricTitle(metric)}</h3></div><div className="chart-export-actions"><button type="button" onClick={() => exportChart(chartID, metric, 'pdf')}>PDF</button><button type="button" onClick={() => exportChart(chartID, metric, 'png')}>PNG 600 DPI</button>{onSave && <details className="chart-save-menu"><summary>{saving ? 'Saving…' : 'Save figure'}</summary><div><button type="button" disabled={saving} onClick={() => save('png')}>Save PNG</button><button type="button" disabled={saving} onClick={() => save('pdf')}>Save PDF</button></div></details>}</div></div>
-    {saveError && <p className="form-error">{saveError}</p>}
+    <div className="metric-card-header"><div><h3>{metricTitle(metric)}</h3></div><div className="chart-export-actions"><button className="button secondary compact" type="button" onClick={() => exportChart(chartID, metric, 'pdf')}>PDF</button><button className="button secondary compact" type="button" onClick={() => exportChart(chartID, metric, 'png')}>PNG</button></div></div>
     <div className="chart-wrap"><svg id={chartID} viewBox={`0 0 ${width} ${height}`} xmlns="http://www.w3.org/2000/svg" role="img" aria-label={`${metricTitle(metric)} comparison chart`}>
-      <style>{`text{fill:#111;font-family:Arial,Helvetica,"DejaVu Sans",sans-serif}.tick{font-size:17px}.axis-label{font-size:20px}.legend-label{font-size:15px}.slo-label{fill:#b42318}.axis{stroke:#111;stroke-width:2;fill:none}.tick-line{stroke:#111;stroke-width:1.5}`}</style>
-      <rect x={padding.left} y={padding.top} width={plotRight - padding.left} height={plotBottom - padding.top} className="axis" />
-      {xAxis.ticks.map(tick => <g key={`x-${tick}`}><line x1={x(tick)} y1={plotBottom} x2={x(tick)} y2={plotBottom + 7} className="tick-line" /><text x={x(tick)} y={plotBottom + 28} textAnchor="middle" className="tick">{formatAxis(tick)}</text></g>)}
-      {yAxis.ticks.map(tick => <g key={`y-${tick}`}><line x1={padding.left - 7} y1={y(tick)} x2={padding.left} y2={y(tick)} className="tick-line" /><text x={padding.left - 13} y={y(tick) + 6} textAnchor="end" className="tick">{formatAxisValue(tick, unit)}</text></g>)}
-      {sloMilliseconds !== undefined && <g><line x1={padding.left} x2={plotRight} y1={y(sloMilliseconds)} y2={y(sloMilliseconds)} stroke="#b42318" strokeWidth="2" strokeDasharray="8 6" /><text x={plotRight - 5} y={y(sloMilliseconds) - 8} textAnchor="end" className="legend-label slo-label">SLO {formatMetric(sloMilliseconds, 'milliseconds')}</text></g>}
-      <text x={(padding.left + plotRight) / 2} y={plotBottom + 58} textAnchor="middle" className="axis-label">Time (min)</text>
-      <text x="27" y={(padding.top + plotBottom) / 2} textAnchor="middle" className="axis-label" transform={`rotate(-90 27 ${(padding.top + plotBottom) / 2})`}>{metricAxisLabel(metric, unit)}</text>
+      <rect width={width} height={height} fill="#ffffff" />
+      <rect x={padding.left} y={padding.top} width={plotRight - padding.left} height={plotBottom - padding.top} className="axis" fill="none" stroke="#111" strokeWidth="2" />
+      {xAxis.ticks.map(tick => <g key={`x-${tick}`}><line x1={x(tick)} y1={plotBottom} x2={x(tick)} y2={plotBottom + 7} className="tick-line" stroke="#111" strokeWidth="1.5" /><text x={x(tick)} y={plotBottom + 28} textAnchor="middle" className="tick" fontSize="17" fill="#111" fontFamily="Arial, Helvetica, DejaVu Sans, sans-serif">{formatAxis(tick)}</text></g>)}
+      {yAxis.ticks.map(tick => <g key={`y-${tick}`}><line x1={padding.left - 7} y1={y(tick)} x2={padding.left} y2={y(tick)} className="tick-line" stroke="#111" strokeWidth="1.5" /><text x={padding.left - 13} y={y(tick) + 6} textAnchor="end" className="tick" fontSize="17" fill="#111" fontFamily="Arial, Helvetica, DejaVu Sans, sans-serif">{formatAxisValue(tick, unit)}</text></g>)}
+      {sloMilliseconds !== undefined && <g><line x1={padding.left} x2={plotRight} y1={y(sloMilliseconds)} y2={y(sloMilliseconds)} stroke="#b42318" strokeWidth="2" strokeDasharray="8 6" /><text x={plotRight - 5} y={y(sloMilliseconds) - 8} textAnchor="end" className="legend-label slo-label" fontSize="15" fill="#b42318" fontFamily="Arial, Helvetica, DejaVu Sans, sans-serif">SLO {formatMetric(sloMilliseconds, 'milliseconds')}</text></g>}
+      <text x={(padding.left + plotRight) / 2} y={plotBottom + 58} textAnchor="middle" className="axis-label" fontSize="20" fill="#111" fontFamily="Arial, Helvetica, DejaVu Sans, sans-serif">Time (min)</text>
+      <text x="27" y={(padding.top + plotBottom) / 2} textAnchor="middle" className="axis-label" transform={`rotate(-90 27 ${(padding.top + plotBottom) / 2})`} fontSize="20" fill="#111" fontFamily="Arial, Helvetica, DejaVu Sans, sans-serif">{metricAxisLabel(metric, unit)}</text>
       {series.map((item, index) => { const color = item.color ?? colors[index % colors.length]; return <g key={`${item.artifactID}-${item.label}-${index}`}><path d={paperChartPath(item.points, x, y)} fill="none" stroke={color} strokeWidth="2.5" strokeDasharray={dashPatterns[Math.floor(index / colors.length) % dashPatterns.length]} strokeLinejoin="round" />{item.points.filter((_, pointIndex) => pointIndex % Math.max(1, Math.floor(item.points.length / 12)) === 0).map((point, pointIndex) => <ChartMarker key={pointIndex} shape={index % 7} x={x(new Date(point.timestamp).getTime() / 60000)} y={y(point.value)} color={color} />)}</g>})}
       {multiple && series.map((item, index) => {
-        const column = index % 2
-        const row = Math.floor(index / 2)
-        const legendX = padding.left + column * 280
-        const legendY = plotBottom + 86 + row * 25
+        const legendX = legend.entries[index].x
+        const legendY = plotBottom + 80 + legend.entries[index].row * 21
         const color = item.color ?? colors[index % colors.length]
-        return <g key={`legend-${item.artifactID}-${item.label}-${index}`}><line x1={legendX} y1={legendY} x2={legendX + 35} y2={legendY} stroke={color} strokeWidth="2.5" strokeDasharray={dashPatterns[Math.floor(index / colors.length) % dashPatterns.length]} /><ChartMarker shape={index % 7} x={legendX + 17} y={legendY} color={color} /><text x={legendX + 45} y={legendY + 5} className="legend-label">{compactLabel(item.label)}</text></g>
+        return <g key={`legend-${item.artifactID}-${item.label}-${index}`}><line x1={legendX} y1={legendY} x2={legendX + 27} y2={legendY} stroke={color} strokeWidth="2.5" strokeDasharray={dashPatterns[Math.floor(index / colors.length) % dashPatterns.length]} /><ChartMarker shape={index % 7} x={legendX + 13} y={legendY} color={color} /><text x={legendX + 37} y={legendY + 5} className="legend-label" fontSize="15" fill="#111" fontFamily="Arial, Helvetica, DejaVu Sans, sans-serif">{compactLabel(item.label)}</text></g>
       })}
     </svg></div>
-    <div className="chart-legend">{series.map((item, index) => {
-      const values = item.points.map(point => point.value)
-      const mean = values.reduce((sum, value) => sum + value, 0) / Math.max(1, values.length)
-      return <div key={`${item.artifactID}-${item.label}-${index}`}><span style={{background: item.color ?? colors[index % colors.length]}} /><strong>{item.label}</strong><small>mean {formatMetric(mean, item.unit)} · last {formatMetric(values.at(-1) ?? 0, item.unit)}</small></div>
-    })}</div>
+    <div className="chart-legend">{series.map((item, index) => <div key={`${item.artifactID}-${item.label}-${index}`}><span style={{background: item.color ?? colors[index % colors.length]}} /><strong>{item.label}</strong></div>)}</div>
   </article>
 }
+
+
+function ServiceMetricChart({metric, datasets, experiment, canvasHeight}: {metric: string; datasets: LoadedDataset[]; experiment?: Experiment; canvasHeight: number}) {
+  const responseTime = metric.endsWith('p95_response_time')
+  const title = responseTime ? metric.startsWith('redis.') ? 'Mean window P95 per Redis operation' : 'Mean window P95 per service' : metric.startsWith('redis.') ? metricTitle(metric) : `${metricTitle(metric)} by service`
+  const {rows} = serviceMetricStatistics(datasets, metric, experiment)
+  if (!rows.length) return null
+  const services = [...new Set(rows.map(row => row.service))]
+  const labels = [...new Set(rows.map(row => row.group))]
+  const width = 860
+  const left = 110
+  const right = width - 64
+  const top = 28
+  const bottom = 383
+  const labelHeight = Math.max(...services.map(service => service.length)) * 7 + 25
+  const legendTop = bottom + labelHeight + 20
+  const legend = chartLegendLayout(labels, left, right, 22, 14)
+  const height = Math.max(canvasHeight, legendTop + legend.rows * 21 + 12)
+  const unit = rows[0].unit
+  const axis = niceAxis(Math.max(...rows.map(row => row.summary.mean + row.summary.standardDeviation)) * 1.15)
+  const y = (value: number) => bottom - value / axis.upper * (bottom - top)
+  const band = (right - left) / services.length
+  const barSlot = Math.max(1, band - Math.min(16, band * .2)) / labels.length
+  const barWidth = Math.min(40, barSlot)
+  const serviceX = (index: number) => left + band * (index + .5)
+  const chartID = `chart-${metric.replaceAll(/[^a-zA-Z0-9]/g, '-')}-by-service`
+  return <article className="metric-card">
+    <div className="metric-card-header"><div><h3>{title}</h3></div><div className="chart-export-actions"><button className="button secondary compact" type="button" onClick={() => exportChart(chartID, `${metric}-by-service`, 'pdf')}>PDF</button><button className="button secondary compact" type="button" onClick={() => exportChart(chartID, `${metric}-by-service`, 'png')}>PNG</button></div></div>
+    <div className="chart-wrap"><svg className="service-metric-chart" id={chartID} viewBox={`0 0 ${width} ${height}`} xmlns="http://www.w3.org/2000/svg" role="img" aria-label={`${title}: mean and standard deviation`}>
+      <rect width={width} height={height} fill="#ffffff" />
+      {axis.ticks.map(tick => <g key={tick}><line x1={left} y1={y(tick)} x2={right} y2={y(tick)} stroke="#e5e7eb" /><text x={left - 12} y={y(tick) + 5} textAnchor="end" className="tick" fontSize="14" fill="#111" fontFamily="Arial, Helvetica, DejaVu Sans, sans-serif">{formatAxisValue(tick, unit)}</text></g>)}
+      {rows.map((row, index) => {
+        const groupIndex = labels.indexOf(row.group)
+        const center = serviceX(services.indexOf(row.service)) + (groupIndex - (labels.length - 1) / 2) * barSlot
+        const color = row.color ?? colors[groupIndex % colors.length]
+        const low = y(Math.max(0, row.summary.mean - row.summary.standardDeviation))
+        const high = y(row.summary.mean + row.summary.standardDeviation)
+        return <g key={`${row.service}-${row.group}-${index}`}><title>{`${row.service} · ${row.group}: mean ${formatMetric(row.summary.mean, unit)}, standard deviation ${formatMetric(row.summary.standardDeviation, unit)}`}</title><rect x={center - barWidth * .4} y={y(row.summary.mean)} width={barWidth * .8} height={Math.max(0, bottom - y(row.summary.mean))} fill={color} opacity="0.8" /><path d={`M${center},${low}V${high}M${center - 6},${low}H${center + 6}M${center - 6},${high}H${center + 6}`} fill="none" stroke="#111" strokeWidth="2" /></g>
+      })}
+      <path d={`M${left},${top}V${bottom}H${right}`} fill="none" stroke="#111" />
+      {services.map((service, index) => <text key={service} x={serviceX(index) + 4} y={bottom + 12} fontSize="12" textAnchor="end" transform={`rotate(-90 ${serviceX(index) + 4} ${bottom + 12})`} fill="#111" fontFamily="Arial, Helvetica, DejaVu Sans, sans-serif">{service}</text>)}
+      <text x="27" y={(top + bottom) / 2} textAnchor="middle" transform={`rotate(-90 27 ${(top + bottom) / 2})`} className="axis-label" fontSize="18" fill="#111" fontFamily="Arial, Helvetica, DejaVu Sans, sans-serif">{metricAxisLabel(metric, unit)}</text>
+      {labels.map((label, index) => {
+        const legendX = legend.entries[index].x
+        const legendY = legendTop + legend.entries[index].row * 21
+        const color = rows.find(row => row.group === label)?.color ?? colors[index % colors.length]
+        return <g key={label}><rect x={legendX} y={legendY - 12} width="16" height="16" fill={color} /><text x={legendX + 24} y={legendY + 1} className="tick" fontSize="14" fill="#111" fontFamily="Arial, Helvetica, DejaVu Sans, sans-serif">{compactLabel(label)}</text></g>
+      })}
+    </svg></div>
+  </article>
+}
+
 
 function ChartMarker({shape, x, y, color}: {shape: number; x: number; y: number; color: string}) {
   if (shape === 0) return <circle cx={x} cy={y} r="4" fill={color} />
@@ -523,6 +545,87 @@ function ChartMarker({shape, x, y, color}: {shape: number; x: number; y: number;
   if (shape === 4) return <polygon points={`${x - 5},${y - 4} ${x + 5},${y - 4} ${x},${y + 5}`} fill={color} />
   if (shape === 5) return <path d={`M${x - 5},${y}H${x + 5}M${x},${y - 5}V${y + 5}`} stroke={color} strokeWidth="3" />
   return <path d={`M${x - 4},${y - 4}L${x + 4},${y + 4}M${x + 4},${y - 4}L${x - 4},${y + 4}`} stroke={color} strokeWidth="3" />
+}
+
+
+function paperChartPath(points: MetricPoint[], x: (value: number) => number, y: (value: number) => number): string {
+  return points.map((point, index) => `${index ? 'L' : 'M'}${x(new Date(point.timestamp).getTime() / 60000).toFixed(2)},${y(point.value).toFixed(2)}`).join(' ')
+}
+
+
+export function formatAxis(value: number): string {
+  if (Math.abs(value) < 1) return Number(value.toPrecision(3)).toString()
+  return value >= 100 ? value.toFixed(0) : value >= 10 ? value.toFixed(1).replace(/\.0$/, '') : value.toFixed(2).replace(/\.0+$/, '').replace(/(\.\d)0$/, '$1')
+}
+
+
+function formatAxisValue(value: number, unit: string): string {
+  if (unit === 'bytes') return formatAxis(value / 1024 ** 2)
+  if (unit === 'bytes_per_second') return formatAxis(value / 1024 ** 2)
+  return formatAxis(value)
+}
+
+
+function metricAxisLabel(metric: string, unit: string): string {
+  const labels: Record<string, string> = {
+    'load.configured_rps': 'Input rate (req/s)',
+    'load.successful_rps': 'Successful input requests (req/s)',
+    'load.failed_rps': 'Failed requests (req/s)',
+    'load.failure_percentage': 'Failed requests (%)',
+    'load.p95_response_time': 'P95 response time (ms)',
+    'load.slo_violation_percentage': 'SLO violation windows (%)',
+    'application.request_rps': 'Internal service calls (req/s)',
+    'application.p95_response_time': 'P95 internal response time (ms)',
+    'cpu.cores': 'CPU usage (cores)',
+    'memory.working_set': 'Working set (MiB)',
+    'pod.restarts': 'Restart count',
+    'deployment.ready_replicas': 'Replica count',
+    'network.rtt': 'Network RTT (ms)',
+    'network.packet_loss': 'Packet loss (%)',
+    'network.bandwidth': 'Bandwidth (MiB/s)'
+  }
+  return labels[metric] ?? `${metricTitle(metric)}${unit ? ` (${unit.replaceAll('_', ' ')})` : ''}`
+}
+
+
+export function compactLabel(value: string): string {
+  if (value.length <= 34) return value
+  const run = value.match(/^(.*)( · Run \d+)$/)
+  if (run) return `${run[1].slice(0, Math.max(1, 31 - run[2].length))}...${run[2]}`
+  return `${value.slice(0, 31)}...`
+}
+
+export function serviceMetricStatistics(datasets: LoadedDataset[], metric: string, experiment?: Experiment) {
+  const groups = new Map<string, {service: string; group: string; color?: string; unit: string; runs: ScientificSummary[]}>()
+  let unmatched = 0
+  for (const dataset of datasets) {
+    const deployments = [...new Set(dataset.dataset.spec.series.filter(series => series.metric === 'deployment.ready_replicas').map(series => series.labels.deployment || series.labels.statefulset).filter(Boolean))].sort((a, b) => b.length - a.length)
+    const variant = experiment?.variants.find(item => item.trials.some(trial => trial.resultArtifactId === dataset.artifact.id))
+    const group = variant?.alias || variant?.name || plotLabel(dataset.label)
+    const groupID = variant?.id || dataset.artifact.id
+    const services = new Map<string, {unit: string; points: Map<string, number>; counts: Map<string, number>}>()
+    for (const series of dataset.dataset.spec.series.filter(series => series.metric === metric)) {
+      if (series.labels['app.kubernetes.io/name'] === 'kubephos-load' || ['deployment', 'pod', 'destination_workload', 'service'].some(label => series.labels[label]?.startsWith('kubephos-load-'))) continue
+      const pod = series.labels.pod
+      // Older datasets contain pod labels only. Match against deployments actually present in the same run.
+      const service = series.labels.deployment || series.labels.statefulset || series.labels.destination_workload || series.labels.service || series.labels.operation || deployments.find(name => pod?.startsWith(`${name}-`) && /^(?:[a-z0-9]+-[a-z0-9]+|[0-9]+)$/.test(pod.slice(name.length + 1)))
+      if (!service) {unmatched++; continue}
+      if (metric === 'application.p95_response_time' && (service === 'node-proxy' || service.startsWith('gateway-'))) continue
+      const values = services.get(service) ?? {unit: series.unit, points: new Map<string, number>(), counts: new Map<string, number>()}
+      for (const point of series.points) if (Number.isFinite(point.value)) {
+        values.points.set(point.timestamp, (values.points.get(point.timestamp) ?? 0) + point.value)
+        values.counts.set(point.timestamp, (values.counts.get(point.timestamp) ?? 0) + 1)
+      }
+      services.set(service, values)
+    }
+    for (const [service, values] of services) {
+      const key = JSON.stringify([service, groupID])
+      const row = groups.get(key) ?? {service, group, color: variant?.color ?? dataset.color, unit: values.unit, runs: []}
+      if (values.points.size) row.runs.push(summarize([...values.points].map(([timestamp, value]) => metric.endsWith('p95_response_time') ? value / values.counts.get(timestamp)! : value)))
+      groups.set(key, row)
+    }
+  }
+  return {unmatched, rows: [...groups.values()].filter(row => row.runs.length).sort((a, b) => a.service.localeCompare(b.service, undefined, {numeric: true}) || a.group.localeCompare(b.group)).map(row => ({...row, summary: row.runs.length > 1 ? summarize(row.runs.map(run => run.mean)) : row.runs[0], acrossRuns: row.runs.length > 1}))}
 }
 
 export function aggregateMetric(datasets: LoadedDataset[], metric: string): AggregateSeries[] {
@@ -538,14 +641,14 @@ export function aggregateMetric(datasets: LoadedDataset[], metric: string): Aggr
       }
     }
     const aggregation = matching[0]?.aggregation ?? 'sum'
-    const startedAt = new Date(item.dataset.spec.start).getTime()
+    const startedAt = new Date(!isControlMetric(metric) && item.dataset.spec.workloadStartedAt ? item.dataset.spec.workloadStartedAt : item.dataset.spec.start).getTime()
     return {
       artifactID: item.artifact.id,
       label: item.label,
       unit: matching[0]?.unit ?? '',
       sloMilliseconds: item.dataset.spec.sloMilliseconds,
       color: item.color,
-      points: [...values.entries()].sort((left, right) => left[0] - right[0]).map(([timestamp, value]) => ({timestamp: new Date(Math.max(0, timestamp - startedAt)).toISOString(), value: aggregation === 'mean' ? value / (counts.get(timestamp) ?? 1) : value}))
+      points: (metric === 'scheduler.pod_scheduling_latency' ? matching.flatMap(series => series.points.map(point => [Number.isFinite(Date.parse(series.labels.scheduled_at)) ? Date.parse(series.labels.scheduled_at) : Date.parse(point.timestamp), point.value] as [number, number])) : [...values.entries()]).sort((left, right) => left[0] - right[0]).map(([timestamp, value]) => ({timestamp: new Date(Math.max(0, timestamp - startedAt)).toISOString(), value: aggregation === 'mean' && metric !== 'scheduler.pod_scheduling_latency' ? value / (counts.get(timestamp) ?? 1) : value}))
     }
   }).filter(item => item.points.length > 0)
 }
@@ -591,18 +694,153 @@ function percentile(sorted: number[], ratio: number): number {
   return sorted[lower] + (sorted[Math.min(lower + 1, sorted.length - 1)] - sorted[lower]) * fraction
 }
 
+function isControlMetric(metric: string): boolean {
+  return ['scheduler.pod_scheduling_latency', 'scheduler.cycle_duration', 'descheduler.cycle_duration', 'descheduler.evictions'].includes(metric)
+}
+
+function controlMetricDescription(metric: string, scope: string, reason?: string, resolution?: number): string {
+  const description = metric === 'scheduler.pod_scheduling_latency' ? 'Time from pod creation to node assignment; includes queueing and scheduling.' : metric === 'scheduler.cycle_duration' ? 'Time spent in the scheduler scheduling algorithm per attempt; excludes queueing and pod startup.' : metric === 'descheduler.cycle_duration' ? 'Time spent in a descheduler loop.' : 'Successful application pod evictions.'
+  return [description, scope === 'cluster' ? 'Scope: entire cluster.' : 'Scope: experiment.', resolution ? `Timestamp resolution: ${resolution} s.` : '', reason ?? ''].filter(Boolean).join(' ')
+}
+
+const serviceStatisticsMetrics = ['deployment.ready_replicas', 'cpu.cores', 'memory.working_set', 'application.p95_response_time', 'redis.operation_rps', 'redis.operation_p95_response_time']
+
+function serviceStatisticsRows(datasets: LoadedDataset[], experiment?: Experiment) {
+  return serviceStatisticsMetrics.flatMap(metric => serviceMetricStatistics(datasets, metric, experiment).rows.map(row => ({...row, metric})))
+}
+
+function ServiceStatisticsTable({datasets, experiment}: {datasets: LoadedDataset[]; experiment?: Experiment}) {
+  const [query, setQuery] = useState('')
+  const rows = serviceStatisticsRows(datasets, experiment).filter(row => !experiment || row.acrossRuns)
+  if (!rows.length) return null
+  const allServices = [...new Set(rows.map(row => row.service))]
+  const services = allServices.filter(service => service.toLowerCase().includes(query.trim().toLowerCase())).sort((left, right) => left.localeCompare(right, undefined, {numeric: true}))
+  return <div className="service-statistics"><h4>{experiment ? 'By service · Across runs' : 'By service'}</h4><div className="list-toolbar"><input type="search" aria-label={`Search services for ${experiment ? 'all runs' : datasets[0].label}`} placeholder="Search services…" value={query} onChange={event => setQuery(event.target.value)} /><span>{services.length} of {allServices.length}</span></div>{!services.length && <p className="empty-inline">No services match your search.</p>}<div className="statistics-table-wrap"><ResponsiveTable className="runs-table" aria-label={experiment ? 'Service statistics across runs' : `Service statistics for ${datasets[0].label}`}><thead><tr><th>Metric</th>{experiment && <th>Strategy</th>}<th>{experiment ? 'Runs' : 'Samples'}</th><th>Mean</th><th>Std. dev.</th><th>Min</th><th>Median</th><th>Max</th></tr></thead>{services.map(service => <tbody key={service}><tr className="service-statistics-group"><th scope="rowgroup" colSpan={experiment ? 8 : 7}>{service}</th></tr>{rows.filter(row => row.service === service).map(row => <tr key={`${row.metric}-${row.group}`}><td>{statisticsMetricTitle(row.metric)}</td>{experiment && <td>{row.group}</td>}<td>{row.summary.count}</td><SummaryCells summary={row.summary} unit={row.unit} /></tr>)}</tbody>)}</ResponsiveTable></div></div>
+}
+
+function SummaryCells({summary, unit}: {summary: ScientificSummary; unit: string}) {
+  return <>{[summary.mean, summary.standardDeviation, summary.min, summary.median, summary.max].map((value, index) => <td key={index}>{formatMetric(value, unit)}</td>)}</>
+}
+
+function ResultsExport({datasets, metrics, experiment, activeRun, onPrint}: {datasets: LoadedDataset[]; metrics: string[]; experiment?: Experiment; activeRun: boolean; onPrint: () => void}) {
+  const [figures, setFigures] = useState<ExperimentFigure[]>([])
+  const [error, setError] = useState('')
+  useEffect(() => {
+    if (!experiment) return
+    const controller = new AbortController()
+    request<{items: ExperimentFigure[]}>(`/experiments/${experiment.id}/figures`, {}, undefined, controller.signal).then(result => {if (!controller.signal.aborted) setFigures(result.items ?? [])}).catch(cause => {if (!controller.signal.aborted) setError(cause instanceof Error ? cause.message : 'Could not load saved figures.')})
+    return () => controller.abort()
+  }, [experiment?.id])
+  const visibleFigures = figures.filter(figure => figure.sourceArtifactIds.some(id => datasets.some(dataset => dataset.artifact.id === id)))
+  return <section className="results-download-panel"><div><h3>Export results</h3></div><div className="results-export-actions"><button className="button secondary" onClick={() => downloadBlob('kubephos-statistics.csv', new Blob([statisticsCSV(datasets, metrics, activeRun ? undefined : experiment)], {type: 'text/csv;charset=utf-8'}))}>Statistics CSV</button><button className="button secondary" onClick={onPrint}>Print statistics</button></div>{error && <p className="form-error">{error}</p>}{visibleFigures.length > 0 && <div className="saved-figures"><strong>Saved figures</strong><div className="dataset-downloads">{visibleFigures.map(figure => <a key={figure.id} href={`/api/v1/figures/${figure.id}/download`}><span>↓</span><span><strong>{metricTitle(figure.metric)} · {figure.format.toUpperCase()}</strong><small>{figure.sourceArtifactIds.length} runs · {formatDate(figure.createdAt)}</small></span></a>)}</div></div>}<div className="results-raw-data"><strong>Complete run data</strong><div className="dataset-downloads">{datasets.map(item => <a key={item.artifact.id} href={`/api/v1/artifacts/${item.artifact.id}/download`}><span>↓</span><span><strong>{item.label}</strong><small>Metric samples</small></span></a>)}</div></div></section>
+}
+
+export function statisticsCSV(datasets: LoadedDataset[], metrics: string[], experiment?: Experiment): string {
+  const rows: Array<Array<string | number>> = [['scope', 'strategy', 'dataset', 'metric', 'service', 'unit', 'status', 'count', 'mean', 'total', 'std', 'min', 'median', 'max', 'missing_runs']]
+  const summaryValues = (summary: ScientificSummary) => [summary.count, summary.mean, '', summary.standardDeviation, summary.min, summary.median, summary.max]
+  for (const dataset of datasets) {
+    for (const metric of metrics) {
+      const series = aggregateMetric([dataset], metric)[0]
+      const control = dataset.dataset.spec.controlMetrics?.find(item => item.metric === metric)
+      const podSummary = metric === 'scheduler.pod_scheduling_latency' ? podSchedulingStatistics(dataset) : undefined
+      if (podSummary) rows.push(['run', '', dataset.label, metric, '', 'milliseconds', 'available', ...summaryValues(podSummary), ''])
+      else if (isControlMetric(metric) && control) rows.push(['run', '', dataset.label, metric, '', metric === 'descheduler.evictions' ? 'count' : 'milliseconds', control.status, control.count ?? '', control.mean ?? '', control.total ?? '', '', '', '', '', ''])
+      else if (series) rows.push(['run', '', dataset.label, metric, '', series.unit, 'available', ...summaryValues(summarize(series.points.map(point => point.value))), ''])
+    }
+    for (const row of serviceStatisticsRows([dataset])) rows.push(['service_run', row.group, dataset.label, row.metric, row.service, row.unit, 'available', ...summaryValues(row.summary), ''])
+  }
+  if (experiment) {
+    for (const row of variantStatistics(experiment, datasets, metrics).filter(row => row.summary.count >= 2)) rows.push(['across_runs', row.variant, '', row.metric, '', row.unit, 'available', ...summaryValues(row.summary), row.missing])
+    for (const row of serviceStatisticsRows(datasets, experiment).filter(row => row.acrossRuns)) rows.push(['service_across_runs', row.group, '', row.metric, row.service, row.unit, 'available', ...summaryValues(row.summary), ''])
+  }
+  return rows.map(row => row.map(value => {const text = String(value); return /[",\r\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text}).join(',')).join('\n')
+}
+
 function StatisticsTable({datasets, metrics, experiment}: {datasets: LoadedDataset[]; metrics: string[]; experiment?: Experiment}) {
-  const rows = datasets.flatMap(dataset => metrics.map(metric => {
-    const series = aggregateMetric([dataset], metric)[0]
-    return series ? {dataset: dataset.label, metric, unit: series.unit, summary: summarize(series.points.map(point => point.value))} : null
-  }).filter((item): item is {dataset: string; metric: string; unit: string; summary: ScientificSummary} => Boolean(item)))
-  const aggregates = experiment ? variantStatistics(experiment, datasets, metrics) : []
+  const runPositions = new Map(experiment?.variants.flatMap(variant => variant.trials.map(trial => [trial.resultArtifactId, trial.position] as const)) ?? [])
+  const orderedDatasets = [...datasets].sort((left, right) => {
+    const position = (dataset: LoadedDataset) => runPositions.get(dataset.artifact.id) ?? Number(dataset.label.match(/Run (\d+)/i)?.[1] ?? 0)
+    return position(left) - position(right)
+  })
+  const comparison = Boolean(experiment && experiment.variants.length > 1)
+  const aggregates = experiment && !comparison ? variantStatistics(experiment, datasets, metrics).filter(row => row.summary.count >= 2) : []
   const effects = experiment ? variantEffectSizes(experiment, datasets, metrics) : []
   return <>
-    {!!effects.length && <section className="statistics-card"><div><h3>Difference between strategies</h3></div><div className="statistics-table-wrap"><table className="effects-table"><thead><tr><th>Comparison</th><th>Metric</th><th title="Standardized effect size">Cohen's d</th><th>Difference</th><th>Runs</th></tr></thead><tbody>{effects.map(row => <tr key={row.metric}><td>{row.left} vs {row.right}</td><td>{metricTitle(row.metric)}</td><td>{row.value.toFixed(3)}</td><td>{effectMagnitude(row.value)}</td><td>{row.leftCount} / {row.rightCount}</td></tr>)}</tbody></table></div></section>}
-    {!!aggregates.length && <section className="statistics-card"><div><h3>Across runs</h3></div><div className="statistics-table-wrap"><table className="aggregate-table"><thead><tr><th>Strategy</th><th>Metric</th><th>Runs</th><th>Runs missing</th><th>Mean</th><th>Std. dev.</th><th>Min</th><th>Median</th><th>Max</th><th>95th percentile</th><th>Variation</th><th>95% interval</th></tr></thead><tbody>{aggregates.map(row => <tr key={`${row.variant}-${row.metric}`}><td>{row.variant}</td><td>{metricTitle(row.metric)}</td><td>{row.summary.count}</td><td>{row.missing}</td><td>{formatMetric(row.summary.mean, row.unit)}</td><td>{formatMetric(row.summary.standardDeviation, row.unit)}</td><td>{formatMetric(row.summary.min, row.unit)}</td><td>{formatMetric(row.summary.median, row.unit)}</td><td>{formatMetric(row.summary.max, row.unit)}</td><td>{formatMetric(row.summary.p95, row.unit)}</td><td>{(row.summary.coefficientOfVariation * 100).toFixed(1)}%</td><td>{formatMetric(row.summary.confidence95Low, row.unit)}–{formatMetric(row.summary.confidence95High, row.unit)}</td></tr>)}</tbody></table></div></section>}
-    <section className="statistics-card"><div><h3>Within each run</h3></div><div className="statistics-table-wrap"><table className="runs-table"><thead><tr><th>Run</th><th>Metric</th><th>Samples</th><th>Mean</th><th>Std. dev.</th><th>Min</th><th>Median</th><th>Max</th><th>95th percentile</th><th>99th percentile</th><th>Variation</th><th>95% interval</th></tr></thead><tbody>{rows.map((row, index) => <tr key={`${row.dataset}-${row.metric}-${index}`}><td>{row.dataset}</td><td>{metricTitle(row.metric)}</td><td>{row.summary.count}</td><td>{formatMetric(row.summary.mean, row.unit)}</td><td>{formatMetric(row.summary.standardDeviation, row.unit)}</td><td>{formatMetric(row.summary.min, row.unit)}</td><td>{formatMetric(row.summary.median, row.unit)}</td><td>{formatMetric(row.summary.max, row.unit)}</td><td>{formatMetric(row.summary.p95, row.unit)}</td><td>{formatMetric(row.summary.p99, row.unit)}</td><td>{(row.summary.coefficientOfVariation * 100).toFixed(1)}%</td><td>{formatMetric(row.summary.confidence95Low, row.unit)}–{formatMetric(row.summary.confidence95High, row.unit)}</td></tr>)}</tbody></table></div></section>
+    {experiment && experiment.variants.length > 1 && <StrategyComparison datasets={datasets} metrics={metrics} experiment={experiment} />}
+    {!!effects.length && <section className="statistics-card"><div><h3>Difference between strategies</h3></div><div className="statistics-table-wrap"><ResponsiveTable className="effects-table"><thead><tr><th>Comparison</th><th>Metric</th><th title="Standardized effect size">Cohen's d</th><th>Difference</th><th>Runs</th></tr></thead><tbody>{effects.map(row => <tr key={row.metric}><td>{row.left} vs {row.right}</td><td>{statisticsMetricTitle(row.metric)}</td><td>{row.value.toFixed(3)}</td><td>{effectMagnitude(row.value)}</td><td>{row.leftCount} / {row.rightCount}</td></tr>)}</tbody></ResponsiveTable></div></section>}
+    {!!aggregates.length && <section className="statistics-card"><div><h3>Across runs</h3></div><div className="statistics-table-wrap"><ResponsiveTable className="aggregate-table"><thead><tr><th>Strategy</th><th>Metric</th><th>Runs</th><th>Runs missing</th><th>Mean across runs</th><th>Std. dev.</th><th>Min</th><th>Median</th><th>Max</th><th>Variation</th><th>95% interval</th></tr></thead><tbody>{aggregates.map(row => <tr key={`${row.variant}-${row.metric}`}><td>{row.variant}</td><td>{statisticsMetricTitle(row.metric)}</td><td>{row.summary.count}</td><td>{row.missing}</td><td>{formatMetric(row.summary.mean, row.unit)}</td><td>{formatMetric(row.summary.standardDeviation, row.unit)}</td><td>{formatMetric(row.summary.min, row.unit)}</td><td>{formatMetric(row.summary.median, row.unit)}</td><td>{formatMetric(row.summary.max, row.unit)}</td><td>{(row.summary.coefficientOfVariation * 100).toFixed(1)}%</td><td>{formatMetric(row.summary.confidence95Low, row.unit)}–{formatMetric(row.summary.confidence95High, row.unit)}</td></tr>)}</tbody></ResponsiveTable></div></section>}
+    {!comparison && <><h3>Within each run</h3>
+    {orderedDatasets.map(dataset => <section className="statistics-card" key={dataset.artifact.id}><div><h3>{dataset.label}</h3></div><div className="statistics-table-wrap"><ResponsiveTable className="runs-table" aria-label={`Statistics for ${dataset.label}`}><thead><tr><th>Metric</th><th>Samples / events</th><th>Mean / total</th><th>Std. dev.</th><th>Min</th><th>Median</th><th>Max</th><th>Variation</th><th>95% interval</th></tr></thead><tbody>{metrics.map(metric => <RunStatisticsRow key={metric} dataset={dataset} metric={metric} />)}</tbody></ResponsiveTable></div><ServiceStatisticsTable datasets={[dataset]} /></section>)}
+    </>}
+    {!comparison && experiment && serviceStatisticsRows(datasets, experiment).some(row => row.acrossRuns) && <section className="statistics-card"><ServiceStatisticsTable datasets={datasets} experiment={experiment} /></section>}
   </>
+}
+
+function StrategyComparison({datasets, metrics, experiment}: {datasets: LoadedDataset[]; metrics: string[]; experiment: Experiment}) {
+  const columns = experiment.variants.map(variant => ({
+    variant,
+    rows: variantStatistics({...experiment, variants: [variant]}, datasets, metrics),
+    available: variant.trials.filter(trial => datasets.some(dataset => dataset.artifact.id === trial.resultArtifactId)).length,
+  }))
+  const visibleMetrics = metrics.filter(metric => columns.some(column => column.rows.some(row => row.metric === metric)))
+  if (!visibleMetrics.length) return null
+  return <section className="statistics-card">
+    <div><h3>Strategy comparison</h3></div>
+    <div className="statistics-table-wrap"><ResponsiveTable aria-label="Strategy comparison">
+      <thead><tr><th>Metric</th>{columns.map(({variant, available}) => <th key={variant.id}>{variant.alias || variant.name}<small className="muted"> · {available}/{variant.trials.length} runs</small></th>)}</tr></thead>
+      <tbody>{visibleMetrics.map(metric => <tr key={metric}>
+        <td>{statisticsMetricTitle(metric)}</td>
+        {columns.map(({variant, rows}) => {
+          const row = rows.find(item => item.metric === metric)
+          const aggregation = metric === 'descheduler.evictions' ? 'Total evictions per run' : metric === 'scheduler.pod_scheduling_latency' ? 'Mean per pod' : isControlMetric(metric) ? 'Mean per cycle' : 'Mean over time windows'
+          return <td key={variant.id} title={row ? `${aggregation}; ${row.summary.count} run(s) with this metric${row.summary.count > 1 ? '; mean ± sample standard deviation across runs' : ''}` : 'No collected data'}>{row ? <>{formatMetric(row.summary.mean, row.unit)}{row.summary.count > 1 && <> ± {formatMetric(row.summary.standardDeviation, row.unit)}</>}</> : '—'}</td>
+        })}
+      </tr>)}</tbody>
+    </ResponsiveTable></div>
+  </section>
+}
+
+function RunStatisticsRow({dataset, metric}: {dataset: LoadedDataset; metric: string}) {
+  const series = aggregateMetric([dataset], metric)[0]
+  const control = dataset.dataset.spec.controlMetrics?.find(item => item.metric === metric)
+  if (!series && !control) return null
+  const unit = series?.unit ?? (metric === 'descheduler.evictions' ? 'count' : 'milliseconds')
+  const name = <td title={control ? controlMetricDescription(metric, control.scope, control.reason, control.timestampResolutionSeconds) : undefined}>{statisticsMetricTitle(metric)}</td>
+  const podSummary = metric === 'scheduler.pod_scheduling_latency' ? podSchedulingStatistics(dataset) : undefined
+  if (podSummary) return <tr>{name}<td>{podSummary.count}</td><td title="Mean per pod">{formatMetric(podSummary.mean, unit)}</td><td>{formatMetric(podSummary.standardDeviation, unit)}</td><td>{formatMetric(podSummary.min, unit)}</td><td>{formatMetric(podSummary.median, unit)}</td><td>{formatMetric(podSummary.max, unit)}</td><td>{(podSummary.coefficientOfVariation * 100).toFixed(1)}%</td><td>{formatMetric(podSummary.confidence95Low, unit)}–{formatMetric(podSummary.confidence95High, unit)}</td></tr>
+  if (isControlMetric(metric)) {
+    const value = control?.total ?? control?.mean
+    return <tr>{name}<td>{control?.count ?? '—'}</td><td title={control?.total !== undefined || metric === 'descheduler.evictions' ? 'Run total' : metric === 'scheduler.pod_scheduling_latency' ? 'Mean per pod' : 'Mean per cycle'}>{value === undefined ? '—' : formatMetric(value, unit)}</td>{Array.from({length: 6}, (_, index) => <td key={index}>—</td>)}</tr>
+  }
+  const summary = summarize(series!.points.map(point => point.value))
+  return <tr>{name}<td>{summary.count}</td><td title="Mean over time">{formatMetric(summary.mean, unit)}</td><td>{formatMetric(summary.standardDeviation, unit)}</td><td>{formatMetric(summary.min, unit)}</td><td>{formatMetric(summary.median, unit)}</td><td>{formatMetric(summary.max, unit)}</td><td>{(summary.coefficientOfVariation * 100).toFixed(1)}%</td><td>{formatMetric(summary.confidence95Low, unit)}–{formatMetric(summary.confidence95High, unit)}</td></tr>
+}
+
+export function podSchedulingStatistics(dataset: LoadedDataset): ScientificSummary | undefined {
+  const control = dataset.dataset.spec.controlMetrics?.find(item => item.metric === 'scheduler.pod_scheduling_latency')
+  if (control?.status !== 'available') return undefined
+  const values = new Map<string, number>()
+  for (const series of dataset.dataset.spec.series.filter(item => item.metric === control.metric)) {
+    const uid = series.labels.pod_uid
+    if (!uid) return undefined
+    for (const point of series.points) {
+      if (!Number.isFinite(point.value) || point.value < 0 || values.has(uid) && values.get(uid) !== point.value) return undefined
+      values.set(uid, point.value)
+    }
+  }
+  if (!values.size || values.size !== control.count) return undefined
+  const summary = summarize([...values.values()])
+  if (control.mean === undefined || Math.abs(summary.mean - control.mean) > Math.max(1, control.mean) * 1e-6) return undefined
+  return summary
+}
+
+function metricRunValue(dataset: LoadedDataset, metric: string): number | undefined {
+  if (isControlMetric(metric)) {
+    const summary = dataset.dataset.spec.controlMetrics?.find(item => item.metric === metric)
+    return summary?.total ?? summary?.mean
+  }
+  const series = aggregateMetric([dataset], metric)[0]
+  return series?.points.length ? series.points.reduce((sum, point) => sum + point.value, 0) / series.points.length : undefined
 }
 
 export function variantStatistics(experiment: Experiment, datasets: LoadedDataset[], metrics: string[]) {
@@ -613,10 +851,10 @@ export function variantStatistics(experiment: Experiment, datasets: LoadedDatase
     for (const trial of variant.trials) {
       const dataset = byArtifact.get(trial.resultArtifactId)
       if (!dataset) continue
-      const series = aggregateMetric([dataset], metric)[0]
-      if (!series?.points.length) continue
-      unit ||= series.unit
-      values.push(series.points.reduce((sum, point) => sum + point.value, 0) / series.points.length)
+      const value = metricRunValue(dataset, metric)
+      if (value === undefined) continue
+      unit ||= aggregateMetric([dataset], metric)[0]?.unit ?? (metric === 'descheduler.evictions' ? 'count' : 'milliseconds')
+      values.push(value)
     }
     return values.length ? {variant: variant.alias || variant.name, metric, unit, missing: variant.trials.length - values.length, summary: summarize(values)} : null
   }).filter((item): item is {variant: string; metric: string; unit: string; missing: number; summary: ScientificSummary} => Boolean(item)))
@@ -638,8 +876,8 @@ function variantRunMeans(variant: Experiment['variants'][number], datasets: Map<
   for (const trial of variant.trials) {
     const dataset = datasets.get(trial.resultArtifactId)
     if (!dataset) continue
-    const series = aggregateMetric([dataset], metric)[0]
-    if (series?.points.length) values.push(series.points.reduce((sum, point) => sum + point.value, 0) / series.points.length)
+    const value = metricRunValue(dataset, metric)
+    if (value !== undefined) values.push(value)
   }
   return values
 }
@@ -661,278 +899,6 @@ function effectMagnitude(value: number): string {
   return 'Large'
 }
 
-function exportStatisticsCSV(datasets: LoadedDataset[], metrics: string[], experiment?: Experiment) {
-  const header = ['scope', 'strategy', 'dataset', 'metric', 'unit', 'missing_runs', 'count', 'mean', 'std', 'min', 'median', 'max', 'p05', 'p25', 'p75', 'p95', 'p99', 'cv', 'ci95_low', 'ci95_high', 'comparison', 'cohen_d']
-  const rows: Array<Array<string | number>> = [header]
-  for (const dataset of datasets) for (const metric of metrics) {
-    const series = aggregateMetric([dataset], metric)[0]
-    if (!series) continue
-    const value = summarize(series.points.map(point => point.value))
-    rows.push(['run', experimentStrategy(experiment, dataset.artifact.id), dataset.label, metric, series.unit, '', value.count, value.mean, value.standardDeviation, value.min, value.median, value.max, value.p05, value.p25, value.p75, value.p95, value.p99, value.coefficientOfVariation, value.confidence95Low, value.confidence95High, '', ''])
-  }
-  if (experiment) for (const item of variantStatistics(experiment, datasets, metrics)) {
-    const value = item.summary
-    rows.push(['strategy', item.variant, '', item.metric, item.unit, item.missing, value.count, value.mean, value.standardDeviation, value.min, value.median, value.max, value.p05, value.p25, value.p75, value.p95, value.p99, value.coefficientOfVariation, value.confidence95Low, value.confidence95High, '', ''])
-  }
-  if (experiment) for (const item of variantEffectSizes(experiment, datasets, metrics)) rows.push(['effect', '', '', item.metric, '', '', item.leftCount + item.rightCount, '', '', '', '', '', '', '', '', '', '', '', '', '', `${item.left} vs ${item.right}`, item.value])
-  const filename = experiment ? `kubephos-${safeName(experiment.name)}-statistics.csv` : 'kubephos-statistics.csv'
-  downloadBlob(filename, new Blob([rows.map(row => row.map(csvValue).join(',')).join('\n')], {type: 'text/csv;charset=utf-8'}))
-}
-
-function experimentStrategy(experiment: Experiment | undefined, artifactID: string): string {
-  const variant = experiment?.variants.find(item => item.trials.some(trial => trial.resultArtifactId === artifactID))
-  return variant?.alias || variant?.name || ''
-}
-
-function safeName(value: string): string {
-  return value.trim().toLowerCase().replaceAll(/[^a-z0-9]+/g, '-').replaceAll(/(^-|-$)/g, '') || 'experiment'
-}
-
-function csvValue(value: string | number): string {
-  const text = String(value)
-  return /[",\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text
-}
-
-export async function exportChart(id: string, metric: string, format: 'pdf' | 'png', onGenerated?: (value: Uint8Array) => Promise<void>) {
-  const source = document.getElementById(id) as SVGSVGElement | null
-  if (!source) return
-  const serialized = new XMLSerializer().serializeToString(source)
-  const name = `kubephos-${metric.replaceAll(/[^a-zA-Z0-9]+/g, '-').toLowerCase()}`
-  if (format === 'pdf') {
-    const pdf = svgToPDF(source)
-    if (onGenerated) await onGenerated(pdf)
-    else downloadBlob(`${name}.pdf`, new Blob([pdf.buffer as ArrayBuffer], {type: 'application/pdf'}))
-    return
-  }
-  const image = new Image()
-  const url = URL.createObjectURL(new Blob([serialized], {type: 'image/svg+xml'}))
-  try {
-    await new Promise<void>((resolve, reject) => { image.onload = () => resolve(); image.onerror = () => reject(new Error('Could not render chart')); image.src = url })
-    const scale = 3
-    const [,, sourceWidth, sourceHeight] = (source.getAttribute('viewBox') ?? '0 0 700 525').split(/\s+/).map(Number)
-    const aspect = sourceWidth > 0 && sourceHeight > 0 ? sourceWidth / sourceHeight : 4 / 3
-    const renderWidth = aspect >= 4 / 3 ? 700 : 525 * aspect
-    const renderHeight = aspect >= 4 / 3 ? 700 / aspect : 525
-    const canvas = document.createElement('canvas')
-    canvas.width = Math.round(renderWidth * scale)
-    canvas.height = Math.round(renderHeight * scale)
-    const context = canvas.getContext('2d')
-    if (!context) return
-    context.fillStyle = '#ffffff'
-    context.fillRect(0, 0, canvas.width, canvas.height)
-    context.drawImage(image, 0, 0, canvas.width, canvas.height)
-    const blob = await new Promise<Blob | null>(resolve => canvas.toBlob(resolve, 'image/png', 1))
-    if (!blob) throw new Error('Could not render PNG figure.')
-    if (blob) {
-      const output = setPNGResolution(new Uint8Array(await blob.arrayBuffer()), 600)
-      if (onGenerated) await onGenerated(output)
-      else downloadBlob(`${name}-600dpi.png`, new Blob([output.buffer as ArrayBuffer], {type: 'image/png'}))
-    }
-  } finally {
-    URL.revokeObjectURL(url)
-  }
-}
-
-export function svgToPDF(source: SVGSVGElement): Uint8Array {
-  const [,, svgWidth, svgHeight] = (source.getAttribute('viewBox') ?? '0 0 700 525').split(/\s+/).map(Number)
-  const aspect = svgWidth > 0 && svgHeight > 0 ? svgWidth / svgHeight : 4 / 3
-  const pageWidth = aspect > 4 / 3 ? 504 : 252
-  const pageHeight = pageWidth / aspect
-  const scale = pageWidth / svgWidth
-  const commands = ['1 1 1 rg', `0 0 ${pageWidth} ${pageHeight} re f`, '0 0 0 RG', '0 0 0 rg']
-  const sx = (value: number) => value * scale
-  const sy = (value: number) => pageHeight - value * scale
-  const number = (value: number) => Number.isFinite(value) ? value : 0
-  const inherited = (element: Element, name: string): string => element.getAttribute(name) ?? element.parentElement?.getAttribute(name) ?? ''
-  const stroke = (element: Element) => {
-    const color = inherited(element, 'stroke') || '#111111'
-    commands.push(`${pdfColor(color)} RG`)
-    commands.push(`${sx(number(Number(inherited(element, 'stroke-width') || 1.5))).toFixed(3)} w`)
-    const dash = inherited(element, 'stroke-dasharray').split(/\s+/).filter(Boolean).map(Number).filter(Number.isFinite)
-    commands.push(dash.length ? `[${dash.map(value => sx(value).toFixed(3)).join(' ')}] 0 d` : '[] 0 d')
-  }
-  for (const element of source.querySelectorAll('rect,line,path,circle,polygon,text')) {
-    const tag = element.tagName.toLowerCase()
-    if (tag === 'text') {
-      const x = sx(number(Number(element.getAttribute('x'))))
-      const y = sy(number(Number(element.getAttribute('y'))))
-      const declaredSize = number(Number(inherited(element, 'font-size')))
-      const logicalSize = declaredSize > 0 ? declaredSize : element.classList.contains('axis-label') ? 20 : element.classList.contains('legend-label') ? 15 : 17
-      const size = sx(logicalSize)
-      const value = pdfText(element.textContent ?? '')
-      const estimate = value.length * size * .5
-      const anchor = element.getAttribute('text-anchor')
-      const offset = anchor === 'middle' ? estimate / 2 : anchor === 'end' ? estimate : 0
-      commands.push(`${pdfColor(inherited(element, 'fill') || '#111111')} rg`)
-      if ((element.getAttribute('transform') ?? '').startsWith('rotate(')) commands.push(`BT /F1 ${size.toFixed(3)} Tf 0 1 -1 0 ${(x + size * .3).toFixed(3)} ${(y - estimate / 2).toFixed(3)} Tm (${value}) Tj ET`)
-      else commands.push(`BT /F1 ${size.toFixed(3)} Tf 1 0 0 1 ${(x - offset).toFixed(3)} ${y.toFixed(3)} Tm (${value}) Tj ET`)
-      continue
-    }
-    if (tag === 'rect') {
-      const x = sx(number(Number(element.getAttribute('x'))))
-      const y = sy(number(Number(element.getAttribute('y'))) + number(Number(element.getAttribute('height'))))
-      const width = sx(number(Number(element.getAttribute('width'))))
-      const height = sx(number(Number(element.getAttribute('height'))))
-      if (element.classList.contains('axis')) {
-        stroke(element)
-        commands.push(`${x.toFixed(3)} ${y.toFixed(3)} ${width.toFixed(3)} ${height.toFixed(3)} re S`)
-      } else {
-        const outline = inherited(element, 'stroke')
-        commands.push(`${pdfColor(inherited(element, 'fill') || '#000000')} rg`)
-        if (outline && outline !== 'none') stroke(element)
-        commands.push(`${x.toFixed(3)} ${y.toFixed(3)} ${width.toFixed(3)} ${height.toFixed(3)} re ${outline && outline !== 'none' ? 'B' : 'f'}`)
-      }
-      continue
-    }
-    if (tag === 'line') {
-      stroke(element)
-      commands.push(`${sx(number(Number(element.getAttribute('x1')))).toFixed(3)} ${sy(number(Number(element.getAttribute('y1')))).toFixed(3)} m ${sx(number(Number(element.getAttribute('x2')))).toFixed(3)} ${sy(number(Number(element.getAttribute('y2')))).toFixed(3)} l S`)
-      continue
-    }
-    if (tag === 'circle') {
-      const x = sx(number(Number(element.getAttribute('cx'))))
-      const y = sy(number(Number(element.getAttribute('cy'))))
-      const radius = sx(number(Number(element.getAttribute('r'))))
-      const control = radius * .5522848
-      commands.push(`${pdfColor(inherited(element, 'fill') || '#000000')} rg`, `${(x + radius).toFixed(3)} ${y.toFixed(3)} m ${(x + radius).toFixed(3)} ${(y + control).toFixed(3)} ${(x + control).toFixed(3)} ${(y + radius).toFixed(3)} ${x.toFixed(3)} ${(y + radius).toFixed(3)} c ${(x - control).toFixed(3)} ${(y + radius).toFixed(3)} ${(x - radius).toFixed(3)} ${(y + control).toFixed(3)} ${(x - radius).toFixed(3)} ${y.toFixed(3)} c ${(x - radius).toFixed(3)} ${(y - control).toFixed(3)} ${(x - control).toFixed(3)} ${(y - radius).toFixed(3)} ${x.toFixed(3)} ${(y - radius).toFixed(3)} c ${(x + control).toFixed(3)} ${(y - radius).toFixed(3)} ${(x + radius).toFixed(3)} ${(y - control).toFixed(3)} ${(x + radius).toFixed(3)} ${y.toFixed(3)} c f`)
-      continue
-    }
-    if (tag === 'polygon') {
-      const points = (element.getAttribute('points') ?? '').trim().split(/\s+/).map(pair => pair.split(',').map(Number))
-      if (!points.length) continue
-      commands.push(`${pdfColor(inherited(element, 'fill') || '#000000')} rg`, `${sx(points[0][0]).toFixed(3)} ${sy(points[0][1]).toFixed(3)} m`, ...points.slice(1).map(point => `${sx(point[0]).toFixed(3)} ${sy(point[1]).toFixed(3)} l`), 'h f')
-      continue
-    }
-    const path = element.getAttribute('d') ?? ''
-    const converted = pdfPath(path, scale, pageHeight)
-    if (!converted) continue
-    stroke(element)
-    commands.push(converted, inherited(element, 'fill') && inherited(element, 'fill') !== 'none' ? 'B' : 'S')
-  }
-  return pdfFile(commands.join('\n'), pageWidth, pageHeight)
-}
-
-function pdfPath(path: string, scale: number, pageHeight: number): string {
-  const tokens = path.match(/[MLHVCZ]|-?(?:\d+\.?\d*|\.\d+)(?:e[-+]?\d+)?/gi) ?? []
-  const output: string[] = []
-  let command = ''
-  let x = 0
-  let y = 0
-  for (let index = 0; index < tokens.length;) {
-    if (/^[MLHVCZ]$/i.test(tokens[index])) command = tokens[index++].toUpperCase()
-    if (command === 'Z') {
-      output.push('h')
-      command = ''
-    } else if (command === 'H') {
-      x = Number(tokens[index++])
-      output.push(`${(x * scale).toFixed(3)} ${(pageHeight - y * scale).toFixed(3)} l`)
-    } else if (command === 'V') {
-      y = Number(tokens[index++])
-      output.push(`${(x * scale).toFixed(3)} ${(pageHeight - y * scale).toFixed(3)} l`)
-    } else if (command === 'M' || command === 'L') {
-      x = Number(tokens[index++])
-      y = Number(tokens[index++])
-      output.push(`${(x * scale).toFixed(3)} ${(pageHeight - y * scale).toFixed(3)} ${command === 'M' ? 'm' : 'l'}`)
-      if (command === 'M') command = 'L'
-    } else if (command === 'C') {
-      const firstX = Number(tokens[index++])
-      const firstY = Number(tokens[index++])
-      const secondX = Number(tokens[index++])
-      const secondY = Number(tokens[index++])
-      x = Number(tokens[index++])
-      y = Number(tokens[index++])
-      output.push(`${(firstX * scale).toFixed(3)} ${(pageHeight - firstY * scale).toFixed(3)} ${(secondX * scale).toFixed(3)} ${(pageHeight - secondY * scale).toFixed(3)} ${(x * scale).toFixed(3)} ${(pageHeight - y * scale).toFixed(3)} c`)
-    } else index++
-  }
-  return output.join('\n')
-}
-
-function pdfColor(value: string): string {
-  const match = value.match(/^#([0-9a-f]{6})$/i)
-  if (!match) return '0 0 0'
-  return [0, 2, 4].map(offset => (parseInt(match[1].slice(offset, offset + 2), 16) / 255).toFixed(4)).join(' ')
-}
-
-function pdfText(value: string): string {
-  return value.normalize('NFKD').replaceAll(/[^\x20-\x7e]/g, '-').replaceAll('\\', '\\\\').replaceAll('(', '\\(').replaceAll(')', '\\)')
-}
-
-function pdfFile(content: string, width: number, height: number): Uint8Array {
-  const encoder = new TextEncoder()
-  const objects = [
-    '<< /Type /Catalog /Pages 2 0 R >>',
-    '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
-    `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${width} ${height}] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>`,
-    `<< /Length ${encoder.encode(content).length} >>\nstream\n${content}\nendstream`,
-    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>'
-  ]
-  let document = '%PDF-1.4\n'
-  const offsets = [0]
-  objects.forEach((object, index) => {
-    offsets.push(encoder.encode(document).length)
-    document += `${index + 1} 0 obj\n${object}\nendobj\n`
-  })
-  const xref = encoder.encode(document).length
-  document += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n${offsets.slice(1).map(offset => `${String(offset).padStart(10, '0')} 00000 n `).join('\n')}\ntrailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`
-  return encoder.encode(document)
-}
-
-export function setPNGResolution(source: Uint8Array, dpi: number): Uint8Array {
-  if (source.length < 33 || source.slice(0, 8).some((value, index) => value !== [137, 80, 78, 71, 13, 10, 26, 10][index])) throw new Error('Invalid PNG output')
-  const chunks: Uint8Array[] = [source.slice(0, 8)]
-  const view = new DataView(source.buffer, source.byteOffset, source.byteLength)
-  let offset = 8
-  while (offset + 12 <= source.length) {
-    const length = view.getUint32(offset)
-    const end = offset + length + 12
-    if (end > source.length) throw new Error('Invalid PNG chunk')
-    const type = String.fromCharCode(...source.slice(offset + 4, offset + 8))
-    if (type !== 'pHYs') chunks.push(source.slice(offset, end))
-    if (type === 'IHDR') chunks.push(pngResolutionChunk(dpi))
-    offset = end
-  }
-  if (offset !== source.length) throw new Error('Invalid PNG length')
-  const size = chunks.reduce((total, chunk) => total + chunk.length, 0)
-  const result = new Uint8Array(size)
-  let cursor = 0
-  for (const chunk of chunks) {
-    result.set(chunk, cursor)
-    cursor += chunk.length
-  }
-  return result
-}
-
-function pngResolutionChunk(dpi: number): Uint8Array {
-  const chunk = new Uint8Array(21)
-  const view = new DataView(chunk.buffer)
-  view.setUint32(0, 9)
-  chunk.set([112, 72, 89, 115], 4)
-  const pixelsPerMeter = Math.round(dpi / 0.0254)
-  view.setUint32(8, pixelsPerMeter)
-  view.setUint32(12, pixelsPerMeter)
-  chunk[16] = 1
-  view.setUint32(17, crc32(chunk.slice(4, 17)))
-  return chunk
-}
-
-function crc32(source: Uint8Array): number {
-  let crc = 0xffffffff
-  for (const byte of source) {
-    crc ^= byte
-    for (let bit = 0; bit < 8; bit++) crc = (crc >>> 1) ^ (crc & 1 ? 0xedb88320 : 0)
-  }
-  return (crc ^ 0xffffffff) >>> 0
-}
-
-function downloadBlob(name: string, blob: Blob) {
-  const url = URL.createObjectURL(blob)
-  const link = document.createElement('a')
-  link.href = url
-  link.download = name
-  link.click()
-  setTimeout(() => URL.revokeObjectURL(url), 0)
-}
-
 function formatDuration(milliseconds: number): string {
   const seconds = Math.max(0, Math.round(milliseconds / 1000))
   if (seconds >= 3600) return `${(seconds / 3600).toFixed(1)}h`
@@ -940,43 +906,8 @@ function formatDuration(milliseconds: number): string {
   return `${seconds}s`
 }
 
-function paperChartPath(points: MetricPoint[], x: (value: number) => number, y: (value: number) => number): string {
-  return points.map((point, index) => `${index ? 'L' : 'M'}${x(new Date(point.timestamp).getTime() / 60000).toFixed(2)},${y(point.value).toFixed(2)}`).join(' ')
-}
-
-function formatAxis(value: number): string {
-  return value >= 100 ? value.toFixed(0) : value >= 10 ? value.toFixed(1).replace(/\.0$/, '') : value.toFixed(2).replace(/\.0+$/, '').replace(/(\.\d)0$/, '$1')
-}
-
-function formatAxisValue(value: number, unit: string): string {
-  if (unit === 'bytes') return formatAxis(value / 1024 ** 2)
-  if (unit === 'bytes_per_second') return formatAxis(value / 1024 ** 2)
-  return formatAxis(value)
-}
-
-function metricAxisLabel(metric: string, unit: string): string {
-  const labels: Record<string, string> = {
-    'load.configured_rps': 'Input rate (req/s)',
-    'load.successful_rps': 'Successful input requests (req/s)',
-    'load.failed_rps': 'Failed requests (req/s)',
-    'load.failure_percentage': 'Failed requests (%)',
-    'load.p95_response_time': 'P95 response time (ms)',
-    'load.slo_violation_percentage': 'SLO violation windows (%)',
-    'application.request_rps': 'Internal service calls (req/s)',
-    'application.p95_response_time': 'P95 internal response time (ms)',
-    'cpu.cores': 'CPU usage (cores)',
-    'memory.working_set': 'Working set (MiB)',
-    'pod.restarts': 'Restart count',
-    'deployment.ready_replicas': 'Replica count',
-    'network.rtt': 'Network RTT (ms)',
-    'network.packet_loss': 'Packet loss (%)',
-    'network.bandwidth': 'Bandwidth (MiB/s)'
-  }
-  return labels[metric] ?? `${metricTitle(metric)}${unit ? ` (${unit.replaceAll('_', ' ')})` : ''}`
-}
-
-function compactLabel(value: string): string {
-  return value.length > 34 ? `${value.slice(0, 31)}...` : value
+function plotLabel(value: string): string {
+  return value.replace(/ · Run \d+$/i, '')
 }
 
 function validateDataset(dataset: TimeSeriesDataset) {
@@ -986,10 +917,17 @@ function validateDataset(dataset: TimeSeriesDataset) {
   }
 }
 
-function datasetLabel(artifact: Artifact, operations: Operation[], workspaces: Workspace[]): string {
+function datasetLabel(artifact: Artifact, operations: Operation[]): string {
   const operation = operations.find(item => item.id === artifact.operationId)
-  const workspace = workspaces.find(item => item.id === artifact.workspaceId)
-  return `${workspace?.name ?? 'Workspace'} · ${operation?.title ?? artifact.name}`
+  return operation?.title ?? artifact.name
+}
+
+function isWindowP95(metric: string): boolean {
+  return metric.endsWith('p95_response_time')
+}
+
+function statisticsMetricTitle(metric: string): string {
+  return isWindowP95(metric) ? metric === 'load.p95_response_time' ? 'Response time P95 per window' : metric === 'application.p95_response_time' ? 'Service response time P95 per window' : 'Redis operation P95 per window' : metricTitle(metric)
 }
 
 function metricTitle(metric: string): string {
@@ -1007,10 +945,16 @@ function metricAxisLabelName(metric: string): string | undefined {
     'load.failure_percentage': 'Failure percentage',
     'load.p95_response_time': 'P95 response time',
     'load.slo_violation_percentage': 'SLO violation windows',
+    'redis.operation_rps': 'Throughput per Redis operation',
+    'redis.operation_p95_response_time': 'P95 per Redis operation',
     'application.request_rps': 'Throughput per service',
     'application.p95_response_time': 'Response time per service',
     'cpu.cores': 'CPU usage',
     'memory.working_set': 'Memory working set',
+    'scheduler.pod_scheduling_latency': 'Scheduling latency',
+    'scheduler.cycle_duration': 'Scheduling cycle duration',
+    'descheduler.cycle_duration': 'Descheduling cycle duration',
+    'descheduler.evictions': 'Descheduler evictions',
     'pod.restarts': 'Pod restarts',
     'deployment.ready_replicas': 'Ready replicas',
     'network.rtt': 'Network RTT',
@@ -1026,7 +970,7 @@ function formatMetric(value: number, unit: string): string {
     const suffix = divisor === 1024 ** 3 ? 'GiB' : divisor === 1024 ** 2 ? 'MiB' : divisor === 1024 ? 'KiB' : 'B'
     return `${(value / divisor).toFixed(divisor === 1 ? 0 : 1)} ${suffix}`
   }
-  if (unit === 'cores') return value < 1 ? `${(value * 1000).toFixed(0)}m` : value.toFixed(2)
+  if (unit === 'cores') return value < 1 ? `${(value * 1000).toFixed(0)} mCPU` : `${value.toFixed(2)} cores`
   if (unit === 'requests_per_second') return `${value.toFixed(2)} req/s`
   if (unit === 'milliseconds') return `${value.toFixed(1)} ms`
   if (unit === 'percent') return `${value.toFixed(2)}%`
@@ -1034,13 +978,10 @@ function formatMetric(value: number, unit: string): string {
   return value.toLocaleString(undefined, {maximumFractionDigits: 2})
 }
 
-function ResultStat({label, value}: {label: string; value: string | number}) {
-  return <div><span>{label}</span><strong>{value}</strong></div>
-}
-
 function EmptyResults({experiment, runStatus}: {experiment?: Experiment; runStatus?: string}) {
   const status = runStatus ?? experiment?.status
-  const running = status && ['queued', 'running', 'starting'].includes(status)
+  const queued = status === 'queued'
+  const running = status && ['running', 'starting', 'prechecking', 'verifying'].includes(status)
   const failed = status === 'failed'
-  return <div className="empty-state"><div><strong>{running ? 'Runs in progress' : failed ? 'No results from this experiment' : 'No results yet'}</strong>{running ? 'Results and plots appear here as runs finish.' : failed ? 'Open the run above to inspect its logs and health checks.' : experiment ? 'Run this experiment to collect metrics and plots.' : 'Choose an experiment or run to explore verified data.'}</div></div>
+  return <div className="empty-state"><div><strong>{queued ? 'Waiting to start' : running ? 'Runs in progress' : failed ? 'No results from this experiment' : 'No results yet'}</strong>{queued ? 'Results will appear after this run starts and finishes.' : running ? 'Results and plots appear here as runs finish.' : failed ? 'Open the run above to inspect its logs and health checks.' : experiment ? 'Run this experiment to collect metrics and plots.' : 'Choose an experiment or run to explore verified data.'}</div></div>
 }

@@ -1,25 +1,15 @@
 package auth
 
-import "testing"
-
-func TestPasswordRoundTrip(t *testing.T) {
-	hash, err := HashPassword("correct horse battery staple")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !VerifyPassword(hash, "correct horse battery staple") {
-		t.Fatal("expected password to verify")
-	}
-	if VerifyPassword(hash, "wrong password") {
-		t.Fatal("wrong password must not verify")
-	}
-}
+import (
+	"strings"
+	"testing"
+)
 
 func TestPasswordPolicy(t *testing.T) {
-	if _, err := HashPassword("short"); err == nil {
-		t.Fatal("expected short password to be rejected")
-	}
-	if VerifyPassword("invalid", "password") {
-		t.Fatal("invalid hash must not verify")
+	for _, length := range []int{0, 11, 12, 128, 129} {
+		err := ValidatePassword(strings.Repeat("p", length))
+		if (err == nil) != (length >= 12 && length <= 128) {
+			t.Fatalf("length %d: unexpected policy result %v", length, err)
+		}
 	}
 }

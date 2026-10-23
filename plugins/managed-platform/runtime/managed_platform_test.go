@@ -194,3 +194,30 @@ func TestNamespaceOwnershipPreservesReadError(t *testing.T) {
 		t.Fatalf("expected %v, got %v", expected, err)
 	}
 }
+
+func TestManagementIngressPreservesExistingValues(t *testing.T) {
+	raw := []byte(`{"spec":{"valuesContent":"nodeSelector:\n  kubernetes.io/os: linux\nports:\n  web:\n    port: 8081\n"}}`)
+	manifest, err := managementIngressManifest(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc struct {
+		Spec struct {
+			ValuesContent string `json:"valuesContent"`
+		} `json:"spec"`
+	}
+	if err := json.Unmarshal(manifest, &doc); err != nil {
+		t.Fatal(err)
+	}
+	var values map[string]any
+	if err := yaml.Unmarshal([]byte(doc.Spec.ValuesContent), &values); err != nil {
+		t.Fatal(err)
+	}
+	selector := values["nodeSelector"].(map[string]any)
+	if selector["kubephos.dev/role"] != "management" || selector["kubernetes.io/os"] != "linux" {
+		t.Fatalf("bad selector %v", selector)
+	}
+	if values["ports"].(map[string]any)["web"].(map[string]any)["port"] != 8081 {
+		t.Fatal("existing ingress port changed")
+	}
+}

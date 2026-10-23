@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math"
 	"net"
 	"os"
 	"path/filepath"
@@ -325,7 +326,12 @@ func annotateNodePeerMetric(out map[string]map[string]string, sample *model.Samp
 	if origin == "" || destination == "" {
 		return
 	}
-	put(out, origin, prefix+"."+destination, formatFloat(float64(sample.Value)))
+	value := float64(sample.Value)
+	if math.IsNaN(value) || math.IsInf(value, 0) {
+		put(out, origin, prefix+"."+destination, "")
+		return
+	}
+	put(out, origin, prefix+"."+destination, formatFloat(value))
 }
 
 func packetLossQuery(promQLRange string) string {
@@ -494,7 +500,11 @@ func (a *agent) patchDeployment(ctx context.Context, dep *appsv1.Deployment, ann
 func annotationPatch(annotations map[string]string) ([]byte, error) {
 	values := make(map[string]any, len(annotations)+2)
 	for key, value := range annotations {
-		values[key] = value
+		if strings.HasPrefix(key, "network-bandwidth.") && value == "" {
+			values[key] = nil
+		} else {
+			values[key] = value
+		}
 	}
 	values["disk-bandwidth"] = nil
 	values["network-bandwidth"] = nil
