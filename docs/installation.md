@@ -58,44 +58,35 @@ KubePhos proxies authentication under `/auth`; PostgreSQL, Keycloak and SeaweedF
 have no published host ports.
 
 To change the instance address, edit `KUBEPHOS_URL` in the installed `.env` and
-run the installed updater. Change `KUBEPHOS_PORT` as well when changing the
+run `./update.sh` from your clone or extracted release directory. Change
+`KUBEPHOS_PORT` as well when changing the
 listener port. The update synchronizes Keycloak's callback URI, web origin and
 logout redirect with the configured URL, preserving users and client settings.
 
-## Manage services
-
-Run commands from the installation directory:
-
-```bash
-cd ~/.local/share/kubephos
-docker compose ps -a
-docker compose logs --tail=100 app worker
-docker compose exec app kubephos doctor
-docker compose stop
-docker compose up -d --wait
-```
-
-Docker restarts the long-running services after host reboot. Do not run
-`docker compose down -v` unless you intend to delete the installation's data.
-
 ## Update
 
-Edit `.env` in the installation directory to set the desired `KUBEPHOS_VERSION`,
-`KUBEPHOS_URL` or `KUBEPHOS_PORT`. Then run this from any working directory:
+From your clone or extracted release directory, run:
 
 ```bash
-~/.local/share/kubephos/update.sh
+./update.sh
 ```
 
-For a custom installation, use `/path/to/installation/update.sh`, or invoke the
-updater supplied with a newer release:
+By default, this uses the existing installation in `~/.local/share/kubephos`.
+Edit `~/.local/share/kubephos/.env` to set the desired `KUBEPHOS_VERSION`,
+`KUBEPHOS_URL` or `KUBEPHOS_PORT` before running the command. You do not need to
+change into the installation directory.
+
+For an installation created with a custom path:
 
 ```bash
-/path/to/new-release/update.sh --directory /path/to/installation
+./update.sh --directory /path/to/installation
 ```
 
-The release updater copies its matching Compose and update script into the
-installation while preserving `.env`, credentials, project name and volumes.
+Use the script from the release or checkout matching your target image version.
+It copies its matching Compose and update script into the installation while
+preserving `.env`, credentials, project name and volumes. The installer also
+places a copy of `update.sh` in the installation directory, which can be invoked
+by absolute path when you only need to reapply configuration.
 It downloads images, checks for running operations, stops app and worker,
 applies migrations, synchronizes authentication and restarts the services.
 `--no-pull` applies configuration using images already present on the host.
@@ -115,6 +106,22 @@ Liquibase applies new database changesets before app or worker starts. Keep app,
 worker and migration-files on the same release. Rolling back an image does not
 reverse a database migration; check compatibility and restore a consistent backup
 if required.
+
+## Manage services
+
+For direct Docker Compose commands, use the installation directory:
+
+```bash
+cd ~/.local/share/kubephos
+docker compose ps -a
+docker compose logs --tail=100 app worker
+docker compose exec app kubephos doctor
+docker compose stop
+docker compose up -d --wait
+```
+
+Docker restarts the long-running services after host reboot. Do not run
+`docker compose down -v` unless you intend to delete the installation's data.
 
 ## Backups
 
