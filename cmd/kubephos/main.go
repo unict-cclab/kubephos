@@ -43,6 +43,8 @@ func run() error {
 	}
 	configValue := config.Load()
 	switch command {
+	case "sync-auth":
+		return synchronizeAuthentication(configValue)
 	case "setup-admin":
 		return setupAdministrator(configValue)
 	case "serve":

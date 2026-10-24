@@ -50,6 +50,9 @@ To install for a server URL or select a published release:
 The first account is created before the application port is published. Repeating
 `./install.sh` resumes the installation without rotating secrets or deleting data.
 For an existing installation with a custom path, repeat the same `--directory`.
+After editing the installed `.env`, run `~/.local/share/kubephos/update.sh` to apply
+the changes, including Keycloak redirect URLs. Both scripts work from any directory and display high-level progress; detailed
+output is saved privately in `install.log` and `update.log`.
 
 See [installation and operations](docs/installation.md) for HTTPS, updates, backups
 and troubleshooting. Published releases are available on

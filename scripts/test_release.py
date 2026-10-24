@@ -15,6 +15,7 @@ class ReleaseTests(unittest.TestCase):
                 files = bundle.getnames()
                 self.assertFalse(any(Path(file).name in ('.env', 'credentials.json', 'compose.dev.yaml', 'dev.env') for file in files))
                 self.assertIn('kubephos-v0.9.0-rc.1/LICENSE', files)
+                self.assertEqual(bundle.getmember('kubephos-v0.9.0-rc.1/update.sh').mode, 0o755)
                 installer = bundle.extractfile('kubephos-v0.9.0-rc.1/install.sh').read().decode()
                 self.assertIn('release_version=v0.9.0-rc.1\n', installer)
                 self.assertEqual(bundle.getmember('kubephos-v0.9.0-rc.1/install.sh').mode, 0o755)

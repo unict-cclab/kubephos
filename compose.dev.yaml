@@ -7,3 +7,5 @@ services:
     image: kubephos:dev
   migration-files:
     image: kubephos:dev
+  auth-sync:
+    image: kubephos:dev

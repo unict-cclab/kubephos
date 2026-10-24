@@ -17,3 +17,7 @@ credentials.json
 **/__pycache__
 **/*.pyc
 .env.*
+
+install.log
+update.log
+compose.previous.yaml

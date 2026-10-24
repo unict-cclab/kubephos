@@ -17,7 +17,7 @@ class InstallerTests(unittest.TestCase):
         self.directory = Path(self.temp.name) / 'installation with spaces'
 
     def run_installer(self, *args, success=True, env=None):
-        result = subprocess.run(['bash', str(ROOT / 'install.sh'), '--directory', str(self.directory), '--admin-email', 'admin@example.test', *args], text=True, capture_output=True, env=env)
+        result = subprocess.run(['bash', str(ROOT / 'install.sh'), '--directory', str(self.directory), '--admin-email', 'admin@example.test', *args], text=True, capture_output=True, env=env, cwd=self.temp.name)
         self.assertEqual(result.returncode == 0, success, result.stdout + result.stderr)
         return result
 
@@ -28,7 +28,7 @@ class InstallerTests(unittest.TestCase):
         self.assertEqual(len(set(secrets)), 4)
         self.assertTrue(all(len(secret) == 64 for secret in secrets))
         self.assertEqual(values['KUBEPHOS_PORT'], '8091')
-        self.assertEqual(values['KUBEPHOS_BIND_ADDRESS'], '0.0.0.0')
+        self.assertNotIn('KUBEPHOS_BIND_ADDRESS', values)
         self.assertTrue(values['COMPOSE_PROJECT_NAME'].startswith('kubephos-'))
         account = json.loads((self.directory / 'credentials.json').read_text())
         self.assertEqual(account['username'], 'admin')
@@ -57,28 +57,31 @@ class InstallerTests(unittest.TestCase):
                 self.run_installer('--prepare-only', *args, success=False)
                 self.assertFalse((self.directory / '.env').exists())
 
-    def test_https_stays_behind_loopback_proxy(self):
+    def test_https_keeps_internal_proxy_port(self):
         self.run_installer('--prepare-only', '--url', 'https://kubephos.example.test')
         config = (self.directory / '.env').read_text()
         self.assertIn('KUBEPHOS_PORT=8080\n', config)
-        self.assertIn('KUBEPHOS_BIND_ADDRESS=127.0.0.1\n', config)
+        self.assertNotIn('BIND_ADDRESS', config)
 
-    def test_binding_uses_the_actual_host_not_a_hostname_prefix(self):
-        for host, expected in (('localhost.example.test', '0.0.0.0'), ('127.0.0.2', '127.0.0.2'), ('[::1]', '[::1]')):
+    def test_urls_do_not_generate_interface_configuration(self):
+        for host in ('localhost.example.test', '127.0.0.2', '[::1]'):
             with self.subTest(host=host), tempfile.TemporaryDirectory() as temporary:
                 result = subprocess.run(['bash', str(ROOT / 'install.sh'), '--directory', temporary, '--prepare-only', '--admin-email', 'admin@example.test', '--url', f'http://{host}:8080'], text=True, capture_output=True)
                 self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertIn(f'KUBEPHOS_BIND_ADDRESS={expected}\n', Path(temporary, '.env').read_text())
+                self.assertNotIn('BIND_ADDRESS', Path(temporary, '.env').read_text())
 
     def test_administrator_is_created_before_app_port_is_published(self):
         tools = Path(self.temp.name) / 'bin'
         tools.mkdir()
         log = Path(self.temp.name) / 'docker.log'
         fake = tools / 'docker'
-        fake.write_text('#!/usr/bin/env bash\nset -eu\nprintf "%s\\n" "$*" >> "$DOCKER_TEST_LOG"\nif [[ "$*" == "compose version --short" ]]; then echo 2.32.0; fi\nif [[ "$*" == *setup-admin ]]; then cat >/dev/null; fi\n')
+        fake.write_text('#!/usr/bin/env bash\nset -eu\nprintf "%s\\n" "$*" >> "$DOCKER_TEST_LOG"\nif [[ "$*" == "compose version --short" ]]; then echo 2.32.0; else echo "compose details hidden" >&2; fi\nif [[ "$*" == *setup-admin ]]; then cat >/dev/null; fi\n')
         fake.chmod(0o700)
         env = {**os.environ, 'PATH': str(tools) + os.pathsep + os.environ['PATH'], 'DOCKER_TEST_LOG': str(log)}
-        self.run_installer(env=env)
+        result = self.run_installer(env=env)
+        self.assertNotIn('compose details hidden', result.stdout + result.stderr)
+        self.assertIn('compose details hidden', (self.directory / 'install.log').read_text())
+        self.assertEqual(stat.S_IMODE((self.directory / 'install.log').stat().st_mode), 0o600)
         calls = log.read_text().splitlines()
         setup = next(i for i, call in enumerate(calls) if call.endswith('app setup-admin'))
         start = next(i for i, call in enumerate(calls) if call.endswith('up -d --wait --wait-timeout 180'))

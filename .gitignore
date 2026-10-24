@@ -19,3 +19,7 @@ __pycache__/
 *.pyc
 .env.*
 !.env.example
+
+install.log
+update.log
+compose.previous.yaml

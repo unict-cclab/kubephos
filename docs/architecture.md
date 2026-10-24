@@ -10,6 +10,7 @@
 | SeaweedFS | Generated artifacts, datasets and figures |
 | Keycloak | User credentials and browser authentication |
 | Liquibase | Ordered database migrations before startup |
+| Auth sync | One-shot update of managed Keycloak client settings before startup |
 
 App, worker and the migration-files helper use the same KubePhos image. Persistent
 volumes belong to the installation's Compose project. The installer generates a
@@ -28,11 +29,14 @@ client secrets and Keycloak bootstrap password. Internal service URLs, directori
 realm names and client IDs are fixed by the installed Compose configuration.
 
 The `.env.example` file documents the generated settings; it is not a usable
-configuration until the secret fields are populated. Never rotate the values in
-`.env` independently from the corresponding persisted services.
+configuration until the secret fields are populated. The updater synchronizes OIDC client secrets. Database and Keycloak
+administrator passwords must also be changed in their persisted accounts; editing
+`.env` alone does not rotate those passwords.
 
 The public URL must match the browser URL because it determines authentication
-callbacks. Default local ports follow `KUBEPHOS_PORT` if no URL is specified.
+callbacks. After editing it, run the installed `update.sh` to synchronize Keycloak
+and restart the services. The application listens on all host interfaces;
+`KUBEPHOS_PORT` controls the published port.
 
 ## Advanced execution settings
 

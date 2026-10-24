@@ -6,7 +6,8 @@ Use a Linux host with Bash, OpenSSL, Docker Engine and Docker Compose 2.23.1 or
 newer. Follow Docker's [Linux installation guide](https://docs.docker.com/engine/install/)
 if Docker is not installed. Your account must be able to run `docker info`.
 
-Keep `install.sh` and `compose.yaml` together. Run:
+Keep `install.sh`, `update.sh` and `compose.yaml` together. Both scripts can be
+invoked by absolute path from any working directory. Run:
 
 ```bash
 ./install.sh
@@ -21,6 +22,8 @@ The installation directory defaults to `~/.local/share/kubephos`. Override it wi
 | File | Purpose |
 | --- | --- |
 | `compose.yaml` | Installed services |
+| `update.sh` | Apply configuration and update from any working directory |
+| `install.log`, `update.log` | Private detailed operation logs |
 | `.env` | Image version, public URL, unique Compose project name and generated secrets |
 | `credentials.json` | Initial KubePhos administrator username, email and password |
 | `.installer-managed` | Marker allowing a later installer run to resume safely |
@@ -42,22 +45,22 @@ record; rerunning the installer does not reset that password.
 
 ## Network access
 
-The default installation listens on `127.0.0.1:8080`.
+The application listens on all host interfaces on port 8080 by default.
+`KUBEPHOS_PORT` changes the published port. Set the browser origin when installing:
 
 ```bash
-./install.sh --url http://SERVER_IP:8080
+/path/to/release/install.sh --url http://SERVER_IP:8080
 ```
 
-An explicit remote HTTP URL publishes the port on the host interfaces (IPv4, or IPv6 for an IPv6 literal URL). For HTTPS,
-use `--url https://kubephos.example.org` and configure a TLS reverse proxy to
-`127.0.0.1:8080`. Forward the original `Host` and `X-Forwarded-Proto` headers.
-KubePhos proxies its authentication service under `/auth`; do not expose Keycloak,
-PostgreSQL or SeaweedFS separately.
+For HTTPS, use `--url https://kubephos.example.org` and configure a TLS reverse
+proxy to port 8080. Forward the original `Host` and `X-Forwarded-Proto` headers.
+KubePhos proxies authentication under `/auth`; PostgreSQL, Keycloak and SeaweedFS
+have no published host ports.
 
-After installation, edit `KUBEPHOS_URL`, `KUBEPHOS_PORT` and
-`KUBEPHOS_BIND_ADDRESS` in the installed `.env` only as part of a planned URL
-change. Keycloak imports the realm only on first startup: changing `.env` alone
-does not update existing client redirect URLs or rotate existing Keycloak secrets.
+To change the instance address, edit `KUBEPHOS_URL` in the installed `.env` and
+run the installed updater. Change `KUBEPHOS_PORT` as well when changing the
+listener port. The update synchronizes Keycloak's callback URI, web origin and
+logout redirect with the configured URL, preserving users and client settings.
 
 ## Manage services
 
@@ -77,21 +80,41 @@ Docker restarts the long-running services after host reboot. Do not run
 
 ## Update
 
-Wait for experiments and cleanup operations to finish before updating the worker.
-Back up the installation first. Use the Compose file supplied with the target
-release, preserving `.env`, credentials, project name and volumes.
+Edit `.env` in the installation directory to set the desired `KUBEPHOS_VERSION`,
+`KUBEPHOS_URL` or `KUBEPHOS_PORT`. Then run this from any working directory:
 
-1. Stop the app and worker: `docker compose stop app worker`.
-2. Set `KUBEPHOS_VERSION` in `.env` to the target published tag.
-3. Run `docker compose pull`.
-4. Run `docker compose up -d --wait --wait-timeout 300`.
-5. Run `docker compose exec app kubephos doctor` and inspect service logs.
+```bash
+~/.local/share/kubephos/update.sh
+```
 
-Liquibase applies new database changesets before the app or worker starts. A
-release image includes the API, frontend, CLI, built-in plugins, application
-catalog and migrations. Keep app, worker and migration-files on the same release.
-Rolling back an image does not reverse a database migration; check compatibility
-and restore a consistent backup if required.
+For a custom installation, use `/path/to/installation/update.sh`, or invoke the
+updater supplied with a newer release:
+
+```bash
+/path/to/new-release/update.sh --directory /path/to/installation
+```
+
+The release updater copies its matching Compose and update script into the
+installation while preserving `.env`, credentials, project name and volumes.
+It downloads images, checks for running operations, stops app and worker,
+applies migrations, synchronizes authentication and restarts the services.
+`--no-pull` applies configuration using images already present on the host.
+
+Wait for experiments and cleanup operations to finish and back up the installation
+before updating. Generated database and Keycloak administrator passwords describe
+existing accounts: editing those passwords in `.env` alone does not rotate them.
+OIDC client secrets are synchronized by the authentication configuration step.
+For a legacy installation whose Keycloak administrator is named `admin`, set
+`KUBEPHOS_KEYCLOAK_ADMIN_USERNAME=admin` in `.env` before its first update.
+
+Both scripts display high-level progress. Compose output is written to private
+`install.log` or `update.log` in the installation directory. On failure, the script
+reports the failed phase and log path; data and credentials remain available.
+
+Liquibase applies new database changesets before app or worker starts. Keep app,
+worker and migration-files on the same release. Rolling back an image does not
+reverse a database migration; check compatibility and restore a consistent backup
+if required.
 
 ## Backups
 

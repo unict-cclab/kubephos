@@ -43,10 +43,9 @@ while (($#)); do
 done
 [[ $(uname -s) == Linux ]] || fail 'This installer supports Linux.'
 command -v openssl >/dev/null || fail 'Install OpenSSL first.'
-[[ -f "$source_dir/compose.yaml" ]] || fail 'Keep install.sh beside the release compose.yaml.'
+[[ -f "$source_dir/compose.yaml" && -f "$source_dir/update.sh" ]] || fail 'Keep install.sh, update.sh and compose.yaml together.'
 [[ $release_version =~ ^[a-zA-Z0-9_][a-zA-Z0-9_.-]{0,127}$ ]] || fail 'Invalid image tag.'
 [[ $public_url =~ ^https?://([a-zA-Z0-9.-]+|\[[a-fA-F0-9:]+\])(:[0-9]+)?$ ]] || fail 'URL must be an HTTP(S) origin without a path, query or credentials.'
-public_host=${BASH_REMATCH[1],,}
 [[ -n $install_dir && $install_dir != / ]] || fail 'Choose an installation directory.'
 if ! $prepare_only; then
   command -v docker >/dev/null || fail 'Install Docker Engine and the Docker Compose plugin first.'
@@ -82,19 +81,9 @@ else
   [[ $administrator_email =~ ^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$ ]] || fail 'Enter a valid administrator email.'
   port=8080
   if [[ $public_url == http://* ]]; then port=80; fi
-  bind_address=127.0.0.1
   authority=${public_url#*://}
   if [[ $public_url == http://* && $authority =~ :([0-9]+)$ ]]; then port=${BASH_REMATCH[1]}; fi
   if [[ ! $port =~ ^[1-9][0-9]{0,4}$ ]] || ((10#$port > 65535)); then fail 'URL port must be between 1 and 65535.'; fi
-  if [[ $public_url == http://* ]]; then
-    case "$public_host" in
-      localhost) bind_address=127.0.0.1 ;;
-      127.*) bind_address=$public_host ;;
-      '[::1]') bind_address='[::1]' ;;
-      '['*']') bind_address='[::]' ;;
-      *) bind_address=0.0.0.0 ;;
-    esac
-  fi
   database_password=$(openssl rand -hex 32)
   client_secret=$(openssl rand -hex 32)
   management_secret=$(openssl rand -hex 32)
@@ -109,7 +98,6 @@ COMPOSE_PROJECT_NAME=kubephos-$(openssl rand -hex 4)
 KUBEPHOS_VERSION=$release_version
 KUBEPHOS_URL=$public_url
 KUBEPHOS_PORT=$port
-KUBEPHOS_BIND_ADDRESS=$bind_address
 POSTGRES_PASSWORD=$database_password
 KUBEPHOS_KEYCLOAK_CLIENT_SECRET=$client_secret
 KUBEPHOS_KEYCLOAK_MANAGEMENT_CLIENT_SECRET=$management_secret
@@ -118,25 +106,34 @@ ENV
   printf '{"username":"admin","email":"%s","password":"%s"}\n' "$administrator_email" "$administrator_password" > "$install_dir/credentials.json"
   touch "$install_dir/.installer-managed"
 fi
+cp -- "$source_dir/update.sh" "$install_dir/update.sh"
+chmod 755 "$install_dir/update.sh"
 chmod 600 "$install_dir/.env" "$install_dir/credentials.json"
 # Never source .env as shell code. Compose parses it itself.
 compose() (
   # Explicit installation files win over values exported by a development shell.
-  while IFS='=' read -r key _; do
-    case "$key" in KUBEPHOS_*|POSTGRES_PASSWORD|COMPOSE_PROJECT_NAME) unset "$key" ;; esac
-  done < "$install_dir/.env"
+  for key in ${!KUBEPHOS_@} POSTGRES_PASSWORD COMPOSE_PROJECT_NAME; do unset "$key"; done
   docker compose --project-directory "$install_dir" --env-file "$install_dir/.env" -f "$install_dir/compose.yaml" "$@"
 )
 if $prepare_only; then
   printf 'Installation files prepared in %s\n' "$install_dir"
   exit 0
 fi
-trap 'printf "Startup failed. Credentials and data were kept. Inspect services with: cd %q && docker compose ps -a\n" "$install_dir" >&2' ERR
-compose config --quiet
-compose pull
-compose up -d --wait --wait-timeout 300 postgres keycloak migrate seaweedfs
+log_file="$install_dir/install.log"
+: > "$log_file"
+chmod 600 "$log_file"
+step() {
+  local title=$1
+  shift
+  printf '%s\n' "$title"
+  "$@" >> "$log_file" 2>&1 || fail "Installation failed during: $title Details: $log_file"
+}
+step 'Checking configuration…' compose config --quiet
+step 'Downloading release images…' compose pull
+step 'Starting infrastructure services and database…' compose up -d --wait --wait-timeout 300 postgres keycloak migrate seaweedfs
+step 'Synchronizing authentication…' compose run --rm --no-deps -T auth-sync
 # Provision the administrator before app/worker startup and port publication.
-compose run --rm --no-deps -T app setup-admin < "$install_dir/credentials.json"
-compose up -d --wait --wait-timeout 180
-printf '\nKubePhos is running.\nInstallation: %s\nLogin credentials: %s/credentials.json\n' "$install_dir" "$install_dir"
+step 'Preparing the administrator account…' compose run --rm --no-deps -T app setup-admin < "$install_dir/credentials.json"
+step 'Starting KubePhos…' compose up -d --wait --wait-timeout 180
+printf '\nKubePhos is running.\nInstallation: %s\nLogin credentials: %s/credentials.json\nDetails: %s\n' "$install_dir" "$install_dir" "$log_file"
 printf 'URL: %s\n' "$(sed -n 's/^KUBEPHOS_URL=//p' "$install_dir/.env")"

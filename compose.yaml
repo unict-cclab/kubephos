@@ -61,7 +61,7 @@ services:
       KC_HOSTNAME: ${KUBEPHOS_URL:-http://localhost:${KUBEPHOS_PORT:-8080}}/auth
       KC_PROXY_HEADERS: xforwarded
       KC_HEALTH_ENABLED: "true"
-      KC_BOOTSTRAP_ADMIN_USERNAME: kubephos-bootstrap
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KUBEPHOS_KEYCLOAK_ADMIN_USERNAME:-kubephos-bootstrap}
       KC_BOOTSTRAP_ADMIN_PASSWORD: ${KUBEPHOS_KEYCLOAK_ADMIN_PASSWORD:?Run ./install.sh to generate credentials}
       KUBEPHOS_URL: ${KUBEPHOS_URL:-http://localhost:${KUBEPHOS_PORT:-8080}}
       KUBEPHOS_KEYCLOAK_CLIENT_SECRET: ${KUBEPHOS_KEYCLOAK_CLIENT_SECRET:?Run ./install.sh to generate credentials}
@@ -82,6 +82,18 @@ services:
       timeout: 5s
       retries: 30
     restart: unless-stopped
+
+  auth-sync:
+    image: *kubephos-image
+    command: sync-auth
+    environment:
+      <<: *platform-environment
+      KUBEPHOS_KEYCLOAK_ADMIN_USERNAME: ${KUBEPHOS_KEYCLOAK_ADMIN_USERNAME:-kubephos-bootstrap}
+      KUBEPHOS_KEYCLOAK_ADMIN_PASSWORD: ${KUBEPHOS_KEYCLOAK_ADMIN_PASSWORD:?Run ./install.sh to generate credentials}
+    depends_on:
+      keycloak:
+        condition: service_healthy
+    restart: "no"
 
   migration-files:
     image: *kubephos-image
@@ -131,6 +143,8 @@ services:
     depends_on:
       migrate:
         condition: service_completed_successfully
+      auth-sync:
+        condition: service_completed_successfully
       seaweedfs:
         condition: service_healthy
       keycloak:
@@ -141,7 +155,7 @@ services:
       timeout: 5s
       retries: 12
     ports:
-      - "${KUBEPHOS_BIND_ADDRESS:-127.0.0.1}:${KUBEPHOS_PORT:-8080}:8080"
+      - "${KUBEPHOS_PORT:-8080}:8080"
     volumes:
       - platform-data:/var/lib/kubephos
     restart: unless-stopped
@@ -154,6 +168,8 @@ services:
       <<: *platform-environment
     depends_on:
       migrate:
+        condition: service_completed_successfully
+      auth-sync:
         condition: service_completed_successfully
       seaweedfs:
         condition: service_healthy
