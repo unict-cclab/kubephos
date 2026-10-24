@@ -3,7 +3,7 @@
 WITH unavailable AS (
     SELECT id FROM experiment_configurations
     WHERE EXISTS (
-        SELECT 1 FROM jsonb_array_elements(COALESCE(definition->'components', '[]'::jsonb)) component
+        SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(definition->'components') = 'array' THEN definition->'components' ELSE '[]'::jsonb END) component
         WHERE component->>'capability' LIKE 'orchestrator.%'
     )
 ), affected AS (
@@ -11,7 +11,7 @@ WITH unavailable AS (
     UNION
     SELECT suite.id FROM experiment_configurations suite
     WHERE EXISTS (
-        SELECT 1 FROM jsonb_array_elements(COALESCE(suite.definition->'variants', '[]'::jsonb)) member
+        SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(suite.definition->'variants') = 'array' THEN suite.definition->'variants' ELSE '[]'::jsonb END) member
         JOIN unavailable ON unavailable.id = member->>'configurationId'
     )
 )

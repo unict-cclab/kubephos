@@ -39,6 +39,8 @@ export interface AggregateSeries {
   label: string
   unit: string
   points: MetricPoint[]
+  deviation?: MetricPoint[]
+  stepMilliseconds?: number
   sloMilliseconds?: number
   color?: string
 }
@@ -52,10 +54,8 @@ export function ResultsView({artifacts, experiments, operations, workspaces, ses
   const availableByID = useMemo(() => new Map(available.map(item => [item.id, item])), [available])
   const focusedArtifactIDs = focusedExperiment?.variants.flatMap(variant => variant.trials.map(trial => trial.resultArtifactId)).filter(Boolean) ?? []
   const selectable = focusedExperiment ? available.filter(item => focusedArtifactIDs.includes(item.id)) : available
-  const focusedKey = focusedArtifactIDs.join('|')
   const availableKey = available.map(item => `${item.id}:${item.digest}`).join('|')
-  const knownFocusedIDs = useRef(selectable.map(item => item.id))
-  const [selected, setSelected] = useState<string[]>(() => focusedArtifactIDs.filter(id => availableByID.has(id)).slice(0, 20))
+  const [selected, setSelected] = useState<string[]>(() => focusedArtifactIDs.filter(id => availableByID.has(id)))
   const [loaded, setLoaded] = useState<LoadedDataset[]>([])
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
@@ -79,7 +79,7 @@ export function ResultsView({artifacts, experiments, operations, workspaces, ses
   const focusedRuns = focusedExperiment?.variants.flatMap(variant => variant.trials.map(trial => ({variant, trial}))) ?? []
   const activeRun = focusedRuns.find(item => item.trial.id === runTab)
   const liveRun = focusedRuns.find(item => item.trial.status === 'running')
-  const viewSelected = activeRun ? activeRun.trial.resultArtifactId && availableByID.has(activeRun.trial.resultArtifactId) ? [activeRun.trial.resultArtifactId] : [] : selected
+  const viewSelected = activeRun ? activeRun.trial.resultArtifactId && availableByID.has(activeRun.trial.resultArtifactId) ? [activeRun.trial.resultArtifactId] : [] : focusedExperiment ? focusedArtifactIDs.filter(id => availableByID.has(id)) : selected
   const selectedKey = viewSelected.map(id => `${id}:${availableByID.get(id)?.digest ?? ''}:${responseTimeSLO(focusedExperiment, id) ?? ''}`).join('|')
 
   useEffect(() => {setRunTab('summary')}, [focusedExperiment?.id])
@@ -91,19 +91,6 @@ export function ResultsView({artifacts, experiments, operations, workspaces, ses
   useEffect(() => {
     setSelected(current => current.filter(id => availableByID.has(id)))
   }, [availableKey])
-
-  useEffect(() => {
-    knownFocusedIDs.current = selectable.map(item => item.id)
-    if (focusedExperiment) setSelected(knownFocusedIDs.current.slice(0, 20))
-  }, [focusedExperiment?.id])
-
-  useEffect(() => {
-    if (!focusedExperiment) return
-    const currentIDs = selectable.map(item => item.id)
-    const added = currentIDs.filter(id => !knownFocusedIDs.current.includes(id))
-    knownFocusedIDs.current = currentIDs
-    if (added.length) setSelected(current => [...new Set([...current, ...added])].slice(0, 20))
-  }, [availableKey, focusedKey, focusedExperiment?.id])
 
   useEffect(() => {
     if (!initialized && available.length) {
@@ -122,7 +109,7 @@ export function ResultsView({artifacts, experiments, operations, workspaces, ses
     const controller = new AbortController()
     setLoading(true)
     setError('')
-    Promise.all(viewSelected.map(async id => {
+    const loadDataset = async (id: string) => {
       const artifact = availableByID.get(id)
       if (!artifact) throw new Error('A selected run is no longer available.')
       const slo = responseTimeSLO(focusedExperiment, id)
@@ -138,7 +125,16 @@ export function ResultsView({artifacts, experiments, operations, workspaces, ses
         datasetCache.current.set(cacheKey, dataset)
       }
       return {artifact, dataset, label: ''}
-    })).then(values => {if (!controller.signal.aborted) setLoaded(values)}).catch(cause => {
+    }
+    const loadSelected = async () => {
+      const values: LoadedDataset[] = []
+      for (let offset = 0; offset < viewSelected.length; offset += 4) {
+        if (controller.signal.aborted) throw new DOMException('Aborted', 'AbortError')
+        values.push(...await Promise.all(viewSelected.slice(offset, offset + 4).map(loadDataset)))
+      }
+      return values
+    }
+    loadSelected().then(values => {if (!controller.signal.aborted) setLoaded(values)}).catch(cause => {
       if (!controller.signal.aborted) setError(cause instanceof Error ? cause.message : 'Could not load the selected runs.')
     }).finally(() => {
       if (!controller.signal.aborted) setLoading(false)
@@ -150,7 +146,7 @@ export function ResultsView({artifacts, experiments, operations, workspaces, ses
     if (!focusedExperiment) setActiveExperiment(null)
     setActiveTab('statistics')
     setNotice('')
-    setSelected(current => current.includes(id) ? current.filter(item => item !== id) : current.length < (focusedExperiment ? 20 : 8) ? [...current, id] : current)
+    setSelected(current => current.includes(id) ? current.filter(item => item !== id) : (focusedExperiment || activeExperiment || current.length < 8) ? [...current, id] : current)
   }
   const experiment = focusedExperiment ?? experiments.find(item => item.id === activeExperiment)
   const experimentPresentation = useMemo(() => {
@@ -171,8 +167,8 @@ export function ResultsView({artifacts, experiments, operations, workspaces, ses
     const artifactIDs = item.variants.flatMap(variant => variant.trials.map(trial => trial.resultArtifactId)).filter(id => available.some(artifact => artifact.id === id))
     setActiveExperiment(item.id)
     setActiveTab('statistics')
-    setSelected(artifactIDs.slice(0, 20))
-    setNotice(artifactIDs.length > 20 ? 'Showing the first twenty runs.' : artifactIDs.length === 0 && item.status === 'succeeded' ? 'This experiment has no plottable metrics.' : '')
+    setSelected(artifactIDs)
+    setNotice(artifactIDs.length === 0 && item.status === 'succeeded' ? 'This experiment has no plottable metrics.' : '')
   }
   const removeExperiment = async () => {
     const label = experiment?.kind === 'suite' ? 'suite' : 'experiment'
@@ -222,7 +218,7 @@ export function ResultsView({artifacts, experiments, operations, workspaces, ses
     {focusedExperiment && <nav className="experiment-run-tabs" aria-label="Experiment runs"><button className="run-tab summary" aria-current={runTab === 'summary' ? 'page' : undefined} data-active={runTab === 'summary'} onClick={() => {setRunTab('summary'); setActiveTab('statistics')}}><span className="run-tab-label">All runs</span></button>{focusedRuns.map(({variant, trial}) => <button key={trial.id} className={`run-tab ${trial.status}`} aria-current={runTab === trial.id ? 'page' : undefined} data-active={runTab === trial.id} onClick={() => {setRunTab(trial.id); setActiveTab('statistics')}}><span className={`status-dot ${trial.status}`} /><span className="run-tab-label">{variant.name} · Run {trial.position}</span></button>)}</nav>}
     {experiment && (!activeRun ? <>{experiment.status !== 'succeeded' && <ExperimentProgress experiment={experiment} />}{liveRun && <RunLoadProgress name={`${liveRun.variant.name} · Run ${liveRun.trial.position}`} trial={liveRun.trial} configuration={liveRun.variant.configuration} operation={operations.find(item => item.id === liveRun.trial.operationId)} />}</> : <><RunDiagnostics status={activeRun.trial.status} error={activeRun.trial.error} pipelineRunId={activeRun.trial.pipelineRunId} operationId={activeRun.trial.operationId} openPipelineRun={openPipelineRun} openOperation={openOperation} /><RunLoadProgress trial={activeRun.trial} configuration={activeRun.variant.configuration} operation={operations.find(item => item.id === activeRun.trial.operationId)} /></>)}
     {!selectable.length || activeRun && !viewSelected.length ? <EmptyResults experiment={experiment} runStatus={activeRun?.trial.status} /> : <div className={`results-layout ${focusedExperiment ? 'focused' : ''}`}>
-      {focusedExperiment && !activeRun && selectable.length > 1 ? <details className="results-run-filter"><summary><span><strong>Included runs</strong><small>{selected.length} of {selectable.length}</small></span><b>Change</b></summary><div className="results-run-filter-body"><button type="button" className="text-button" onClick={() => setSelected(selectable.map(item => item.id).slice(0, 20))}>Select all</button><div className="results-run-filter-options">{selectable.map(artifact => <button type="button" className={selected.includes(artifact.id) ? 'active' : ''} aria-pressed={selected.includes(artifact.id)} aria-label={`Include ${experimentPresentation.get(artifact.id)?.label ?? artifact.name}`} key={artifact.id} onClick={() => toggle(artifact.id)}><span className="dataset-check">{selected.includes(artifact.id) ? <ActionIcon name="check" /> : null}</span><strong>{experimentPresentation.get(artifact.id)?.label ?? artifact.name}</strong></button>)}</div></div></details> : !focusedExperiment ? <aside className="dataset-picker" aria-label="Available datasets">
+      {!focusedExperiment ? <aside className="dataset-picker" aria-label="Available datasets">
         <div className="dataset-picker-title"><strong>{focusedExperiment ? 'Runs' : 'Select runs'}</strong><span>{selected.length} selected</span></div>
         {selectable.map(artifact => {
           const operation = operations.find(item => item.id === artifact.operationId)
@@ -244,7 +240,7 @@ export function ResultsView({artifacts, experiments, operations, workspaces, ses
             <div className="results-heading-actions">{!focusedExperiment && <button className="button primary" disabled={selected.length < 2} onClick={() => setSaving(true)}>Save comparison</button>}</div>
           </div>}
           <nav className="results-tabs" aria-label="Result sections">{(['statistics', 'charts', 'downloads'] as ResultsTab[]).map(tab => <button key={tab} className={activeTab === tab ? 'active' : ''} aria-current={activeTab === tab ? 'page' : undefined} onClick={() => setActiveTab(tab)}>{({statistics: 'Statistics', charts: 'Plots', downloads: 'Export'} as Record<ResultsTab, string>)[tab]}</button>)}</nav>
-          {activeTab === 'charts' && <div className="chart-grid" style={{'--plot-aspect-ratio': plotHeight / 860} as CSSProperties}>{visibleMetrics.map(metric => <Fragment key={metric}>{!['application.p95_response_time', 'redis.operation_rps', 'redis.operation_p95_response_time'].includes(metric) && <MetricChart metric={metric} series={aggregateMetric(displayed, metric)} canvasHeight={plotHeight} />}{serviceStatisticsMetrics.includes(metric) && <ServiceMetricChart metric={metric} datasets={displayed} experiment={activeRun ? undefined : experiment} canvasHeight={plotHeight} />}</Fragment>)}</div>}
+          {activeTab === 'charts' && <div className="chart-grid" style={{'--plot-aspect-ratio': plotHeight / 860} as CSSProperties}>{visibleMetrics.map(metric => <Fragment key={metric}>{!['application.p95_response_time', 'redis.operation_rps', 'redis.operation_p95_response_time'].includes(metric) && <MetricChart metric={metric} series={aggregatePlotMetric(displayed, metric, activeRun ? undefined : experiment)} canvasHeight={plotHeight} />}{serviceStatisticsMetrics.includes(metric) && <ServiceMetricChart metric={metric} datasets={displayed} experiment={activeRun ? undefined : experiment} canvasHeight={plotHeight} />}</Fragment>)}</div>}
           {activeTab === 'statistics' && <><StatisticsTable datasets={displayed} metrics={statisticsMetrics} experiment={activeRun ? undefined : experiment} /></>}
           {activeTab === 'downloads' && <ResultsExport datasets={displayed} metrics={statisticsMetrics} experiment={experiment} activeRun={Boolean(activeRun)} onPrint={() => {setActiveTab('statistics'); setPrintPending(true)}} />}
         </>}
@@ -426,8 +422,8 @@ function chartLegendLayout(labels: string[], left: number, right: number, symbol
 function sharedChartHeight(datasets: LoadedDataset[], metrics: string[], experiment?: Experiment) {
   let height = 465
   for (const metric of metrics) {
-    const series = aggregateMetric(datasets, metric)
-    if (series.length > 1) height = Math.max(height, 465 + chartLegendLayout(series.map(item => item.label), 112, 832, 37, 15).rows * 21)
+    const series = aggregatePlotMetric(datasets, metric, experiment)
+    if (series.length > 1 || series.some(item => item.deviation !== undefined)) height = Math.max(height, 465 + chartLegendLayout(series.map(item => item.label), 112, 832, 37, 15).rows * 21)
     if (!['deployment.ready_replicas', 'cpu.cores', 'memory.working_set', 'application.p95_response_time', 'redis.operation_rps', 'redis.operation_p95_response_time'].includes(metric)) continue
     const {rows} = serviceMetricStatistics(datasets, metric, experiment)
     if (!rows.length) continue
@@ -443,7 +439,7 @@ function sharedChartHeight(datasets: LoadedDataset[], metrics: string[], experim
 
 function MetricChart({metric, series, canvasHeight}: {metric: string; series: AggregateSeries[]; canvasHeight: number}) {
   const width = 860
-  const multiple = series.length > 1
+  const multiple = series.length > 1 || series.some(item => item.deviation !== undefined)
   const legend = chartLegendLayout(series.map(item => item.label), 112, width - 28, 37, 15)
   const legendRows = multiple ? legend.rows : 0
   const footerHeight = multiple ? 82 + legendRows * 21 : 72
@@ -452,7 +448,7 @@ function MetricChart({metric, series, canvasHeight}: {metric: string; series: Ag
   const padding = {top: 16, right: 64, bottom: footerHeight, left: 96}
   const allPoints = series.flatMap(item => item.points)
   const timestamps = allPoints.map(point => new Date(point.timestamp).getTime())
-  const values = allPoints.map(point => point.value)
+  const values = series.flatMap(item => item.points.map((point, index) => point.value + (item.deviation?.[index]?.value ?? 0)))
   const maxX = Math.max(0, ...timestamps) / 60000
   const sloMilliseconds = metric === 'load.p95_response_time' ? series.find(item => item.sloMilliseconds)?.sloMilliseconds : undefined
   const maxY = Math.max(0, ...values, sloMilliseconds ?? 0)
@@ -473,7 +469,7 @@ function MetricChart({metric, series, canvasHeight}: {metric: string; series: Ag
       {sloMilliseconds !== undefined && <g><line x1={padding.left} x2={plotRight} y1={y(sloMilliseconds)} y2={y(sloMilliseconds)} stroke="#b42318" strokeWidth="2" strokeDasharray="8 6" /><text x={plotRight - 5} y={y(sloMilliseconds) - 8} textAnchor="end" className="legend-label slo-label" fontSize="15" fill="#b42318" fontFamily="Arial, Helvetica, DejaVu Sans, sans-serif">SLO {formatMetric(sloMilliseconds, 'milliseconds')}</text></g>}
       <text x={(padding.left + plotRight) / 2} y={plotBottom + 58} textAnchor="middle" className="axis-label" fontSize="20" fill="#111" fontFamily="Arial, Helvetica, DejaVu Sans, sans-serif">Time (min)</text>
       <text x="27" y={(padding.top + plotBottom) / 2} textAnchor="middle" className="axis-label" transform={`rotate(-90 27 ${(padding.top + plotBottom) / 2})`} fontSize="20" fill="#111" fontFamily="Arial, Helvetica, DejaVu Sans, sans-serif">{metricAxisLabel(metric, unit)}</text>
-      {series.map((item, index) => { const color = item.color ?? colors[index % colors.length]; return <g key={`${item.artifactID}-${item.label}-${index}`}><path d={paperChartPath(item.points, x, y)} fill="none" stroke={color} strokeWidth="2.5" strokeDasharray={dashPatterns[Math.floor(index / colors.length) % dashPatterns.length]} strokeLinejoin="round" />{item.points.filter((_, pointIndex) => pointIndex % Math.max(1, Math.floor(item.points.length / 12)) === 0).map((point, pointIndex) => <ChartMarker key={pointIndex} shape={index % 7} x={x(new Date(point.timestamp).getTime() / 60000)} y={y(point.value)} color={color} />)}</g>})}
+      {series.map((item, index) => { const color = item.color ?? colors[index % colors.length]; return <g key={`${item.artifactID}-${item.label}-${index}`}><DeviationBand series={item} x={x} y={y} color={color} /><path d={paperChartPath(item.points, x, y, item.stepMilliseconds)} fill="none" stroke={color} strokeWidth="2.5" strokeDasharray={dashPatterns[Math.floor(index / colors.length) % dashPatterns.length]} strokeLinejoin="round" />{chartMarkerPoints(item.points).map((point, pointIndex) => <ChartMarker key={pointIndex} size={3} shape={index % 7} x={x(new Date(point.timestamp).getTime() / 60000)} y={y(point.value)} color={color} />)}</g>})}
       {multiple && series.map((item, index) => {
         const legendX = legend.entries[index].x
         const legendY = plotBottom + 80 + legend.entries[index].row * 21
@@ -481,7 +477,7 @@ function MetricChart({metric, series, canvasHeight}: {metric: string; series: Ag
         return <g key={`legend-${item.artifactID}-${item.label}-${index}`}><line x1={legendX} y1={legendY} x2={legendX + 27} y2={legendY} stroke={color} strokeWidth="2.5" strokeDasharray={dashPatterns[Math.floor(index / colors.length) % dashPatterns.length]} /><ChartMarker shape={index % 7} x={legendX + 13} y={legendY} color={color} /><text x={legendX + 37} y={legendY + 5} className="legend-label" fontSize="15" fill="#111" fontFamily="Arial, Helvetica, DejaVu Sans, sans-serif">{compactLabel(item.label)}</text></g>
       })}
     </svg></div>
-    <div className="chart-legend">{series.map((item, index) => <div key={`${item.artifactID}-${item.label}-${index}`}><span style={{background: item.color ?? colors[index % colors.length]}} /><strong>{item.label}</strong></div>)}</div>
+    <div className="chart-legend">{series.map((item, index) => <div key={`${item.artifactID}-${item.label}-${index}`}><span style={{background: item.color ?? colors[index % colors.length]}} /><strong>{plotLabel(item.label)}</strong></div>)}</div>
   </article>
 }
 
@@ -537,19 +533,42 @@ function ServiceMetricChart({metric, datasets, experiment, canvasHeight}: {metri
 }
 
 
-function ChartMarker({shape, x, y, color}: {shape: number; x: number; y: number; color: string}) {
-  if (shape === 0) return <circle cx={x} cy={y} r="4" fill={color} />
-  if (shape === 1) return <rect x={x - 4} y={y - 4} width="8" height="8" fill={color} />
-  if (shape === 2) return <polygon points={`${x},${y - 5} ${x - 5},${y + 4} ${x + 5},${y + 4}`} fill={color} />
-  if (shape === 3) return <polygon points={`${x},${y - 5} ${x - 5},${y} ${x},${y + 5} ${x + 5},${y}`} fill={color} />
-  if (shape === 4) return <polygon points={`${x - 5},${y - 4} ${x + 5},${y - 4} ${x},${y + 5}`} fill={color} />
-  if (shape === 5) return <path d={`M${x - 5},${y}H${x + 5}M${x},${y - 5}V${y + 5}`} stroke={color} strokeWidth="3" />
-  return <path d={`M${x - 4},${y - 4}L${x + 4},${y + 4}M${x + 4},${y - 4}L${x - 4},${y + 4}`} stroke={color} strokeWidth="3" />
+function chartMarkerPoints(points: MetricPoint[]): MetricPoint[] {
+  const count = Math.min(8, points.length)
+  if (count < 2) return points
+  return Array.from({length: count}, (_, index) => points[Math.round(index * (points.length - 1) / (count - 1))])
+}
+
+function ChartMarker({shape, x, y, color, size = 4}: {shape: number; x: number; y: number; color: string; size?: number}) {
+  const outer = size * 1.25
+  if (shape === 0) return <circle cx={x} cy={y} r={size} fill={color} />
+  if (shape === 1) return <rect x={x - size} y={y - size} width={size * 2} height={size * 2} fill={color} />
+  if (shape === 2) return <polygon points={`${x},${y - outer} ${x - outer},${y + size} ${x + outer},${y + size}`} fill={color} />
+  if (shape === 3) return <polygon points={`${x},${y - outer} ${x - outer},${y} ${x},${y + outer} ${x + outer},${y}`} fill={color} />
+  if (shape === 4) return <polygon points={`${x - outer},${y - size} ${x + outer},${y - size} ${x},${y + outer}`} fill={color} />
+  if (shape === 5) return <path d={`M${x - outer},${y}H${x + outer}M${x},${y - outer}V${y + outer}`} stroke={color} strokeWidth={size * .75} />
+  return <path d={`M${x - size},${y - size}L${x + size},${y + size}M${x + size},${y - size}L${x - size},${y + size}`} stroke={color} strokeWidth={size * .75} />
 }
 
 
-function paperChartPath(points: MetricPoint[], x: (value: number) => number, y: (value: number) => number): string {
-  return points.map((point, index) => `${index ? 'L' : 'M'}${x(new Date(point.timestamp).getTime() / 60000).toFixed(2)},${y(point.value).toFixed(2)}`).join(' ')
+function paperChartPath(points: MetricPoint[], x: (value: number) => number, y: (value: number) => number, stepMilliseconds?: number): string {
+  return points.map((point, index) => {
+    const gap = index > 0 && stepMilliseconds !== undefined && Date.parse(point.timestamp) - Date.parse(points[index - 1].timestamp) > stepMilliseconds * 1.5
+    return `${index && !gap ? 'L' : 'M'}${x(Date.parse(point.timestamp) / 60000).toFixed(2)},${y(point.value).toFixed(2)}`
+  }).join(' ')
+}
+
+function DeviationBand({series, x, y, color}: {series: AggregateSeries; x: (value: number) => number; y: (value: number) => number; color: string}) {
+  if (!series.deviation) return null
+  const segments: number[][] = []
+  series.points.forEach((point, index) => {
+    if (!index || series.stepMilliseconds && Date.parse(point.timestamp) - Date.parse(series.points[index - 1].timestamp) > series.stepMilliseconds * 1.5) segments.push([])
+    segments.at(-1)!.push(index)
+  })
+  return <g className="deviation-band" fill={color} fillOpacity="0.16" stroke="none">{segments.filter(indices => indices.length > 1).map((indices, segment) => {
+    const edge = (index: number, sign: number) => `${x(Date.parse(series.points[index].timestamp) / 60000)},${y(Math.max(0, series.points[index].value + sign * series.deviation![index].value))}`
+    return <path key={segment} d={`M${indices.map(index => edge(index, 1)).join(' L')} L${[...indices].reverse().map(index => edge(index, -1)).join(' L')} Z`} />
+  })}</g>
 }
 
 
@@ -589,10 +608,8 @@ function metricAxisLabel(metric: string, unit: string): string {
 
 
 export function compactLabel(value: string): string {
-  if (value.length <= 34) return value
-  const run = value.match(/^(.*)( · Run \d+)$/)
-  if (run) return `${run[1].slice(0, Math.max(1, 31 - run[2].length))}...${run[2]}`
-  return `${value.slice(0, 31)}...`
+  const label = plotLabel(value)
+  return label.length <= 34 ? label : `${label.slice(0, 31)}...`
 }
 
 export function serviceMetricStatistics(datasets: LoadedDataset[], metric: string, experiment?: Experiment) {
@@ -651,6 +668,49 @@ export function aggregateMetric(datasets: LoadedDataset[], metric: string): Aggr
       points: (metric === 'scheduler.pod_scheduling_latency' ? matching.flatMap(series => series.points.map(point => [Number.isFinite(Date.parse(series.labels.scheduled_at)) ? Date.parse(series.labels.scheduled_at) : Date.parse(point.timestamp), point.value] as [number, number])) : [...values.entries()]).sort((left, right) => left[0] - right[0]).map(([timestamp, value]) => ({timestamp: new Date(Math.max(0, timestamp - startedAt)).toISOString(), value: aggregation === 'mean' && metric !== 'scheduler.pod_scheduling_latency' ? value / (counts.get(timestamp) ?? 1) : value}))
     }
   }).filter(item => item.points.length > 0)
+}
+
+// Keep raw per-run statistics separate from the presentation of repeated trials.
+export function aggregatePlotMetric(datasets: LoadedDataset[], metric: string, experiment?: Experiment): AggregateSeries[] {
+  if (!experiment) return aggregateMetric(datasets, metric)
+  const groups = new Map<string, {label: string; color?: string; datasets: LoadedDataset[]}>()
+  datasets.forEach(dataset => {
+    const index = experiment.variants.findIndex(variant => variant.trials.some(trial => trial.resultArtifactId === dataset.artifact.id))
+    const variant = experiment.variants[index]
+    const key = variant ? `variant-${index}` : dataset.artifact.id
+    const group = groups.get(key) ?? {label: variant?.alias || variant?.name || plotLabel(dataset.label), color: variant?.color ?? dataset.color, datasets: []}
+    group.datasets.push(dataset)
+    groups.set(key, group)
+  })
+  return [...groups.entries()].flatMap(([key, group]) => {
+    const runs = group.datasets.map(dataset => {
+      const origin = Date.parse(dataset.dataset.spec.workloadStartedAt || dataset.dataset.spec.start)
+      const end = Date.parse(dataset.dataset.spec.end)
+      const series = dataset.dataset.spec.series.map(series => ({...series, points: series.points.filter(point => Number.isFinite(point.value) && Date.parse(point.timestamp) >= origin && (!Number.isFinite(end) || Date.parse(point.timestamp) <= end))}))
+      return aggregateMetric([{...dataset, dataset: {...dataset.dataset, spec: {...dataset.dataset.spec, series}}}], metric)[0]
+    })
+    if (runs.length === 1) return runs[0] ? [{...runs[0], label: group.label, color: group.color}] : []
+    // A missing run/metric is not a zero and cannot contribute to an N-run mean.
+    if (runs.some(run => !run)) return []
+    const intervals = group.datasets.map(dataset => dataset.dataset.spec.stepSeconds * 1000).filter(value => Number.isFinite(value) && value > 0)
+    const inferred = runs.flatMap(run => run.points.slice(1).map((point, index) => Date.parse(point.timestamp) - Date.parse(run.points[index].timestamp))).filter(value => value > 0)
+    const step = intervals.length ? Math.max(...intervals) : inferred.length ? Math.min(...inferred) : 1000
+    const windows = runs.map(run => {
+      const bins = new Map<number, number[]>()
+      run.points.forEach(point => {
+        if (!Number.isFinite(point.value)) return
+        const bin = Math.round(Date.parse(point.timestamp) / step)
+        bins.set(bin, [...(bins.get(bin) ?? []), point.value])
+      })
+      return new Map([...bins].map(([bin, values]) => [bin, summarize(values).mean]))
+    })
+    // Only windows sampled by every included run are comparable; never interpolate gaps.
+    const common = [...windows[0].keys()].filter(bin => windows.every(window => window.has(bin))).sort((a, b) => a - b)
+    const summaries = common.map(bin => summarize(windows.map(window => window.get(bin)!)))
+    return common.length ? [{...runs[0], artifactID: key, label: group.label, color: group.color, stepMilliseconds: step,
+      points: common.map((bin, index) => ({timestamp: new Date(bin * step).toISOString(), value: summaries[index].mean})),
+      deviation: common.map((bin, index) => ({timestamp: new Date(bin * step).toISOString(), value: summaries[index].standardDeviation}))}] : []
+  })
 }
 
 export interface ScientificSummary {

@@ -81,6 +81,7 @@ export function svgToPDF(source: SVGSVGElement): Uint8Array {
   const [,, svgWidth, svgHeight] = (source.getAttribute('viewBox') ?? '0 0 700 525').split(/\s+/).map(Number)
   const {pageWidth, pageHeight} = figureDimensions(svgWidth, svgHeight, source.getAttribute('data-export-size') === 'content')
   const scale = pageWidth / svgWidth
+  const alphaStates = new Map<number, string>()
   const commands = ['1 1 1 rg', `0 0 ${pageWidth} ${pageHeight} re f`, '0 0 0 RG', '0 0 0 rg']
   const sx = (value: number) => value * scale
   const sy = (value: number) => pageHeight - value * scale
@@ -166,10 +167,22 @@ export function svgToPDF(source: SVGSVGElement): Uint8Array {
     const path = element.getAttribute('d') ?? ''
     const converted = pdfPath(path, scale, pageHeight)
     if (!converted) continue
-    stroke(element)
-    commands.push(converted, inherited(element, 'fill') && inherited(element, 'fill') !== 'none' ? 'B' : 'S')
+    const fill = inherited(element, 'fill')
+    const hasFill = Boolean(fill && fill !== 'none')
+    const hasStroke = inherited(element, 'stroke') !== 'none'
+    commands.push('q')
+    if (hasFill) {
+      const alpha = Math.max(0, Math.min(1, Number(inherited(element, 'fill-opacity') || 1)))
+      if (alpha < 1) {
+        if (!alphaStates.has(alpha)) alphaStates.set(alpha, `GS${alphaStates.size}`)
+        commands.push(`/${alphaStates.get(alpha)} gs`)
+      }
+      commands.push(`${pdfColor(fill)} rg`)
+    }
+    if (hasStroke) stroke(element)
+    commands.push(converted, hasFill ? hasStroke ? 'B' : 'f' : 'S', 'Q')
   }
-  return pdfFile(commands.join('\n'), pageWidth, pageHeight)
+  return pdfFile(commands.join('\n'), pageWidth, pageHeight, [...alphaStates.keys()])
 }
 
 function pdfPath(path: string, scale: number, pageHeight: number): string {
@@ -219,14 +232,15 @@ function pdfText(value: string): string {
   return value.normalize('NFKD').replaceAll(/[^\x20-\x7e±]/g, '-').replaceAll('\\', '\\\\').replaceAll('(', '\\(').replaceAll(')', '\\)').replaceAll('±', '\\261')
 }
 
-function pdfFile(content: string, width: number, height: number): Uint8Array {
+function pdfFile(content: string, width: number, height: number, alphas: number[] = []): Uint8Array {
   const encoder = new TextEncoder()
   const objects = [
     '<< /Type /Catalog /Pages 2 0 R >>',
     '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
-    `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${width} ${height}] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>`,
+    `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${width} ${height}] /Resources << /Font << /F1 5 0 R >> /ExtGState << ${alphas.map((_, index) => `/GS${index} ${6 + index} 0 R`).join(' ')} >> >> /Contents 4 0 R >>`,
     `<< /Length ${encoder.encode(content).length} >>\nstream\n${content}\nendstream`,
-    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>'
+    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>',
+    ...alphas.map(alpha => `<< /Type /ExtGState /ca ${alpha} /CA ${alpha} >>`)
   ]
   let document = '%PDF-1.4\n'
   const offsets = [0]

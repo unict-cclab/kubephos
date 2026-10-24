@@ -3,7 +3,7 @@ import {describe, expect, it, vi} from 'vitest'
 import {request} from '../api'
 import {timeAxis} from '../charts'
 import type {Artifact, Experiment, Operation, Session, TimeSeriesDataset} from '../types'
-import {formatAxis, aggregateMetric, cohenD, compactLabel, experimentProgress, figureDimensions, niceAxis, ResultsView, serviceMetricStatistics, setPNGResolution, podSchedulingStatistics, statisticsCSV, summarize, svgToPDF, variantStatistics, type LoadedDataset} from './ResultsView'
+import {formatAxis, aggregateMetric, aggregatePlotMetric, cohenD, compactLabel, experimentProgress, figureDimensions, niceAxis, ResultsView, serviceMetricStatistics, setPNGResolution, podSchedulingStatistics, statisticsCSV, summarize, svgToPDF, variantStatistics, type LoadedDataset} from './ResultsView'
 
 vi.mock('../api', () => ({request: vi.fn(async () => ({items: []}))}))
 
@@ -238,10 +238,9 @@ describe('focused experiment results', () => {
   it('separates aggregate results from the individual run tabs', async () => {
     const first = loaded('one', [[1, 3]])
     const second = loaded('two', [[3, 5]])
-    second.dataset.spec.series[0].points[1].timestamp = '2026-09-09T10:40:00Z'
     for (const dataset of [first, second]) dataset.dataset.spec.series.forEach(series => {series.metric = 'load.p95_response_time'; series.unit = 'milliseconds'})
     vi.mocked(request).mockImplementation(async path => path.endsWith('/figures') ? {items: []} as never : path.includes(first.artifact.id) ? first.dataset as never : second.dataset as never)
-    const experiment = {id: 'exp_02', name: 'Scheduler comparison', description: '', status: 'succeeded', resultType: 'TimeSeriesDataset', resultVersion: 'v1alpha1', variants: [{id: 'variant_01', name: 'Baseline', trials: [{id: 'trial_01', position: 1, status: 'succeeded', resultArtifactId: first.artifact.id, operationId: 'op_01'}, {id: 'trial_02', position: 2, status: 'succeeded', resultArtifactId: second.artifact.id, operationId: 'op_02'}]}]} as Experiment
+    const experiment = {id: 'exp_02', name: 'Scheduler comparison', description: '', status: 'succeeded', resultType: 'TimeSeriesDataset', resultVersion: 'v1alpha1', variants: [{id: 'variant_01', name: 'Baseline', alias: 'Paper label', trials: [{id: 'trial_01', position: 1, status: 'succeeded', resultArtifactId: first.artifact.id, operationId: 'op_01'}, {id: 'trial_02', position: 2, status: 'succeeded', resultArtifactId: second.artifact.id, operationId: 'op_02'}]}]} as Experiment
     render(<ResultsView artifacts={[first.artifact, second.artifact]} experiments={[experiment]} operations={[]} workspaces={[]} session={{authenticated: true} as Session} changed={async () => {}} openOperation={() => {}} focusedExperiment={experiment} />)
     expect(screen.getByRole('button', {name: 'All runs'})).toHaveAttribute('aria-current', 'page')
     expect(await screen.findByRole('heading', {name: 'Within each run'})).toBeInTheDocument()
@@ -253,33 +252,29 @@ describe('focused experiment results', () => {
     expect(screen.queryByText(/±/)).not.toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', {name: 'Plots'}))
     const chart = screen.getByRole('img', {name: 'P95 response time comparison chart'})
-    expect(within(chart).getByText('Baseline · Run 1')).toBeInTheDocument()
-    expect(within(chart).getByText('Baseline · Run 2')).toBeInTheDocument()
+    expect(within(chart).getByText('Paper label')).toBeInTheDocument()
+    expect(chart).not.toHaveTextContent(/Run \d+/)
+    expect(document.querySelector('.chart-legend')).not.toHaveTextContent(/Run \d+/)
+    expect(chart.querySelectorAll('path[stroke-width="2.5"]')).toHaveLength(1)
+    expect(chart.querySelector('.deviation-band path')).toHaveAttribute('d', expect.stringContaining('Z'))
+    expect(new TextDecoder().decode(svgToPDF(chart as unknown as SVGSVGElement))).toContain('/ca 0.16')
     expect(chart.querySelector('style')).toBeNull()
     expect(chart.querySelector('.axis')).toHaveAttribute('fill', 'none')
     expect(chart.querySelector('.axis')).toHaveAttribute('stroke', '#111')
-    const frame = chart.querySelector('.axis')!
-    const left = Number(frame.getAttribute('x'))
-    const width = Number(frame.getAttribute('width'))
-    const paths = chart.querySelectorAll('path[stroke-width="2.5"]')
-    const endX = (path: Element) => Number(path.getAttribute('d')!.match(/L([\d.]+),[\d.]+$/)![1])
-    expect(endX(paths[0])).toBeCloseTo(left + width * 5 / timeAxis(45, true).upper, 2)
-    expect(endX(paths[1])).toBeCloseTo(left + width * 45 / timeAxis(45, true).upper, 2)
-    const ticks = [...chart.querySelectorAll('text.tick[text-anchor="middle"]')]
-    expect(ticks.at(-1)).toHaveTextContent('40')
-    expect(Number(ticks.at(-1)!.getAttribute('x'))).toBeCloseTo(left + width * 40 / timeAxis(45, true).upper)
-    expect(paths[1].getAttribute('d')!.match(/[ML]/g)).toHaveLength(2)
 
     fireEvent.click(screen.getByRole('button', {name: 'Statistics'}))
     expect(await screen.findByText('Across runs')).toBeInTheDocument()
     const runTables = screen.getAllByRole('table', {name: /^Statistics for /})
     expect(runTables).toHaveLength(2)
-    expect(runTables.map(table => table.getAttribute('aria-label'))).toEqual(['Statistics for Baseline · Run 1', 'Statistics for Baseline · Run 2'])
+    expect(runTables.map(table => table.getAttribute('aria-label'))).toEqual(['Statistics for Paper label · Run 1', 'Statistics for Paper label · Run 2'])
     runTables.forEach(table => expect(table.querySelectorAll('tbody tr')).toHaveLength(1))
     fireEvent.click(screen.getByRole('button', {name: 'Baseline · Run 1'}))
     expect(screen.getByRole('button', {name: 'Baseline · Run 1'})).toHaveAttribute('aria-current', 'page')
     expect(screen.queryByText('Across runs')).not.toBeInTheDocument()
     expect(screen.queryByRole('button', {name: /logs/i})).not.toBeInTheDocument()
+    fireEvent.click(await screen.findByRole('button', {name: 'Plots'}))
+    expect(document.querySelector('.chart-legend')).toHaveTextContent('Paper label')
+    expect(document.querySelector('.chart-legend')).not.toHaveTextContent(/Run \d+/)
   })
 
   it('adds a newly completed run without downloading the existing dataset again', async () => {
@@ -293,7 +288,7 @@ describe('focused experiment results', () => {
     expect(await screen.findByRole('heading', {name: 'Within each run'})).toBeInTheDocument()
     const completed = {...experiment, variants: [{...experiment.variants[0], trials: [experiment.variants[0].trials[0], {...experiment.variants[0].trials[1], status: 'succeeded', resultArtifactId: second.artifact.id}]}]} as Experiment
     view.rerender(<ResultsView {...props} experiments={[completed]} artifacts={[first.artifact, second.artifact]} focusedExperiment={completed} />)
-    expect(await screen.findByText('2 of 2', {selector: '.results-run-filter small'})).toBeInTheDocument()
+    expect(screen.queryByText('Included runs')).not.toBeInTheDocument()
     await waitFor(() => expect(vi.mocked(request).mock.calls.filter(([path]) => path.includes(second.artifact.id))).toHaveLength(1))
     expect(vi.mocked(request).mock.calls.filter(([path]) => path.includes(first.artifact.id))).toHaveLength(1)
   })
@@ -416,13 +411,11 @@ describe('setPNGResolution', () => {
 })
 
 describe('publication figures', () => {
-  it('keeps run numbers visible when long legend labels are shortened', () => {
-    const first = compactLabel('Baseline scheduler configuration · Run 1')
-    const second = compactLabel('Baseline scheduler configuration · Run 2')
-    expect(first).toHaveLength(34)
-    expect(first).toMatch(/ · Run 1$/)
-    expect(second).toMatch(/ · Run 2$/)
-    expect(first).not.toBe(second)
+  it('removes run suffixes before shortening plot labels', () => {
+    expect(compactLabel('Baseline · Run 1')).toBe('Baseline')
+    expect(compactLabel('Baseline · Run 2')).toBe('Baseline')
+    expect(compactLabel('Baseline scheduler configuration with a long name · Run 1')).toBe('Baseline scheduler configuratio...')
+    expect(compactLabel('My label')).toBe('My label')
   })
 
   it('exports PNGs at 600 DPI at the same physical size as their vector PDF', () => {
@@ -667,4 +660,64 @@ it('keeps small adjacent axis ticks distinct', () => {
   const values = [0, 0.005, 0.01, 0.015, 0.02, 0.025]
   expect(new Set(values.map(formatAxis)).size).toBe(values.length)
   expect(formatAxis(0.005)).toBe('0.005')
+})
+
+describe('suite mean curves', () => {
+  const experimentFor = (...datasets: LoadedDataset[]) => ({variants: [{id: 'approach', name: 'Source configuration', alias: 'Paper label', color: '#123456', trials: datasets.map(dataset => ({resultArtifactId: dataset.artifact.id}))}]} as Experiment)
+
+  it('aligns independent starts, averages each run equally and computes sample deviation', () => {
+    const first = loaded('r1', [[1, 3]])
+    const second = loaded('r2', [[3, 7]])
+    for (const dataset of [first, second]) dataset.dataset.spec.workloadStartedAt = '2026-09-09T09:59:45Z'
+    second.dataset.spec.workloadStartedAt = '2026-09-10T09:59:45Z'
+    second.dataset.spec.end = '2026-09-10T10:00:15Z'
+    second.dataset.spec.series[0].points = second.dataset.spec.series[0].points.map(point => ({...point, timestamp: new Date(Date.parse(point.timestamp.replace('09-09', '09-10')) + 2000).toISOString()}))
+    const result = aggregatePlotMetric([first, second], 'cpu.cores', experimentFor(first, second))
+    expect(result).toHaveLength(1)
+    expect(result[0].label).toBe('Paper label')
+    expect(result[0].color).toBe('#123456')
+    expect(result[0].points.map(point => point.value)).toEqual([2, 5])
+    expect(result[0].points.map(point => Date.parse(point.timestamp))).toEqual([0, 15000])
+    expect(result[0].deviation?.[0].value).toBeCloseTo(Math.sqrt(2))
+    expect(result[0].deviation?.[1].value).toBeCloseTo(Math.sqrt(8))
+    expect(aggregateMetric([first], 'cpu.cores')[0].points.map(point => point.value)).toEqual([1, 3])
+  })
+
+  it('keeps distinct approaches separate even when their labels match', () => {
+    const first = loaded('r1', [[1, 3]])
+    const second = loaded('r2', [[3, 7]])
+    const experiment = {variants: [first, second].map((dataset, index) => ({id: `variant-${index}`, name: 'Same label', trials: [{resultArtifactId: dataset.artifact.id}]}))} as Experiment
+    expect(aggregatePlotMetric([first, second], 'cpu.cores', experiment)).toHaveLength(2)
+  })
+
+  it('does not interpolate missing windows or average a shorter run against fewer repetitions', () => {
+    const first = loaded('r1', [[1, 3]])
+    const second = loaded('r2', [[3]])
+    const result = aggregatePlotMetric([first, second], 'cpu.cores', experimentFor(first, second))
+    expect(result[0].points).toHaveLength(1)
+    expect(result[0].points[0].value).toBe(2)
+    second.dataset.spec.series = []
+    expect(aggregatePlotMetric([first, second], 'cpu.cores', experimentFor(first, second))).toEqual([])
+  })
+
+  it('omits warmup and invalid values and keeps a single run without a deviation band', () => {
+    const first = loaded('r1', [[1, 3]])
+    first.dataset.spec.workloadStartedAt = '2026-09-09T10:00:00Z'
+    const result = aggregatePlotMetric([first], 'cpu.cores', experimentFor(first))
+    expect(result[0].points.map(point => point.value)).toEqual([3])
+    expect(result[0].deviation).toBeUndefined()
+  })
+})
+
+it('includes every available suite repetition beyond twenty runs', async () => {
+  const datasets = Array.from({length: 24}, (_, index) => loaded(`many-${index}`, [[index, index + 1]]))
+  const byID = new Map(datasets.map(dataset => [dataset.artifact.id, dataset.dataset]))
+  const experiment = {id: 'many-runs', name: 'Repeated suite', status: 'succeeded', variants: [{id: 'approach', name: 'Approach', trials: datasets.map((dataset, index) => ({id: `trial-${index}`, position: index + 1, status: 'succeeded', resultArtifactId: dataset.artifact.id, operationId: ''}))}]} as Experiment
+  vi.mocked(request).mockClear()
+  vi.mocked(request).mockImplementation(async path => path.endsWith('/figures') ? {items: []} as never : byID.get(path.split('/')[2]) as never)
+  render(<ResultsView artifacts={datasets.map(dataset => dataset.artifact)} experiments={[experiment]} operations={[]} workspaces={[]} session={{authenticated: true}} changed={async () => {}} openOperation={() => {}} focusedExperiment={experiment} />)
+  expect(await screen.findByRole('button', {name: 'Plots'})).toBeInTheDocument()
+  expect(screen.queryByText('Included runs')).not.toBeInTheDocument()
+  expect(screen.queryByRole('button', {name: 'Change'})).not.toBeInTheDocument()
+  expect(vi.mocked(request).mock.calls.filter(([path]) => path.endsWith('/download'))).toHaveLength(24)
 })

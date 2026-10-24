@@ -38,9 +38,19 @@ Each run creates an isolated, service-mesh-enabled namespace containing only the
 
 ## Configurations and experiments
 
-Configurations are reusable definitions. A **single configuration** defines an application or external destination, load and strategies. A **comparative configuration (suite)** selects two to eight compatible single configurations and saves their execution order, plot aliases, colors and repetitions.
+Configurations are reusable definitions. A **single configuration** defines an application or external destination, load and strategies. A **comparative configuration (suite)** selects two to eight compatible single configurations and saves their execution order, plot labels, colors and repetitions.
 
 An experiment executes either configuration type. Starting one freezes the suite recipe and the complete single-configuration settings; later edits do not change its results. Existing result plots and per-run diagnostics remain available, with the configuration snapshot downloadable from Export.
+
+The All runs temporal plots show one mean curve per approach, with a shaded band
+of one sample standard deviation between the included runs. Samples are aligned
+to workload start and matched on the Data resolution grid (the coarsest grid if
+resolutions differ). Each run contributes equally in a window; only windows
+present in every included run are shown. Warmup samples are excluded, missing
+windows are not interpolated, and gaps remain gaps. A single run has no deviation
+band. For P95 metrics this is the mean of the window P95 values, not a pooled
+request percentile. Individual-run tabs retain their own curves and statistics.
+The suite Plot label and line color apply to the aggregate curve and exports.
 
 Migration `040-comparative-configurations` turns historical suites into reusable comparative configurations and preserves their experiments and recorded settings. A historical suite with deleted source configurations remains visible and must be edited before running again. Single configurations used by a suite cannot be deleted until that reference is removed.
 

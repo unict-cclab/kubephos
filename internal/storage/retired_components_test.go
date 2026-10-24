@@ -17,6 +17,7 @@ func TestRetiredComponentsPreserveHistoricalDefinitions(t *testing.T) {
  ('retired','{"components":[{"capability":"orchestrator.kubernetes.install","strategyId":"old","configuration":{"parameters":"saved"}}]}','{"valid":true}'),
  ('current','{"components":[{"capability":"scheduler.kubernetes.install"}]}','{"valid":true}'),
  ('suite','{"kind":"suite","variants":[{"configurationId":"retired"},{"configurationId":"current"}]}','{"valid":true}'),
+ ('null-fields','{"components":null,"variants":null}','{"valid":true}'),
  ('other-suite','{"kind":"suite","variants":[{"configurationId":"current"}]}','{"valid":true}');
  CREATE TEMP TABLE original_definitions AS SELECT id,definition FROM experiment_configurations;
  CREATE TEMP TABLE original_history AS SELECT id,configuration_snapshot FROM experiments;
@@ -39,7 +40,7 @@ func TestRetiredComponentsPreserveHistoricalDefinitions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	expected := map[string]bool{"retired": false, "suite": false, "current": true, "other-suite": true}
+	expected := map[string]bool{"retired": false, "suite": false, "current": true, "other-suite": true, "null-fields": true}
 	for rows.Next() {
 		var id string
 		var valid bool
