@@ -4,19 +4,27 @@ on:
   push:
     branches: ['**']
   pull_request:
-  workflow_call:
 
 permissions:
   contents: read
 
 jobs:
   go:
+    name: ${{ matrix.name }}
     runs-on: ubuntu-latest
     container: golang:1.26.10
     strategy:
       fail-fast: false
       matrix:
-        module: ['.', components/cluster-lens/backend, components/mon-agent, components/mentat]
+        include:
+          - name: KubePhos
+            module: .
+          - name: ClusterLens
+            module: components/cluster-lens/backend
+          - name: MonAgent
+            module: components/mon-agent
+          - name: Mentat
+            module: components/mentat
     steps:
       - uses: actions/checkout@v6.0.3
       - name: Install Python for generated workload checks
@@ -32,6 +40,7 @@ jobs:
         run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
 
   storage:
+    name: PostgreSQL
     runs-on: ubuntu-latest
     container: golang:1.26.10
     services:
@@ -52,6 +61,7 @@ jobs:
         run: go test ./internal/storage -v
 
   frontend:
+    name: Frontend
     runs-on: ubuntu-latest
     container: node:24.20.0
     steps:
@@ -71,6 +81,7 @@ jobs:
         run: npm --prefix frontend audit --audit-level=moderate
 
   installer:
+    name: Installer
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6.0.3
@@ -79,7 +90,8 @@ jobs:
           bash -n install.sh
           python3 scripts/test_install.py
           python3 scripts/test_release.py
-          shellcheck install.sh
+          shellcheck install.sh scripts/verify_release_checks.sh
+          python3 scripts/test_release_checks.py
           ./install.sh --prepare-only --admin-email admin@example.test --directory "$RUNNER_TEMP/kubephos-install"
           docker compose --project-directory "$RUNNER_TEMP/kubephos-install" config --quiet
           docker compose --env-file deploy/dev.env -f compose.yaml -f compose.dev.yaml config --quiet

@@ -11,9 +11,19 @@ env:
 
 jobs:
   checks:
-    uses: ./.github/workflows/checks.yml
+    name: Verify commit checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
     permissions:
       contents: read
+      actions: read
+      checks: read
+    steps:
+      - uses: actions/checkout@v6.0.3
+      - name: Wait for existing Checks on this commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/verify_release_checks.sh
 
   component-matrix:
     runs-on: ubuntu-latest

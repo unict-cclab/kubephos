@@ -74,9 +74,14 @@ Each managed Go component has a separate module and is included in `make test`.
 
 ## Releases
 
-Push a version tag only after checks and release validation succeed. The release
-workflow publishes the platform image and an installer archive containing the
-matching Compose file. Prerelease tags must not move `latest`.
+Push the commit to a branch before creating its version tag. Checks validates all
+four Go modules, PostgreSQL, the frontend and the installer. The release workflow
+waits for that same commit's latest branch-push Checks run instead of repeating
+its tests. A failed, cancelled or missing check run blocks publication; rerunning
+Checks and then the release gate does not require another commit or tag.
+
+After checks and release validation succeed, the release workflow publishes the
+platform image and an installer archive containing the matching Compose file. Prerelease tags must not move `latest`.
 
 Managed component versions live in `internal/managedcomponents/components.go`.
 Increment a component version whenever its source changes; existing published

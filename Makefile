@@ -24,6 +24,7 @@ build: managed-image-archives
 test:
 	python3 scripts/test_install.py
 	python3 scripts/test_release.py
+	python3 scripts/test_release_checks.py
 	node --test components/cluster-lens/tests/*.test.cjs
 	go test ./...
 	cd components/cluster-lens/backend && go test ./...
