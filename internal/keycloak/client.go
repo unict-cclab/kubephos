@@ -115,6 +115,15 @@ func (c *Client) Exchange(ctx context.Context, code, verifier string) (Identity,
 }
 
 func (c *Client) CreateUser(ctx context.Context, username, email, password string) (string, error) {
+	return c.createUser(ctx, username, email, password, false)
+}
+
+// CreateUserWithTemporaryPassword requires a password change during first login.
+func (c *Client) CreateUserWithTemporaryPassword(ctx context.Context, username, email, password string) (string, error) {
+	return c.createUser(ctx, username, email, password, true)
+}
+
+func (c *Client) createUser(ctx context.Context, username, email, password string, temporary bool) (string, error) {
 	token, err := c.adminToken(ctx)
 	if err != nil {
 		return "", err
@@ -126,7 +135,7 @@ func (c *Client) CreateUser(ctx context.Context, username, email, password strin
 		"email":         email,
 		"enabled":       true,
 		"emailVerified": email != "",
-		"credentials":   []map[string]any{{"type": "password", "value": password, "temporary": false}},
+		"credentials":   []map[string]any{{"type": "password", "value": password, "temporary": temporary}},
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {

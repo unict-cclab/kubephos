@@ -135,5 +135,5 @@ step 'Synchronizing authentication…' compose run --rm --no-deps -T auth-sync
 # Provision the administrator before app/worker startup and port publication.
 step 'Preparing the administrator account…' compose run --rm --no-deps -T app setup-admin < "$install_dir/credentials.json"
 step 'Starting KubePhos…' compose up -d --wait --wait-timeout 180
-printf '\nKubePhos is running.\nInstallation: %s\nLogin credentials: %s/credentials.json\nDetails: %s\n' "$install_dir" "$install_dir" "$log_file"
+printf '\nKubePhos is running.\nInstallation: %s\nInitial login credentials: %s/credentials.json\nDetails: %s\n' "$install_dir" "$install_dir" "$log_file"
 printf 'URL: %s\n' "$(sed -n 's/^KUBEPHOS_URL=//p' "$install_dir/.env")"

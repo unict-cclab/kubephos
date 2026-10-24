@@ -77,7 +77,7 @@ func setupAdministrator(cfg config.Config) error {
 		return nil
 	}
 	identity := configuredIdentity(cfg)
-	externalID, err := identity.CreateUser(ctx, account.Username, account.Email, account.Password)
+	externalID, err := identity.CreateUserWithTemporaryPassword(ctx, account.Username, account.Email, account.Password)
 	if err != nil {
 		return fmt.Errorf("create administrator in Keycloak: %w", err)
 	}

@@ -33,13 +33,18 @@ cd kubephos
 ./install.sh
 ```
 
-Enter the administrator email when prompted. The installer creates a separate installation in `~/.local/share/kubephos`,
-generates unique credentials, creates the initial `admin` account and starts the
-services. Open **http://localhost:8080**. Read your generated login credentials:
+Enter the administrator email when prompted. The installer creates a separate
+installation in `~/.local/share/kubephos`, generates unique credentials, creates
+the initial `admin` account with a temporary password and starts the services.
+Open **http://localhost:8080**. Read your generated login credentials:
 
 ```bash
 cat ~/.local/share/kubephos/credentials.json
 ```
+
+At first login, you must choose a new password before accessing the platform.
+For a custom installation path, the file is `<installation-directory>/credentials.json`.
+The saved file contains only the initial credentials, not your replacement password.
 
 To install for a server URL or select a published release:
 

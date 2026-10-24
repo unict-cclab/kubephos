@@ -10,6 +10,14 @@ import (
 )
 
 func TestCreateUserCreatesCompleteKeycloakProfile(t *testing.T) {
+	for _, temporary := range []bool{false, true} {
+		t.Run(map[bool]string{false: "regular", true: "temporary"}[temporary], func(t *testing.T) {
+			testCreateUser(t, temporary)
+		})
+	}
+}
+
+func testCreateUser(t *testing.T, temporary bool) {
 	var payload map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		switch request.URL.Path {
@@ -32,7 +40,11 @@ func TestCreateUserCreatesCompleteKeycloakProfile(t *testing.T) {
 	defer server.Close()
 
 	client := New(Config{InternalURL: server.URL, Realm: "kubephos", ManagementClientID: "kubephos-management", ManagementClientSecret: "secret"})
-	externalID, err := client.CreateUser(context.Background(), "researcher", "researcher@example.test", "password")
+	create := client.CreateUser
+	if temporary {
+		create = client.CreateUserWithTemporaryPassword
+	}
+	externalID, err := create(context.Background(), "researcher", "researcher@example.test", "password")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -43,6 +55,14 @@ func TestCreateUserCreatesCompleteKeycloakProfile(t *testing.T) {
 		if payload[field] != "researcher" {
 			t.Fatalf("unexpected %s %v", field, payload[field])
 		}
+	}
+	credentials, ok := payload["credentials"].([]any)
+	if !ok || len(credentials) != 1 {
+		t.Fatalf("expected one password credential, got %v", payload["credentials"])
+	}
+	credential := credentials[0].(map[string]any)
+	if credential["type"] != "password" || credential["value"] != "password" || credential["temporary"] != temporary {
+		t.Fatal("unexpected password credential configuration")
 	}
 	if payload["emailVerified"] != true {
 		t.Fatalf("expected verified email, got %v", payload["emailVerified"])

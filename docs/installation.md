@@ -13,7 +13,8 @@ invoked by absolute path from any working directory. Run:
 ./install.sh
 ```
 
-The installer asks for the initial administrator email and generates its password.
+The installer asks for the initial administrator email and generates a temporary
+password. At first login, you must set a new password before accessing KubePhos.
 For non-interactive installation, pass `--admin-email you@example.org`.
 
 The installation directory defaults to `~/.local/share/kubephos`. Override it with
@@ -25,8 +26,18 @@ The installation directory defaults to `~/.local/share/kubephos`. Override it wi
 | `update.sh` | Apply configuration and update from any working directory |
 | `install.log`, `update.log` | Private detailed operation logs |
 | `.env` | Image version, public URL, unique Compose project name and generated secrets |
-| `credentials.json` | Initial KubePhos administrator username, email and password |
+| `credentials.json` | Initial KubePhos administrator username, email and temporary password |
 | `.installer-managed` | Marker allowing a later installer run to resume safely |
+
+Read the initial login credentials from `~/.local/share/kubephos/credentials.json`:
+
+```bash
+cat ~/.local/share/kubephos/credentials.json
+```
+
+If you installed using `--directory /path/to/installation`, the file is
+`/path/to/installation/credentials.json`. The installer prints its exact path
+at the end.
 
 The two credential files have mode `0600`. Passwords are not printed or placed in
 command arguments. Infrastructure secrets are independent from the application
@@ -39,9 +50,11 @@ replace an existing installation's URL or version implicitly. A failed startup
 keeps all files and volumes so it can be resumed.
 
 The initial administrator is created through a one-shot container, before the app
-and worker start. This is not a password reset mechanism. If you change the
-administrator's password in the UI, `credentials.json` is only the original login
-record; rerunning the installer does not reset that password.
+and worker start. After the mandatory first-login password change,
+`credentials.json` still contains the original temporary password and is not
+updated with your new password. Rerunning the installer or updater does not reset
+an existing account's password or force another password change. Existing
+installations retain their current login credentials.
 
 ## Network access
 
