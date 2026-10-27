@@ -65,6 +65,9 @@ Cluster Retry keeps the saved settings and resource identity. It validates and
 removes resources left by the previous attempt before provisioning again with
 the current plugins. Retry is blocked during active experiments or lifecycle
 operations; previous attempts remain available in the history.
+If only the final ClusterMesh stage fails, Retry reuses the completed operations
+and verified outputs, and runs only the mesh stage. No VM or storage replacement
+is performed in that case.
 
 ## Portable state archives
 

@@ -46,6 +46,14 @@ func (r *cliRunner) Run(ctx context.Context, configs map[string]string, args ...
 		return "", err
 	}
 	command := exec.CommandContext(ctx, r.binary, append([]string{"--kubeconfig", path}, args...)...)
+	// Cilium's destination clients load the default kubeconfig instead of the
+	// root flag. Give every client the same private, merged configuration.
+	for _, entry := range os.Environ() {
+		if !strings.HasPrefix(entry, "KUBECONFIG=") {
+			command.Env = append(command.Env, entry)
+		}
+	}
+	command.Env = append(command.Env, "KUBECONFIG="+path)
 	result, err := command.CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("Cilium command failed: %s", strings.TrimSpace(string(result)))

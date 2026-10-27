@@ -340,3 +340,10 @@ databaseChangeLog:
         - sqlFile:
             path: changes/048-retire-placement-controllers.sql
             relativeToChangelogFile: true
+  - changeSet:
+      id: 049-reuse-completed-cluster-stages
+      author: kubephos
+      changes:
+        - sqlFile:
+            path: changes/049-reuse-completed-cluster-stages.sql
+            relativeToChangelogFile: true

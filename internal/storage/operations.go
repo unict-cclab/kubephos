@@ -437,6 +437,14 @@ func (s *Store) ResetFailedManagedResourceDeletion(ctx context.Context, resource
 }
 
 func (s *Store) CreateManagedResourceRecreation(ctx context.Context, resourceID, expectedRunID string, desiredSpec json.RawMessage, pipeline domain.Pipeline, run domain.PipelineRun) error {
+	return s.createManagedResourceRecreation(ctx, resourceID, expectedRunID, desiredSpec, pipeline, run, false)
+}
+
+func (s *Store) RetryManagedClusterMesh(ctx context.Context, resourceID, expectedRunID string, desiredSpec json.RawMessage, pipeline domain.Pipeline, run domain.PipelineRun) error {
+	return s.createManagedResourceRecreation(ctx, resourceID, expectedRunID, desiredSpec, pipeline, run, true)
+}
+
+func (s *Store) createManagedResourceRecreation(ctx context.Context, resourceID, expectedRunID string, desiredSpec json.RawMessage, pipeline domain.Pipeline, run domain.PipelineRun, reuseCompleted bool) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return err
@@ -494,6 +502,35 @@ func (s *Store) CreateManagedResourceRecreation(ctx context.Context, resourceID,
 	}
 	if err := insertPipelineLifecycle(ctx, tx, &pipeline, &run); err != nil {
 		return err
+	}
+	if reuseCompleted {
+		var reusable bool
+		if err := tx.QueryRow(ctx, `
+			SELECT count(*) > 1 AND count(*) = $3
+			 AND (SELECT count(*) FROM pipeline_run_stages WHERE run_id=$1) = $3
+			 AND (SELECT status FROM pipeline_runs WHERE id=$1) IN ('failed','canceled')
+			 AND bool_and(old.stage_id = current.stage_id AND old.plugin_id = current.plugin_id)
+			 AND bool_and(CASE WHEN old.position = $3 THEN old.stage_id = 'mesh'
+			   AND old.plugin_id = 'io.kubephos.cluster.cilium.mesh' AND old.status IN ('failed','canceled')
+			   ELSE old.status = 'succeeded' AND COALESCE(operation.status = 'succeeded' AND operation.workspace_id = $4, false) END)
+			FROM pipeline_run_stages old
+			JOIN pipeline_run_stages current ON current.run_id = $2 AND current.position = old.position
+			LEFT JOIN operations operation ON operation.id = old.operation_id
+			WHERE old.run_id = $1
+		`, expectedRunID, run.ID, len(run.Stages), pipeline.WorkspaceID).Scan(&reusable); err != nil {
+			return err
+		}
+		if !reusable {
+			return ErrConflict
+		}
+		if _, err := tx.Exec(ctx, `
+			UPDATE pipeline_run_stages current SET status = old.status, operation_id = old.operation_id,
+			 spec = old.spec, started_at = old.started_at, completed_at = old.completed_at
+			FROM pipeline_run_stages old WHERE current.run_id = $1 AND old.run_id = $2
+			 AND current.position = old.position AND old.position < $3
+		`, run.ID, expectedRunID, len(run.Stages)); err != nil {
+			return err
+		}
 	}
 	command, err := tx.Exec(ctx, `
 		UPDATE managed_resources

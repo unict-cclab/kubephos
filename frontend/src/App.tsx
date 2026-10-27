@@ -9,6 +9,7 @@ import {ToastRegion, type ToastMessage} from './components/ToastRegion'
 import {ThemeToggle} from './components/ThemeToggle'
 import {Views} from './components/Views'
 import type {Application, Session, View} from './types'
+import {retriesOnlyClusterMesh} from './clusterRetry'
 import {hashView} from './detailRoute'
 
 const viewMetadata: Record<View, string> = {
@@ -179,9 +180,11 @@ export default function App() {
   }
 
   const recreateKubernetesCluster = async (clusterID: string, name: string) => {
-    const retry = ['failed', 'recreation-failed', 'maintenance-failed'].includes(data.kubernetesClusters.find(item => item.id === clusterID)?.status ?? '')
-    if (!await confirmAction(retry ? `Retry ${name}? Existing cluster VMs will be replaced using the saved settings.` : `Recreate ${name}? Its VMs will be replaced using the saved topology.`, {title: retry ? 'Retry cluster creation' : 'Recreate cluster', label: retry ? 'Retry' : 'Recreate'})) return
-    setClusterActions(items => ({...items, [clusterID]: {pending: true, message: 'Validating cluster health, ownership and cleanup targets…', error: false}}))
+    const resource = data.kubernetesClusters.find(item => item.id === clusterID)
+    const retry = ['failed', 'recreation-failed', 'maintenance-failed'].includes(resource?.status ?? '')
+    const meshOnly = retriesOnlyClusterMesh(resource, data.pipelineRuns)
+    if (!await confirmAction(meshOnly ? `Retry the ClusterMesh connection for ${name} using the existing clusters?` : retry ? `Retry ${name}? Existing cluster VMs will be replaced using the saved settings.` : `Recreate ${name}? Its VMs will be replaced using the saved topology.`, {title: retry ? 'Retry cluster creation' : 'Recreate cluster', label: retry ? 'Retry' : 'Recreate'})) return
+    setClusterActions(items => ({...items, [clusterID]: {pending: true, message: meshOnly ? 'Validating existing clusters and mesh inputs…' : 'Validating cluster health, ownership and cleanup targets…', error: false}}))
     notify(retry ? 'Validating cluster retry.' : 'Validating cluster recreation.')
     try {
       await request(`/kubernetes-clusters/${clusterID}/recreate`, {method: 'POST', body: '{}'}, session?.csrfToken)

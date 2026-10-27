@@ -461,6 +461,10 @@ func (s *Server) recreateKubernetesCluster(response http.ResponseWriter, request
 		writeError(response, http.StatusConflict, "recreation_unavailable", "The saved cluster workflow is unavailable.")
 		return
 	}
+	if input.Mode == "multi" && canRetryClusterMesh(sourceRun) {
+		s.retryClusterMesh(response, request, resource, sourceRun, sourcePipeline)
+		return
+	}
 	definition := domain.PipelineDefinition{}
 	resolution := domain.PipelineResolution{}
 	validation := domain.ValidationReport{Valid: true, CheckedAt: time.Now().UTC()}
