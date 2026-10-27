@@ -411,11 +411,17 @@ func storageClassManifest(input stepInput, storage sharedStorageEndpoint) ([]byt
 		"apiVersion": "storage.k8s.io/v1", "kind": "StorageClass",
 		"metadata":      map[string]any{"name": input.StorageClassName, "annotations": map[string]string{"kubephos.dev/ownership-marker": input.Marker}},
 		"provisioner":   provisioner,
-		"parameters":    map[string]string{"server": storage.Spec.Server, "share": storage.Spec.ExportPath, "mountPermissions": "0777", "subDir": "${pvc.metadata.namespace}/${pvc.metadata.name}"},
+		"parameters":    map[string]string{"server": storage.Spec.Server, "share": storage.Spec.ExportPath, "mountPermissions": "0777", "subDir": volumeDirectory(input)},
 		"reclaimPolicy": "Delete", "volumeBindingMode": "Immediate", "allowVolumeExpansion": true,
 		"mountOptions": storage.Spec.MountOptions,
 	}
 	return json.Marshal(value)
+}
+
+func volumeDirectory(input stepInput) string {
+	// PVC names repeat across clusters and after recreation. Isolate each storage
+	// installation and let the CSI driver substitute the unique PV name.
+	return path.Join("kubephos", input.Marker, "${pv.metadata.name}")
 }
 
 func validateResult(value result, input stepInput, cluster clusterConnection, storage sharedStorageEndpoint) error {
@@ -465,6 +471,7 @@ func verifyManagedResources(ctx context.Context, runner commandRunner, kubeconfi
 		{[]string{"get", "storageclass", input.StorageClassName, "-o", "jsonpath={.parameters.server}"}, storage.Spec.Server},
 		{[]string{"get", "storageclass", input.StorageClassName, "-o", "jsonpath={.parameters.share}"}, storage.Spec.ExportPath},
 		{[]string{"get", "storageclass", input.StorageClassName, "-o", "jsonpath={.parameters.mountPermissions}"}, "0777"},
+		{[]string{"get", "storageclass", input.StorageClassName, "-o", "jsonpath={.parameters.subDir}"}, volumeDirectory(input)},
 	}
 	for _, check := range checks {
 		value, err := runner.Run(ctx, kubeconfig, nil, check.args...)

@@ -198,6 +198,7 @@ func (probe fakeProbe) Check(context.Context, string, string) error { return pro
 type fakeRunner struct {
 	installed bool
 	marker    string
+	subDir    string
 }
 
 func (runner *fakeRunner) Run(_ context.Context, _ string, stdin []byte, args ...string) (string, error) {
@@ -211,6 +212,13 @@ func (runner *fakeRunner) Run(_ context.Context, _ string, stdin []byte, args ..
 	if command == "apply -f -" {
 		if strings.Contains(string(stdin), "StorageClass") {
 			runner.installed = true
+			var storageClass struct {
+				Parameters map[string]string `json:"parameters"`
+			}
+			if err := json.Unmarshal(stdin, &storageClass); err != nil {
+				return "", err
+			}
+			runner.subDir = storageClass.Parameters["subDir"]
 		}
 		return "applied", nil
 	}
@@ -268,6 +276,9 @@ func (runner *fakeRunner) Run(_ context.Context, _ string, stdin []byte, args ..
 	}
 	if strings.Contains(command, "jsonpath={.parameters.mountPermissions}") {
 		return "0777", nil
+	}
+	if strings.Contains(command, "jsonpath={.parameters.subDir}") {
+		return runner.subDir, nil
 	}
 	if strings.HasPrefix(command, "get ") {
 		if runner.installed {

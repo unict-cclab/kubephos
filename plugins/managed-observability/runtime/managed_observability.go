@@ -190,8 +190,10 @@ type podList struct {
 			Name string `json:"name"`
 		} `json:"metadata"`
 		Status struct {
-			Phase      string `json:"phase"`
-			Conditions []struct {
+			Phase                 string            `json:"phase"`
+			ContainerStatuses     []containerStatus `json:"containerStatuses"`
+			InitContainerStatuses []containerStatus `json:"initContainerStatuses"`
+			Conditions            []struct {
 				Type   string `json:"type"`
 				Status string `json:"status"`
 			} `json:"conditions"`
@@ -414,6 +416,7 @@ func (plugin Plugin) Verify(ctx context.Context, step domain.PlanStep, raw json.
 		if ctx.Err() == nil {
 			_ = log("warning", "Managed observability readiness failed: "+err.Error())
 			logRolloutDiagnostics(ctx, runner, cluster.Spec.Kubeconfig, log)
+			logFailedContainers(ctx, runner, cluster.Spec.Kubeconfig, log)
 		}
 		return unhealthy(err.Error(), "readiness", "unhealthy"), nil
 	}
@@ -733,7 +736,7 @@ func verifyPods(ctx context.Context, runner clusterRunner, kubeconfig string) er
 			}
 		}
 		if item.Status.Phase != "Running" || !ready {
-			return fmt.Errorf("managed pod %s is not ready", item.Metadata.Name)
+			return fmt.Errorf("managed pod %s is not ready (%s)", item.Metadata.Name, podFailureSummary(item.Status.Phase, append(item.Status.InitContainerStatuses, item.Status.ContainerStatuses...)))
 		}
 		running++
 	}
@@ -786,9 +789,10 @@ func waitForManagedReadiness(ctx context.Context, runner clusterRunner, kubeconf
 func waitForReadiness(ctx context.Context, timeout, interval time.Duration, check func(context.Context) error) error {
 	waitCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
+	deadline, _ := waitCtx.Deadline()
 	var last error = context.DeadlineExceeded
 	for {
-		if waitCtx.Err() != nil {
+		if !time.Now().Before(deadline) || waitCtx.Err() != nil {
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
@@ -799,8 +803,8 @@ func waitForReadiness(ctx context.Context, timeout, interval time.Duration, chec
 			return ctx.Err()
 		}
 		if last == nil {
-			if waitCtx.Err() != nil {
-				return fmt.Errorf("readiness timed out after %s: %w", timeout, waitCtx.Err())
+			if !time.Now().Before(deadline) || waitCtx.Err() != nil {
+				return fmt.Errorf("readiness timed out after %s: %w", timeout, context.DeadlineExceeded)
 			}
 			return nil
 		}

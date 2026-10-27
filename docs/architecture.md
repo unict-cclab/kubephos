@@ -56,6 +56,11 @@ These advanced settings are intentionally absent from the basic installer.
 Managed clusters, Harbor, NFS and cloud images are configured in the UI rather
 than global environment variables.
 
+Managed NFS storage uses `kubephos/<installation marker>/<PV name>` for each
+volume directory. This isolates clusters sharing the same export and PVCs
+recreated under the same namespace and name. Existing PVs retain their original
+paths; changing the provisioning rule does not migrate their data.
+
 ## Portable state archives
 
 Administrator-only state transfer uses a password-encrypted `.kps` archive.
