@@ -436,31 +436,41 @@ func (s *Store) ResetFailedManagedResourceDeletion(ctx context.Context, resource
 	return nil
 }
 
-func (s *Store) CreateManagedResourceRecreation(ctx context.Context, resourceID string, desiredSpec json.RawMessage, pipeline domain.Pipeline, run domain.PipelineRun) error {
+func (s *Store) CreateManagedResourceRecreation(ctx context.Context, resourceID, expectedRunID string, desiredSpec json.RawMessage, pipeline domain.Pipeline, run domain.PipelineRun) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback(ctx)
-	var kind, creationStatus, recreationRunID string
+	var kind, creationStatus, creationRunID, recreationRunID, recreationStatus string
 	err = tx.QueryRow(ctx, `
-		SELECT resource.kind, COALESCE(creation.status, creation_run.status), COALESCE(resource.recreation_pipeline_run_id, '')
+		SELECT resource.kind, COALESCE(creation.status, creation_run.status), COALESCE(resource.pipeline_run_id, ''),
+		       COALESCE(resource.recreation_pipeline_run_id, ''), COALESCE(recreation.status, '')
 		FROM managed_resources resource
 		LEFT JOIN operations creation ON creation.id = resource.operation_id
 		LEFT JOIN pipeline_runs creation_run ON creation_run.id = resource.pipeline_run_id
+		LEFT JOIN pipeline_runs recreation ON recreation.id = resource.recreation_pipeline_run_id
 		WHERE resource.id = $1
 		  AND resource.deleted_at IS NULL
 		  AND resource.deletion_operation_id IS NULL
 		  AND resource.deletion_pipeline_run_id IS NULL
 		FOR UPDATE OF resource
-	`, resourceID).Scan(&kind, &creationStatus, &recreationRunID)
+	`, resourceID).Scan(&kind, &creationStatus, &creationRunID, &recreationRunID, &recreationStatus)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrNotFound
 	}
 	if err != nil {
 		return err
 	}
-	if kind != "kubernetes-cluster" || creationStatus != domain.OperationSucceeded || recreationRunID != "" {
+	currentRunID := creationRunID
+	if recreationRunID != "" {
+		currentRunID = recreationRunID
+		if recreationStatus != domain.OperationFailed && recreationStatus != domain.OperationCanceled {
+			return ErrConflict
+		}
+	}
+	if kind != "kubernetes-cluster" || expectedRunID == "" || currentRunID != expectedRunID ||
+		creationStatus != domain.OperationSucceeded && creationStatus != domain.OperationFailed && creationStatus != domain.OperationCanceled {
 		return ErrConflict
 	}
 	var active bool
@@ -497,26 +507,6 @@ func (s *Store) CreateManagedResourceRecreation(ctx context.Context, resourceID 
 		return ErrNotFound
 	}
 	return tx.Commit(ctx)
-}
-
-func (s *Store) ResetFailedManagedResourceRecreation(ctx context.Context, resourceID string) error {
-	command, err := s.pool.Exec(ctx, `
-		UPDATE managed_resources resource
-		SET recreation_pipeline_id = NULL, recreation_pipeline_run_id = NULL, updated_at = now()
-		WHERE resource.id = $1
-		  AND EXISTS (
-		      SELECT 1 FROM pipeline_runs recreation
-		      WHERE recreation.id = resource.recreation_pipeline_run_id
-		        AND recreation.status IN ($2, $3)
-		  )
-	`, resourceID, domain.OperationFailed, domain.OperationCanceled)
-	if err != nil {
-		return err
-	}
-	if command.RowsAffected() != 1 {
-		return ErrConflict
-	}
-	return nil
 }
 
 func (s *Store) DeleteFailedManagedResource(ctx context.Context, resourceID string) error {

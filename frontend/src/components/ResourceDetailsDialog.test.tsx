@@ -87,6 +87,21 @@ describe('resource detail', () => {
     expect(screen.getByRole('link', {name: 'Download kubeconfig'})).toHaveAttribute('href', `/api/v1/kubernetes-clusters/${resource.id}/kubeconfig`)
   })
 
+  it.each(['failed', 'recreation-failed', 'maintenance-failed'])('offers Retry for %s clusters', status => {
+    const recreate = vi.fn(async () => {})
+    const failed = {...resource, status, spec: {...resource.spec, mode: 'multi'}}
+    render(createElement(ResourceDetailsPage, {resource: failed, close: () => {}, connections: [], workspaces: [], resources: [failed], runs: [], session: {authenticated: true, user: {id: 'admin', username: 'admin', role: 'admin'}} as Session, openOperation: () => {}, recreate}))
+    fireEvent.click(screen.getByRole('button', {name: 'Retry'}))
+    expect(recreate).toHaveBeenCalledOnce()
+    expect(screen.queryByRole('button', {name: 'Recreate cluster'})).not.toBeInTheDocument()
+  })
+
+  it('prevents retrying while cluster provisioning is active', () => {
+    const provisioning = {...resource, status: 'recreating'}
+    render(createElement(ResourceDetailsPage, {resource: provisioning, close: () => {}, connections: [], workspaces: [], resources: [provisioning], runs: [], session: {authenticated: true, user: {id: 'admin', username: 'admin', role: 'admin'}} as Session, openOperation: () => {}, recreate: vi.fn()}))
+    expect(screen.getByRole('button', {name: 'Recreate cluster'})).toBeDisabled()
+  })
+
   it('renders credential-free access returned as null without crashing', async () => {
     vi.mocked(request).mockResolvedValueOnce({items: [{name: 'Prometheus', url: 'http://192.0.2.10:32090', service: 'prometheus', credentials: null}]})
     render(createElement(ResourceDetailsPage, {resource, close: () => {}, connections: [], workspaces: [], resources: [resource], runs: [], session: {authenticated: true, csrfToken: 'csrf', user: {id: 'admin', username: 'admin', role: 'admin'}} as Session, openOperation: () => {}}))

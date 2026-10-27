@@ -61,6 +61,11 @@ volume directory. This isolates clusters sharing the same export and PVCs
 recreated under the same namespace and name. Existing PVs retain their original
 paths; changing the provisioning rule does not migrate their data.
 
+Cluster Retry keeps the saved settings and resource identity. It validates and
+removes resources left by the previous attempt before provisioning again with
+the current plugins. Retry is blocked during active experiments or lifecycle
+operations; previous attempts remain available in the history.
+
 ## Portable state archives
 
 Administrator-only state transfer uses a password-encrypted `.kps` archive.

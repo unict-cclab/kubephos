@@ -179,15 +179,16 @@ export default function App() {
   }
 
   const recreateKubernetesCluster = async (clusterID: string, name: string) => {
-    if (!await confirmAction(`Recreate ${name}? Its VMs will be replaced using the saved topology.`, {title: 'Recreate cluster', label: 'Recreate'})) return
+    const retry = ['failed', 'recreation-failed', 'maintenance-failed'].includes(data.kubernetesClusters.find(item => item.id === clusterID)?.status ?? '')
+    if (!await confirmAction(retry ? `Retry ${name}? Existing cluster VMs will be replaced using the saved settings.` : `Recreate ${name}? Its VMs will be replaced using the saved topology.`, {title: retry ? 'Retry cluster creation' : 'Recreate cluster', label: retry ? 'Retry' : 'Recreate'})) return
     setClusterActions(items => ({...items, [clusterID]: {pending: true, message: 'Validating cluster health, ownership and cleanup targets…', error: false}}))
-    notify('Validating cluster recreation. This can take up to a minute.')
+    notify(retry ? 'Validating cluster retry.' : 'Validating cluster recreation.')
     try {
       await request(`/kubernetes-clusters/${clusterID}/recreate`, {method: 'POST', body: '{}'}, session?.csrfToken)
-      await afterMutation('Cluster recreation validated and queued.')
-      setClusterActions(items => ({...items, [clusterID]: {pending: false, message: 'Recreation queued. Progress is available in View activity.', error: false}}))
+      await afterMutation(retry ? 'Cluster retry queued.' : 'Cluster recreation validated and queued.')
+      setClusterActions(items => ({...items, [clusterID]: {pending: false, message: retry ? 'Retry queued. Progress is available in Activity.' : 'Recreation queued. Progress is available in Activity.', error: false}}))
     } catch (cause) {
-      const message = cause instanceof Error ? cause.message : 'Could not recreate the cluster.'
+      const message = cause instanceof Error ? cause.message : retry ? 'Could not retry cluster creation.' : 'Could not recreate the cluster.'
       setClusterActions(items => ({...items, [clusterID]: {pending: false, message, error: true}}))
       notify(message, true)
     }

@@ -276,7 +276,7 @@ func (s *Server) reconfigureKubernetesCluster(w http.ResponseWriter, r *http.Req
 	pipeline := domain.Pipeline{ID: id.New("pipe"), WorkspaceID: resource.WorkspaceID, Name: fmt.Sprintf("maintain-%s-%s", resource.ID, id.New("change")), Definition: validated.Definition, Resolution: validated.Resolution, Validation: validated.Validation, Hash: validated.Hash}
 	lifecycle := pipelineRunForManagedPipeline(pipeline, "Maintain "+resource.Name)
 	spec, _ := json.Marshal(desired)
-	if err := s.store.CreateManagedResourceRecreation(r.Context(), resource.ID, spec, pipeline, lifecycle); err != nil {
+	if err := s.store.CreateManagedResourceRecreation(r.Context(), resource.ID, resource.PipelineRunID, spec, pipeline, lifecycle); err != nil {
 		if errors.Is(err, storage.ErrConflict) {
 			writeError(w, 409, "cluster_in_use", "Maintenance requires no queued or running experiments or other lifecycle operations.")
 		} else {

@@ -411,10 +411,13 @@ func (s *Server) recreateKubernetesCluster(response http.ResponseWriter, request
 	}
 	cleanupRunID := resource.PipelineRunID
 	provisionPipelineID := resource.PipelineID
+	expectedRunID := resource.PipelineRunID
 	recovering := (resource.Status == "recreation-failed" || resource.Status == "maintenance-failed")
+	retrying := resource.Status == "failed" || recovering
 	if recovering {
 		cleanupRunID = resource.RecreationPipelineRunID
 		provisionPipelineID = resource.RecreationPipelineID
+		expectedRunID = cleanupRunID
 		failedRun, runErr := s.store.GetPipelineRun(request.Context(), cleanupRunID)
 		if runErr != nil || failedRun.Status != domain.OperationFailed && failedRun.Status != domain.OperationCanceled || len(failedRun.Stages) == 0 {
 			writeError(response, http.StatusConflict, "recreation_unavailable", "The failed recreation lifecycle is unavailable.")
@@ -424,18 +427,9 @@ func (s *Server) recreateKubernetesCluster(response http.ResponseWriter, request
 			writeError(response, http.StatusConflict, "recreation_unavailable", "The failed recreation workflow is unavailable.")
 			return
 		}
-		if err := s.store.ResetFailedManagedResourceRecreation(request.Context(), resource.ID); err != nil {
-			writeError(response, http.StatusConflict, "recreation_unavailable", "The failed recreation cannot be retried in its current state.")
-			return
-		}
-		resource, err = s.store.GetManagedResource(request.Context(), resource.ID)
-		if err != nil {
-			writeError(response, http.StatusInternalServerError, "database_error", "Could not reload the Kubernetes cluster.")
-			return
-		}
 	}
-	if resource.Status != "ready" || resource.PipelineRunID == "" || resource.PipelineID == "" {
-		writeError(response, http.StatusConflict, "cluster_not_ready", "Only a ready cluster can be recreated.")
+	if resource.Status != "ready" && !retrying || resource.PipelineRunID == "" || resource.PipelineID == "" {
+		writeError(response, http.StatusConflict, "cluster_not_ready", "Only a ready or failed cluster can be recreated.")
 		return
 	}
 	var input managedKubernetesClusterInput
@@ -443,7 +437,9 @@ func (s *Server) recreateKubernetesCluster(response http.ResponseWriter, request
 		writeError(response, http.StatusConflict, "configuration_invalid", "The saved cluster configuration is invalid.")
 		return
 	}
-	input.ManagedProfile = "2026.09.2"
+	if input.Mode != "multi" {
+		input.ManagedProfile = "2026.09.2"
+	}
 	connection, err := s.store.GetProviderConnectionConfiguration(request.Context(), input.ConnectionID)
 	if err != nil || connection.ID != resource.ConnectionID {
 		writeError(response, http.StatusConflict, "connection_unavailable", "The saved Proxmox connection is unavailable.")
@@ -456,7 +452,7 @@ func (s *Server) recreateKubernetesCluster(response http.ResponseWriter, request
 		}
 	}
 	sourceRun, err := s.store.GetPipelineRun(request.Context(), cleanupRunID)
-	if err != nil || !terminal(sourceRun.Status) || !recovering && sourceRun.Status != domain.OperationSucceeded || len(sourceRun.Stages) == 0 {
+	if err != nil || !terminal(sourceRun.Status) || !retrying && sourceRun.Status != domain.OperationSucceeded || len(sourceRun.Stages) == 0 {
 		writeError(response, http.StatusConflict, "recreation_unavailable", "The cluster lifecycle is unavailable.")
 		return
 	}
@@ -468,12 +464,13 @@ func (s *Server) recreateKubernetesCluster(response http.ResponseWriter, request
 	definition := domain.PipelineDefinition{}
 	resolution := domain.PipelineResolution{}
 	validation := domain.ValidationReport{Valid: true, CheckedAt: time.Now().UTC()}
-	for sourcePosition := len(sourceRun.Stages) - 1; sourcePosition >= 0; sourcePosition-- {
-		sourceStage := sourceRun.Stages[sourcePosition]
-		if sourceStage.OperationID == "" {
-			continue
-		}
-		source, err := s.store.GetOperation(request.Context(), sourceStage.OperationID)
+	targets, err := clusterRecreationCleanupTargets(sourceRun, sourcePipeline.Definition)
+	if err != nil {
+		writeError(response, http.StatusConflict, "recreation_unavailable", err.Error())
+		return
+	}
+	for _, target := range targets {
+		source, err := s.store.GetOperation(request.Context(), target.OperationID)
 		if err != nil {
 			writeError(response, http.StatusConflict, "recreation_unavailable", "A cluster lifecycle stage is unavailable.")
 			return
@@ -486,9 +483,8 @@ func (s *Server) recreateKubernetesCluster(response http.ResponseWriter, request
 			failure.write(response)
 			return
 		}
-		stageID := "cleanup-" + sourceStage.StageID
-		definition.Stages = append(definition.Stages, domain.PipelineStage{ID: stageID, PluginID: cleanup.PluginID, Title: "Remove " + strings.ToLower(sourceStage.Title), Spec: cleanup.Spec})
-		resolution.Stages = append(resolution.Stages, domain.ResolvedPipelineStage{ID: stageID, PluginID: cleanup.PluginID, PluginVersion: cleanup.PluginVersion, PluginDigest: cleanup.PluginDigest, Spec: cleanup.Spec, Plan: cleanup.Plan})
+		definition.Stages = append(definition.Stages, domain.PipelineStage{ID: target.StageID, PluginID: cleanup.PluginID, Title: target.Title, Spec: cleanup.Spec})
+		resolution.Stages = append(resolution.Stages, domain.ResolvedPipelineStage{ID: target.StageID, PluginID: cleanup.PluginID, PluginVersion: cleanup.PluginVersion, PluginDigest: cleanup.PluginDigest, Spec: cleanup.Spec, Plan: cleanup.Plan})
 		validation.Issues = append(validation.Issues, cleanup.Validation.Issues...)
 	}
 	provisionDefinition := clusterProvisioningStages(sourcePipeline.Definition)
@@ -543,7 +539,7 @@ func (s *Server) recreateKubernetesCluster(response http.ResponseWriter, request
 
 	for i := range provisionDefinition.Stages {
 		stage := &provisionDefinition.Stages[i]
-		if stage.ID == "kubernetes" {
+		if stage.PluginID == "io.kubephos.cluster.k3s.bootstrap" {
 			var spec map[string]any
 			_ = json.Unmarshal(stage.Spec, &spec)
 			delete(spec, "reconcile")
@@ -596,9 +592,13 @@ func (s *Server) recreateKubernetesCluster(response http.ResponseWriter, request
 	}
 	pipelineID := id.New("pipe")
 	pipeline := domain.Pipeline{ID: pipelineID, WorkspaceID: resource.WorkspaceID, Name: "recreate-managed-" + resource.ID + "-" + strings.TrimPrefix(pipelineID, "pipe_")[:8], Definition: definition, Resolution: resolution, Validation: validation, Hash: hash}
-	run := pipelineRunForManagedPipeline(pipeline, "Recreate "+resource.Name)
+	runName := "Recreate " + resource.Name
+	if retrying {
+		runName = "Retry " + resource.Name
+	}
+	run := pipelineRunForManagedPipeline(pipeline, runName)
 	desiredSpec, _ := json.Marshal(input)
-	if err := s.store.CreateManagedResourceRecreation(request.Context(), resource.ID, desiredSpec, pipeline, run); errors.Is(err, storage.ErrConflict) {
+	if err := s.store.CreateManagedResourceRecreation(request.Context(), resource.ID, expectedRunID, desiredSpec, pipeline, run); errors.Is(err, storage.ErrConflict) {
 		writeError(response, http.StatusConflict, "cluster_in_use", "The cluster is running an experiment or another lifecycle operation.")
 		return
 	} else if err != nil {
