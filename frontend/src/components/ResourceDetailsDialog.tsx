@@ -9,6 +9,7 @@ import {DetailBreadcrumb} from './DetailBreadcrumb'
 import {InputData, hasInputData} from './InputData'
 import {ExecutionProgressGraph} from './ExecutionProgressGraph'
 import {KubernetesLogo} from './KubernetesLogo'
+import {ClusterDashboards} from './ClusterDashboards'
 
 interface Props {
   resource: ManagedResource | null
@@ -39,7 +40,6 @@ export function ResourceDetailsPage({resource, close, connections, workspaces, r
     const dependencies = [...new Set(definition?.bindings?.map(binding => pipeline?.definition.stages.find(item => item.id === binding.fromStage)?.title ?? binding.fromStage) ?? (index ? [run.stages[index - 1].title] : []))]
     return {id: stage.id, title: stage.title, status: stage.status, detail: stage.error || stage.cleanupError || undefined, dependencies, operationId: stage.operationId}
   }) ?? []
-  const endpoints = managedEndpoints(resource)
   const cluster = resource.kind === 'kubernetes-cluster'
   const retry = ['failed', 'recreation-failed', 'maintenance-failed'].includes(resource.status)
   const completedStages = run?.stages.filter(stage => stage.status === 'succeeded').length ?? 0
@@ -53,7 +53,7 @@ export function ResourceDetailsPage({resource, close, connections, workspaces, r
     </div>
 
     {cluster && <section className="details-section"><div className="details-heading"><strong>Topology</strong></div><Topology resource={resource} /></section>}
-    {endpoints.length > 0 && <section className="details-section"><div className="details-heading"><strong>Dashboards</strong></div><div className="details-endpoints">{endpoints.map(endpoint => <a key={endpoint.name} href={endpoint.url} target="_blank" rel="noreferrer"><span>{endpoint.name}</span><strong>{endpoint.label}</strong></a>)}</div></section>}</>}
+    <ClusterDashboards key={resource.id} resource={resource} /></>}
     {tab === 'access' && <>{resource.kind === 'kubernetes-cluster' && resource.status === 'ready' && <section className="details-section"><div className="details-heading"><strong>Kubernetes access</strong></div><a className="button secondary compact" href={`/api/v1/kubernetes-clusters/${resource.id}/kubeconfig`}>Download kubeconfig</a></section>}<AccessPanel key={resource.id} resource={resource} session={session} /></>}
     {tab === 'activity' && <>
     <section className="details-section activity-status"><div><span>Status</span><strong className={`status-pill ${resource.status}`}>{resource.status}</strong></div>{run && <div><span>Progress</span><strong>{completedStages}/{run.stages.length}</strong></div>}</section>
@@ -149,24 +149,6 @@ async function copy(value: string) {
 function dependencyEntries(resource: ManagedResource): Array<{relation: string; id: string}> {
   const fields: Array<[string, string]> = [['templateId', 'VM template'], ['harborId', 'Harbor'], ['nfsId', 'NFS']]
   return fields.flatMap(([field, relation]) => typeof resource.spec?.[field] === 'string' ? [{relation, id: resource.spec[field] as string}] : [])
-}
-
-function managedEndpoints(resource: ManagedResource): Array<{name: string; label: string; url: string}> {
- if (resource.spec.mode === 'multi' && Array.isArray(resource.spec.members)) return resource.spec.members.flatMap(member => member && typeof member === 'object' ? managedEndpoints({...resource,spec:member}).map(endpoint => ({...endpoint,name: `${member.name} · ${endpoint.name}`})) : [])
-  if (resource.status !== 'ready' || resource.kind !== 'kubernetes-cluster' || typeof resource.spec?.managedProfile !== 'string') return []
-  const address = String(resource.spec.addressStart ?? '')
-  if (!address) return []
-  return [
-    ['Grafana', 32000, ''],
-    ['Prometheus', 32090, ''],
-    ['Cluster Lens', 32088, ''],
-    ['Chaos dashboard', 32300, ''],
-    ['Loki API', 32099, ''],
-    ['Jaeger', 30002, ''],
-    ['Kiali', 30001, '/kiali'],
-    ['Headlamp', 30003, ''],
-    ...(resource.spec.networking === 'cilium' ? [['Hubble', 31235, '']] : [])
-  ].filter(([name]) => resource.spec.networking !== 'cilium' || name !== 'Kiali').map(([name, port, path]) => ({name: String(name), label: `${address}:${port}`, url: `http://${address}:${port}${path}`}))
 }
 
 function Topology({resource}: {resource: ManagedResource}) {

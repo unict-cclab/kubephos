@@ -1,4 +1,36 @@
 @media screen {
+  .cluster-dashboards { min-width: 0; }
+  .dashboard-clusters { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr)); gap: 24px; }
+  .dashboard-cluster { min-width: 0; }
+  .dashboard-cluster h3 { margin: 0 0 16px; font-size: 14px; font-weight: 600; }
+  .dashboard-links { display: grid; gap: 10px; }
+  .dashboard-links-single { grid-template-columns: repeat(auto-fit, minmax(min(100%, 230px), 1fr)); }
+  .dashboard-link { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-width: 0; min-height: 76px; padding: 14px 16px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface); color: var(--ink); text-decoration: none; }
+  .dashboard-link > span { min-width: 0; }
+  .dashboard-link strong { display: block; font-size: 14px; font-weight: 600; }
+  .dashboard-link span span { display: block; margin-top: 4px; color: var(--muted-foreground); font-size: 12px; font-weight: 400; overflow-wrap: anywhere; }
+  .dashboard-link > svg { flex-shrink: 0; color: var(--muted-foreground); }
+  .dashboard-link:hover { border-color: var(--primary); background: var(--accent); }
+  .dashboard-link:focus-visible { outline: 2px solid var(--ring); outline-offset: 3px; }
+  .mesh-dashboard { display: flex; flex-wrap: wrap; align-items: center; gap: 20px 32px; padding: 20px; margin-bottom: 28px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface); }
+  .mesh-dashboard-title { flex: 1; min-width: 170px; }
+  .mesh-dashboard-title strong { display: block; font-size: 14px; font-weight: 600; }
+  .mesh-dashboard-title > span { display: block; margin-top: 6px; font-size: 12px; color: var(--muted-foreground); }
+  .mesh-dashboard label { display: grid; min-width: 180px; margin: 0; gap: 8px; font-weight: 600; }
+  .mesh-dashboard select { font-weight: 400; }
+  .mesh-dashboard > a { align-self: end; text-decoration: none; }
+  .managed-access-list { grid-template-columns: repeat(auto-fit, minmax(min(100%, 360px), 1fr)); gap: 20px; align-items: start; }
+  .managed-access-head { min-height: 72px; padding: 16px; }
+  .managed-access-head strong { font-size: 14px; }
+}
+
+@media screen and (max-width: 600px) {
+  .mesh-dashboard { gap: 20px; padding: 16px; }
+  .mesh-dashboard-title { flex-basis: 100%; }
+  .mesh-dashboard label { flex: 1; min-width: 0; }
+}
+
+@media screen {
   :root {
     --space-1: 4px;
     --space-2: 8px;
