@@ -45,6 +45,19 @@ func TestCiliumBootstrapUsesUniqueNetworksAndDisablesDefaultCNI(t *testing.T) {
 			t.Fatalf("missing Cilium value %s", value)
 		}
 	}
+	var values struct {
+		Mesh struct {
+			Config struct {
+				Enabled bool `yaml:"enabled"`
+			} `yaml:"config"`
+		} `yaml:"clustermesh"`
+	}
+	if err := yaml.Unmarshal([]byte(chart.Spec.Values), &values); err != nil {
+		t.Fatal(err)
+	}
+	if !values.Mesh.Config.Enabled {
+		t.Fatal("bootstrap must let Helm create ClusterMesh connection resources, including clustermesh-remote-users")
+	}
 	if chart.Spec.Version != ciliumVersion {
 		t.Fatal("unversioned Cilium install")
 	}

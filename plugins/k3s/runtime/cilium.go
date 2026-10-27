@@ -58,7 +58,7 @@ func ciliumBootstrapManifest(spec Spec, host string) ([]byte, error) {
 		"cluster": map[string]any{"name": spec.ClusterName, "id": spec.ClusterID},
 		"ipam":    map[string]any{"mode": "kubernetes"}, "routingMode": "tunnel", "tunnelProtocol": "vxlan",
 		"gatewayAPI":  map[string]any{"enabled": true},
-		"clustermesh": map[string]any{"useAPIServer": true, "enableEndpointSliceSynchronization": true, "apiserver": map[string]any{"nodeSelector": map[string]string{"kubephos.dev/role": "management"}, "service": map[string]any{"type": "NodePort", "nodePort": 32379}}},
+		"clustermesh": map[string]any{"useAPIServer": true, "config": map[string]any{"enabled": true}, "enableEndpointSliceSynchronization": true, "apiserver": map[string]any{"nodeSelector": map[string]string{"kubephos.dev/role": "management"}, "service": map[string]any{"type": "NodePort", "nodePort": 32379}}},
 		"hubble":      map[string]any{"enabled": true, "relay": map[string]any{"enabled": true, "nodeSelector": map[string]string{"kubephos.dev/role": "management"}}, "ui": map[string]any{"enabled": true, "nodeSelector": map[string]string{"kubephos.dev/role": "management"}, "service": map[string]any{"type": "NodePort", "nodePort": 31235}}, "metrics": map[string]any{"enabled": []string{"dns", "drop", "tcp", "flow", "icmp", "httpV2"}}},
 		"operator":    map[string]any{"replicas": 1, "nodeSelector": map[string]string{"kubephos.dev/role": "management"}},
 		"prometheus":  map[string]any{"enabled": true},

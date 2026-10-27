@@ -377,6 +377,9 @@ func (p Plugin) Execute(ctx context.Context, step domain.PlanStep, log plugins.L
 		}
 	}
 	if spec.Networking == "cilium" {
+		if err := log("info", "Installing Cilium, Hubble and the ClusterMesh API server"); err != nil {
+			return nil, err
+		}
 		if err := installCilium(ctx, runner, primary, access, spec); err != nil {
 			return nil, err
 		}
