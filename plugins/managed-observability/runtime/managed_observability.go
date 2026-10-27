@@ -407,23 +407,21 @@ func (plugin Plugin) Verify(ctx context.Context, step domain.PlanStep, raw json.
 	if _, err := runner.Helm(ctx, cluster.Spec.Kubeconfig, nil, nil, "status", releaseName, "--namespace", namespace); err != nil {
 		return unhealthy("Managed Helm release is unhealthy: "+err.Error(), "release", "unhealthy"), nil
 	}
-	if err := verifyPods(ctx, runner, cluster.Spec.Kubeconfig); err != nil {
-		return unhealthy(err.Error(), "pods", "unhealthy"), nil
+	if err := log("info", "Waiting up to 5 minutes for observability pods, persistent volumes and health endpoints to become ready"); err != nil {
+		return domain.HealthReport{}, err
+	}
+	if err := waitForManagedReadiness(ctx, runner, cluster.Spec.Kubeconfig, value.ObservabilityCapability.Spec.Endpoints, 5*time.Minute, 5*time.Second); err != nil {
+		if ctx.Err() == nil {
+			_ = log("warning", "Managed observability readiness failed: "+err.Error())
+			logRolloutDiagnostics(ctx, runner, cluster.Spec.Kubeconfig, log)
+		}
+		return unhealthy(err.Error(), "readiness", "unhealthy"), nil
 	}
 	if _, err := runner.Kubectl(ctx, cluster.Spec.Kubeconfig, nil, "rollout", "status", "deployment/"+monAgentName, "-n", namespace, "--timeout=5m"); err != nil {
 		return unhealthy("Managed mon-agent is not ready: "+err.Error(), "monAgent", "unhealthy"), nil
 	}
 	if err := waitForNodeResourceAnnotations(ctx, runner, cluster.Spec.Kubeconfig, 2*time.Minute); err != nil {
 		return unhealthy(err.Error(), "nodeResourceAnnotations", "unhealthy"), nil
-	}
-	if err := verifyPVCs(ctx, runner, cluster.Spec.Kubeconfig); err != nil {
-		return unhealthy(err.Error(), "persistence", "unhealthy"), nil
-	}
-	for _, endpoint := range value.ObservabilityCapability.Spec.Endpoints {
-		path := healthProxyPath(endpoint)
-		if _, err := runner.Kubectl(ctx, cluster.Spec.Kubeconfig, nil, "get", "--raw="+path); err != nil {
-			return unhealthy(endpoint.Name+" health endpoint failed: "+err.Error(), endpoint.Name, "unhealthy"), nil
-		}
 	}
 	if err := verifyCRDOwnership(ctx, runner, cluster.Spec.Kubeconfig, input.Marker); err != nil {
 		return unhealthy(err.Error(), "ownership", "invalid"), nil
@@ -616,17 +614,21 @@ func installWithDiagnostics(ctx context.Context, runner clusterRunner, kubeconfi
 		case outcome := <-result:
 			return outcome.err
 		case <-ticker.C:
-			diagnosticContext, cancel := context.WithTimeout(ctx, 15*time.Second)
-			status, err := runner.Kubectl(diagnosticContext, kubeconfig, nil, "get", "pods,pvc", "-n", namespace, "-o", "wide")
-			cancel()
-			if err == nil && strings.TrimSpace(status) != "" {
-				_ = log("info", "Managed observability rollout diagnostic:\n"+strings.TrimSpace(status))
-			} else if err != nil {
-				_ = log("warning", "Managed observability rollout diagnostic failed: "+err.Error())
-			}
+			logRolloutDiagnostics(ctx, runner, kubeconfig, log)
 		case <-ctx.Done():
 			return ctx.Err()
 		}
+	}
+}
+
+func logRolloutDiagnostics(ctx context.Context, runner clusterRunner, kubeconfig string, log plugins.Logger) {
+	diagnosticContext, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	status, err := runner.Kubectl(diagnosticContext, kubeconfig, nil, "get", "pods,pvc", "-n", namespace, "-o", "wide")
+	if err == nil && strings.TrimSpace(status) != "" {
+		_ = log("info", "Managed observability rollout diagnostic:\n"+strings.TrimSpace(status))
+	} else if err != nil {
+		_ = log("warning", "Managed observability rollout diagnostic failed: "+err.Error())
 	}
 }
 
@@ -759,20 +761,54 @@ func verifyPVCs(ctx context.Context, runner clusterRunner, kubeconfig string) er
 }
 
 func waitForNodeResourceAnnotations(ctx context.Context, runner clusterRunner, kubeconfig string, timeout time.Duration) error {
-	deadline := time.Now().Add(timeout)
-	var last error
+	return waitForReadiness(ctx, timeout, 3*time.Second, func(ctx context.Context) error {
+		return verifyNodeResourceAnnotations(ctx, runner, kubeconfig)
+	})
+}
+
+func waitForManagedReadiness(ctx context.Context, runner clusterRunner, kubeconfig string, endpoints []serviceEndpoint, timeout, interval time.Duration) error {
+	return waitForReadiness(ctx, timeout, interval, func(ctx context.Context) error {
+		if err := verifyPods(ctx, runner, kubeconfig); err != nil {
+			return err
+		}
+		if err := verifyPVCs(ctx, runner, kubeconfig); err != nil {
+			return err
+		}
+		for _, endpoint := range endpoints {
+			if _, err := runner.Kubectl(ctx, kubeconfig, nil, "get", "--raw="+healthProxyPath(endpoint)); err != nil {
+				return fmt.Errorf("%s health endpoint failed: %w", endpoint.Name, err)
+			}
+		}
+		return nil
+	})
+}
+
+func waitForReadiness(ctx context.Context, timeout, interval time.Duration, check func(context.Context) error) error {
+	waitCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	var last error = context.DeadlineExceeded
 	for {
-		last = verifyNodeResourceAnnotations(ctx, runner, kubeconfig)
+		if waitCtx.Err() != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			return fmt.Errorf("readiness timed out after %s: %w", timeout, last)
+		}
+		last = check(waitCtx)
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 		if last == nil {
+			if waitCtx.Err() != nil {
+				return fmt.Errorf("readiness timed out after %s: %w", timeout, waitCtx.Err())
+			}
 			return nil
 		}
-		if time.Now().After(deadline) {
-			return last
-		}
+		timer := time.NewTimer(interval)
 		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(3 * time.Second):
+		case <-waitCtx.Done():
+			timer.Stop()
+		case <-timer.C:
 		}
 	}
 }
