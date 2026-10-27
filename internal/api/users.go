@@ -63,7 +63,7 @@ func (s *Server) createUser(response http.ResponseWriter, request *http.Request)
 		writeError(response, http.StatusUnprocessableEntity, "invalid_password", err.Error())
 		return
 	}
-	externalID, err := s.identity.CreateUser(request.Context(), input.Username, input.Email, input.Password)
+	externalID, err := s.identity.CreateUserWithTemporaryPassword(request.Context(), input.Username, input.Email, input.Password)
 	if errors.Is(err, keycloak.ErrConflict) {
 		writeError(response, http.StatusConflict, "username_taken", "This username already exists.")
 		return

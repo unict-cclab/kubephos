@@ -22,11 +22,11 @@ export function UsersView({users, assignments, clusters, session, changed}: {use
       {label: 'Role', render: user => <span className={`user-role ${user.role}`}>{user.role === 'admin' ? 'Administrator' : 'User'}</span>},
       {label: 'Clusters', render: user => <span className="user-cluster-count">{user.role === 'admin' ? 'All' : assignments.filter(item => item.userId === user.id).length}</span>}
     ]} actions={user => <ResourceAction action="view" label={`View ${user.username}`} onClick={() => setSelectedID(user.id)} />} />
-    <CreateUserDialog open={creating} close={() => setCreating(false)} session={session} changed={changed} />
+    {creating && <CreateUserDialog close={() => setCreating(false)} session={session} changed={changed} />}
   </>
 }
 
-function CreateUserDialog({open, close, session, changed}: {open: boolean; close: () => void; session: Session; changed: () => Promise<void>}) {
+function CreateUserDialog({close, session, changed}: {close: () => void; session: Session; changed: () => Promise<void>}) {
   const [pending, setPending] = useState(false)
   const [error, setError] = useState('')
   const submit = async (event: FormEvent<HTMLFormElement>) => {
@@ -44,7 +44,7 @@ function CreateUserDialog({open, close, session, changed}: {open: boolean; close
       setPending(false)
     }
   }
-  return <Dialog open={open} onClose={close} title="Create user"><form className="form-stack" onSubmit={submit}><div className="field-row"><label>Username<input name="username" minLength={3} maxLength={40} required autoFocus /></label><label>Email<input name="email" type="email" /></label></div><div className="field-row"><label>Password<input name="password" type="password" minLength={12} maxLength={128} required /></label><label>Role<select name="role" defaultValue="user"><option value="user">User</option><option value="admin">Administrator</option></select></label></div><p className="form-error">{error}</p><div className="dialog-actions"><button className="button secondary" type="button" onClick={close}>Cancel</button><button className="button primary" disabled={pending}>{pending ? 'Creating…' : 'Create'}</button></div></form></Dialog>
+  return <Dialog open onClose={close} title="Create user"><form className="form-stack" onSubmit={submit}><div className="field-row"><label>Username<input name="username" minLength={3} maxLength={40} required autoFocus /></label><label>Email<input name="email" type="email" /></label></div><div className="field-row"><label>Temporary password<input name="password" autoComplete="new-password" type="password" minLength={12} maxLength={128} required /></label><label>Role<select name="role" defaultValue="user"><option value="user">User</option><option value="admin">Administrator</option></select></label></div><p className="form-error">{error}</p><div className="dialog-actions"><button className="button secondary" type="button" onClick={close}>Cancel</button><button className="button primary" disabled={pending}>{pending ? 'Creating…' : 'Create'}</button></div></form></Dialog>
 }
 
 function UserDetailsPage({user, close, assignments, clusters, session, changed}: {user: User; close: () => void; assignments: ClusterUserAssignment[]; clusters: ManagedResource[]; session: Session; changed: () => Promise<void>}) {

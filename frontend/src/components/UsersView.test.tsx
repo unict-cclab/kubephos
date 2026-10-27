@@ -28,6 +28,24 @@ describe('users view', () => {
     expect(screen.getByText('No users.').closest('td')).toHaveAttribute('colspan', '9')
   })
 
+  it.each(['Cancel', 'Close', 'success'])('starts with a fresh form after %s', async exit => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('{}', {status: 201})))
+    const session = {authenticated: true, csrfToken: 'csrf', user: {id: 'admin', username: 'admin', role: 'admin'}} as Session
+    render(<UsersView users={[]} assignments={[]} clusters={[]} session={session} changed={vi.fn().mockResolvedValue(undefined)} />)
+    fireEvent.click(screen.getByRole('button', {name: 'Create user'}))
+    let dialog = screen.getByRole('dialog')
+    fireEvent.change(within(dialog).getByLabelText('Username'), {target: {value: 'researcher'}})
+    fireEvent.change(within(dialog).getByLabelText('Email'), {target: {value: 'researcher@example.test'}})
+    fireEvent.change(within(dialog).getByLabelText('Temporary password'), {target: {value: 'temporary-test-password'}})
+    fireEvent.change(within(dialog).getByLabelText('Role'), {target: {value: 'admin'}})
+    fireEvent.click(within(dialog).getByRole('button', {name: exit === 'success' ? 'Create' : exit}))
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+    fireEvent.click(screen.getByRole('button', {name: 'Create user'}))
+    dialog = screen.getByRole('dialog')
+    for (const label of ['Username', 'Email', 'Temporary password']) expect(within(dialog).getByLabelText(label)).toHaveValue('')
+    expect(within(dialog).getByLabelText('Role')).toHaveValue('user')
+  })
+
   it('opens a full detail page and saves cluster assignments', async () => {
     const fetch = vi.fn().mockResolvedValue(new Response(null, {status: 204}))
     vi.stubGlobal('fetch', fetch)
