@@ -56,6 +56,14 @@ updated with your new password. Rerunning the installer or updater does not rese
 an existing account's password or force another password change. Existing
 installations retain their current login credentials.
 
+## Proxmox provisioning
+
+VM identifiers are checked across the Proxmox cluster, including guests on offline
+nodes. An unavailable peer does not block provisioning on an available node:
+network checks use reachable guests and the reservations already saved in KubePhos.
+The selected destination node must still be online. Authentication, permission
+and malformed-response errors remain explicit.
+
 ## Network access
 
 The application listens on all host interfaces on port 8080 by default.

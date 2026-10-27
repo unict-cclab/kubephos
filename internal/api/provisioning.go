@@ -15,7 +15,7 @@ import (
 	proxmoxvm "kubephos.dev/kubephos/plugins/proxmox-vm/runtime"
 )
 
-func (s *Server) provisioningInventory(ctx context.Context, connectionID, templateID string) (*provisioning.Inventory, provisioning.Network, error) {
+func (s *Server) provisioningInventory(ctx context.Context, connectionID, templateID string, readNetwork bool) (*provisioning.Inventory, provisioning.Network, error) {
 	connection, err := s.store.GetProviderConnectionConfiguration(ctx, connectionID)
 	if err != nil {
 		return nil, provisioning.Network{}, err
@@ -37,9 +37,13 @@ func (s *Server) provisioningInventory(ctx context.Context, connectionID, templa
 	tokenSecret, _ := credential["tokenSecret"].(string)
 	ctx, cancel := context.WithTimeout(ctx, 45*time.Second)
 	defer cancel()
-	vms, err := proxmoxvm.ReadAllocationInventory(ctx, endpoint, verifyTLS, tokenID, tokenSecret)
+	readInventory := proxmoxvm.ReadAllocationVMIDs
+	if readNetwork {
+		readInventory = proxmoxvm.ReadAllocationInventory
+	}
+	vms, err := readInventory(ctx, endpoint, verifyTLS, tokenID, tokenSecret)
 	if err != nil {
-		return nil, provisioning.Network{}, fmt.Errorf("Could not read Proxmox VM and network allocations.")
+		return nil, provisioning.Network{}, err
 	}
 	inventory := provisioning.NewInventory()
 	preferred := provisioning.Network{}
@@ -140,10 +144,22 @@ func (s *Server) getProvisioningSuggestions(response http.ResponseWriter, reques
 			return
 		}
 	}
-	inventory, preferred, err := s.provisioningInventory(request.Context(), request.PathValue("id"), request.URL.Query().Get("templateId"))
-	if err != nil {
+	inventory, preferred, err := s.provisioningInventory(request.Context(), request.PathValue("id"), request.URL.Query().Get("templateId"), true)
+	if err != nil && !errors.Is(err, proxmoxvm.ErrNetworkAllocationsUnavailable) {
 		writeError(response, http.StatusUnprocessableEntity, "inventory_unavailable", err.Error())
 		return
+	}
+	if err != nil {
+		// VM identifiers remain verifiable even if an unrelated node is down.
+		// Do not suggest IPs from an incomplete scan.
+		fallback, _, fallbackErr := s.provisioningInventory(request.Context(), request.PathValue("id"), request.URL.Query().Get("templateId"), false)
+		if fallbackErr != nil {
+			writeError(response, http.StatusUnprocessableEntity, "inventory_unavailable", err.Error())
+			return
+		}
+		inventory = fallback
+		inventory.Networks = nil
+		preferred = provisioning.Network{}
 	}
 	value, err := inventory.Suggest(count, preferred)
 	if err != nil {
@@ -165,7 +181,7 @@ func (s *Server) validateProvisioning(response http.ResponseWriter, request *htt
 		}
 		return nil, false
 	}
-	inventory, _, err := s.provisioningInventory(request.Context(), connectionID, "")
+	inventory, _, err := s.provisioningInventory(request.Context(), connectionID, "", provisioning.NetworkFromSpec(spec).Address != "")
 	if err == nil {
 		vmid := intField(spec, "vmid")
 		if vmid == 0 {

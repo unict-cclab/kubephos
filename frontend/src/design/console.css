@@ -713,9 +713,9 @@
   .wizard-panels .schema-fields > .wide { grid-column: 1 / -1; }
   .wizard-panels .schema-fields > label.wide:not(.checkbox-field):not(:has(textarea)) { grid-column: auto; }
   .wizard-panels .schema-fields > label:only-child { grid-column: 1 / -1; }
-  .wizard-panels .schema-fields.schema-fields-network { grid-template-columns: repeat(6, minmax(0, 1fr)); max-width: 560px; }
-  .wizard-panels .schema-fields-network > label.wide:not(.checkbox-field):not(:has(textarea)) { grid-column: span 3; }
-  .wizard-panels .schema-fields.schema-fields-network > label.wide:has(input[name$=".address"]) { grid-column: span 5; }
+  .wizard-panels .schema-fields.schema-fields-network { grid-template-columns: repeat(4, minmax(0, 1fr)); max-width: 560px; align-items: end; }
+  .wizard-panels .schema-fields-network > label.wide:not(.checkbox-field):not(:has(textarea)) { grid-column: span 2; }
+  .wizard-panels .schema-fields.schema-fields-network > label.wide:has(input[name$=".address"]) { grid-column: span 3; }
   .wizard-panels .schema-fields.schema-fields-network > label:has(input[name$=".prefixLength"]) { grid-column: span 1; }
   .wizard-panels label:has(input[name="template.vmid"]) { max-width: 160px; }
   .wizard-panels .vm-placement-grid { padding-top: 8px; gap: 24px; }
@@ -729,6 +729,10 @@
   .wizard-panels .field-row-address { grid-template-columns: minmax(0, 1fr) 100px; }
   .wizard-panels .field-row-count { grid-template-columns: 100px minmax(0, 1fr); }
   .wizard-panels .schema-fields > label.wide:not(.checkbox-field):not(:has(textarea)) { grid-column: 1; }
+  .wizard-panels .schema-fields.schema-fields-network { grid-template-columns: minmax(0, 1fr) 112px; }
+  .wizard-panels .schema-fields.schema-fields-network > label.wide:not(.checkbox-field):not(:has(textarea)) { grid-column: 1 / -1; }
+  .wizard-panels .schema-fields.schema-fields-network > label.wide:has(input[name$=".address"]) { grid-column: 1; }
+  .wizard-panels .schema-fields.schema-fields-network > label:has(input[name$=".prefixLength"]) { grid-column: 2; }
 }
 @media screen and (max-width: 540px) {
   .wizard-panels .capacity-grid { grid-template-columns: minmax(0, 1fr); }

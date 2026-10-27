@@ -96,7 +96,7 @@ func (s *Server) createMultiCluster(response http.ResponseWriter, request *http.
 		return
 	}
 	defer release()
-	inventory, _, err := s.provisioningInventory(request.Context(), input.ConnectionID, "")
+	inventory, _, err := s.provisioningInventory(request.Context(), input.ConnectionID, "", true)
 	if err != nil {
 		writeError(response, http.StatusUnprocessableEntity, "inventory_unavailable", err.Error())
 		return
