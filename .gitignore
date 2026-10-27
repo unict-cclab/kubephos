@@ -23,3 +23,6 @@ __pycache__/
 install.log
 update.log
 compose.previous.yaml
+
+# Portable state archives contain infrastructure credentials.
+*.kps

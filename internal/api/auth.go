@@ -68,7 +68,7 @@ func adminReadPath(path string) bool {
 	for _, prefix := range []string{
 		"/api/v1/credentials", "/api/v1/connections", "/api/v1/machine-templates", "/api/v1/infrastructure-services",
 		"/api/v1/infrastructure/resources", "/api/v1/audit", "/api/v1/plugin-imports", "/api/v1/plugin-packages",
-		"/api/v1/plugin-runtime", "/api/v1/terminal-targets", "/api/v1/terminals", "/api/v1/pipelines",
+		"/api/v1/administration", "/api/v1/plugin-runtime", "/api/v1/terminal-targets", "/api/v1/terminals", "/api/v1/pipelines",
 	} {
 		if strings.HasPrefix(path, prefix) {
 			return true

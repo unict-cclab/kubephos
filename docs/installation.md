@@ -136,6 +136,57 @@ docker compose up -d --wait
 Docker restarts the long-running services after host reboot. Do not run
 `docker compose down -v` unless you intend to delete the installation's data.
 
+## Move instance state to another server
+
+Administrators can use **Administration → Export / Import** to move
+infrastructure and reusable configuration to a new KubePhos instance.
+
+1. Wait for queued and running experiments, infrastructure operations and plugin
+   imports to finish on the source instance.
+2. Open **Administration → Export**, choose an archive password of at least 12 characters,
+   confirm it and select **Export state**. Keep the downloaded `.kps` file and its
+   password: both are required for import.
+3. Install KubePhos on the new server using the same release. Keep the new
+   installation's generated `.env`, credentials and encryption key.
+4. Sign in as an administrator on the destination. Before adding resources, open
+   **Administration → Import**, choose the `.kps` file, enter its archive password and select
+   **Review archive**. Check the source version, date and resource counts, then
+   select **Import state**.
+5. Stop the old instance before managing the transferred infrastructure from the
+   new one. Ensure the new server can reach the existing Proxmox servers, VMs,
+   Kubernetes APIs, registries and remote plugin runtime, if configured.
+
+The archive contains Proxmox connections and credentials, VM templates, Harbor,
+NFS and cluster records and dependencies, application/model/strategy catalogs,
+experiment configurations and suites, installed plugin descriptors, remote runtime
+settings and infrastructure artifacts such as kubeconfigs and certificates.
+Infrastructure provisioning metadata and resource authorship labels are retained;
+operation logs and unrelated execution history are excluded.
+
+Users, login passwords, sessions, sharing permissions, cluster assignments,
+experiments, runs and collected experiment results are excluded. Imported
+configurations become private and belong to the administrator performing the
+import. If different source owners used the same configuration name, additional
+names receive an `(imported N)` suffix; suite references remain intact.
+
+The export never contains `.env` or the source instance's credential encryption
+key. Connection credentials and sensitive artifacts are re-encrypted with the
+destination key. The archive itself is encrypted with its separate password.
+Neither archive passwords nor decrypted credentials are returned in the review.
+The destination's public URL, Keycloak clients and service credentials remain
+unchanged.
+
+Import requires a fresh destination with no infrastructure, custom catalogs,
+credentials, configurations or experiments. A matching database migration schema
+is required. Metadata is committed together after artifact uploads succeed;
+failed imports roll back metadata and queue cleanup of temporary objects.
+Archives are limited to 128 MiB.
+
+This moves KubePhos management state. It does not copy VMs, container images,
+model caches or data stored on NFS/Harbor, and does not reprovision infrastructure.
+Use the backup procedure below when you need the full experiment history or a
+complete disaster-recovery backup.
+
 ## Backups
 
 A complete recoverable backup includes the installed `.env`, `credentials.json`,

@@ -46,6 +46,7 @@ type Server struct {
 	runtime        plugins.ContainerRunner
 	loadPlugin     func([]byte) (plugins.Plugin, error)
 	version        string
+	transferMu     sync.Mutex
 	pluginMu       sync.Mutex
 	previewMu      sync.Mutex
 	previewFlights map[string]*applicationPreviewFlight
@@ -90,6 +91,9 @@ func NewServer(store *storage.Store, registry *plugins.Registry, artifactStore *
 	router.HandleFunc("GET /api/v1/users/{id}/clusters", server.listUserClusters)
 	router.HandleFunc("PUT /api/v1/users/{id}/clusters", server.replaceUserClusters)
 	router.HandleFunc("GET /api/v1/system", server.system)
+	router.HandleFunc("POST /api/v1/administration/state/export", server.exportState)
+	router.HandleFunc("POST /api/v1/administration/state/inspect", server.inspectState)
+	router.HandleFunc("POST /api/v1/administration/state/import", server.importState)
 	router.HandleFunc("GET /api/v1/plugins", server.listPlugins)
 	router.HandleFunc("POST /api/v1/plugins/inspect", server.inspectPlugin)
 	router.HandleFunc("POST /api/v1/plugins", server.importPlugin)

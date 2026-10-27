@@ -18,7 +18,8 @@ const viewMetadata: Record<View, string> = {
   infrastructure: 'Infrastructure',
   kubernetes: 'Kubernetes',
   experiments: 'Configurations',
-  users: 'Users'
+  users: 'Users',
+  administration: 'Administration'
 }
 const navigation: Array<[View, string]> = [
   ['overview', 'Overview'],
@@ -38,6 +39,7 @@ function NavigationIcon({view}: {view: View}) {
     catalog: <><path d="M4 5h16v14H4zM4 12h16M9 5v7m6 0v7"/></>,
     experiments: <><path d="M6 4h12v16H6zM9 8h6M9 12h6M9 16h4"/></>,
     results: <><circle cx="12" cy="12" r="9"/><path d="m10 8 6 4-6 4z"/></>,
+    administration: <><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M8 8h8M8 12h8M8 16h5"/></>,
     users: <><circle cx="9" cy="8" r="3"/><path d="M3.5 19c.5-4 2.3-6 5.5-6s5 2 5.5 6M16 7h5M18.5 4.5v5"/></>
   } as Partial<Record<View, React.ReactNode>>
   return <svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true" {...common}>{shape[view]}</svg>
@@ -246,10 +248,10 @@ export default function App() {
 
 function initialView(): View {
   const next = hashView(window.location.hash)
-  return next === 'users' || navigation.some(([view]) => view === next) ? next : 'overview'
+  return next === 'users' || next === 'administration' || navigation.some(([view]) => view === next) ? next : 'overview'
 }
 
 function visibleNavigation(admin: boolean): Array<Array<[View, string]>> {
-	const items = admin ? [...navigation, ['users', 'Users'] as [View, string]] : navigation.filter(([view]) => !['infrastructure'].includes(view))
+	const items = admin ? [...navigation, ['users', 'Users'] as [View, string], ['administration', 'Administration'] as [View, string]] : navigation.filter(([view]) => !['infrastructure'].includes(view))
 	return [items.slice(0, admin ? 4 : 3), items.slice(admin ? 4 : 3)]
 }

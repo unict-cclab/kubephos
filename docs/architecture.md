@@ -55,3 +55,22 @@ sources; `KUBEPHOS_BUILD_ALLOWED_GIT_HOSTS` defaults to `github.com`.
 These advanced settings are intentionally absent from the basic installer.
 Managed clusters, Harbor, NFS and cloud images are configured in the UI rather
 than global environment variables.
+
+## Portable state archives
+
+Administrator-only state transfer uses a password-encrypted `.kps` archive.
+`internal/storage/transfer.go` explicitly lists portable tables and follows
+infrastructure operation/artifact dependencies; experiment execution data and
+identity tables are excluded. Database migration checksums must match before an
+import. Extend this table list and the transfer integration tests when adding
+new persistent configuration; incompatible archive shapes need a new format
+version.
+
+The archive contains decrypted infrastructure credentials only inside its
+authenticated encryption envelope. Import re-encrypts credentials and sensitive
+artifacts with the destination vault, preserves resource IDs, remaps configuration
+ownership, and keeps installation secrets and Keycloak state untouched. Metadata
+is committed in one transaction after object uploads; cleanup directories are
+registered in the artifact deletion outbox before uploading and removed from the
+outbox in the same transaction on success. Failed or interrupted imports leave
+retryable object cleanup, rather than partially imported resources.

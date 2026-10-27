@@ -6,7 +6,7 @@ export interface ResourceAttributionFields {
 }
 
 export type Role = 'admin' | 'user'
-export type View = 'overview' | 'infrastructure' | 'kubernetes' | 'experiments' | 'results' | 'catalog' | 'users'
+export type View = 'overview' | 'infrastructure' | 'kubernetes' | 'experiments' | 'results' | 'catalog' | 'users' | 'administration'
 
 export interface User extends ResourceAttributionFields {
   id: string

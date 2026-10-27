@@ -15,6 +15,7 @@ import {ConnectionDetailsPage} from './ConnectionDetailsPage'
 import {SectionIcon, type SectionIconKind} from './SectionIcon'
 import {ResourceAction} from './ResourceAction'
 import {UsersView} from './UsersView'
+import {AdministrationView} from './AdministrationView'
 
 interface ViewProps {
   view: View
@@ -81,6 +82,7 @@ export function Views(props: ViewProps) {
     {props.view === 'experiments' && <section className="view active">
       <ExperimentConfigurationsView items={props.experimentConfigurations} experiments={props.experiments} artifacts={props.artifacts} operations={props.operations} clusters={props.kubernetesClusters} workspaces={props.workspaces} applications={props.applications} plugins={props.plugins} strategies={props.strategies} session={props.session} isAdmin={props.isAdmin} changed={props.changed} openOperation={props.openOperation} openExperiment={id => {window.location.hash = `results/instance/${encodeURIComponent(id)}`} } />
     </section>}
+    {props.view === 'administration' && props.isAdmin && <section className="view active"><AdministrationView session={props.session} changed={props.changed} /></section>}
     {props.view === 'users' && <section className="view active">
       {props.isAdmin && <UsersView users={props.users} assignments={props.clusterAssignments} clusters={props.kubernetesClusters} session={props.session} changed={props.changed} />}
     </section>}

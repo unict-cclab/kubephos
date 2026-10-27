@@ -52,6 +52,12 @@ describe('application navigation', () => {
     expect(screen.queryByRole('button', {name: 'Suites'})).not.toBeInTheDocument()
   })
 
+  it('opens the administrator state transfer section', async () => {
+    render(<App />)
+    fireEvent.click(await screen.findByRole('button', {name: 'Administration'}))
+    await waitFor(() => expect(screen.getByText('Current view: administration')).toBeInTheDocument())
+  })
+
   it('opens users on the first menu selection', async () => {
     render(<App />)
 

@@ -1218,3 +1218,23 @@
   .return-button:hover { background: var(--accent); color: var(--accent-foreground); border-color: var(--muted-foreground); }
   .return-button:focus-visible { outline: 2px solid var(--ring); outline-offset: 3px; }
 }
+
+@media screen {
+  .state-transfer-scope { margin: 0 0 32px; color: var(--muted-foreground); max-width: 90ch; }
+  .state-transfer-tabs .form-tab-panel { padding: 28px 0 0; }
+  .state-transfer-panel { min-width: 0; max-width: 880px; }
+  .state-transfer-panel > p:not(.form-error):not(.state-transfer-success) { margin: 0 0 24px; color: var(--muted-foreground); }
+  .state-transfer-panel fieldset { border: 0; padding: 0; margin: 0; display: grid; gap: 20px; min-width: 0; }
+  .state-transfer-panel label { display: grid; gap: 8px; font-weight: 600; margin: 0; min-width: 0; }
+  .state-transfer-panel input { width: 100%; min-width: 0; font-weight: 400; }
+  .state-transfer-panel input[type=file] { height: auto; padding: 10px; }
+  .state-transfer-panel .state-transfer-hint { margin: 0; color: var(--muted-foreground); }
+  .state-transfer-panel .button { justify-self: start; }
+  .state-transfer-review { margin-top: 32px; display: grid; gap: 20px; }
+  .state-transfer-review h4 { margin: 0; font-weight: 600; }
+  .state-transfer-review table { width: 100%; border-collapse: collapse; }
+  .state-transfer-review :is(th, td) { border: 1px solid var(--line); padding: 10px 14px; text-align: left; }
+  .state-transfer-review th { font-weight: 600; width: 50%; }
+  .state-transfer-review td { font-weight: 400; overflow-wrap: anywhere; }
+  .state-transfer-success { margin: 0 0 24px; }
+}

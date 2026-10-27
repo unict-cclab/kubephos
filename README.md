@@ -68,6 +68,10 @@ Both scripts can also be invoked by absolute path from any working directory.
 They display high-level progress; detailed output is saved privately in
 `install.log` and `update.log` inside the installation directory.
 
+Administrators can move infrastructure, catalog and configurations to a fresh
+instance through **Administration → Export / Import**, using an
+archive password. Users, experiments and `.env` are excluded.
+
 See [installation and operations](docs/installation.md) for HTTPS, updates, backups
 and troubleshooting. Published releases are available on
 [GitHub Releases](https://github.com/unict-cclab/kubephos/releases).

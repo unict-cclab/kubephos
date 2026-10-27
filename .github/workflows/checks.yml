@@ -58,7 +58,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6.0.3
       - name: Check storage and migrations against PostgreSQL
-        run: go test ./internal/storage -v
+        run: go test ./internal/storage ./internal/api -v
 
   frontend:
     name: Frontend

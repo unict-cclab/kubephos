@@ -6,6 +6,7 @@ describe('detail routes', () => {
     expect(hashView('#kubernetes/resource/cluster_01')).toBe('kubernetes')
     expect(hashView('#experiments/instance/exp_01')).toBe('experiments')
     expect(hashView('#users')).toBe('users')
+    expect(hashView('#administration')).toBe('administration')
     expect(hashView('#suites')).toBe('results')
     expect(hashView('#unknown')).toBe('overview')
   })

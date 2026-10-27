@@ -91,6 +91,9 @@ func auditTarget(request *http.Request) (string, string, string, bool) {
 	}
 	path := strings.Trim(strings.TrimPrefix(request.URL.Path, "/api/v1/"), "/")
 	parts := strings.Split(path, "/")
+	if path == "administration/state/import" || path == "administration/state/export" {
+		return "instance." + parts[2], "instance", "", true
+	}
 	if len(parts) == 1 {
 		switch parts[0] {
 		case "workspaces":

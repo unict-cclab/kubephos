@@ -1,0 +1,87 @@
+import {fireEvent, render, screen, waitFor} from '@testing-library/react'
+import {afterEach, describe, expect, it, vi} from 'vitest'
+import axe from 'axe-core'
+import {AdministrationView} from './AdministrationView'
+import type {Session} from '../types'
+
+const session: Session = {authenticated: true, setupRequired: false, csrfToken: 'csrf', user: {id: 'admin', username: 'admin', role: 'admin'}}
+afterEach(() => vi.unstubAllGlobals())
+
+describe('instance state transfer', () => {
+  it('provides accessible forms and archive review', async () => {
+    render(<main><h1>KubePhos</h1><AdministrationView session={session} changed={vi.fn()} /></main>)
+    const result = await axe.run(document.body, {runOnly: {type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag21aa', 'wcag22aa']}, rules: {'color-contrast': {enabled: false}}})
+    expect(result.violations.map(item => item.id)).toEqual([])
+    fireEvent.click(screen.getByRole('tab', {name: 'Import'}))
+    const importResult = await axe.run(document.body, {runOnly: {type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag21aa', 'wcag22aa']}, rules: {'color-contrast': {enabled: false}}})
+    expect(importResult.violations.map(item => item.id)).toEqual([])
+  })
+  it('separates export and import into keyboard-accessible tabs without environment-file copy', () => {
+    render(<AdministrationView session={session} changed={vi.fn()} />)
+    expect(screen.getByRole('tabpanel', {name: 'Export'})).toBeVisible()
+    expect(screen.queryByRole('button', {name: 'Review archive'})).not.toBeInTheDocument()
+    expect(screen.queryByText(/\.env/)).not.toBeInTheDocument()
+    fireEvent.keyDown(screen.getByRole('tab', {name: 'Export'}), {key: 'ArrowRight'})
+    expect(screen.getByRole('tab', {name: 'Import'})).toHaveFocus()
+    expect(screen.getByRole('button', {name: 'Review archive'})).toBeVisible()
+    expect(screen.queryByRole('button', {name: 'Export state'})).not.toBeInTheDocument()
+  })
+  it('is unavailable to regular users', () => {
+    render(<AdministrationView session={{...session, user: {...session.user!, role: 'user'}}} changed={vi.fn()} />)
+    expect(screen.queryByRole('heading', {name: 'Administration'})).not.toBeInTheDocument()
+  })
+  it('reviews an encrypted archive before importing and clears the review when credentials change', async () => {
+    const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({version: 'test', createdAt: '2026-10-26T10:00:00Z', counts: {credentials: 2}})))
+    vi.stubGlobal('fetch', fetch)
+    render(<AdministrationView session={session} changed={vi.fn()} />)
+    expect(screen.queryByRole('button', {name: 'Import state'})).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('tab', {name: 'Import'}))
+    fireEvent.change(screen.getByLabelText('State archive'), {target: {files: [new File(['encrypted'], 'state.kps')]}})
+    fireEvent.change(screen.getAllByLabelText('Archive password')[1], {target: {value: 'archive-password'}})
+    fireEvent.submit(screen.getByRole('button', {name: 'Review archive'}).closest('form')!)
+    expect(await screen.findByRole('table', {name: 'Archive contents'})).toBeInTheDocument()
+    expect(screen.getByRole('heading', {name: 'Archive contents'})).toHaveFocus()
+    expect(fetch.mock.calls[0][0]).toBe('/api/v1/administration/state/inspect')
+    expect(fetch.mock.calls[0][1].headers.get('X-CSRF-Token')).toBe('csrf')
+    expect(fetch.mock.calls[0][1].headers.has('Content-Type')).toBe(false)
+    expect(screen.getByRole('button', {name: 'Import state'})).toBeEnabled()
+    fireEvent.change(screen.getAllByLabelText('Archive password')[1], {target: {value: 'different-password'}})
+    expect(screen.queryByRole('button', {name: 'Import state'})).not.toBeInTheDocument()
+  })
+  it('reports archive errors and does not offer import', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({message: 'Invalid archive or incorrect password.'}), {status: 422})))
+    render(<AdministrationView session={session} changed={vi.fn()} />)
+    fireEvent.click(screen.getByRole('tab', {name: 'Import'}))
+    fireEvent.change(screen.getByLabelText('State archive'), {target: {files: [new File(['bad'], 'state.kps')]}})
+    fireEvent.change(screen.getAllByLabelText('Archive password')[1], {target: {value: 'wrong-password'}})
+    fireEvent.submit(screen.getByRole('button', {name: 'Review archive'}).closest('form')!)
+    expect(await screen.findByRole('alert')).toHaveTextContent('Invalid archive or incorrect password.')
+    expect(screen.queryByRole('button', {name: 'Import state'})).not.toBeInTheDocument()
+  })
+  it('requires matching export passwords without sending them to the API on mismatch', () => {
+    const fetch = vi.fn(); vi.stubGlobal('fetch', fetch)
+    render(<AdministrationView session={session} changed={vi.fn()} />)
+    fireEvent.change(screen.getAllByLabelText('Archive password')[0], {target: {value: 'archive-password'}})
+    fireEvent.change(screen.getByLabelText('Confirm password'), {target: {value: 'other-password'}})
+    fireEvent.click(screen.getByRole('button', {name: 'Export state'}))
+    expect(screen.getByRole('alert')).toHaveTextContent('Archive passwords do not match.')
+    expect(fetch).not.toHaveBeenCalled()
+  })
+  it('imports only after explicit review and refreshes resources', async () => {
+    const changed = vi.fn().mockResolvedValue(undefined)
+    const fetch = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({version: 'test', createdAt: '2026-10-26T10:00:00Z', counts: {}})))
+      .mockResolvedValueOnce(new Response(JSON.stringify({imported: true})))
+    vi.stubGlobal('fetch', fetch)
+    render(<AdministrationView session={session} changed={changed} />)
+    fireEvent.click(screen.getByRole('tab', {name: 'Import'}))
+    fireEvent.change(screen.getByLabelText('State archive'), {target: {files: [new File(['encrypted'], 'state.kps')]}})
+    fireEvent.change(screen.getAllByLabelText('Archive password')[1], {target: {value: 'archive-password'}})
+    fireEvent.submit(screen.getByRole('button', {name: 'Review archive'}).closest('form')!)
+    fireEvent.click(await screen.findByRole('button', {name: 'Import state'}))
+    await waitFor(() => expect(changed).toHaveBeenCalledOnce())
+    expect(fetch.mock.calls[1][0]).toBe('/api/v1/administration/state/import')
+    expect(screen.getByRole('status')).toHaveTextContent('State imported.')
+    expect(screen.getAllByLabelText('Archive password')[1]).toHaveValue('')
+  })
+})
