@@ -178,5 +178,14 @@ func (r *cliRunner) install(ctx context.Context) error {
 
 func (r *cliRunner) Kubectl(ctx context.Context, config string, stdin []byte, args ...string) (string, error) {
 	raw, err := kubeconfig.RunKubectl(ctx, config, stdin, args...)
+	if err != nil {
+		detail := strings.TrimSpace(string(raw))
+		if len(detail) > 4096 {
+			detail = detail[len(detail)-4096:]
+		}
+		if detail != "" {
+			return string(raw), fmt.Errorf("Kubernetes command failed: %s: %w", detail, err)
+		}
+	}
 	return string(raw), err
 }

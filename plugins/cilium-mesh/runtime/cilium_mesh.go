@@ -215,10 +215,16 @@ func (p Plugin) Execute(ctx context.Context, step domain.PlanStep, log plugins.L
 			}
 		}
 	}
-	if err := configureMeshMeasurements(ctx, runner, spec, configs); err != nil {
+	if err := log("info", "Waiting for Cilium agents and ClusterMesh connections to become ready"); err != nil {
 		return nil, err
 	}
 	if err := verifyMesh(ctx, runner, spec, configs); err != nil {
+		return nil, err
+	}
+	if err := log("info", "Configuring cross-cluster network measurements and monitoring"); err != nil {
+		return nil, err
+	}
+	if err := configureMeshMeasurements(ctx, runner, spec, configs); err != nil {
 		return nil, err
 	}
 	envelope := func(kind string) map[string]any {

@@ -859,7 +859,7 @@ func installCommandWithLabels(role, nodeName, server, token string, first bool, 
 	for _, key := range keys {
 		arguments += " --node-label " + shellQuote(key+"="+labels[key])
 	}
-	return "curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION=" + shellQuote(k3sVersion) + " K3S_TOKEN=" + shellQuote(token) + " sh -s - " + arguments
+	return NodeWatchLimitsCommand() + " &&\n" + "curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION=" + shellQuote(k3sVersion) + " K3S_TOKEN=" + shellQuote(token) + " sh -s - " + arguments
 }
 
 func shellQuote(value string) string {

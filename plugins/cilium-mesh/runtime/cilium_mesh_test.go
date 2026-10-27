@@ -3,6 +3,7 @@ package mesh
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -47,12 +48,16 @@ func fixtureStep(t *testing.T) domain.PlanStep {
 }
 
 type meshTestRunner struct {
-	commands [][]string
-	applied  int
+	commands      [][]string
+	applied       int
+	statusFailure error
 }
 
 func (r *meshTestRunner) Run(_ context.Context, _ map[string]string, args ...string) (string, error) {
 	r.commands = append(r.commands, append([]string{}, args...))
+	if len(args) > 1 && args[1] == "status" && r.statusFailure != nil {
+		return "", r.statusFailure
+	}
 	return "connected", nil
 }
 func (r *meshTestRunner) Kubectl(_ context.Context, config string, stdin []byte, args ...string) (string, error) {
@@ -122,5 +127,16 @@ func TestMergedKubeconfigKeepsAllContexts(t *testing.T) {
 	}
 	if yaml.Unmarshal(raw, &result) != nil || len(result.Contexts) != 2 || len(result.Clusters) != 2 || len(result.Users) != 2 {
 		t.Fatal("member contexts lost")
+	}
+}
+
+func TestMeshWaitsForNetworkBeforeConfiguringMeasurements(t *testing.T) {
+	runner := &meshTestRunner{statusFailure: errors.New("Cilium agent is not ready")}
+	_, err := (Plugin{Runner: runner}).Execute(context.Background(), fixtureStep(t), func(string, string) error { return nil })
+	if err == nil || !strings.Contains(err.Error(), "Cilium agent is not ready") {
+		t.Fatalf("missing network readiness failure: %v", err)
+	}
+	if runner.applied != 0 {
+		t.Fatal("measurement resources were changed before the mesh became ready")
 	}
 }

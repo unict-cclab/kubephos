@@ -87,3 +87,8 @@ is committed in one transaction after object uploads; cleanup directories are
 registered in the artifact deletion outbox before uploading and removed from the
 outbox in the same transaction on success. Failed or interrupted imports leave
 retryable object cleanup, rather than partially imported resources.
+
+Managed node bootstrap persists minimum inotify limits (8192 instances and
+1048576 watches per user) before installing Kubernetes, preserving larger
+existing limits. This leaves room for Cilium and the managed monitoring agents
+when their workloads restart or roll out.

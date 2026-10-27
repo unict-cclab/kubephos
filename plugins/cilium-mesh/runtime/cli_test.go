@@ -42,3 +42,15 @@ printf 'both contexts available'
 		t.Fatal("merged kubeconfig must remain private")
 	}
 }
+
+func TestMeshKubectlPreservesRolloutFailureDetails(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "kubectl"), []byte("#!/bin/sh\nprintf 'daemonset mentat exceeded its progress deadline\\n' >&2\nexit 1\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
+	_, err := (&cliRunner{}).Kubectl(context.Background(), fixtureKubeconfig("cluster-a"), nil, "rollout", "status", "daemonset/mentat")
+	if err == nil || !strings.Contains(err.Error(), "mentat exceeded its progress deadline") {
+		t.Fatalf("rollout detail lost: %v", err)
+	}
+}
