@@ -204,7 +204,7 @@ func TestInstallerIsVersionedAndDigestVerified(t *testing.T) {
 	if strings.Contains(command, "http://") || strings.Contains(command, "curl -k") || strings.Contains(command, "curl --insecure") || !strings.Contains(command, "subjectAltName=IP:10.10.0.12") || !strings.Contains(command, "--cacert "+tlsPath+"/ca.crt") || !strings.Contains(command, caMarker) {
 		t.Fatal("installer command does not enforce verifiable registry TLS")
 	}
-	if !strings.Contains(command, "{ attempt=0; until curl --connect-timeout 3 --max-time 10") || !strings.Contains(command, `test "$attempt" -lt 61 || exit 1`) {
+	if !strings.Contains(command, "{ health_attempt=0; while :") || !strings.Contains(command, `test "$health_attempt" -ge 61`) {
 		t.Fatal("registry readiness retries are not bounded or chained to successful installation")
 	}
 	if !strings.Contains(command, "install -d -m 0755 "+tlsPath) || !strings.Contains(command, "chmod 0600 "+tlsPath+"/ca.key "+tlsPath+"/server.key") || !strings.Contains(command, "test -r "+tlsPath+"/ca.crt") || !strings.Contains(command, "openssl verify -CAfile "+tlsPath+"/ca.crt") {
