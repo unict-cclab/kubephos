@@ -11,6 +11,7 @@ import {useProvisioningSuggestions} from '../hooks/useProvisioningSuggestions'
 import {MultiClusterForm} from './MultiClusterForm'
 import {WizardForm, WizardStep, WizardReview} from './WizardForm'
 import {FormTabs} from './FormTabs'
+import {ProxmoxNodeSelect} from './ProxmoxNodeSelect'
 
 export interface CommonProps {
   session: Session
@@ -193,6 +194,7 @@ export function InfrastructureServiceDialog({open, close, workspaces, templates,
         workspaceId: workspaceID,
         connectionId: connectionID,
         templateId: values.get('templateId'),
+        node: values.get('node'),
         kind,
         name: values.get('name'),
         vmid: Number(values.get('vmid')),
@@ -216,9 +218,10 @@ export function InfrastructureServiceDialog({open, close, workspaces, templates,
   return <Dialog open={open} onClose={close} title={`New ${kind === 'harbor' ? 'Harbor registry' : 'NFS server'}`} className="template-modal" presentation="page">
     <WizardForm onSubmit={submit} key={`${kind}-${workspaceID}-${connectionID}`} onCancel={close} pending={pending} error={error} submitDisabled={!availableTemplates.length || !workspaceID || !connectionID} submitLabel={`Create ${kind === 'harbor' ? 'Harbor' : 'NFS'}`}>
       <WizardStep title="General">
-<label>Name<input name="name" pattern="[a-z0-9][a-z0-9-]{0,31}" maxLength={32} placeholder={kind === 'harbor' ? 'main-registry' : 'shared-data'} required autoFocus /></label>
-      <div className="field-row"><label>Proxmox connection<select value={connectionID} onChange={event => setConnectionID(event.target.value)} required>{common.connections.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
-      <label>VM template<select name="templateId" value={selectedTemplateID} onChange={event => setTemplateID(event.target.value)} required>{availableTemplates.length ? availableTemplates.map(item => <option key={item.id} value={item.id}>{item.name}</option>) : <option value="">No ready VM template</option>}</select></label></div>
+<div className="field-row"><label>Name<input name="name" pattern="[a-z0-9][a-z0-9-]{0,31}" maxLength={32} placeholder={kind === 'harbor' ? 'main-registry' : 'shared-data'} required autoFocus /></label>
+      <label>Proxmox connection<select value={connectionID} onChange={event => setConnectionID(event.target.value)} required>{common.connections.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label></div>
+      <div className="field-row"><label>VM template<select name="templateId" value={selectedTemplateID} onChange={event => setTemplateID(event.target.value)} required>{availableTemplates.length ? availableTemplates.map(item => <option key={item.id} value={item.id}>{item.name}</option>) : <option value="">No ready VM template</option>}</select></label>
+      <ProxmoxNodeSelect connectionID={connectionID} defaultNode={String(availableTemplates.find(item => item.id === selectedTemplateID)?.spec.node ?? '')} /></div>
       </WizardStep>
       <WizardStep title="Resources">
       <div className="capacity-grid"><label>CPU cores<input name="cores" type="number" min={1} max={32} defaultValue={defaults.cores} /></label><label>Memory (MiB)<input name="memoryMiB" type="number" min={512} max={131072} defaultValue={defaults.memory} /></label><label>Disk (GiB)<input name="diskGiB" type="number" min={8} max={2048} defaultValue={defaults.disk} /></label></div>

@@ -7,6 +7,7 @@ import (
 	"log/slog"
 
 	"net/http"
+	"regexp"
 
 	"slices"
 
@@ -201,6 +202,7 @@ func (s *Server) getInfrastructureService(response http.ResponseWriter, request 
 
 func (s *Server) createInfrastructureService(response http.ResponseWriter, request *http.Request) {
 	var input struct {
+		Node         string `json:"node"`
 		WorkspaceID  string `json:"workspaceId"`
 		ConnectionID string `json:"connectionId"`
 		TemplateID   string `json:"templateId"`
@@ -224,6 +226,7 @@ func (s *Server) createInfrastructureService(response http.ResponseWriter, reque
 	input.TemplateID = strings.TrimSpace(input.TemplateID)
 	input.Kind = strings.TrimSpace(input.Kind)
 	input.Name = strings.TrimSpace(input.Name)
+	input.Node = strings.TrimSpace(input.Node)
 	input.Address = strings.TrimSpace(input.Address)
 	input.Gateway = strings.TrimSpace(input.Gateway)
 	input.DNSServer = strings.TrimSpace(input.DNSServer)
@@ -271,6 +274,13 @@ func (s *Server) createInfrastructureService(response http.ResponseWriter, reque
 		writeError(response, http.StatusConflict, "template_invalid", "The saved machine template configuration is incomplete.")
 		return
 	}
+	if input.Node == "" {
+		input.Node = templateSpec.Node
+	}
+	if !regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}$`).MatchString(input.Node) {
+		writeError(response, 422, "invalid_node", "Select a valid Proxmox server.")
+		return
+	}
 	if input.VMID < 100 || input.VMID > 999999999 {
 		writeError(response, http.StatusUnprocessableEntity, "invalid_vmid", "VM ID must be between 100 and 999999999.")
 		return
@@ -302,7 +312,7 @@ func (s *Server) createInfrastructureService(response http.ResponseWriter, reque
 	topologySpec, _ := json.Marshal(map[string]any{
 		"connectionRef": connection.ID, "machineTemplateRef": template.ArtifactID, "node": templateSpec.Node,
 		"templateVMID": templateSpec.VMID, "baseVMID": input.VMID, "namePrefix": input.Name, "machineCount": 1,
-		"machineNames": []string{input.Name},
+		"machineNames": []string{input.Name}, "machineNodes": []string{input.Node},
 		"addressStart": input.Address, "prefixLength": input.PrefixLength, "gateway": input.Gateway, "dnsServer": input.DNSServer,
 		"cores": input.Cores, "memoryMiB": input.MemoryMiB, "diskGiB": input.DiskGiB, "sshUser": templateSpec.SSHUser, "cleanupAfterTest": false,
 	})

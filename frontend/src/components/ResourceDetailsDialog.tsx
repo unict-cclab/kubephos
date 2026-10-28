@@ -7,7 +7,7 @@ import {request} from '../api'
 import type {Connection, ManagedResource, Pipeline, PipelineRun, Session, Workspace} from '../types'
 import {DetailBreadcrumb} from './DetailBreadcrumb'
 import {InputData, hasInputData} from './InputData'
-import {ExecutionProgressGraph} from './ExecutionProgressGraph'
+import {ResourceActivity} from './ResourceActivity'
 import {KubernetesLogo} from './KubernetesLogo'
 import {ClusterDashboards} from './ClusterDashboards'
 import {ClusterSSHAccess} from './ClusterSSHAccess'
@@ -27,23 +27,16 @@ interface Props {
   recreation?: {pending: boolean; message: string; error: boolean}
 }
 
-export function ResourceDetailsPage({resource, close, connections, workspaces, resources, runs, pipelines, session, openPipelineRun, recreate, recreation}: Props) {
+export function ResourceDetailsPage({resource, close, connections, workspaces, resources, runs, session, openOperation, openPipelineRun, recreate, recreation}: Props) {
   const [tab, setTab] = useState<'overview' | 'access' | 'activity' | 'configuration'>(['pending', 'provisioning', 'recreating', 'maintaining', 'deleting'].includes(resource?.status ?? '') ? 'activity' : 'overview')
   if (!resource) return null
-  if (['machine-template', 'harbor', 'nfs'].includes(resource.kind)) return <SimpleResourceDetails resource={resource} connections={connections} resources={resources} close={close} />
+  if (['machine-template', 'harbor', 'nfs'].includes(resource.kind)) return <SimpleResourceDetails resource={resource} connections={connections} resources={resources} close={close} runs={runs} openOperation={openOperation} openPipelineRun={openPipelineRun} />
   const connection = connections.find(item => item.id === resource.connectionId)?.name ?? resource.connectionId ?? '—'
   const dependencies = dependencyEntries(resource).map(item => ({...item, name: resources.find(candidate => candidate.id === item.id)?.name ?? item.id}))
   const references = Object.fromEntries([...resources.map(item => [item.id, item.name]), ...connections.map(item => [item.id, item.name]), ...workspaces.map(item => [item.id, item.name])])
   const run = runs.find(item => item.id === (resource.recreationPipelineRunId ?? resource.deletionPipelineRunId ?? resource.pipelineRunId))
-  const pipeline = pipelines?.find(item => item.id === run?.pipelineId)
-  const progressNodes = run?.stages.map((stage, index) => {
-    const definition = pipeline?.definition.stages.find(item => item.id === stage.stageId)
-    const dependencies = [...new Set(definition?.bindings?.map(binding => pipeline?.definition.stages.find(item => item.id === binding.fromStage)?.title ?? binding.fromStage) ?? (index ? [run.stages[index - 1].title] : []))]
-    return {id: stage.id, title: stage.title, status: stage.status, detail: stage.error || stage.cleanupError || undefined, dependencies, operationId: stage.operationId}
-  }) ?? []
   const cluster = resource.kind === 'kubernetes-cluster'
   const retry = ['failed', 'recreation-failed', 'maintenance-failed'].includes(resource.status)
-  const completedStages = run?.stages.filter(stage => stage.status === 'succeeded').length ?? 0
   return <div className="detail-page"><DetailBreadcrumb parent={cluster ? 'Kubernetes' : 'Infrastructure'} current={resource.name} back={close} /><div className="detail-page-heading"><div className={cluster ? 'cluster-detail-title' : undefined}>{cluster && <KubernetesLogo />}<div><h2>{resource.name}</h2>{!cluster && <p>{resourceLabel(resource.kind)}</p>}</div></div><div className="detail-page-actions">{cluster && resource.spec.mode !== 'multi' && <ClusterMaintenance key={resource.id} resource={resource} runs={runs} session={session} />}{recreate && session.user?.role === 'admin' && <button className="button secondary" disabled={recreation?.pending || resource.status !== 'ready' && !retry} onClick={() => void recreate()}>{recreation?.pending ? (retry ? 'Retrying…' : 'Recreating…') : retry ? 'Retry' : 'Recreate cluster'}</button>}<span className={`status-pill ${resource.status}`}>{resource.status}</span></div></div>{recreation?.message && <p className={recreation.error ? 'managed-error' : 'managed-feedback'}>{recreation.message}</p>}<ResourceAttribution resource={resource} editable={cluster} />{dependencies.length > 0 && <div className="cluster-resource-summary"><ReadoutTable label="Cluster resources" data={{headers: dependencies.map(item => item.relation), rows: [dependencies.map(item => item.name)]}} /></div>}<nav className="detail-tabs" aria-label="Resource details"><button className={tab === 'overview' ? 'active' : ''} aria-current={tab === 'overview' ? 'page' : undefined} onClick={() => setTab('overview')}>Overview</button><button className={tab === 'access' ? 'active' : ''} aria-current={tab === 'access' ? 'page' : undefined} onClick={() => setTab('access')}>Access</button><button className={tab === 'activity' ? 'active' : ''} aria-current={tab === 'activity' ? 'page' : undefined} onClick={() => setTab('activity')}>Activity</button><button className={tab === 'configuration' ? 'active' : ''} aria-current={tab === 'configuration' ? 'page' : undefined} onClick={() => setTab('configuration')}>Configuration</button></nav><article className={`detail-page-card ${cluster ? 'cluster-detail-card' : ''}`}>
     {tab === 'overview' && <><div className={`details-summary${cluster ? ' cluster-summary' : ''}`}>
       {!cluster && <div><span>Type</span><strong>{resourceLabel(resource.kind)}</strong></div>}
@@ -56,25 +49,24 @@ export function ResourceDetailsPage({resource, close, connections, workspaces, r
     {cluster && <section className="details-section"><div className="details-heading"><strong>Topology</strong></div><Topology resource={resource} /></section>}
     <ClusterDashboards key={resource.id} resource={resource} /></>}
     {tab === 'access' && <>{resource.kind === 'kubernetes-cluster' && resource.status === 'ready' && session.user?.role === 'admin' && <section className="details-section"><div className="details-heading"><strong>Kubernetes access</strong></div><a className="button secondary compact" href={`/api/v1/kubernetes-clusters/${resource.id}/kubeconfig`}>Download kubeconfig</a></section>}{session.user?.role === 'admin' && <ClusterSSHAccess resource={resource} resources={resources} />}<AccessPanel key={resource.id} resource={resource} session={session} /></>}
-    {tab === 'activity' && <>
-    <section className="details-section activity-status"><div><span>Status</span><strong className={`status-pill ${resource.status}`}>{resource.status}</strong></div>{run && <div><span>Progress</span><strong>{completedStages}/{run.stages.length}</strong></div>}</section>
-    {run && <section className="details-section"><ExecutionProgressGraph nodes={progressNodes} label={`${resource.name} lifecycle progress`} showLogs={openPipelineRun ? () => openPipelineRun(run.id) : undefined} /></section>}
-    </>}
+    {tab === 'activity' && <ResourceActivity key={resource.recreationPipelineRunId ?? resource.deletionPipelineRunId ?? resource.pipelineRunId ?? resource.id} resource={resource} initialRun={run} openOperation={openOperation} openPipelineRun={openPipelineRun} />}
     {tab === 'configuration' && (cluster ? <ClusterConfiguration spec={resource.spec} references={references} /> : hasInputData(resource.spec) && <section className="details-section"><div className="details-heading"><strong>Resource settings</strong></div><InputData value={resource.spec} references={references} /></section>)}
   </article></div>
 }
 
-function SimpleResourceDetails({resource, connections, resources, close}: {resource: ManagedResource; connections: Connection[]; resources: ManagedResource[]; close: () => void}) {
+function SimpleResourceDetails({resource, connections, resources, close, runs, openOperation, openPipelineRun}: {resource: ManagedResource; connections: Connection[]; resources: ManagedResource[]; close: () => void; runs: PipelineRun[]; openOperation: (id: string) => void; openPipelineRun?: (id: string) => void}) {
+  const [tab,setTab] = useState<'overview'|'activity'>(['pending','provisioning','deleting'].includes(resource.status)?'activity':'overview')
   const references = Object.fromEntries([...connections.map(item => [item.id, item.name]), ...resources.map(item => [item.id, item.name])])
   const connectionId = resource.connectionId ?? resource.spec.connectionId
   const fields = resource.kind === 'machine-template'
     ? Object.fromEntries([['name', resource.name], ['connectionId', connectionId], ...Object.entries(resource.spec).filter(([name]) => !['name', 'connectionRef'].includes(name))])
-    : Object.fromEntries(['name', 'connectionId', 'templateId', 'vmid', 'address', 'prefixLength', 'gateway', 'dnsServer', 'cores', 'memoryMiB', 'diskGiB'].flatMap(name => {
+    : Object.fromEntries(['name', 'connectionId', 'templateId', 'node', 'vmid', 'address', 'prefixLength', 'gateway', 'dnsServer', 'cores', 'memoryMiB', 'diskGiB'].flatMap(name => {
         if (name === 'name') return [[name, resource.name]]
         if (name === 'connectionId') return [[name, connectionId]]
+        if (name === 'node') return [[name, resource.spec.node ?? resources.find(item => item.id === resource.spec.templateId)?.spec.node ?? '—']]
         return name in resource.spec ? [[name, resource.spec[name]]] : []
       }))
-  return <div className="detail-page"><DetailBreadcrumb parent="Infrastructure" current={resource.name} back={close} /><div className="detail-page-heading"><div><h2>{resource.name}</h2></div><span className={`status-pill ${resource.status}`}>{resource.status}</span></div><ResourceAttribution resource={resource} editable /><article className="detail-page-card simple-resource-detail"><InputData value={fields} references={references} /></article></div>
+  return <div className="detail-page"><DetailBreadcrumb parent="Infrastructure" current={resource.name} back={close} /><div className="detail-page-heading"><div><h2>{resource.name}</h2></div><span className={`status-pill ${resource.status}`}>{resource.status}</span></div><ResourceAttribution resource={resource} editable /><nav className="detail-tabs" aria-label="Resource details"><button className={tab==='overview'?'active':''} aria-current={tab==='overview'?'page':undefined} onClick={()=>setTab('overview')}>Overview</button><button className={tab==='activity'?'active':''} aria-current={tab==='activity'?'page':undefined} onClick={()=>setTab('activity')}>Activity</button></nav><article className="detail-page-card simple-resource-detail">{tab==='overview'?<InputData value={fields} references={references}/>:<ResourceActivity key={resource.deletionPipelineRunId??resource.pipelineRunId??resource.deletionOperationId??resource.operationId} resource={resource} initialRun={runs.find(run=>run.id===(resource.deletionPipelineRunId??resource.pipelineRunId))} openOperation={openOperation} openPipelineRun={openPipelineRun}/>}</article></div>
 }
 
 type AccessIdentity = {name: string; role: string; username: string; password: string}

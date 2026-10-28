@@ -125,6 +125,7 @@ func NewServer(store *storage.Store, registry *plugins.Registry, artifactStore *
 	router.HandleFunc("POST /api/v1/credentials", server.createCredential)
 	router.HandleFunc("GET /api/v1/connections", server.listConnections)
 	router.HandleFunc("GET /api/v1/connections/{id}", server.getConnectionDetails)
+	router.HandleFunc("GET /api/v1/connections/{id}/nodes", server.listProxmoxNodes)
 	router.HandleFunc("GET /api/v1/connections/{id}/provisioning-suggestions", server.getProvisioningSuggestions)
 	router.HandleFunc("POST /api/v1/connections/{id}/secret", server.revealConnectionSecret)
 	router.HandleFunc("POST /api/v1/connections", server.createConnection)
