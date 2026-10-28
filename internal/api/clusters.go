@@ -261,10 +261,7 @@ func (s *Server) prepareManagedCluster(response http.ResponseWriter, request *ht
 		machineProfiles = appendManagedMachineProfiles(machineProfiles, pool.Count, pool.Capacity)
 	}
 	topologySpec, _ := json.Marshal(map[string]any{"connectionRef": connection.ID, "machineTemplateRef": template.ArtifactID, "node": templateSpec.Node, "templateVMID": templateSpec.VMID, "baseVMID": input.BaseVMID, "addressStart": input.AddressStart, "prefixLength": input.PrefixLength, "gateway": input.Gateway, "dnsServer": input.DNSServer, "namePrefix": input.Name, "machineNames": managedClusterMachineNames(input), "machineNodes": machineNodes, "machineCount": totalMachines, "cores": input.ControlPlaneCapacity.Cores, "memoryMiB": input.ControlPlaneCapacity.MemoryMiB, "diskGiB": input.ControlPlaneCapacity.DiskGiB, "machineProfiles": machineProfiles, "sshUser": templateSpec.SSHUser, "cleanupAfterTest": false})
-	nodePools := []map[string]any{{"name": input.ManagementPool.Name, "role": "management", "count": input.ManagementPool.Count, "zones": input.ManagementPool.Zones, "labels": input.ManagementPool.Labels}}
-	for _, pool := range input.ApplicationPools {
-		nodePools = append(nodePools, map[string]any{"name": pool.Name, "role": "application", "count": pool.Count, "zones": pool.Zones, "labels": pool.Labels})
-	}
+	nodePools := managedClusterNodePools(input)
 	clusterSpec, _ := json.Marshal(map[string]any{"machineSetRef": "", "machineAccessRef": "", "clusterName": input.Name, "controlPlanes": input.ControlPlanes, "controlPlaneZones": input.ControlPlaneZones, "nodePools": nodePools, "registryEndpointRef": harbor.ArtifactID, "registryCredentialRef": registryCredential.ID})
 	if input.Networking == "cilium" {
 		var spec map[string]any

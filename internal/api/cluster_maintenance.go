@@ -237,10 +237,7 @@ func (s *Server) reconfigureKubernetesCluster(w http.ResponseWriter, r *http.Req
 	delete(topology, "machineProfiles")
 	machineStage.Spec, _ = json.Marshal(topology)
 	machineStage.Title = "Reconcile VM placement and capacity"
-	pools := []map[string]any{{"name": desired.ManagementPool.Name, "role": "management", "count": desired.ManagementPool.Count, "zones": desired.ManagementPool.Zones}}
-	for _, p := range desired.ApplicationPools {
-		pools = append(pools, map[string]any{"name": p.Name, "role": "application", "count": p.Count, "zones": p.Zones})
-	}
+	pools := managedClusterNodePools(desired)
 	for i := range definition.Stages {
 		if definition.Stages[i].ID == "kubernetes" {
 			stage := &definition.Stages[i]
