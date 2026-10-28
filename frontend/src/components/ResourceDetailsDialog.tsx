@@ -10,6 +10,7 @@ import {InputData, hasInputData} from './InputData'
 import {ExecutionProgressGraph} from './ExecutionProgressGraph'
 import {KubernetesLogo} from './KubernetesLogo'
 import {ClusterDashboards} from './ClusterDashboards'
+import {ClusterSSHAccess} from './ClusterSSHAccess'
 
 interface Props {
   resource: ManagedResource | null
@@ -54,7 +55,7 @@ export function ResourceDetailsPage({resource, close, connections, workspaces, r
 
     {cluster && <section className="details-section"><div className="details-heading"><strong>Topology</strong></div><Topology resource={resource} /></section>}
     <ClusterDashboards key={resource.id} resource={resource} /></>}
-    {tab === 'access' && <>{resource.kind === 'kubernetes-cluster' && resource.status === 'ready' && <section className="details-section"><div className="details-heading"><strong>Kubernetes access</strong></div><a className="button secondary compact" href={`/api/v1/kubernetes-clusters/${resource.id}/kubeconfig`}>Download kubeconfig</a></section>}<AccessPanel key={resource.id} resource={resource} session={session} /></>}
+    {tab === 'access' && <>{resource.kind === 'kubernetes-cluster' && resource.status === 'ready' && session.user?.role === 'admin' && <section className="details-section"><div className="details-heading"><strong>Kubernetes access</strong></div><a className="button secondary compact" href={`/api/v1/kubernetes-clusters/${resource.id}/kubeconfig`}>Download kubeconfig</a></section>}{session.user?.role === 'admin' && <ClusterSSHAccess resource={resource} />}<AccessPanel key={resource.id} resource={resource} session={session} /></>}
     {tab === 'activity' && <>
     <section className="details-section activity-status"><div><span>Status</span><strong className={`status-pill ${resource.status}`}>{resource.status}</strong></div>{run && <div><span>Progress</span><strong>{completedStages}/{run.stages.length}</strong></div>}</section>
     {run && <section className="details-section"><ExecutionProgressGraph nodes={progressNodes} label={`${resource.name} lifecycle progress`} showLogs={openPipelineRun ? () => openPipelineRun(run.id) : undefined} /></section>}

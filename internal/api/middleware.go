@@ -86,6 +86,12 @@ func auditMutations(store *storage.Store, next http.Handler) http.Handler {
 }
 
 func auditTarget(request *http.Request) (string, string, string, bool) {
+	if request.Method == http.MethodGet && strings.HasPrefix(request.URL.Path, "/api/v1/kubernetes-clusters/") && strings.HasSuffix(request.URL.Path, "/ssh-key") {
+		parts := strings.Split(strings.Trim(request.URL.Path, "/"), "/")
+		if len(parts) == 5 {
+			return "kubernetes-cluster.ssh-key.download", "kubernetes-clusters", parts[3], true
+		}
+	}
 	if request.Method != http.MethodPost && request.Method != http.MethodPut && request.Method != http.MethodPatch && request.Method != http.MethodDelete {
 		return "", "", "", false
 	}

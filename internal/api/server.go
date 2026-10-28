@@ -142,6 +142,7 @@ func NewServer(store *storage.Store, registry *plugins.Registry, artifactStore *
 	router.HandleFunc("POST /api/v1/kubernetes-clusters/{id}/recreate", server.recreateKubernetesCluster)
 	router.HandleFunc("POST /api/v1/kubernetes-clusters/{id}/reconfigure", server.reconfigureKubernetesCluster)
 	router.HandleFunc("GET /api/v1/kubernetes-clusters/{id}/kubeconfig", server.downloadKubeconfig)
+	router.HandleFunc("GET /api/v1/kubernetes-clusters/{id}/ssh-key", server.downloadClusterSSHKey)
 	router.HandleFunc("POST /api/v1/managed-resources/{id}/access", server.revealManagedResourceAccess)
 	router.HandleFunc("GET /api/v1/sharing/users", server.sharingUsers)
 	for _, kind := range []string{"experiments", "experiment-configurations"} {

@@ -1,5 +1,6 @@
 @media screen {
   .cluster-dashboards { min-width: 0; }
+  .ssh-key-download { text-decoration: none; white-space: nowrap; }
   .dashboard-clusters { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr)); gap: 24px; }
   .dashboard-cluster { min-width: 0; }
   .dashboard-cluster h3 { margin: 0 0 16px; font-size: 14px; font-weight: 600; }

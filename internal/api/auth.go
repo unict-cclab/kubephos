@@ -74,7 +74,7 @@ func adminReadPath(path string) bool {
 			return true
 		}
 	}
-	return strings.HasSuffix(path, "/kubeconfig") || strings.HasSuffix(path, "/access")
+	return strings.HasSuffix(path, "/kubeconfig") || strings.HasSuffix(path, "/access") || strings.HasSuffix(path, "/ssh-key")
 }
 
 func userMutationAllowed(path string) bool {
