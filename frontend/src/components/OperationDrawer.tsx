@@ -5,6 +5,7 @@ import {ExecutionProgressGraph} from './ExecutionProgressGraph'
 import {DetailBreadcrumb} from './DetailBreadcrumb'
 import {Status} from './Views'
 import {LogViewer} from './LogViewer'
+import {operationProgressNodes} from '../operationProgress'
 
 interface Props {
   operationID: string | null
@@ -117,10 +118,7 @@ export function OperationDetailsPage({operationID, session, plugins, close, open
   const canQueue = operation?.status === 'ready'
   const canCancel = operation && ['ready', 'queued', 'prechecking', 'running', 'verifying'].includes(operation.status)
   const canCleanup = operation && terminal(operation.status) && !operation.plan.steps.some(step => step.cleanup) && plugins.find(plugin => plugin.id === operation.pluginId)?.capabilities?.includes('lifecycle.cleanup')
-  const progressNodes = operation?.plan.steps.map(planStep => {
-    const step = operation.steps.find(item => item.id === planStep.id)
-    return {id: planStep.id, title: planStep.name, status: step?.status ?? 'queued', detail: step?.error || undefined}
-  }) ?? []
+  const progressNodes = operation ? operationProgressNodes(operation) : []
   if (!operationID) return null
   return <div className="detail-page operation-detail-page">
     <DetailBreadcrumb parent="Back" current="Activity" back={close} />

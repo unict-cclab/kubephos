@@ -221,8 +221,8 @@ it.each(['harbor','nfs'] as const)('submits the selected Proxmox server for %s',
  await waitFor(()=>expect(screen.getByRole('option',{name:'pve-2'})).toBeInTheDocument())
  fireEvent.change(screen.getByRole('textbox',{name:'Name'}),{target:{value:kind+'-service'}})
  fireEvent.change(screen.getByRole('combobox',{name:'Proxmox server'}),{target:{value:'pve-2'}})
- fireEvent.click(screen.getByRole('button',{name:'Review',exact:true}))
- fireEvent.click(screen.getByRole('button',{name:kind==='harbor'?'Create Harbor':'Create NFS',exact:true}))
+ fireEvent.click(screen.getByRole('button',{name:'Review'}))
+ fireEvent.click(screen.getByRole('button',{name:kind==='harbor'?'Create Harbor':'Create NFS'}))
  await waitFor(()=>expect(fetch).toHaveBeenCalledWith('/api/v1/infrastructure-services',expect.objectContaining({method:'POST',body:expect.any(String)})))
  const created=fetch.mock.calls.find(call=>call[0]==='/api/v1/infrastructure-services')!
  expect(JSON.parse(created[1].body)).toMatchObject({node:'pve-2',templateId:machineTemplate.id,kind})

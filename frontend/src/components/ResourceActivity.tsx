@@ -3,6 +3,7 @@ import {request} from '../api'
 import type {ManagedResource, Operation, PipelineRun, PipelineRunLogEntry} from '../types'
 import {ExecutionProgressGraph} from './ExecutionProgressGraph'
 import {LogViewer} from './LogViewer'
+import {operationProgressNodes} from '../operationProgress'
 
 const finished = (status: string) => ['succeeded','failed','canceled'].includes(status)
 
@@ -42,7 +43,7 @@ export function ResourceActivity({resource, initialRun, openOperation, openPipel
   if(source)void load()
   return()=>{controller.abort();if(timer!==undefined)window.clearTimeout(timer)}
  },[source,runID,retry])
- const nodes=runID ? run?.stages.map(stage=>({id:stage.id,title:stage.title,status:stage.status,detail:stage.error||stage.cleanupError||undefined,operationId:stage.operationId}))??[] : operation?.plan.steps.map(step=>({id:step.id,title:step.name,status:operation.steps.find(current=>current.id===step.id)?.status??'pending',detail:operation.steps.find(current=>current.id===step.id)?.error||undefined,operationId:operation.id}))??[]
+ const nodes=runID ? run?.stages.map(stage=>({id:stage.id,title:stage.title,status:stage.status,detail:stage.error||stage.cleanupError||undefined,operationId:stage.operationId}))??[] : operation ? operationProgressNodes(operation) : []
  const status = runID ? run?.status : operation?.status
  const showLogs = runID && openPipelineRun ? ()=>openPipelineRun(runID) : operationID ? ()=>openOperation(operationID) : undefined
  return <>

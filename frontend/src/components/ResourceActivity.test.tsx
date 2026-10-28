@@ -10,7 +10,7 @@ const resource={id:'infra',name:'ubuntu',status:'ready',operationId:'op_1'} as M
 const entry=(sequence:number,message:string)=>({sequence,message,createdAt:'2026-10-28T10:00:00Z',level:'info'})
 describe('resource activity',()=>{
  it('shows template operation logs and opens the existing operation detail',async()=>{
-  const operation={id:'op_1',status:'succeeded',plan:{steps:[{id:'create',name:'Create VM'}]},steps:[{id:'create',status:'succeeded'}]} as Operation
+  const operation={id:'op_1',status:'succeeded',plan:{steps:[{id:'create',name:'Create VM'}]},steps:[{id:'op_1_create',status:'succeeded'}]} as Operation
   vi.mocked(request).mockImplementation(async path=>path.includes('/logs')?{items:[entry(7,'Template ready')]}:operation)
   const open=vi.fn()
   render(<ResourceActivity resource={resource} openOperation={open}/>)
