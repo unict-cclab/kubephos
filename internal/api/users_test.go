@@ -137,6 +137,9 @@ func TestUserEmailPasswordAndDeletion(t *testing.T) {
 	if sessions != 0 {
 		t.Fatal("sessions were not revoked")
 	}
+	if _, err = pool.Exec(ctx, `UPDATE users SET role='admin' WHERE id='user-edit'`); err != nil {
+		t.Fatal(err)
+	}
 	failDelete = true
 	if w := call(server.deleteUser, "DELETE", "user-edit", ""); w.Code != 502 {
 		t.Fatalf("expected identity failure: %d", w.Code)
