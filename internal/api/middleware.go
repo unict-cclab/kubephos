@@ -97,6 +97,12 @@ func auditTarget(request *http.Request) (string, string, string, bool) {
 	}
 	path := strings.Trim(strings.TrimPrefix(request.URL.Path, "/api/v1/"), "/")
 	parts := strings.Split(path, "/")
+	if len(parts) == 3 && parts[0] == "users" && parts[2] == "password" && request.Method == http.MethodPost {
+		return "user.password.reset", "users", parts[1], true
+	}
+	if len(parts) == 2 && parts[0] == "users" && request.Method == http.MethodPatch {
+		return "user.email.update", "users", parts[1], true
+	}
 	if path == "administration/state/import" || path == "administration/state/export" {
 		return "instance." + parts[2], "instance", "", true
 	}

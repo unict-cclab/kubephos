@@ -95,19 +95,24 @@ func (s *Server) deleteUser(response http.ResponseWriter, request *http.Request)
 		writeError(response, http.StatusInternalServerError, "database_error", "Could not read the user.")
 		return
 	}
-	if user.Role == "admin" {
-		writeError(response, http.StatusConflict, "admin_protected", "Administrator accounts cannot be deleted here.")
+	if user.ID == requestUser(request).ID {
+		writeError(response, http.StatusConflict, "self_deletion", "You cannot delete your own account.")
 		return
 	}
-	if err := s.store.DeleteIdentityUser(request.Context(), user.ID); errors.Is(err, storage.ErrConflict) {
+	identityFailed := false
+	if err := s.store.DeleteIdentityUserAndAccount(request.Context(), user.ID, requestUser(request).ID, func() error {
+		err := s.identity.DeleteUser(request.Context(), user.ExternalID)
+		identityFailed = err != nil
+		return err
+	}); errors.Is(err, storage.ErrConflict) {
 		writeError(response, http.StatusConflict, "user_in_use", "The user owns configurations or experiments and cannot be deleted.")
 		return
 	} else if err != nil {
+		if identityFailed {
+			writeError(response, http.StatusBadGateway, "identity_unavailable", "Could not delete the account. Please retry.")
+			return
+		}
 		writeError(response, http.StatusInternalServerError, "database_error", "Could not delete the user.")
-		return
-	}
-	if err := s.identity.DeleteUser(request.Context(), user.ExternalID); err != nil {
-		writeError(response, http.StatusBadGateway, "identity_unavailable", "The KubePhos user was deleted, but Keycloak cleanup failed.")
 		return
 	}
 	response.WriteHeader(http.StatusNoContent)
@@ -148,4 +153,84 @@ func (s *Server) replaceUserClusters(response http.ResponseWriter, request *http
 		return
 	}
 	response.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) updateUserEmail(w http.ResponseWriter, r *http.Request) {
+	var input struct {
+		Email string `json:"email"`
+	}
+	if err := decodeJSON(r, &input); err != nil {
+		writeError(w, 400, "invalid_request", "Enter an email address.")
+		return
+	}
+	input.Email = strings.ToLower(strings.TrimSpace(input.Email))
+	if input.Email != "" {
+		address, err := mail.ParseAddress(input.Email)
+		if err != nil || !strings.EqualFold(address.Address, input.Email) {
+			writeError(w, 422, "invalid_email", "Enter a valid email address.")
+			return
+		}
+	}
+	user, err := s.store.GetUserByID(r.Context(), r.PathValue("id"))
+	if errors.Is(err, storage.ErrNotFound) {
+		writeError(w, 404, "not_found", "User not found.")
+		return
+	}
+	if err != nil {
+		writeError(w, 500, "database_error", "Could not read the user.")
+		return
+	}
+	identityFailed := false
+	updated, err := s.store.UpdateIdentityEmail(r.Context(), user.ID, input.Email, func() error {
+		err := s.identity.UpdateUserEmail(r.Context(), user.ExternalID, input.Email)
+		identityFailed = err != nil
+		return err
+	})
+	if errors.Is(err, keycloak.ErrConflict) {
+		writeError(w, 409, "email_taken", "This email address is already in use.")
+		return
+	}
+	if identityFailed {
+		writeError(w, 502, "identity_unavailable", "Could not update the email address.")
+		return
+	}
+	if err != nil {
+		writeError(w, 500, "database_error", "Could not save the email address.")
+		return
+	}
+	writeJSON(w, 200, updated)
+}
+
+func (s *Server) resetUserPassword(w http.ResponseWriter, r *http.Request) {
+	var input struct {
+		Password string `json:"password"`
+	}
+	if err := decodeJSON(r, &input); err != nil {
+		writeError(w, 400, "invalid_request", "Enter a temporary password.")
+		return
+	}
+	if err := auth.ValidatePassword(input.Password); err != nil {
+		writeError(w, 422, "invalid_password", err.Error())
+		return
+	}
+	user, err := s.store.GetUserByID(r.Context(), r.PathValue("id"))
+	if errors.Is(err, storage.ErrNotFound) {
+		writeError(w, 404, "not_found", "User not found.")
+		return
+	}
+	if err != nil {
+		writeError(w, 500, "database_error", "Could not read the user.")
+		return
+	}
+	identityErr := s.identity.ResetTemporaryPassword(r.Context(), user.ExternalID, input.Password)
+	sessionErr := s.store.RevokeUserSessions(r.Context(), user.ID)
+	if identityErr != nil {
+		writeError(w, 502, "identity_unavailable", "Could not reset the temporary password. Please retry.")
+		return
+	}
+	if sessionErr != nil {
+		writeError(w, 500, "database_error", "Password reset, but existing sessions could not be closed. Please retry.")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }

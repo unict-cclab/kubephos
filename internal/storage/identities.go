@@ -228,3 +228,71 @@ func (s *Store) DeleteExpiredSessions(ctx context.Context) error {
 	_, err := s.pool.Exec(ctx, `DELETE FROM auth_sessions WHERE expires_at <= now()`)
 	return err
 }
+
+func (s *Store) UpdateIdentityEmail(ctx context.Context, userID, email string, update func() error) (domain.User, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return domain.User{}, err
+	}
+	defer tx.Rollback(ctx)
+	user, err := scanIdentityUser(tx.QueryRow(ctx, `UPDATE users SET email=$2,updated_at=now() WHERE id=$1 AND external_id IS NOT NULL RETURNING id,username,external_id,email,role,enabled,created_at,updated_at`, userID, email))
+	if err != nil {
+		return domain.User{}, err
+	}
+	if err = update(); err != nil {
+		return domain.User{}, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return domain.User{}, err
+	}
+	return user, nil
+}
+func (s *Store) RevokeUserSessions(ctx context.Context, userID string) error {
+	_, err := s.pool.Exec(ctx, `DELETE FROM auth_sessions WHERE user_id=$1`, userID)
+	return err
+}
+
+// Identity cleanup runs after the local constraints are checked, before commit.
+// A failed identity request therefore leaves the local account available to retry.
+func (s *Store) DeleteIdentityUserAndAccount(ctx context.Context, userID, actorID string, remove func() error) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	rows, err := tx.Query(ctx, `SELECT id FROM users WHERE role='admin' AND enabled=true ORDER BY id FOR UPDATE`)
+	if err != nil {
+		return err
+	}
+	actorPresent := false
+	for rows.Next() {
+		var value string
+		if err = rows.Scan(&value); err != nil {
+			rows.Close()
+			return err
+		}
+		actorPresent = actorPresent || value == actorID
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return err
+	}
+	if !actorPresent || userID == actorID {
+		return ErrConflict
+	}
+	command, err := tx.Exec(ctx, `DELETE FROM users WHERE id=$1`, userID)
+	if foreignKeyViolation(err) {
+		return ErrConflict
+	}
+	if err != nil {
+		return err
+	}
+	if command.RowsAffected() != 1 {
+		return ErrNotFound
+	}
+	if err = remove(); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}

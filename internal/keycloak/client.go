@@ -277,3 +277,52 @@ func responseError(response *http.Response) error {
 	body, _ := io.ReadAll(io.LimitReader(response.Body, 4096))
 	return fmt.Errorf("keycloak returned %s: %s", response.Status, strings.TrimSpace(string(body)))
 }
+
+// UpdateUserEmail leaves roles, required actions and other identity fields intact.
+func (c *Client) UpdateUserEmail(ctx context.Context, externalID, email string) error {
+	return c.userAdminRequest(ctx, http.MethodPut, externalID, "", map[string]any{"email": email, "emailVerified": false})
+}
+
+func (c *Client) ResetTemporaryPassword(ctx context.Context, externalID, password string) error {
+	if err := c.userAdminRequest(ctx, http.MethodPut, externalID, "/reset-password", map[string]any{"type": "password", "value": password, "temporary": true}); err != nil {
+		return err
+	}
+	return c.userAdminRequest(ctx, http.MethodPost, externalID, "/logout", nil)
+}
+
+func (c *Client) userAdminRequest(ctx context.Context, method, externalID, suffix string, value any) error {
+	if externalID == "" {
+		return errors.New("identity is unavailable")
+	}
+	token, err := c.adminToken(ctx)
+	if err != nil {
+		return err
+	}
+	var body io.Reader
+	if value != nil {
+		raw, e := json.Marshal(value)
+		if e != nil {
+			return e
+		}
+		body = strings.NewReader(string(raw))
+	}
+	endpoint := c.config.InternalURL + "/admin/realms/" + url.PathEscape(c.config.Realm) + "/users/" + url.PathEscape(externalID) + suffix
+	request, err := http.NewRequestWithContext(ctx, method, endpoint, body)
+	if err != nil {
+		return err
+	}
+	request.Header.Set("Authorization", "Bearer "+token)
+	request.Header.Set("Content-Type", "application/json")
+	response, err := c.http.Do(request)
+	if err != nil {
+		return err
+	}
+	defer response.Body.Close()
+	if response.StatusCode == http.StatusConflict {
+		return ErrConflict
+	}
+	if response.StatusCode != http.StatusNoContent {
+		return responseError(response)
+	}
+	return nil
+}

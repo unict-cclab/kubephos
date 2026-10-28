@@ -88,6 +88,8 @@ func NewServer(store *storage.Store, registry *plugins.Registry, artifactStore *
 	router.HandleFunc("GET /api/v1/users", server.listUsers)
 	router.HandleFunc("POST /api/v1/users", server.createUser)
 	router.HandleFunc("DELETE /api/v1/users/{id}", server.deleteUser)
+	router.HandleFunc("PATCH /api/v1/users/{id}", server.updateUserEmail)
+	router.HandleFunc("POST /api/v1/users/{id}/password", server.resetUserPassword)
 	router.HandleFunc("GET /api/v1/users/{id}/clusters", server.listUserClusters)
 	router.HandleFunc("PUT /api/v1/users/{id}/clusters", server.replaceUserClusters)
 	router.HandleFunc("GET /api/v1/system", server.system)
