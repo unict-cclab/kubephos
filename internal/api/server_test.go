@@ -765,7 +765,7 @@ func TestPreflightPlanRejectsUnhealthyStep(t *testing.T) {
 }
 
 func TestPlanEffectsRequireProvisionCapability(t *testing.T) {
-	plan := domain.Plan{PluginID: "test", Steps: []domain.PlanStep{{ID: "create", Name: "Create", Input: json.RawMessage(`{}`), Effects: []domain.ResourceEffect{{Action: "create", ExternalID: "qemu/9000", Kind: "virtual-machine", Name: "kubephos-test"}}}}}
+	plan := domain.Plan{PluginID: "test", Steps: []domain.PlanStep{{ID: "create", Name: "Create", Input: json.RawMessage(`{"connectionRef":"conn_test"}`), Effects: []domain.ResourceEffect{{Action: "create", ExternalID: "qemu/9000", Kind: "virtual-machine", Name: "kubephos-test"}}}}}
 	if err := validatePlanEffects(plugins.Manifest{ID: "test"}, plan); err == nil {
 		t.Fatal("expected missing capability error")
 	}
@@ -776,7 +776,7 @@ func TestPlanEffectsRequireProvisionCapability(t *testing.T) {
 }
 
 func TestPlanEffectsRejectDuplicateCreates(t *testing.T) {
-	plan := domain.Plan{PluginID: "test", Steps: []domain.PlanStep{{ID: "create", Name: "Create", Input: json.RawMessage(`{}`), Effects: []domain.ResourceEffect{
+	plan := domain.Plan{PluginID: "test", Steps: []domain.PlanStep{{ID: "create", Name: "Create", Input: json.RawMessage(`{"connectionRef":"conn_test"}`), Effects: []domain.ResourceEffect{
 		{Action: "create", ExternalID: "qemu/9000", Kind: "virtual-machine", Name: "one"},
 		{Action: "create", ExternalID: "qemu/9000", Kind: "virtual-machine", Name: "two"},
 	}}}}
@@ -788,14 +788,14 @@ func TestPlanEffectsRejectDuplicateCreates(t *testing.T) {
 
 func TestPlanEffectsRejectIncompleteIdentity(t *testing.T) {
 	manifest := plugins.Manifest{ID: "test", Provider: "proxmox", Capabilities: []string{"infrastructure.provision"}}
-	plan := domain.Plan{PluginID: "test", Steps: []domain.PlanStep{{ID: "create", Name: "Create", Input: json.RawMessage(`{}`), Effects: []domain.ResourceEffect{{Action: "create", ExternalID: "qemu/9000"}}}}}
+	plan := domain.Plan{PluginID: "test", Steps: []domain.PlanStep{{ID: "create", Name: "Create", Input: json.RawMessage(`{"connectionRef":"conn_test"}`), Effects: []domain.ResourceEffect{{Action: "create", ExternalID: "qemu/9000"}}}}}
 	if err := validatePlanEffects(manifest, plan); err == nil {
 		t.Fatal("expected incomplete identity error")
 	}
 }
 
 func TestDeleteEffectsRequireDeprovisionCapability(t *testing.T) {
-	plan := domain.Plan{PluginID: "test", Steps: []domain.PlanStep{{ID: "delete", Name: "Delete", Input: json.RawMessage(`{}`), Effects: []domain.ResourceEffect{{Action: "delete", ExternalID: "qemu/9000", Kind: "virtual-machine", Name: "kubephos-test"}}}}}
+	plan := domain.Plan{PluginID: "test", Steps: []domain.PlanStep{{ID: "delete", Name: "Delete", Input: json.RawMessage(`{"connectionRef":"conn_test"}`), Effects: []domain.ResourceEffect{{Action: "delete", ExternalID: "qemu/9000", Kind: "virtual-machine", Name: "kubephos-test"}}}}}
 	if err := validatePlanEffects(plugins.Manifest{ID: "test", Provider: "proxmox", Capabilities: []string{"infrastructure.provision"}}, plan); err == nil {
 		t.Fatal("expected missing deprovision capability error")
 	}
@@ -805,7 +805,7 @@ func TestDeleteEffectsRequireDeprovisionCapability(t *testing.T) {
 }
 
 func TestPlanEffectsRequireProviderIdentity(t *testing.T) {
-	plan := domain.Plan{PluginID: "test", Steps: []domain.PlanStep{{ID: "create", Name: "Create", Input: json.RawMessage(`{}`), Effects: []domain.ResourceEffect{{Action: "create", ExternalID: "qemu/9000", Kind: "virtual-machine", Name: "kubephos-test"}}}}}
+	plan := domain.Plan{PluginID: "test", Steps: []domain.PlanStep{{ID: "create", Name: "Create", Input: json.RawMessage(`{"connectionRef":"conn_test"}`), Effects: []domain.ResourceEffect{{Action: "create", ExternalID: "qemu/9000", Kind: "virtual-machine", Name: "kubephos-test"}}}}}
 	if err := validatePlanEffects(plugins.Manifest{ID: "test", Capabilities: []string{"infrastructure.provision"}}, plan); err == nil {
 		t.Fatal("expected missing provider error")
 	}

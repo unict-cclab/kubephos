@@ -337,10 +337,14 @@ func validatePlanEffects(manifest plugins.Manifest, plan domain.Plan) error {
 				return fmt.Errorf("step %q declares an incomplete resource effect", step.ID)
 			}
 			if effect.Action == "create" {
-				if createdResources[effect.ExternalID] {
+				ledgerID, err := resourceidentity.LedgerID(manifest.Provider, step.Input, effect.ExternalID)
+				if err != nil {
+					return err
+				}
+				if createdResources[ledgerID] {
 					return fmt.Errorf("resource %q is created more than once in the plan", effect.ExternalID)
 				}
-				createdResources[effect.ExternalID] = true
+				createdResources[ledgerID] = true
 			}
 		}
 	}

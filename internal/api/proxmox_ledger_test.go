@@ -30,3 +30,16 @@ func TestResourceEffectValidationUsesProxmoxConnectionScope(t *testing.T) {
 		t.Fatal("cross-connection create authorized a protected deletion")
 	}
 }
+
+func TestPlanAllowsSameVMIDOnDifferentConnections(t *testing.T) {
+	manifest := plugins.Manifest{Provider: "proxmox", Capabilities: []string{"infrastructure.provision"}}
+	makeStep := func(id, connection string) domain.PlanStep {
+		return domain.PlanStep{ID: id, Name: id, Input: json.RawMessage(`{"connectionRef":"` + connection + `"}`), Effects: []domain.ResourceEffect{{Action: "create", ExternalID: "qemu/100", Kind: "virtual-machine", Name: id}}}
+	}
+	if err := validatePlanEffects(manifest, domain.Plan{Steps: []domain.PlanStep{makeStep("one", "conn_a"), makeStep("two", "conn_b")}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := validatePlanEffects(manifest, domain.Plan{Steps: []domain.PlanStep{makeStep("one", "conn_a"), makeStep("two", "conn_a")}}); err == nil {
+		t.Fatal("duplicate VMID on same connection accepted")
+	}
+}
