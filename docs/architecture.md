@@ -56,6 +56,12 @@ These advanced settings are intentionally absent from the basic installer.
 Managed clusters, Harbor, NFS and cloud images are configured in the UI rather
 than global environment variables.
 
+Proxmox VMIDs are scoped to a connection in the infrastructure ledger. Independent
+Proxmox clusters can reuse the same VMID; nodes within one Proxmox cluster share
+one VMID space. Allocation checks still read the whole selected Proxmox cluster.
+Existing managed ledger rows are migrated using their provisioning provenance;
+plugin plans and machine artifacts retain their original local resource IDs.
+
 New single and multi clusters use K3s `v1.36.5+k3s1`, which includes the
 [cloud-controller RBAC startup guard](https://github.com/k3s-io/k3s/issues/7328).
 Updating KubePhos does not upgrade running clusters. Node maintenance retains the

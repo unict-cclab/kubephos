@@ -26,6 +26,7 @@ import (
 	"kubephos.dev/kubephos/internal/plugins"
 	"kubephos.dev/kubephos/internal/pluginssh"
 
+	"kubephos.dev/kubephos/internal/resourceidentity"
 	"kubephos.dev/kubephos/internal/secrets"
 	"kubephos.dev/kubephos/internal/storage"
 	"kubephos.dev/kubephos/internal/webui"
@@ -349,16 +350,20 @@ func validatePlanEffects(manifest plugins.Manifest, plan domain.Plan) error {
 func (s *Server) validateResourceEffects(ctx context.Context, workspaceID string, manifest plugins.Manifest, plan domain.Plan) error {
 	for position, step := range plan.Steps {
 		for _, effect := range step.Effects {
+			ledgerID, err := resourceidentity.LedgerID(manifest.Provider, step.Input, effect.ExternalID)
+			if err != nil {
+				return err
+			}
 			switch effect.Action {
 			case "create":
-				if err := s.store.EnsureResourceAvailable(ctx, manifest.Provider, effect.ExternalID); err != nil {
+				if err := s.store.EnsureResourceAvailable(ctx, manifest.Provider, ledgerID); err != nil {
 					return err
 				}
 			case "delete", "update":
 				createdInPlan := false
 				for _, previous := range plan.Steps[:position] {
 					for _, candidate := range previous.Effects {
-						if candidate.Action == "create" && candidate.ExternalID == effect.ExternalID {
+						if candidate.Action == "create" && sameLedgerResource(manifest.Provider, previous.Input, candidate.ExternalID, ledgerID) {
 							createdInPlan = true
 						}
 					}
@@ -368,7 +373,7 @@ func (s *Server) validateResourceEffects(ctx context.Context, workspaceID string
 					if step.Cleanup {
 						authorize = s.store.AuthorizeManagedCleanup
 					}
-					if err := authorize(ctx, manifest.Provider, effect.ExternalID, workspaceID); err != nil {
+					if err := authorize(ctx, manifest.Provider, ledgerID, workspaceID); err != nil {
 						return err
 					}
 				}
@@ -399,4 +404,9 @@ func Serve(ctx context.Context, address string, handler http.Handler) error {
 		}
 		return err
 	}
+}
+
+func sameLedgerResource(provider string, input json.RawMessage, externalID, expected string) bool {
+	actual, err := resourceidentity.LedgerID(provider, input, externalID)
+	return err == nil && actual == expected
 }

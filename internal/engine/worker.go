@@ -13,6 +13,7 @@ import (
 	"kubephos.dev/kubephos/internal/domain"
 	"kubephos.dev/kubephos/internal/id"
 	"kubephos.dev/kubephos/internal/plugins"
+	"kubephos.dev/kubephos/internal/resourceidentity"
 	"kubephos.dev/kubephos/internal/secrets"
 	"kubephos.dev/kubephos/internal/storage"
 )
@@ -439,9 +440,13 @@ func (w *Worker) reserveEffects(ctx context.Context, operation domain.Operation,
 	}
 	creates := make([]domain.InfrastructureResource, 0, len(step.Effects))
 	for _, effect := range step.Effects {
+		ledgerID, err := resourceidentity.LedgerID(provider, step.Input, effect.ExternalID)
+		if err != nil {
+			return err
+		}
 		if effect.Action == "create" {
 			resourceID := id.New("res")
-			creates = append(creates, domain.InfrastructureResource{ID: resourceID, Provider: provider, ExternalID: effect.ExternalID, WorkspaceID: operation.WorkspaceID, Kind: effect.Kind, Name: effect.Name, Ownership: "managed", Protection: "managed"})
+			creates = append(creates, domain.InfrastructureResource{ID: resourceID, Provider: provider, ExternalID: ledgerID, WorkspaceID: operation.WorkspaceID, Kind: effect.Kind, Name: effect.Name, Ownership: "managed", Protection: "managed"})
 		}
 	}
 	createIDs, err := w.store.ReserveManagedResources(ctx, creates, operation.ID)
@@ -452,10 +457,14 @@ func (w *Worker) reserveEffects(ctx context.Context, operation domain.Operation,
 		_ = w.store.ReleaseManagedResourceReservations(ctx, creates, operation.ID)
 	}
 	for _, effect := range step.Effects {
+		ledgerID, err := resourceidentity.LedgerID(provider, step.Input, effect.ExternalID)
+		if err != nil {
+			return err
+		}
 		switch effect.Action {
 		case "create":
-			details, _ := json.Marshal(map[string]any{"operationId": operation.ID, "externalId": effect.ExternalID, "state": "reserved"})
-			if err := w.store.AppendAuditEvent(ctx, domain.AuditEvent{Actor: "worker", Action: "infrastructure.reserve", TargetType: effect.Kind, TargetID: createIDs[effect.ExternalID], Outcome: "succeeded", Details: details}); err != nil {
+			details, _ := json.Marshal(map[string]any{"operationId": operation.ID, "externalId": ledgerID, "state": "reserved"})
+			if err := w.store.AppendAuditEvent(ctx, domain.AuditEvent{Actor: "worker", Action: "infrastructure.reserve", TargetType: effect.Kind, TargetID: createIDs[ledgerID], Outcome: "succeeded", Details: details}); err != nil {
 				release()
 				return err
 			}
@@ -468,7 +477,7 @@ func (w *Worker) reserveEffects(ctx context.Context, operation domain.Operation,
 			if step.Cleanup {
 				authorize = w.store.AuthorizeManagedCleanup
 			}
-			if err := authorize(ctx, provider, effect.ExternalID, operation.WorkspaceID); err != nil {
+			if err := authorize(ctx, provider, ledgerID, operation.WorkspaceID); err != nil {
 				return err
 			}
 			if err := log("warning", fmt.Sprintf("Authorized %s of managed resource %s", effect.Action, effect.ExternalID)); err != nil {
@@ -496,17 +505,22 @@ func (w *Worker) completeEffects(ctx context.Context, operation domain.Operation
 		resources[resource.ExternalID] = resource
 	}
 	for _, effect := range step.Effects {
+		ledgerID, err := resourceidentity.LedgerID(provider, step.Input, effect.ExternalID)
+		if err != nil {
+			return err
+		}
 		switch effect.Action {
 		case "create":
 			resource, ok := resources[effect.ExternalID]
 			if !ok {
 				return fmt.Errorf("managed resource result is missing %s", effect.ExternalID)
 			}
+			resource.ExternalID = ledgerID
 			if err := w.store.CompleteManagedResource(ctx, operation.ID, provider, resource); err != nil {
 				return err
 			}
-			details, _ := json.Marshal(map[string]any{"operationId": operation.ID, "externalId": effect.ExternalID, "state": resource.State})
-			if err := w.store.AppendAuditEvent(ctx, domain.AuditEvent{Actor: "worker", Action: "infrastructure.create", TargetType: effect.Kind, TargetID: effect.ExternalID, Outcome: "succeeded", Details: details}); err != nil {
+			details, _ := json.Marshal(map[string]any{"operationId": operation.ID, "externalId": ledgerID, "state": resource.State})
+			if err := w.store.AppendAuditEvent(ctx, domain.AuditEvent{Actor: "worker", Action: "infrastructure.create", TargetType: effect.Kind, TargetID: ledgerID, Outcome: "succeeded", Details: details}); err != nil {
 				return err
 			}
 		case "update":
@@ -514,19 +528,20 @@ func (w *Worker) completeEffects(ctx context.Context, operation domain.Operation
 			if !ok {
 				return fmt.Errorf("updated resource %s is missing", effect.ExternalID)
 			}
+			resource.ExternalID = ledgerID
 			if err := w.store.UpdateManagedResource(ctx, provider, operation.WorkspaceID, resource); err != nil {
 				return err
 			}
-			details, _ := json.Marshal(map[string]any{"operationId": operation.ID, "externalId": effect.ExternalID, "state": resource.State})
-			if err := w.store.AppendAuditEvent(ctx, domain.AuditEvent{Actor: "worker", Action: "infrastructure.update", TargetType: effect.Kind, TargetID: effect.ExternalID, Outcome: "succeeded", Details: details}); err != nil {
+			details, _ := json.Marshal(map[string]any{"operationId": operation.ID, "externalId": ledgerID, "state": resource.State})
+			if err := w.store.AppendAuditEvent(ctx, domain.AuditEvent{Actor: "worker", Action: "infrastructure.update", TargetType: effect.Kind, TargetID: ledgerID, Outcome: "succeeded", Details: details}); err != nil {
 				return err
 			}
 		case "delete":
-			if err := w.store.SetManagedResourceState(ctx, provider, effect.ExternalID, operation.WorkspaceID, "deleted"); err != nil {
+			if err := w.store.SetManagedResourceState(ctx, provider, ledgerID, operation.WorkspaceID, "deleted"); err != nil {
 				return err
 			}
-			details, _ := json.Marshal(map[string]any{"operationId": operation.ID, "externalId": effect.ExternalID, "state": "deleted"})
-			if err := w.store.AppendAuditEvent(ctx, domain.AuditEvent{Actor: "worker", Action: "infrastructure.delete", TargetType: effect.Kind, TargetID: effect.ExternalID, Outcome: "succeeded", Details: details}); err != nil {
+			details, _ := json.Marshal(map[string]any{"operationId": operation.ID, "externalId": ledgerID, "state": "deleted"})
+			if err := w.store.AppendAuditEvent(ctx, domain.AuditEvent{Actor: "worker", Action: "infrastructure.delete", TargetType: effect.Kind, TargetID: ledgerID, Outcome: "succeeded", Details: details}); err != nil {
 				return err
 			}
 		}
@@ -555,10 +570,14 @@ func (w *Worker) captureDiscovery(ctx context.Context, operation domain.Operatio
 		if discovered.ExternalID == "" || discovered.Kind == "" || discovered.Name == "" {
 			return errors.New("discovery result contains an incomplete resource identity")
 		}
+		ledgerID, err := resourceidentity.LedgerID(provider, operation.Spec, discovered.ExternalID)
+		if err != nil {
+			return err
+		}
 		resources = append(resources, domain.InfrastructureResource{
 			ID:         id.New("res"),
 			Provider:   provider,
-			ExternalID: discovered.ExternalID,
+			ExternalID: ledgerID,
 			Kind:       discovered.Kind,
 			Name:       discovered.Name,
 			State:      discovered.State,

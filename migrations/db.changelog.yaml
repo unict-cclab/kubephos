@@ -347,3 +347,10 @@ databaseChangeLog:
         - sqlFile:
             path: changes/049-reuse-completed-cluster-stages.sql
             relativeToChangelogFile: true
+  - changeSet:
+      id: 050-scope-proxmox-ledger
+      author: kubephos
+      changes:
+        - sqlFile:
+            path: changes/050-scope-proxmox-ledger.sql
+            relativeToChangelogFile: true
