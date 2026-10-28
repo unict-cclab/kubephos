@@ -55,7 +55,7 @@ export function ResourceDetailsPage({resource, close, connections, workspaces, r
 
     {cluster && <section className="details-section"><div className="details-heading"><strong>Topology</strong></div><Topology resource={resource} /></section>}
     <ClusterDashboards key={resource.id} resource={resource} /></>}
-    {tab === 'access' && <>{resource.kind === 'kubernetes-cluster' && resource.status === 'ready' && session.user?.role === 'admin' && <section className="details-section"><div className="details-heading"><strong>Kubernetes access</strong></div><a className="button secondary compact" href={`/api/v1/kubernetes-clusters/${resource.id}/kubeconfig`}>Download kubeconfig</a></section>}{session.user?.role === 'admin' && <ClusterSSHAccess resource={resource} />}<AccessPanel key={resource.id} resource={resource} session={session} /></>}
+    {tab === 'access' && <>{resource.kind === 'kubernetes-cluster' && resource.status === 'ready' && session.user?.role === 'admin' && <section className="details-section"><div className="details-heading"><strong>Kubernetes access</strong></div><a className="button secondary compact" href={`/api/v1/kubernetes-clusters/${resource.id}/kubeconfig`}>Download kubeconfig</a></section>}{session.user?.role === 'admin' && <ClusterSSHAccess resource={resource} resources={resources} />}<AccessPanel key={resource.id} resource={resource} session={session} /></>}
     {tab === 'activity' && <>
     <section className="details-section activity-status"><div><span>Status</span><strong className={`status-pill ${resource.status}`}>{resource.status}</strong></div>{run && <div><span>Progress</span><strong>{completedStages}/{run.stages.length}</strong></div>}</section>
     {run && <section className="details-section"><ExecutionProgressGraph nodes={progressNodes} label={`${resource.name} lifecycle progress`} showLogs={openPipelineRun ? () => openPipelineRun(run.id) : undefined} /></section>}
@@ -168,7 +168,7 @@ function Topology({resource}: {resource: ManagedResource}) {
 
 function ClusterConfiguration({spec, references}: {spec: Record<string, unknown>; references: Record<string, string>}) {
  if (spec.mode === 'multi' && Array.isArray(spec.members)) return <>{spec.members.map((member,index) => member && typeof member === 'object' && <section className="details-section" key={index}><div className="details-heading"><strong>{String(member.name)}</strong></div><ClusterConfiguration spec={member} references={references} /></section>)}</>
-  const grouped = new Set(['machineNodes', 'controlPlaneZones', 'controlPlaneCapacity', 'managementPool', 'applicationPools', 'scrapeInterval', 'retention', 'mode', 'members'])
+  const grouped = new Set(['machineNodes', 'controlPlaneZones', 'controlPlaneCapacity', 'managementPool', 'applicationPools', 'scrapeInterval', 'retention', 'mode', 'members', 'sharedSSHKey'])
   const settings = Object.fromEntries(Object.entries(spec).filter(([key]) => !grouped.has(key)))
   const controlPlane = Object.fromEntries((spec.networking === 'cilium' ? ['controlPlaneCapacity'] : ['controlPlaneZones', 'controlPlaneCapacity']).filter(key => key in spec).map(key => [key, spec[key]]))
   const poolSettings = (value: unknown) => spec.networking === 'cilium' && value && typeof value === 'object' ? Object.fromEntries(Object.entries(value).filter(([key]) => key !== 'zones')) : value

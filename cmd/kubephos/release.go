@@ -41,6 +41,9 @@ type releaseRegistryCredential struct {
 }
 
 func releaseMaintenance(configValue config.Config) error {
+	if len(os.Args) >= 3 && os.Args[2] == "cluster-ssh-share" {
+		return releaseClusterSSHShare(configValue)
+	}
 	if len(os.Args) >= 3 && os.Args[2] == "cluster-lens-rollout" {
 		return releaseClusterLensRollout(configValue)
 	}

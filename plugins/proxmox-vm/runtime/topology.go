@@ -284,7 +284,7 @@ func (TopologyPlugin) Plan(ctx context.Context, invocation Invocation) (domain.P
 		}
 		createEffects[index] = domain.ResourceEffect{Action: "create", ExternalID: externalID(machines[index].VMID), Kind: "virtual-machine", Name: machines[index].Name}
 	}
-	base := topologyStepInput{ConnectionRef: spec.ConnectionRef, MachineTemplateRef: spec.MachineTemplateRef, Node: spec.Node, TemplateVMID: spec.TemplateVMID, Cores: spec.Cores, MemoryMiB: spec.MemoryMiB, DiskGiB: spec.DiskGiB, SSHUser: spec.SSHUser, PrefixLength: spec.PrefixLength, Gateway: spec.Gateway, DNSServer: spec.DNSServer, Marker: marker, Machines: machines}
+	base := topologyStepInput{ReconcileOptions: ReconcileOptions{MachineAccessRef: spec.MachineAccessRef}, ConnectionRef: spec.ConnectionRef, MachineTemplateRef: spec.MachineTemplateRef, Node: spec.Node, TemplateVMID: spec.TemplateVMID, Cores: spec.Cores, MemoryMiB: spec.MemoryMiB, DiskGiB: spec.DiskGiB, SSHUser: spec.SSHUser, PrefixLength: spec.PrefixLength, Gateway: spec.Gateway, DNSServer: spec.DNSServer, Marker: marker, Machines: machines}
 	create := base
 	create.Action = "provision"
 	createInput, err := json.Marshal(create)
@@ -292,6 +292,9 @@ func (TopologyPlugin) Plan(ctx context.Context, invocation Invocation) (domain.P
 		return domain.Plan{}, err
 	}
 	artifactInputs := []domain.ArtifactInput{}
+	if spec.MachineAccessRef != "" {
+		artifactInputs = append(artifactInputs, domain.ArtifactInput{Name: "shared-access", Type: "MachineAccess", Version: "v1alpha1", ArtifactID: spec.MachineAccessRef})
+	}
 	if spec.MachineTemplateRef != "" {
 		artifactInputs = append(artifactInputs, domain.ArtifactInput{Name: "machine-template", Type: "MachineTemplate", Version: "v1alpha1", ArtifactID: spec.MachineTemplateRef})
 	}
@@ -423,7 +426,7 @@ func (plugin TopologyPlugin) Execute(ctx context.Context, step domain.PlanStep, 
 	if input.Action != "provision" {
 		return nil, fmt.Errorf("unsupported topology action %q", input.Action)
 	}
-	privateKey, publicKey, err := generateSSHKey()
+	privateKey, publicKey, err := topologyProvisioningKey(step, input.MachineAccessRef)
 	if err != nil {
 		return nil, err
 	}

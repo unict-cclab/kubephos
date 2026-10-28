@@ -93,6 +93,12 @@ func TestClusterSSHKeyDownload(t *testing.T) {
 	if w := call("?cluster=west"); w.Code != 409 {
 		t.Fatal("unprotected artifact accepted")
 	}
+	exec(`UPDATE managed_resources SET spec=jsonb_set(spec,'{sharedSSHKey}','true'::jsonb) WHERE id='cluster_ssh'`)
+	check("", keys[1])
+	check("?cluster=west", keys[1])
+	if w := call("?cluster=other"); w.Code != 400 {
+		t.Fatal("invalid shared-key member accepted")
+	}
 	exec(`UPDATE pipeline_runs SET status='failed' WHERE id='run_ssh'`)
 	if w := call("?cluster=east"); w.Code != 409 {
 		t.Fatal("failed resource accepted")

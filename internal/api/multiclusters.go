@@ -122,6 +122,8 @@ func (s *Server) createMultiCluster(response http.ResponseWriter, request *http.
 	}
 	definition.Stages = append(definition.Stages, domain.PipelineStage{ID: "mesh", PluginID: meshPlugin.Manifest().ID, Title: "Connect and verify Cilium ClusterMesh", Spec: marshalRaw(map[string]any{"name": input.Name, "members": meshMembers}), Bindings: bindings})
 	definition.Result = domain.PipelineOutput{Stage: "mesh", Output: "cluster-environment"}
+	definition = withSharedMultiClusterSSHKey(definition, len(input.Members))
+	input.SharedSSHKey = true
 	input.Networking = "cilium"
 	input.ManagedProfile = "2026.10.multicluster"
 	input.Members = nil

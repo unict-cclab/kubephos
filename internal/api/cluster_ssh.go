@@ -30,6 +30,9 @@ func (s *Server) downloadClusterSSHKey(response http.ResponseWriter, request *ht
 	memberName := request.URL.Query().Get("cluster")
 	if saved, multi := multiClusterSpec(resource.Spec); multi {
 		stage = ""
+		if saved.SharedSSHKey && memberName == "" {
+			stage = "c1-machines"
+		}
 		for index, member := range saved.Members {
 			if member.Name == memberName {
 				stage, name = fmt.Sprintf("c%d-machines", index+1), member.Name
@@ -39,6 +42,9 @@ func (s *Server) downloadClusterSSHKey(response http.ResponseWriter, request *ht
 		if stage == "" {
 			writeError(response, http.StatusBadRequest, "invalid_cluster", "Select a cluster belonging to this multi cluster.")
 			return
+		}
+		if saved.SharedSSHKey {
+			stage, name = "c1-machines", resource.Name
 		}
 	} else if memberName != "" {
 		writeError(response, http.StatusBadRequest, "invalid_cluster", "This resource is a single cluster.")

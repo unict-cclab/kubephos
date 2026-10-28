@@ -492,6 +492,10 @@ func (s *Server) recreateKubernetesCluster(response http.ResponseWriter, request
 		validation.Issues = append(validation.Issues, cleanup.Validation.Issues...)
 	}
 	provisionDefinition := clusterProvisioningStages(sourcePipeline.Definition)
+	if input.Mode == "multi" {
+		provisionDefinition = withSharedMultiClusterSSHKey(provisionDefinition, len(input.Members))
+		input.SharedSSHKey = true
+	}
 	for index := range provisionDefinition.Stages {
 		stage := &provisionDefinition.Stages[index]
 		if stage.PluginID != "io.kubephos.infrastructure.proxmox.topology" {

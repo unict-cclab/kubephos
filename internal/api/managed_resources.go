@@ -372,6 +372,7 @@ type managedMachineCapacity struct {
 }
 
 type managedKubernetesClusterInput struct {
+	SharedSSHKey         bool                            `json:"sharedSSHKey,omitempty"`
 	Mode                 string                          `json:"mode,omitempty"`
 	Members              []managedKubernetesClusterInput `json:"members,omitempty"`
 	Networking           string                          `json:"networking,omitempty"`
