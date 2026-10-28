@@ -33,12 +33,16 @@ type maintenanceRunner struct {
 	base      *fakeRunner
 	commands  []string
 	failDrain bool
+	version   string
 }
 
 func (r *maintenanceRunner) Run(ctx context.Context, target machine, access machineAccess, command string) (string, error) {
 	r.commands = append(r.commands, command)
 	switch {
 	case command == "sudo k3s --version":
+		if r.version != "" {
+			return r.version, nil
+		}
 		return k3sVersion, nil
 	case command == "sudo cat /var/lib/rancher/k3s/server/node-token":
 		return "test-join-token", nil
@@ -56,7 +60,11 @@ func (r *maintenanceRunner) Run(ctx context.Context, target machine, access mach
 		delete(r.base.nodeNames, target.Name)
 		return "", nil
 	default:
-		return r.base.Run(ctx, target, access, command)
+		value, err := r.base.Run(ctx, target, access, command)
+		if r.version != "" {
+			value = strings.ReplaceAll(value, k3sVersion, r.version)
+		}
+		return value, err
 	}
 }
 func TestMaintenanceDrainsBeforeRemovingApplicationNodes(t *testing.T) {
@@ -109,5 +117,63 @@ func TestMaintenanceDrainsBeforeRemovingApplicationNodes(t *testing.T) {
 				t.Fatalf("incorrect drain/uninstall order: %v", runner.commands)
 			}
 		})
+	}
+}
+
+func TestMaintenanceKeepsLegacyReleaseWhenAddingNode(t *testing.T) {
+	step := bootstrapStep(t, 1)
+	var old machineSet
+	_ = json.Unmarshal(step.ResolvedInputs["machines"].Value, &old)
+	for i := range old.Spec.Machines {
+		old.Spec.Machines[i].Name = managedNodeName(Spec{ClusterName: "dev", ControlPlanes: 1}, i)
+	}
+	previous, _ := json.Marshal(old)
+	desired := old
+	added := old.Spec.Machines[2]
+	added.Name = "dev-worker-3"
+	added.ID = "machine-4"
+	added.Address = "10.20.0.13"
+	desired.Spec.Machines = append(desired.Spec.Machines, added)
+	raw, _ := json.Marshal(desired)
+	a := step.ResolvedInputs["machines"]
+	a.Value = raw
+	step.ResolvedInputs["machines"] = a
+	step.ResolvedInputs["previous-machines"] = domain.ResolvedArtifact{ID: "art_previous", Type: "MachineSet", Value: previous}
+	spec := Spec{MachineSetRef: "art_machines", MachineAccessRef: "art_access", ClusterName: "dev", ControlPlanes: 1, Reconcile: true, PreviousMachineSetRef: "art_previous"}
+	step.Input, _ = json.Marshal(spec)
+	runner := &maintenanceRunner{version: "v1.36.0+k3s1", base: &fakeRunner{installed: map[string]string{}, nodeNames: map[string]string{}}}
+	for i, m := range old.Spec.Machines {
+		role := "agent"
+		if i == 0 {
+			role = "server"
+		}
+		runner.base.installed[m.Name] = role
+		runner.base.nodeNames[m.Name] = m.Name
+	}
+	plugin := Plugin{Runner: runner}
+	result, err := plugin.Execute(context.Background(), step, func(string, string) error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	health, err := plugin.Verify(context.Background(), step, result, func(string, string) error { return nil })
+	if err != nil || health.Status != domain.HealthHealthy {
+		t.Fatalf("legacy maintenance verification: %#v %v", health, err)
+	}
+	var decoded clusterResult
+	_ = json.Unmarshal(result, &decoded)
+	if decoded.ClusterConnection.Metadata.Version != runner.version || decoded.ClusterInventory.Spec.Version != runner.version {
+		t.Fatal("maintenance changed reported version")
+	}
+	found := false
+	for _, command := range runner.commands {
+		if strings.Contains(command, "sh -s - agent") {
+			found = true
+			if !strings.Contains(command, "INSTALL_K3S_VERSION='"+runner.version+"'") {
+				t.Fatal("new node would upgrade cluster")
+			}
+		}
+	}
+	if !found {
+		t.Fatal("new node not installed")
 	}
 }

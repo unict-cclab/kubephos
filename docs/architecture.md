@@ -56,6 +56,13 @@ These advanced settings are intentionally absent from the basic installer.
 Managed clusters, Harbor, NFS and cloud images are configured in the UI rather
 than global environment variables.
 
+New single and multi clusters use K3s `v1.36.5+k3s1`, which includes the
+[cloud-controller RBAC startup guard](https://github.com/k3s-io/k3s/issues/7328).
+Updating KubePhos does not upgrade running clusters. Node maintenance retains the
+installed release, including existing `v1.36.0+k3s1` clusters, and requires all
+nodes to run that same release. Failed bootstrap attempts collect bounded,
+credential-free systemd, disk and failure-category diagnostics before cleanup.
+
 Managed NFS storage uses `kubephos/<installation marker>/<PV name>` for each
 volume directory. This isolates clusters sharing the same export and PVCs
 recreated under the same namespace and name. Existing PVs retain their original

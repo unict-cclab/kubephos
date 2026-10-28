@@ -77,7 +77,7 @@ func (p Plugin) reconcile(ctx context.Context, step domain.PlanStep, spec Spec, 
 		return nil, err
 	}
 	version := regexp.MustCompile(`v[0-9]+\.[0-9]+\.[0-9]+\+k3s[0-9]+`).FindString(versionText)
-	if version != k3sVersion {
+	if !validResultVersion(spec, version) {
 		return nil, errors.New("the running K3s version must match the managed version before node maintenance")
 	}
 	token, err := runner.Run(ctx, primary, access, "sudo cat /var/lib/rancher/k3s/server/node-token")
@@ -172,7 +172,7 @@ func (p Plugin) reconcile(ctx context.Context, step domain.PlanStep, spec Spec, 
 			return nil, err
 		}
 	}
-	inventory, err = waitForInventory(ctx, runner, primary, access, spec.ClusterName, len(machines.Spec.Machines), 5*time.Minute)
+	inventory, err = waitForInventory(ctx, runner, primary, access, spec.ClusterName, len(machines.Spec.Machines), 5*time.Minute, version)
 	if err != nil {
 		return nil, err
 	}

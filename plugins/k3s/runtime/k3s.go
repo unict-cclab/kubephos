@@ -29,7 +29,7 @@ import (
 
 const (
 	pluginID          = "io.kubephos.cluster.k3s.bootstrap"
-	k3sVersion        = "v1.36.0+k3s1"
+	k3sVersion        = "v1.36.5+k3s1"
 	clusterAPIVersion = "artifacts.kubephos.dev/v1alpha1"
 )
 
@@ -320,7 +320,7 @@ func (p Plugin) Precheck(ctx context.Context, step domain.PlanStep, log plugins.
 	return domain.HealthReport{Status: domain.HealthHealthy, Summary: "Every machine is reachable and ready for a clean K3s installation", Checks: map[string]string{"machines": strconv.Itoa(len(machines.Spec.Machines)), "ssh": "verified", "sudo": "verified", "existingInstallation": "absent"}}, nil
 }
 
-func (p Plugin) Execute(ctx context.Context, step domain.PlanStep, log plugins.Logger) (json.RawMessage, error) {
+func (p Plugin) Execute(ctx context.Context, step domain.PlanStep, log plugins.Logger) (output json.RawMessage, executeErr error) {
 	spec, machines, access, err := resolve(step)
 	if err != nil {
 		return nil, err
@@ -328,6 +328,16 @@ func (p Plugin) Execute(ctx context.Context, step domain.PlanStep, log plugins.L
 	if spec.Reconcile {
 		return p.reconcile(ctx, step, spec, machines, access, log)
 	}
+	// Leave time for diagnostics before the runtime terminates the plugin at 30m.
+	ctx, cancel := context.WithTimeout(ctx, 28*time.Minute)
+	defer cancel()
+	defer func() {
+		if executeErr != nil && !errors.Is(executeErr, context.Canceled) {
+			if detail := collectBootstrapDiagnostics(ctx, p.runner(), machines, access, log); detail != "" {
+				executeErr = fmt.Errorf("%w; %s", executeErr, detail)
+			}
+		}
+	}()
 	tokenBytes := make([]byte, 32)
 	if _, err := rand.Read(tokenBytes); err != nil {
 		return nil, err
@@ -444,7 +454,7 @@ func (p Plugin) Verify(ctx context.Context, step domain.PlanStep, raw json.RawMe
 	}
 	primary := machines.Spec.Machines[0]
 	server := "https://" + net.JoinHostPort(primary.Address, "6443")
-	if result.ClusterConnection.APIVersion != clusterAPIVersion || result.ClusterConnection.Kind != "ClusterConnection" || result.ClusterConnection.Metadata.Name != spec.ClusterName || result.ClusterConnection.Metadata.Version != k3sVersion || result.ClusterConnection.Spec.Distribution != "k3s" || result.ClusterConnection.Spec.Server != server {
+	if result.ClusterConnection.APIVersion != clusterAPIVersion || result.ClusterConnection.Kind != "ClusterConnection" || result.ClusterConnection.Metadata.Name != spec.ClusterName || !validResultVersion(spec, result.ClusterConnection.Metadata.Version) || result.ClusterConnection.Spec.Distribution != "k3s" || result.ClusterConnection.Spec.Server != server {
 		return unhealthy("Cluster connection identity does not match the validated plan", "connection", "invalid"), nil
 	}
 	if err := validateKubeconfig(result.ClusterConnection.Spec.Kubeconfig, server); err != nil {
@@ -454,7 +464,7 @@ func (p Plugin) Verify(ctx context.Context, step domain.PlanStep, raw json.RawMe
 	if err != nil {
 		return unhealthy("Kubernetes API health check failed: "+err.Error(), "api", "unhealthy"), nil
 	}
-	if err := validateInventory(inventory, len(machines.Spec.Machines)); err != nil {
+	if err := validateInventory(inventory, len(machines.Spec.Machines), result.ClusterConnection.Metadata.Version); err != nil {
 		return unhealthy(err.Error(), "nodes", "unhealthy"), nil
 	}
 	if err := validateInventoryTopology(inventory, machines.Spec.Machines, spec); err != nil {
@@ -478,7 +488,7 @@ func (p Plugin) Verify(ctx context.Context, step domain.PlanStep, raw json.RawMe
 	if err := log("info", "Kubernetes API, node readiness, version and kubeconfig are verified"); err != nil {
 		return domain.HealthReport{}, err
 	}
-	return domain.HealthReport{Status: domain.HealthHealthy, Summary: "Kubernetes cluster is ready for managed components", Checks: map[string]string{"api": "ready", "nodes": strconv.Itoa(len(inventory.Spec.Nodes)), "version": k3sVersion, "kubeconfig": "verified"}}, nil
+	return domain.HealthReport{Status: domain.HealthHealthy, Summary: "Kubernetes cluster is ready for managed components", Checks: map[string]string{"api": "ready", "nodes": strconv.Itoa(len(inventory.Spec.Nodes)), "version": inventory.Spec.Version, "kubeconfig": "verified"}}, nil
 }
 
 func (p Plugin) Cleanup(ctx context.Context, step domain.PlanStep, _ json.RawMessage, log plugins.Logger) error {
@@ -904,11 +914,11 @@ func waitForAPI(ctx context.Context, runner commandRunner, primary machine, acce
 	}
 }
 
-func waitForInventory(ctx context.Context, runner commandRunner, primary machine, access machineAccess, name string, count int, timeout time.Duration) (clusterInventory, error) {
+func waitForInventory(ctx context.Context, runner commandRunner, primary machine, access machineAccess, name string, count int, timeout time.Duration, versions ...string) (clusterInventory, error) {
 	deadline := time.Now().Add(timeout)
 	for {
 		inventory, err := readInventory(ctx, runner, primary, access, name)
-		if err == nil && validateInventory(inventory, count) == nil {
+		if err == nil && validateInventory(inventory, count, versions...) == nil {
 			return inventory, nil
 		}
 		if time.Now().After(deadline) {
@@ -949,16 +959,33 @@ func readInventory(ctx context.Context, runner commandRunner, primary machine, a
 		nodes = append(nodes, clusterNode{Name: item.Metadata.Name, Role: role, Pool: item.Metadata.Labels["kubephos.dev/pool"], Zone: nodePlacementLabel(item.Metadata.Labels), Ready: ready, Version: item.Status.NodeInfo.KubeletVersion})
 	}
 	sort.Slice(nodes, func(i, j int) bool { return nodes[i].Name < nodes[j].Name })
-	return clusterInventory{APIVersion: clusterAPIVersion, Kind: "ClusterInventory", Metadata: clusterInventoryMetadata{Name: name}, Spec: clusterInventorySpec{Distribution: "k3s", Version: k3sVersion, Nodes: nodes}}, nil
+	return clusterInventory{APIVersion: clusterAPIVersion, Kind: "ClusterInventory", Metadata: clusterInventoryMetadata{Name: name}, Spec: clusterInventorySpec{Distribution: "k3s", Version: inventoryVersion(nodes), Nodes: nodes}}, nil
 }
 
-func validateInventory(inventory clusterInventory, count int) error {
-	if inventory.APIVersion != clusterAPIVersion || inventory.Kind != "ClusterInventory" || inventory.Spec.Distribution != "k3s" || inventory.Spec.Version != k3sVersion || len(inventory.Spec.Nodes) != count {
+func inventoryVersion(nodes []clusterNode) string {
+	if len(nodes) == 0 {
+		return ""
+	}
+	return nodes[0].Version
+}
+
+// Maintenance keeps the exact release already installed on managed clusters.
+func validResultVersion(spec Spec, version string) bool {
+	return version == k3sVersion || (spec.Reconcile && version == "v1.36.0+k3s1")
+}
+
+func validateInventory(inventory clusterInventory, count int, versions ...string) error {
+	version := k3sVersion
+	if len(versions) > 0 {
+		version = versions[0]
+	}
+
+	if inventory.APIVersion != clusterAPIVersion || inventory.Kind != "ClusterInventory" || inventory.Spec.Distribution != "k3s" || inventory.Spec.Version != version || len(inventory.Spec.Nodes) != count {
 		return errors.New("cluster inventory does not match the managed topology")
 	}
 	for _, node := range inventory.Spec.Nodes {
-		if !node.Ready || node.Version != k3sVersion {
-			return fmt.Errorf("node %s is not ready on managed version %s", node.Name, k3sVersion)
+		if !node.Ready || node.Version != version {
+			return fmt.Errorf("node %s is not ready on managed version %s", node.Name, version)
 		}
 	}
 	return nil
