@@ -335,7 +335,7 @@ func (plugin Plugin) Execute(ctx context.Context, step domain.PlanStep, log plug
 	if err := log("info", "Downloading and verifying managed platform charts in parallel"); err != nil {
 		return nil, err
 	}
-	charts, err := plugin.fetchCharts(ctx)
+	charts, err := plugin.fetchCharts(ctx, cluster.Spec.Networking)
 	if err != nil {
 		return nil, err
 	}
@@ -1282,7 +1282,7 @@ func namespaceOwnership(ctx context.Context, runner clusterRunner, kubeconfig, n
 	return object.Metadata.Annotations[ownershipKey] == marker, true, nil
 }
 
-func (plugin Plugin) fetchCharts(ctx context.Context) (map[string][]byte, error) {
+func (plugin Plugin) fetchCharts(ctx context.Context, networking ...string) (map[string][]byte, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	values := map[string][]byte{}
@@ -1290,6 +1290,9 @@ func (plugin Plugin) fetchCharts(ctx context.Context) (map[string][]byte, error)
 	var first error
 	var wait sync.WaitGroup
 	for _, chart := range managedCharts {
+		if len(networking) > 0 && networking[0] == "cilium" && (chart.ID == "istio-base" || chart.ID == "istiod" || chart.ID == "kiali") {
+			continue
+		}
 		chart := chart
 		wait.Add(1)
 		go func() {

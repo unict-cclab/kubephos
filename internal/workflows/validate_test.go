@@ -229,3 +229,29 @@ func TestValidateRejectsContractMismatch(t *testing.T) {
 		t.Fatalf("expected contract mismatch, got %v", err)
 	}
 }
+
+func TestParallelPipelineRejectsInvalidDependencies(t *testing.T) {
+	valid := func() domain.PipelineDefinition {
+		return domain.PipelineDefinition{MaxParallelStages: 2, Stages: []domain.PipelineStage{{ID: "a", PluginID: "test", Title: "A", Spec: json.RawMessage(`{}`)}, {ID: "b", PluginID: "test", Title: "B", Spec: json.RawMessage(`{}`), DependsOn: []string{"a"}}}, Result: domain.PipelineOutput{Stage: "b"}}
+	}
+	if _, err := normalize(valid()); err != nil {
+		t.Fatal(err)
+	}
+	for _, deps := range [][]string{{"b"}, {"missing"}, {"a", "a"}} {
+		def := valid()
+		def.Stages[1].DependsOn = deps
+		if _, err := normalize(def); err == nil {
+			t.Fatalf("accepted invalid dependencies: %v", deps)
+		}
+	}
+	def := valid()
+	def.MaxParallelStages = 5
+	if _, err := normalize(def); err == nil {
+		t.Fatal("accepted unbounded parallelism")
+	}
+	def = valid()
+	def.Stages[0].DependsOn = []string{"b"}
+	if _, err := normalize(def); err == nil {
+		t.Fatal("accepted dependency cycle")
+	}
+}

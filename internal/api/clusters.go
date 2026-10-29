@@ -590,6 +590,9 @@ func (s *Server) recreateKubernetesCluster(response http.ResponseWriter, request
 	resolution.Result = provision.Resolution.Result
 	validation.Issues = append(validation.Issues, provision.Validation.Issues...)
 	validation.Issues = append(validation.Issues, domain.ValidationIssue{Level: "info", Message: "Provisioning health checks will run after the current cluster has been removed."})
+	if input.Mode == "multi" {
+		definition = withParallelClusterProvisioning(definition, len(input.Members))
+	}
 	hash, err := workflows.Fingerprint(definition, resolution)
 	if err != nil {
 		writeError(response, http.StatusInternalServerError, "planning_failed", "Could not fingerprint the recreation workflow.")
@@ -622,6 +625,13 @@ func clusterProvisioningStages(source domain.PipelineDefinition) domain.Pipeline
 	byID := map[string]domain.PipelineStage{}
 	for _, stage := range source.Stages {
 		if !strings.HasPrefix(stage.ID, "cleanup-") && stage.ID != "prune-machines" {
+			dependencies := []string{}
+			for _, dependency := range stage.DependsOn {
+				if !strings.HasPrefix(dependency, "cleanup-") {
+					dependencies = append(dependencies, dependency)
+				}
+			}
+			stage.DependsOn = dependencies
 			byID[stage.ID] = stage
 		}
 	}

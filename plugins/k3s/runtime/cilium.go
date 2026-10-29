@@ -76,9 +76,11 @@ func installCilium(ctx context.Context, runner commandRunner, primary machine, a
 	}
 	// K3s' bootstrap Helm controller runs with host networking before the CNI is ready.
 	command := "set -eu\n"
+	command += "sudo k3s kubectl apply --server-side"
 	for _, crd := range []string{"gatewayclasses", "gateways", "httproutes", "referencegrants", "grpcroutes", "backendtlspolicies", "tlsroutes", "tcproutes", "udproutes"} {
-		command += "sudo k3s kubectl apply --server-side -f " + shellQuote("https://raw.githubusercontent.com/kubernetes-sigs/gateway-api/"+gatewayAPIVersion+"/config/crd/standard/gateway.networking.k8s.io_"+crd+".yaml") + "\n"
+		command += " -f " + shellQuote("https://raw.githubusercontent.com/kubernetes-sigs/gateway-api/"+gatewayAPIVersion+"/config/crd/standard/gateway.networking.k8s.io_"+crd+".yaml")
 	}
+	command += "\n"
 	command += "printf %s " + shellQuote(base64.StdEncoding.EncodeToString(manifest)) + " | base64 -d | sudo tee /var/lib/rancher/k3s/server/manifests/cilium.yaml >/dev/null\n"
 	command += "timeout 600 sh -c 'until sudo k3s kubectl -n kube-system get daemonset cilium >/dev/null 2>&1; do sleep 3; done'\n"
 	command += "sudo k3s kubectl -n kube-system rollout status daemonset/cilium --timeout=10m\n"

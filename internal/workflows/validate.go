@@ -271,6 +271,10 @@ func mutatingPlan(plan domain.Plan) bool {
 }
 
 func normalize(definition domain.PipelineDefinition) (domain.PipelineDefinition, error) {
+	if definition.MaxParallelStages < 0 || definition.MaxParallelStages > 4 {
+		return domain.PipelineDefinition{}, errors.New("pipeline parallelism must be between 1 and 4 (or omitted for sequential execution)")
+	}
+
 	if len(definition.Stages) < 1 || len(definition.Stages) > 128 {
 		return domain.PipelineDefinition{}, errors.New("a pipeline requires between 1 and 128 stages")
 	}
@@ -285,6 +289,13 @@ func normalize(definition domain.PipelineDefinition) (domain.PipelineDefinition,
 		}
 		if seen[stage.ID] {
 			return domain.PipelineDefinition{}, fmt.Errorf("stage id %q is duplicated", stage.ID)
+		}
+		dependencies := map[string]bool{}
+		for _, dependency := range stage.DependsOn {
+			if dependency == stage.ID || !seen[dependency] || dependencies[dependency] {
+				return domain.PipelineDefinition{}, fmt.Errorf("stage %q requires unique dependencies on earlier stages", stage.ID)
+			}
+			dependencies[dependency] = true
 		}
 		seen[stage.ID] = true
 		if stage.PluginID == "" {

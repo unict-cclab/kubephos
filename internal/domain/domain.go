@@ -55,17 +55,19 @@ type Pipeline struct {
 }
 
 type PipelineDefinition struct {
-	Stages          []PipelineStage `json:"stages"`
-	Result          PipelineOutput  `json:"result"`
-	CleanupAfterRun bool            `json:"cleanupAfterRun,omitempty"`
+	MaxParallelStages int             `json:"maxParallelStages,omitempty"`
+	Stages            []PipelineStage `json:"stages"`
+	Result            PipelineOutput  `json:"result"`
+	CleanupAfterRun   bool            `json:"cleanupAfterRun,omitempty"`
 }
 
 type PipelineStage struct {
-	ID       string            `json:"id"`
-	PluginID string            `json:"pluginId"`
-	Title    string            `json:"title"`
-	Spec     json.RawMessage   `json:"spec"`
-	Bindings []PipelineBinding `json:"bindings,omitempty"`
+	DependsOn []string          `json:"dependsOn,omitempty"`
+	ID        string            `json:"id"`
+	PluginID  string            `json:"pluginId"`
+	Title     string            `json:"title"`
+	Spec      json.RawMessage   `json:"spec"`
+	Bindings  []PipelineBinding `json:"bindings,omitempty"`
 }
 
 type PipelineBinding struct {

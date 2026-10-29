@@ -303,3 +303,13 @@ func TestCSIControllerPlacementPreservesNodeDaemon(t *testing.T) {
 		t.Fatal("node daemon was restricted to management")
 	}
 }
+
+func TestDisposableStorageProbeTerminatesPromptly(t *testing.T) {
+	raw, err := probeManifest("probe", "shared")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), `"terminationGracePeriodSeconds":1`) || !strings.Contains(string(raw), `"command":["sleep","600"]`) {
+		t.Fatal("temporary storage probe still waits for shell termination")
+	}
+}

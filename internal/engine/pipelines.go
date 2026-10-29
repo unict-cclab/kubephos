@@ -13,7 +13,6 @@ import (
 
 	"kubephos.dev/kubephos/internal/domain"
 	"kubephos.dev/kubephos/internal/id"
-	"kubephos.dev/kubephos/internal/storage"
 	"kubephos.dev/kubephos/internal/workflows"
 )
 
@@ -50,7 +49,7 @@ func (w *Worker) reconcilePipelineRun(ctx context.Context, owner string, run dom
 	released := false
 	release := func() {
 		if !released {
-			_ = w.store.ReleasePipelineRun(context.WithoutCancel(ctx), run.ID, owner)
+			_ = w.store.ReleasePipelineRun(context.WithoutCancel(ctx), run.ID, owner, w.poll)
 			released = true
 		}
 	}
@@ -63,6 +62,17 @@ func (w *Worker) reconcilePipelineRun(ctx context.Context, owner string, run dom
 		return w.failPipelineRun(ctx, owner, run, -1, errors.New("validated pipeline identity changed"))
 	}
 	if run.TerminalStatus != "" {
+		stopped, err := w.stopPipelineOperations(ctx, run)
+		if err != nil {
+			return err
+		}
+		if !stopped {
+			release()
+			return nil
+		}
+		if !pipeline.Definition.CleanupAfterRun {
+			return w.store.FailPipelineRun(ctx, run.ID, owner, run.TerminalStatus, run.Error)
+		}
 		complete, cleanupErr := w.reconcilePipelineCleanup(ctx, owner, run)
 		if cleanupErr != nil {
 			run.Error = errors.Join(errors.New(run.Error), cleanupErr).Error()
@@ -84,31 +94,18 @@ func (w *Worker) reconcilePipelineRun(ctx context.Context, owner string, run dom
 	}
 	produced := map[string]map[string]string{}
 	for position := range run.Stages {
-		runStage := run.Stages[position]
-		if runStage.OperationID == "" {
-			if run.CancelRequested {
-				return w.deferPipelineTermination(ctx, owner, run, pipeline, position, domain.OperationCanceled, errors.New("canceled before the next stage started"))
-			}
-			if err := w.startPipelineStage(ctx, owner, run, pipeline, position, produced); err != nil {
-				return w.deferPipelineTermination(ctx, owner, run, pipeline, position, domain.OperationFailed, err)
-			}
-			release()
-			return nil
+		stage := &run.Stages[position]
+		if stage.OperationID == "" {
+			continue
 		}
-		operation, err := w.store.GetOperation(ctx, runStage.OperationID)
+		operation, err := w.store.GetOperation(ctx, stage.OperationID)
 		if err != nil {
 			return w.deferPipelineTermination(ctx, owner, run, pipeline, position, domain.OperationFailed, fmt.Errorf("load stage operation: %w", err))
 		}
-		if err := w.store.SyncPipelineRunStage(ctx, runStage.ID, operation); err != nil {
+		if err := w.store.SyncPipelineRunStage(ctx, stage.ID, operation); err != nil {
 			return err
 		}
-		if run.CancelRequested && !terminalOperation(operation.Status) {
-			if err := w.store.RequestCancel(ctx, operation.ID); err != nil && !errors.Is(err, storage.ErrConflict) {
-				return err
-			}
-			release()
-			return nil
-		}
+		stage.Status = operation.Status
 		switch operation.Status {
 		case domain.OperationSucceeded:
 			outputs := map[string]string{}
@@ -117,16 +114,27 @@ func (w *Worker) reconcilePipelineRun(ctx context.Context, owner string, run dom
 					outputs[artifact.OutputName] = artifact.ID
 				}
 			}
-			produced[runStage.StageID] = outputs
-		case domain.OperationFailed:
-			return w.deferPipelineTermination(ctx, owner, run, pipeline, position, domain.OperationFailed, fmt.Errorf("stage %q failed: %s", runStage.Title, operation.Error))
-		case domain.OperationCanceled:
-			return w.deferPipelineTermination(ctx, owner, run, pipeline, position, domain.OperationCanceled, errors.New("stage operation was canceled"))
-		default:
+			produced[stage.StageID] = outputs
+		case domain.OperationFailed, domain.OperationCanceled:
+			return w.deferPipelineTermination(ctx, owner, run, pipeline, position, operation.Status, fmt.Errorf("stage %q %s: %s", stage.Title, operation.Status, operation.Error))
+		}
+	}
+	if run.CancelRequested {
+		return w.deferPipelineTermination(ctx, owner, run, pipeline, -1, domain.OperationCanceled, errors.New("pipeline cancellation requested"))
+	}
+	positions := readyPipelineStages(pipeline.Definition, run.Stages)
+	for _, position := range positions {
+		if err := w.startPipelineStage(ctx, owner, run, pipeline, position, produced); err != nil {
+			return w.deferPipelineTermination(ctx, owner, run, pipeline, position, domain.OperationFailed, err)
+		}
+	}
+	for _, stage := range run.Stages {
+		if stage.Status != domain.OperationSucceeded {
 			release()
 			return nil
 		}
 	}
+
 	if run.ResultType == "" && run.ResultVersion == "" {
 		if err := w.store.CompletePipelineRun(ctx, run.ID, owner, ""); err != nil {
 			return err
@@ -274,8 +282,18 @@ func (w *Worker) deferPipelineTermination(ctx context.Context, owner string, run
 			return err
 		}
 	}
-	if !pipeline.Definition.CleanupAfterRun {
-		return w.store.FailPipelineRun(ctx, run.ID, owner, status, cause.Error())
+	if !pipeline.Definition.CleanupAfterRun && pipeline.Definition.MaxParallelStages <= 1 {
+		stopped, err := w.stopPipelineOperations(ctx, run)
+		if err != nil {
+			return err
+		}
+		if stopped {
+			return w.store.FailPipelineRun(ctx, run.ID, owner, status, cause.Error())
+		}
+	}
+	// Drain every running sibling before final failure or reverse-order cleanup.
+	if _, err := w.stopPipelineOperations(ctx, run); err != nil {
+		return err
 	}
 	return w.store.BeginPipelineRunTermination(ctx, run.ID, owner, status, cause.Error())
 }
@@ -313,12 +331,17 @@ func (w *Worker) startPipelineStage(ctx context.Context, owner string, run domai
 		return err
 	}
 	runStage := run.Stages[position]
-	_, err = w.store.CreatePipelineStageOperation(ctx, run.ID, runStage.ID, owner, domain.Operation{
+	operation, err := w.store.CreatePipelineStageOperation(ctx, run.ID, runStage.ID, owner, domain.Operation{
 		ID: id.New("op"), WorkspaceID: run.WorkspaceID, PluginID: resolved.PluginID,
 		PluginVersion: resolved.PluginVersion, PluginDigest: resolved.PluginDigest,
 		Title: run.Name + " · " + runStage.Title, Status: domain.OperationQueued,
 		Spec: resolved.Spec, Plan: resolved.Plan, Validation: validation, PlanHash: hash,
 	})
+	if err == nil {
+		// Keep newly started siblings visible to cancellation in this same tick.
+		run.Stages[position].OperationID = operation.ID
+		run.Stages[position].Status = operation.Status
+	}
 	return err
 }
 

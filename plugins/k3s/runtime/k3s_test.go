@@ -177,7 +177,7 @@ func TestRegistryVerificationPullsEveryManagedComponent(t *testing.T) {
 	profile := registryProfile{}
 	profile.Endpoint.Spec.Host = "registry.internal"
 	profile.Endpoint.Spec.URL = "https://registry.internal"
-	commands := strings.Join(registryVerificationCommands(profile), "\n")
+	commands := strings.Join(registryWarmupImages(profile, Spec{}), "\n")
 	for _, component := range managedcomponents.Catalog() {
 		expected := managedcomponents.Image(profile.Endpoint.Spec.Host, component.Name, component.Version)
 		if !strings.Contains(commands, expected) {

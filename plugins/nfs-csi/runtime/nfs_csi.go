@@ -525,7 +525,7 @@ func probeManifest(namespace, storageClass string) ([]byte, error) {
 	objects := []map[string]any{
 		{"apiVersion": "v1", "kind": "Namespace", "metadata": map[string]any{"name": namespace}},
 		{"apiVersion": "v1", "kind": "PersistentVolumeClaim", "metadata": map[string]any{"name": "storage-probe", "namespace": namespace}, "spec": map[string]any{"accessModes": []string{"ReadWriteMany"}, "storageClassName": storageClass, "resources": map[string]any{"requests": map[string]string{"storage": "16Mi"}}}},
-		{"apiVersion": "v1", "kind": "Pod", "metadata": map[string]any{"name": "storage-probe", "namespace": namespace}, "spec": map[string]any{"restartPolicy": "Never", "securityContext": map[string]any{"runAsUser": 472, "runAsGroup": 472}, "containers": []map[string]any{{"name": "probe", "image": "busybox:1.37.0", "command": []string{"sh", "-c", "sleep 600"}, "volumeMounts": []map[string]any{{"name": "data", "mountPath": "/data"}}}}, "volumes": []map[string]any{{"name": "data", "persistentVolumeClaim": map[string]string{"claimName": "storage-probe"}}}}},
+		{"apiVersion": "v1", "kind": "Pod", "metadata": map[string]any{"name": "storage-probe", "namespace": namespace}, "spec": map[string]any{"restartPolicy": "Never", "terminationGracePeriodSeconds": 1, "securityContext": map[string]any{"runAsUser": 472, "runAsGroup": 472}, "containers": []map[string]any{{"name": "probe", "image": "busybox:1.37.0", "command": []string{"sleep", "600"}, "volumeMounts": []map[string]any{{"name": "data", "mountPath": "/data"}}}}, "volumes": []map[string]any{{"name": "data", "persistentVolumeClaim": map[string]string{"claimName": "storage-probe"}}}}},
 	}
 	parts := make([]string, 0, len(objects))
 	for _, object := range objects {

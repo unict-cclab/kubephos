@@ -21,7 +21,6 @@ import (
 
 	"kubephos.dev/kubephos/internal/domain"
 	kubeconfigutil "kubephos.dev/kubephos/internal/kubeconfig"
-	"kubephos.dev/kubephos/internal/managedcomponents"
 	"kubephos.dev/kubephos/internal/managedregistry"
 	"kubephos.dev/kubephos/internal/plugins"
 	"kubephos.dev/kubephos/internal/pluginssh"
@@ -393,6 +392,9 @@ func (p Plugin) Execute(ctx context.Context, step domain.PlanStep, log plugins.L
 		if err := installCilium(ctx, runner, primary, access, spec); err != nil {
 			return nil, err
 		}
+		if err := log("info", "Cilium, Hubble and the ClusterMesh API server are ready"); err != nil {
+			return nil, err
+		}
 	}
 	inventory, err := waitForInventory(ctx, runner, primary, access, spec.ClusterName, len(machines.Spec.Machines), 5*time.Minute)
 	if err != nil {
@@ -405,7 +407,7 @@ func (p Plugin) Execute(ctx context.Context, step domain.PlanStep, log plugins.L
 		return nil, err
 	}
 	if registry.Enabled {
-		if err := verifyRegistryProfile(ctx, runner, machines, access, registry); err != nil {
+		if err := warmRegistryProfile(ctx, runner, machines, access, registry, spec, log); err != nil {
 			return nil, err
 		}
 	}
@@ -635,12 +637,7 @@ func registryVerificationCommands(profile registryProfile) []string {
 		"sudo systemctl cat k3s k3s-agent 2>/dev/null | grep -q -- '--disable-default-registry-endpoint'",
 		"curl --connect-timeout 5 --max-time 15 --cacert /etc/rancher/k3s/kubephos-registry-ca.crt -fsS -u " + shellQuote(profile.Credential.Spec.Username+":"+profile.Credential.Spec.Password) + " " + shellQuote(profile.Endpoint.Spec.URL+"/v2/") + " >/dev/null",
 	}
-	for _, mirror := range profile.Endpoint.Spec.Mirrors {
-		commands = append(commands, registryPullCommand(mirror.Source+"/"+mirror.Probe))
-	}
-	for _, component := range managedcomponents.Catalog() {
-		commands = append(commands, registryPullCommand(managedcomponents.Image(profile.Endpoint.Spec.Host, component.Name, component.Version)))
-	}
+
 	return commands
 }
 

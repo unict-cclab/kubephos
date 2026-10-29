@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
@@ -397,8 +398,14 @@ func (s *Store) ClaimPipelineRun(ctx context.Context, owner string) (domain.Pipe
 	return run, err == nil, err
 }
 
-func (s *Store) ReleasePipelineRun(ctx context.Context, runID, owner string) error {
-	_, err := s.pool.Exec(ctx, `UPDATE pipeline_runs SET lease_owner = NULL, lease_until = NULL WHERE id = $1 AND lease_owner = $2`, runID, owner)
+func (s *Store) ReleasePipelineRun(ctx context.Context, runID, owner string, delays ...time.Duration) error {
+	delay := time.Duration(0)
+	if len(delays) > 0 {
+		delay = delays[0]
+	}
+	_, err := s.pool.Exec(ctx, `UPDATE pipeline_runs SET lease_owner = NULL,
+ lease_until = CASE WHEN $3::double precision > 0 AND status='running' THEN now()+($3::double precision * interval '1 second') ELSE NULL END
+ WHERE id = $1 AND lease_owner = $2`, runID, owner, delay.Seconds())
 	return err
 }
 
