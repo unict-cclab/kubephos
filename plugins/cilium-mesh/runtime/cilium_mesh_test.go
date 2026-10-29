@@ -48,13 +48,19 @@ func fixtureStep(t *testing.T) domain.PlanStep {
 }
 
 type meshTestRunner struct {
-	commands      [][]string
-	applied       int
-	statusFailure error
+	commands           [][]string
+	applied            int
+	measurementApplied int
+	managedSecrets     []json.RawMessage
+	statusFailure      error
+	disconnected       bool
 }
 
 func (r *meshTestRunner) Run(_ context.Context, _ map[string]string, args ...string) (string, error) {
 	r.commands = append(r.commands, append([]string{}, args...))
+	if len(args) > 1 && args[1] == "disconnect" {
+		r.disconnected = true
+	}
 	if len(args) > 1 && args[1] == "status" && r.statusFailure != nil {
 		return "", r.statusFailure
 	}
@@ -63,8 +69,40 @@ func (r *meshTestRunner) Run(_ context.Context, _ map[string]string, args ...str
 func (r *meshTestRunner) Kubectl(_ context.Context, config string, stdin []byte, args ...string) (string, error) {
 	if len(stdin) > 0 {
 		r.applied++
+		var object struct {
+			Kind     string
+			Metadata struct{ Name string }
+		}
+		_ = json.Unmarshal(stdin, &object)
+		if object.Kind == "Secret" && object.Metadata.Name == meshValuesSecret {
+			r.managedSecrets = append(r.managedSecrets, append(json.RawMessage{}, stdin...))
+		}
+		if object.Kind != "HelmChartConfig" && !(object.Kind == "Secret" && object.Metadata.Name == meshValuesSecret) {
+			r.measurementApplied++
+		}
 	}
 	command := strings.Join(args, " ")
+	if strings.HasPrefix(command, "get helmchartconfig cilium") || strings.HasPrefix(command, "get secret "+meshValuesSecret) {
+		return "", nil
+	}
+	peers := map[string]any{}
+	for _, name := range []string{"cluster-a", "cluster-b", "cluster-c"} {
+		if !strings.Contains(config, "https://"+name+".test") && !r.disconnected {
+			peers[name] = map[string]any{"ips": []any{"192.0.2.1"}, "port": 32379}
+		}
+	}
+	if strings.HasPrefix(command, "get secrets ") {
+		return testHelmReleaseList(map[string]any{"clustermesh": map[string]any{"config": map[string]any{"enabled": true, "clusters": peers}}}), nil
+	}
+	if strings.HasPrefix(command, "get secret cilium-clustermesh ") {
+		data := map[string]string{}
+		for name := range peers {
+			data[name] = "Y29uZmln"
+		}
+		raw, _ := json.Marshal(map[string]any{"data": data})
+		return string(raw), nil
+	}
+
 	if strings.HasPrefix(command, "get prometheus") {
 		return `{"items":[{"metadata":{"name":"prometheus"},"spec":{}}]}`, nil
 	}
@@ -99,8 +137,8 @@ func TestMeshConnectsEveryPairAndRetainsMembership(t *testing.T) {
 			statuses++
 		}
 	}
-	if connections != 3 || statuses != 3 || runner.applied < 6 {
-		t.Fatalf("incomplete mesh: %d pairs, %d status checks, %d applied resources", connections, statuses, runner.applied)
+	if connections != 3 || statuses != 3 || runner.measurementApplied < 6 {
+		t.Fatalf("incomplete mesh: %d pairs, %d status checks, %d applied resources", connections, statuses, runner.measurementApplied)
 	}
 	if !strings.Contains(string(raw), `"mode":"multi"`) || !strings.Contains(string(raw), "art_connection_cluster-c") {
 		t.Fatal("membership lost")
@@ -136,7 +174,7 @@ func TestMeshWaitsForNetworkBeforeConfiguringMeasurements(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "Cilium agent is not ready") {
 		t.Fatalf("missing network readiness failure: %v", err)
 	}
-	if runner.applied != 0 {
+	if runner.measurementApplied != 0 {
 		t.Fatal("measurement resources were changed before the mesh became ready")
 	}
 }

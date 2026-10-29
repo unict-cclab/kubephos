@@ -215,10 +215,13 @@ func (p Plugin) Execute(ctx context.Context, step domain.PlanStep, log plugins.L
 			}
 		}
 	}
+	if err := persistCurrentMesh(ctx, runner, spec, configs, false); err != nil {
+		return nil, err
+	}
 	if err := log("info", "Waiting for Cilium agents and ClusterMesh connections to become ready"); err != nil {
 		return nil, err
 	}
-	if err := verifyMesh(ctx, runner, spec, configs); err != nil {
+	if err := VerifyMeshConnections(ctx, runner, spec, configs); err != nil {
 		return nil, err
 	}
 	if err := log("info", "Configuring cross-cluster network measurements and monitoring"); err != nil {
@@ -232,8 +235,14 @@ func (p Plugin) Execute(ctx context.Context, step domain.PlanStep, log plugins.L
 	}
 	return json.Marshal(map[string]any{"environment": envelope("ClusterEnvironment")})
 }
-func verifyMesh(ctx context.Context, runner Runner, spec Spec, configs map[string]string) error {
+
+// VerifyMeshConnections requires the complete expected membership, even when
+// Cilium reports a healthy but empty 0/0 mesh.
+func VerifyMeshConnections(ctx context.Context, runner Runner, spec Spec, configs map[string]string) error {
 	for _, member := range spec.Members {
+		if err := waitForMeshMembership(ctx, runner, configs[member.Name], expectedPeers(spec, member.Name)); err != nil {
+			return fmt.Errorf("verify membership on %s: %w", member.Name, err)
+		}
 		if _, err := runner.Run(ctx, configs, "clustermesh", "status", "--context", member.Name, "--wait", "--wait-duration", "10m"); err != nil {
 			return fmt.Errorf("verify mesh on %s: %w", member.Name, err)
 		}
@@ -263,7 +272,7 @@ func (p Plugin) Verify(ctx context.Context, step domain.PlanStep, raw json.RawMe
 	if closer, ok := runner.(interface{ Close() }); ok {
 		defer closer.Close()
 	}
-	return health(verifyMesh(ctx, runner, spec, configs)), nil
+	return health(VerifyMeshConnections(ctx, runner, spec, configs)), nil
 }
 func (p Plugin) Cleanup(ctx context.Context, step domain.PlanStep, raw json.RawMessage, log plugins.Logger) error {
 	spec, configs, err := resolve(step)
@@ -281,7 +290,7 @@ func (p Plugin) Cleanup(ctx context.Context, step domain.PlanStep, raw json.RawM
 			}
 		}
 	}
-	return nil
+	return persistCurrentMesh(ctx, runner, spec, configs, true)
 }
 func health(err error) domain.HealthReport {
 	if err != nil {
