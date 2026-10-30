@@ -1,14 +1,19 @@
 package harbor
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestRegistryHealthProbeAuthenticatesAndRejectsUnauthorizedWithoutRetry(t *testing.T) {
+	if _, err := exec.LookPath("jq"); err != nil {
+		t.Fatal("jq is required to test the Harbor startup probe")
+	}
 	for _, status := range []string{"200", "401", "403"} {
 		t.Run(status, func(t *testing.T) {
 			directory := t.TempDir()
@@ -29,7 +34,10 @@ printf '%s' "$HTTP_STATUS"
 				t.Fatal(err)
 			}
 			command := strings.ReplaceAll(waitForRegistryHealthCommand("192.0.2.10", "test-password"), "/tmp/kubephos-harbor-health.json", response)
-			process := exec.Command("sh", "-c", command)
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			process := exec.CommandContext(ctx, "sh", "-c", command)
+			process.WaitDelay = time.Second
 			process.Env = append(os.Environ(), "PATH="+directory+":"+os.Getenv("PATH"), "COUNT_FILE="+count, "HEALTH_FILE="+response, "HTTP_STATUS="+status)
 			output, err := process.CombinedOutput()
 			if status == "200" && err != nil {

@@ -27,9 +27,9 @@ jobs:
             module: components/mentat
     steps:
       - uses: actions/checkout@v6.0.3
-      - name: Install Python for generated workload checks
+      - name: Install runtime test dependencies
         if: matrix.module == '.'
-        run: apt-get update && apt-get install -y --no-install-recommends python3
+        run: apt-get update && apt-get install -y --no-install-recommends python3 jq
       - name: Test and vet
         working-directory: ${{ matrix.module }}
         run: |

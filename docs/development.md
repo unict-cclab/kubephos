@@ -46,8 +46,8 @@ authentication requests to that stack.
 
 ## Checks
 
-Host requirements: Go as pinned in `go.mod`, Node as used by CI, Python 3, Bash and
-OpenSSL. Run:
+Host requirements: Go as pinned in `go.mod`, Node as used by CI, Python 3, Bash,
+OpenSSL and jq. Run:
 
 ```bash
 make test
