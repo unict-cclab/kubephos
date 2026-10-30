@@ -160,7 +160,17 @@ function SchemaField({name, prefix, property, value, required, onValue, formValu
   }
   if (property.type === 'object' || property.type === 'array') {
     const serialized = value === undefined && property.default === undefined ? '' : JSON.stringify(value ?? property.default, null, 2)
-    return <label className="wide">{title}<textarea className={strategyConfig ? 'strategy-config-editor' : 'code-editor'} name={fieldName} rows={strategyConfig ? 20 : 4} required={required} defaultValue={serialized} onChange={event => onValue(event.target.value)} /></label>
+    return <label className="wide">{title}<textarea className={strategyConfig ? 'strategy-config-editor' : 'code-editor'} name={fieldName} rows={strategyConfig ? 20 : 4} required={required} defaultValue={serialized} onChange={event => {
+      const field = event.currentTarget
+      field.setCustomValidity('')
+      if (field.value.trim()) {
+        try {
+          const parsed: unknown = JSON.parse(field.value)
+          if (property.type === 'array' ? !Array.isArray(parsed) : !parsed || typeof parsed !== 'object' || Array.isArray(parsed)) field.setCustomValidity(`Enter a JSON ${property.type === 'array' ? 'array' : 'object'}.`)
+        } catch {field.setCustomValidity(`Enter a valid JSON ${property.type === 'array' ? 'array' : 'object'}.`)}
+      }
+      onValue(field.value)
+    }} /></label>
   }
   if (property.type === 'string' && property['x-kubephos-multiline']) {
     return <label className="wide">{title}<textarea className={strategyConfig ? 'strategy-config-editor' : undefined} name={fieldName} rows={strategyConfig ? 20 : 5} required={required} defaultValue={value === undefined && property.default === undefined ? '' : String(value ?? property.default)} minLength={property.minLength} maxLength={property.maxLength} onChange={event => onValue(event.target.value)} /></label>

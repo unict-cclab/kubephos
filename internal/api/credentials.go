@@ -54,11 +54,11 @@ func (s *Server) createCredential(response http.ResponseWriter, request *http.Re
 	}
 	issues, err := schema.Validate(definition, input.Value)
 	if err != nil {
-		writeError(response, http.StatusInternalServerError, "invalid_schema", err.Error())
+		writeError(response, http.StatusInternalServerError, "invalid_schema", "Could not validate the credential. Check the installed plugin and try again.")
 		return
 	}
 	if len(issues) > 0 {
-		writeJSON(response, http.StatusUnprocessableEntity, map[string]any{"code": "validation_failed", "issues": issues})
+		writeJSON(response, http.StatusUnprocessableEntity, map[string]any{"code": "validation_failed", "issues": schema.DescribeIssues(definition, issues)})
 		return
 	}
 	nonce, ciphertext, fingerprint, err := s.vault.Encrypt(input.Value)
@@ -135,11 +135,11 @@ func (s *Server) createConnection(response http.ResponseWriter, request *http.Re
 	}
 	issues, err := schema.Validate(manifest.Schema, input.Configuration)
 	if err != nil {
-		writeError(response, http.StatusInternalServerError, "invalid_schema", err.Error())
+		writeError(response, http.StatusInternalServerError, "invalid_schema", "Could not validate the connection. Check the installed plugin and try again.")
 		return
 	}
 	if len(issues) > 0 {
-		writeJSON(response, http.StatusUnprocessableEntity, map[string]any{"code": "validation_failed", "issues": issues})
+		writeJSON(response, http.StatusUnprocessableEntity, map[string]any{"code": "validation_failed", "issues": schema.DescribeIssues(manifest.Schema, issues)})
 		return
 	}
 	report := plugin.Validate(request.Context(), input.Configuration)

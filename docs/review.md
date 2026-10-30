@@ -1,61 +1,60 @@
-# Installation and repository review — October 2026
+# Project review — 30 October 2026
 
 ## Changes
 
-- Added a Linux installer with generated, independent secrets and an initial
-  administrator provisioned before the application port is published.
-- Kept installation configuration separate from development. The development
-  override has its own project, volumes, port and explicit local credentials.
-- Removed fallback development secrets from the installation Compose file and
-  core Keycloak configuration. Internal service addresses and advanced runtime
-  parameters no longer appear in the basic installation path.
-- Fixed the health-check CLI to use the internal HTTP listener, so a different
-  public port or an HTTPS reverse proxy does not make a healthy container fail.
-- Removed the unused status CLI, which queried an authenticated endpoint without
-  credentials; doctor is the supported health-check command.
-- Removed the duplicate, unused managed-stack version manifest and editor backups;
-  moved the standalone LocalAI workload example into examples/.
-- Excluded local state, agent configuration, credentials and Python caches from
-  publication/build contexts. Kept public development credentials explicitly named.
-- Added the MIT license, contribution/security guides and third-party notices.
-  Preserved Mentat's notice in its image and incremented that component version.
-- Simplified the README and separated operational, development and experiment
-  documentation. Installation archives pin their image version and include checksums.
-- Prevented prereleases from updating latest and protected published managed
-  component versions using source-tree labels.
-- Expanded CI from a subset to the full storage test package; included installer,
-  and packaging checks. Fixed two stale frontend
-  navigation assertions and gave the full multi cluster wizard test a suitable
-  timeout rather than changing the application behavior.
-- Updated Vitest, the Go compiler and the vulnerable PostgreSQL, cryptographic,
-  network and text dependencies. Added reachable-vulnerability scans to CI.
-  Normalized dependency manifests for all Go modules.
+- Installation and development instructions now distinguish a published installer
+  archive from an unreleased source checkout. Experiment and frontend quality
+  guides describe current behavior without the previous chronological notes.
+- The updater identifies an installation by its installer marker, checks pending
+  work before changing files, and validates/downloads the release before replacing
+  the installed Compose file. Invalid HTTPS ports are rejected by the installer.
+- Shared lists adapt to their available width while keeping actions visible.
+  Wide editable tables expose their field labels before controls become too narrow.
+  Wizard navigation adapts to its container and no longer marks skipped steps as
+  completed. Field alignment, CPU units and authorship fallback are consistent.
+- API clients preserve valid lists on incomplete responses and provide actionable
+  errors for connectivity, malformed responses and expired sessions. JSON editors
+  validate their expected object/array shape before submission.
+- Authentication cookies and Keycloak forwarding honor the configured HTTPS
+  origin behind TLS-terminating proxies, without trusting arbitrary proxy headers.
+- Request validation rejects oversized bodies, extra JSON values and non-object
+  requests. Application errors use field labels with deterministic ordering;
+  model-import errors omit internal network details and signed URLs.
+- Suite plots filter unrelated metrics before processing samples. Script-test
+  discovery is shared by Make and CI; PostgreSQL CI also runs coordinator tests.
+- Added bounded, read-only connectivity monitoring with per-member multi cluster
+  results, consecutive-failure confirmation, recovery and stale-result handling.
+  Checks do not change provisioning or attribution; exported/imported state resets
+  transient monitoring results and leases.
+- Removed the unused standalone LocalAI example and the tracked placeholder for
+  generated component-image archives. The build creates its output directory.
 
 ## Verification
 
-The review ran the root Go tests and vet using Go 1.26.10, tests/vet for all three managed Go
-modules, the complete frontend suite and production build, frontend bundle/theme
-checks, the complete storage package on disposable PostgreSQL, installer and
-packaging regressions, Compose validation, ShellCheck, npm audit and govulncheck.
-The frontend passed its test suite; npm audit reported zero vulnerabilities. The core
-and all three managed modules reported zero reachable Go vulnerabilities after
-the updates. Transitive modules can still contain advisory-listed packages that
-are not reachable from these programs; this is not an image/OS vulnerability scan.
+- Root Go tests against disposable PostgreSQL; race checks for connectivity probes
+  and exclusive monitor leases; tests and vet for all three managed
+  Go modules; Cluster Lens theme regression.
+- 336 frontend tests, including accessibility and wizard regressions; production
+  build; both-theme contrast checks; initial assets below the 220 KiB gzip budget.
+- 20 installer, updater and packaging tests; Bash syntax and ShellCheck.
+- `npm audit`: no vulnerabilities. `govulncheck`: no reachable vulnerabilities in
+  the root module or the three managed modules. These are dependency checks, not
+  an image/operating-system security audit.
+- Full Docker build and local app/worker health checks.
+- Real installation with fresh volumes using published v0.1.3, followed by the
+  revised updater and development image. Initial credentials, encryption key and
+  a saved catalog edit survived; changing the public URL updated Keycloak's
+  redirect URI and browser origin. All doctor checks passed.
+- Authenticated browser walkthrough: Overview, all Infrastructure and Catalog
+  lists, single/multi cluster forms, cluster details/access, new/edit configuration
+  workflows, suite review/colors, sharing, experiment comparison/statistics/plots/
+  exports, Users and Administration. Checked desktop, intermediate and phone
+  widths, light/dark themes, empty search results and values retained across steps.
 
-A separate Compose installation with fresh volumes was used to verify migrations,
-Keycloak realm import, generated administrator credentials, a custom public port,
-all health checks, repeated administrator setup without resetting accounts, and a
-real browser login to the empty dashboard. It did not reuse the operational
-installation's database, object storage, encryption key or volumes. Browser tests
-must also isolate hostnames/profiles, as described in the development guide.
+## Limits
 
-## Publication boundaries
-
-The default installer is ready to be packaged with its matching platform image.
-No GitHub release or registry image was published during this review. Registry
-publication and the matching release download still require a release run.
-
-These checks do not replace an upgrade/restore rehearsal from the previous
-published release, a deployment on every Linux distribution or new Proxmox/VM
-provisioning experiments. Those operations were deliberately not run on existing
-clusters during repository cleanup.
+The visual walkthrough did not submit provisioning, experiments, account or
+sharing changes, credential downloads, or deletions. Automated tests cover those
+interfaces where applicable. No new Proxmox provisioning benchmark, full external
+backup/restore rehearsal, screen-reader session or representative-user usability
+study was performed. Existing Proxmox VMs and cluster deployments were not changed by these checks.

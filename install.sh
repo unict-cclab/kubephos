@@ -46,6 +46,13 @@ command -v openssl >/dev/null || fail 'Install OpenSSL first.'
 [[ -f "$source_dir/compose.yaml" && -f "$source_dir/update.sh" ]] || fail 'Keep install.sh, update.sh and compose.yaml together.'
 [[ $release_version =~ ^[a-zA-Z0-9_][a-zA-Z0-9_.-]{0,127}$ ]] || fail 'Invalid image tag.'
 [[ $public_url =~ ^https?://([a-zA-Z0-9.-]+|\[[a-fA-F0-9:]+\])(:[0-9]+)?$ ]] || fail 'URL must be an HTTP(S) origin without a path, query or credentials.'
+authority=${public_url#*://}
+if [[ $authority =~ :([0-9]+)$ ]]; then
+  url_port=${BASH_REMATCH[1]}
+  if [[ ! $url_port =~ ^[1-9][0-9]{0,4}$ ]] || ((10#$url_port > 65535)); then
+    fail 'URL port must be between 1 and 65535.'
+  fi
+fi
 [[ -n $install_dir && $install_dir != / ]] || fail 'Choose an installation directory.'
 if ! $prepare_only; then
   command -v docker >/dev/null || fail 'Install Docker Engine and the Docker Compose plugin first.'
@@ -81,9 +88,7 @@ else
   [[ $administrator_email =~ ^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$ ]] || fail 'Enter a valid administrator email.'
   port=8080
   if [[ $public_url == http://* ]]; then port=80; fi
-  authority=${public_url#*://}
   if [[ $public_url == http://* && $authority =~ :([0-9]+)$ ]]; then port=${BASH_REMATCH[1]}; fi
-  if [[ ! $port =~ ^[1-9][0-9]{0,4}$ ]] || ((10#$port > 65535)); then fail 'URL port must be between 1 and 65535.'; fi
   database_password=$(openssl rand -hex 32)
   client_secret=$(openssl rand -hex 32)
   management_secret=$(openssl rand -hex 32)

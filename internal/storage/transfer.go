@@ -58,6 +58,12 @@ func transferRows(ctx context.Context, tx pgx.Tx, table, where string, args ...a
 		if err = json.Unmarshal(raw, &row); err != nil {
 			return nil, err
 		}
+		if table == "provider_connections" || table == "managed_resources" {
+			transfer.Set(row, "connectivity", nil)
+			transfer.Set(row, "connectivity_failures", 0)
+			transfer.Set(row, "connectivity_next_check_at", time.Now().UTC())
+			transfer.Set(row, "connectivity_lease_id", nil)
+		}
 		result = append(result, row)
 	}
 	return result, rows.Err()
@@ -368,6 +374,12 @@ func (s *Store) ImportState(ctx context.Context, state *transfer.State, ownerID 
 	}
 	for _, table := range transferTables {
 		for _, row := range state.Tables[table] {
+			if table == "provider_connections" || table == "managed_resources" {
+				transfer.Set(row, "connectivity", nil)
+				transfer.Set(row, "connectivity_failures", 0)
+				transfer.Set(row, "connectivity_next_check_at", time.Now().UTC())
+				transfer.Set(row, "connectivity_lease_id", nil)
+			}
 			raw, e := json.Marshal(row)
 			if e != nil {
 				return e

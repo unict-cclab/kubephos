@@ -46,6 +46,8 @@
   --shadow: 0 10px 30px rgb(0 0 0 / .12);
   --dark: #171717;
   --lime: #fafafa;
+  --error-foreground: #b42318;
+  --error-background: #fef3f2;
   --success-foreground: #146c35;
   --success-background: #e8f5ee;
   --success-contrast: #ffffff;
@@ -55,6 +57,8 @@
 }
 
 :root[data-theme="dark"] {
+  --error-foreground: #fda29b;
+  --error-background: #3b1d1d;
   color-scheme: dark;
   --background: oklch(.145 0 0);
   --foreground: oklch(.985 0 0);

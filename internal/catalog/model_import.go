@@ -3,8 +3,11 @@ package catalog
 import (
 	"context"
 	"crypto/sha256"
+	"crypto/tls"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
 	"path"
@@ -60,7 +63,19 @@ func ImportModel(ctx context.Context, source string, client *http.Client) (Model
 	}
 	response, err := client.Do(request)
 	if err != nil {
-		return model, fmt.Errorf("could not read model metadata: %w", err)
+		var network net.Error
+		var dns *net.DNSError
+		var certificate *tls.CertificateVerificationError
+		switch {
+		case errors.As(err, &network) && network.Timeout():
+			return model, errors.New("The model server did not respond in time. Try again or check the download URL.")
+		case errors.As(err, &dns):
+			return model, errors.New("Could not find the model server. Check the download URL.")
+		case errors.As(err, &certificate):
+			return model, errors.New("The model server's HTTPS certificate could not be verified.")
+		default:
+			return model, errors.New("Could not reach the model server. Check the download URL and try again.")
+		}
 	}
 	defer response.Body.Close()
 	if response.StatusCode == http.StatusNotFound || response.StatusCode == http.StatusUnauthorized || response.StatusCode == http.StatusForbidden {

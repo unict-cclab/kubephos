@@ -955,12 +955,12 @@ func (s *Server) validatedManagedOperation(ctx context.Context, workspaceID stri
 	manifest := plugin.Manifest()
 	issues, err := schema.Validate(manifest.Schema, spec)
 	if err != nil {
-		return domain.Operation{}, &managedOperationFailure{status: http.StatusInternalServerError, code: "invalid_schema", message: err.Error()}
+		return domain.Operation{}, &managedOperationFailure{status: http.StatusInternalServerError, code: "invalid_schema", message: "Could not validate the configuration. Check the installed plugin and try again."}
 	}
 	if len(issues) > 0 {
 		converted := make([]domain.ValidationIssue, 0, len(issues))
 		for _, issue := range issues {
-			converted = append(converted, domain.ValidationIssue{Level: "error", Path: issue.Path, Message: issue.Message})
+			converted = append(converted, domain.ValidationIssue{Level: "error", Path: issue.Path, Message: schema.IssueMessage(manifest.Schema, issue)})
 		}
 		validation := domain.ValidationReport{Valid: false, Issues: converted, CheckedAt: time.Now().UTC()}
 		return domain.Operation{}, &managedOperationFailure{status: http.StatusUnprocessableEntity, payload: map[string]any{"code": "validation_failed", "validation": validation}}

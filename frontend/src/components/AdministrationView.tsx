@@ -1,5 +1,5 @@
 import {useEffect, useRef, useState, type FormEvent} from 'react'
-import {ApiError} from '../api'
+import {requestResponse} from '../api'
 import {formatDate} from '../lib'
 import type {Session} from '../types'
 import {ResourceListHeading} from './ResourceListHeading'
@@ -9,11 +9,7 @@ interface Summary {version: string; createdAt: string; counts: Record<string, nu
 const countLabels: Record<string, string> = {provider_connections: 'Proxmox connections', credentials: 'Credentials', managed_resources: 'Infrastructure resources', experiment_configurations: 'Configurations', catalog_applications: 'Applications', catalog_models: 'AI models', strategy_catalog: 'Strategies'}
 
 async function transferRequest(path: string, body: BodyInit, csrfToken?: string) {
-  const headers = new Headers({'X-CSRF-Token': csrfToken ?? ''})
-  if (typeof body === 'string') headers.set('Content-Type', 'application/json')
-  const response = await fetch(`/api/v1/administration/state/${path}`, {method: 'POST', headers, body})
-  if (!response.ok) throw new ApiError(response.status, await response.json().catch(() => ({})))
-  return response
+  return requestResponse(`/administration/state/${path}`, {method: 'POST', body}, csrfToken)
 }
 
 export function AdministrationView({session, changed}: {session: Session; changed: () => Promise<void>}) {

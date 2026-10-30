@@ -1,5 +1,6 @@
 """Update regressions with a fake Docker CLI; never changes running services."""
 import os
+import shutil
 from pathlib import Path
 import subprocess
 import tempfile
@@ -23,6 +24,7 @@ printf '%s\\n' "$*" >> "$UPDATE_TEST_LOG"
 printf '%s\\n' 'compose output hidden' >&2
 if [[ "$*" == *'psql '* ]]; then printf '%s\\n' "${UPDATE_TEST_ACTIVE:-0}"; fi
 if [[ "$*" == *' auth-sync' && "${UPDATE_TEST_FAIL:-}" == yes ]]; then exit 1; fi
+if [[ "$*" == *'config --quiet' && "${UPDATE_TEST_CONFIG_FAIL:-}" == yes ]]; then exit 1; fi
 ''')
         (tools/'docker').chmod(0o755)
         self.env={**os.environ,'PATH':str(tools)+os.pathsep+os.environ['PATH'],'UPDATE_TEST_LOG':str(self.log)}
@@ -53,6 +55,36 @@ if [[ "$*" == *' auth-sync' && "${UPDATE_TEST_FAIL:-}" == yes ]]; then exit 1; f
         result=subprocess.run([str(self.installation/'update.sh'),'--no-pull'],env={**self.env,'UPDATE_TEST_ACTIVE':'1'},capture_output=True,text=True)
         self.assertNotEqual(result.returncode,0)
         self.assertNotIn(' stop ',self.log.read_text())
+
+    def test_busy_installation_keeps_files_and_skips_image_downloads(self):
+        compose=self.installation/'compose.yaml'
+        compose.write_text(compose.read_text()+'\n# Existing installation\n')
+        before=compose.read_bytes()
+        result=subprocess.run([str(ROOT/'update.sh'),'--directory',str(self.installation)],env={**self.env,'UPDATE_TEST_ACTIVE':'1'},capture_output=True,text=True)
+        self.assertNotEqual(result.returncode,0)
+        self.assertEqual(compose.read_bytes(),before)
+        self.assertFalse((self.installation/'compose.previous.yaml').exists())
+        self.assertNotIn(' pull',self.log.read_text())
+
+    def test_checkout_env_does_not_select_the_checkout_as_an_installation(self):
+        home=self.base/'home'
+        installed=home/'.local/share/kubephos'
+        shutil.copytree(self.installation,installed)
+        checkout=self.base/'checkout';checkout.mkdir()
+        for name in ('update.sh','compose.yaml'):
+            shutil.copy2(ROOT/name,checkout/name)
+        (checkout/'.env').write_text('COMPOSE_PROJECT_NAME=unrelated-development\n')
+        result=subprocess.run([str(checkout/'update.sh'),'--no-pull'],env={**self.env,'HOME':str(home)},capture_output=True,text=True)
+        self.assertEqual(result.returncode,0,result.stderr)
+        self.assertTrue(all(str(installed/'.env') in call for call in self.log.read_text().splitlines()))
+
+    def test_invalid_configuration_does_not_stop_services_or_replace_files(self):
+        before=(self.installation/'compose.yaml').read_bytes()
+        result=subprocess.run([str(ROOT/'update.sh'),'--directory',str(self.installation)],env={**self.env,'UPDATE_TEST_CONFIG_FAIL':'yes'},capture_output=True,text=True)
+        self.assertNotEqual(result.returncode,0)
+        self.assertEqual((self.installation/'compose.yaml').read_bytes(),before)
+        self.assertNotIn(' stop ',self.log.read_text())
+        self.assertNotIn('compose output hidden',result.stderr)
 
     def test_sync_failure_keeps_application_stopped_and_reports_only_the_log_path(self):
         result=subprocess.run([str(self.installation/'update.sh'),'--no-pull'],env={**self.env,'UPDATE_TEST_FAIL':'yes'},capture_output=True,text=True)

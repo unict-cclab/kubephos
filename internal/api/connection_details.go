@@ -33,7 +33,7 @@ func (s *Server) getConnectionDetails(response http.ResponseWriter, request *htt
 	details := map[string]any{"endpoint": configuration["endpoint"], "verifyTLS": configuration["verifyTLS"], "tokenId": credential["tokenId"], "tokenSecret": "••••••••"}
 	response.Header().Set("Cache-Control", "no-store, max-age=0")
 	response.Header().Set("Pragma", "no-cache")
-	writeJSON(response, http.StatusOK, map[string]any{"id": connection.ID, "name": connection.Name, "description": connection.Description, "provider": connection.Provider, "pluginId": connection.PluginID, "createdAt": connection.CreatedAt, "updatedAt": connection.UpdatedAt, "configuration": details})
+	writeJSON(response, http.StatusOK, map[string]any{"id": connection.ID, "name": connection.Name, "description": connection.Description, "provider": connection.Provider, "pluginId": connection.PluginID, "createdAt": connection.CreatedAt, "updatedAt": connection.UpdatedAt, "configuration": details, "connectivity": connection.Connectivity})
 }
 
 func (s *Server) revealConnectionSecret(response http.ResponseWriter, request *http.Request) {

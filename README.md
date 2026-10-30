@@ -7,7 +7,7 @@ compare placement strategies, and inspect the results from one interface.
 ## What it does
 
 - Provisions VM templates, Harbor, NFS and K3s clusters on Proxmox.
-- Supports scheduler, descheduler, autoscaler integrations.
+- Supports scheduler, descheduler and autoscaler integrations.
 - Provides an application catalog and Locust load generation, including external
   HTTP destinations and Redis Cluster workloads.
 - Runs experiments and comparison suites with sequential repetitions.
@@ -25,13 +25,16 @@ newer**. The host needs network access to Proxmox, the provisioned VMs and the i
 registries used by your experiments. The installer does not modify Docker or your
 host's package configuration.
 
-From a release archive or a checkout:
+Download and extract an installer archive from
+[GitHub Releases](https://github.com/unict-cclab/kubephos/releases), then run:
 
 ```bash
-git clone https://github.com/unict-cclab/kubephos.git
-cd kubephos
 ./install.sh
 ```
+
+A release archive selects its matching image version automatically. For a Git
+checkout, select a published tag and run `./install.sh --version <release-tag>`.
+Use the development workflow below to run unreleased source.
 
 Enter the administrator email when prompted. The installer creates a separate
 installation in `~/.local/share/kubephos`, generates unique credentials, creates
@@ -73,8 +76,7 @@ instance through **Administration → Export / Import**, using an
 archive password. Users, experiments and `.env` are excluded.
 
 See [installation and operations](docs/installation.md) for HTTPS, updates, backups
-and troubleshooting. Published releases are available on
-[GitHub Releases](https://github.com/unict-cclab/kubephos/releases).
+and troubleshooting.
 
 ## First experiment
 

@@ -52,7 +52,7 @@ class InstallerTests(unittest.TestCase):
         self.assertFalse((self.directory / 'credentials.json').exists())
 
     def test_rejects_invalid_options_without_creating_files(self):
-        for args in (('--url', 'http://host/invalid'), ('--url', 'http://host:99999'), ('--url', 'http://host:0'), ('--url', 'http://user:password@host'), ('--version', 'tag$(false)'), ('--unknown',)):
+        for args in (('--url', 'http://host/invalid'), ('--url', 'http://host:99999'), ('--url', 'http://host:0'), ('--url', 'https://host:99999'), ('--url', 'https://host:0'), ('--url', 'http://user:password@host'), ('--version', 'tag$(false)'), ('--unknown',)):
             with self.subTest(args=args):
                 self.run_installer('--prepare-only', *args, success=False)
                 self.assertFalse((self.directory / '.env').exists())

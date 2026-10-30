@@ -1,3 +1,4 @@
+import {ResourceStatus, ResourceConnectivity} from './ResourceConnectivity'
 import {ResourceAttribution} from './ResourceAttribution'
 import {useEffect, useState} from 'react'
 import {request} from '../api'
@@ -44,7 +45,7 @@ export function ConnectionDetailsPage({connection, session, close}: {connection:
       setPending(false)
     }
   }
-  return <div className="detail-page"><DetailBreadcrumb parent="Infrastructure" current={connection.name} back={close} /><div className="detail-page-heading"><div><h2>{connection.name}</h2></div></div><ResourceAttribution resource={connection} editable /><article className="detail-page-card simple-resource-detail">
+  return <div className="detail-page"><DetailBreadcrumb parent="Infrastructure" current={connection.name} back={close} /><div className="detail-page-heading"><div><h2>{connection.name}</h2></div><ResourceStatus resource={connection} /></div><ResourceAttribution resource={connection} editable /><article className="detail-page-card simple-resource-detail">
 
     {details ? <dl className="simple-detail-grid">
       <div><dt>Name</dt><dd>{details.name}</dd></div>
@@ -55,6 +56,7 @@ export function ConnectionDetailsPage({connection, session, close}: {connection:
 
 
     </dl> : error ? <p className="managed-error">{error}</p> : <p className="details-copy">Loading…</p>}
+    <ResourceConnectivity value={connection.connectivity} />
     {details && error && <p className="managed-error">{error}</p>}
   </article></div>
 }

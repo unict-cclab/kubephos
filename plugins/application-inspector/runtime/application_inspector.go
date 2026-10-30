@@ -447,7 +447,7 @@ func resolveValues(definition, defaults, supplied map[string]any) (map[string]an
 		return nil, errors.New("application values schema is invalid")
 	}
 	if len(issues) > 0 {
-		return nil, fmt.Errorf("application settings do not satisfy valuesSchema at %s: %s", issues[0].Path, issues[0].Message)
+		return nil, errors.New(schema.IssueMessage(rawDefinition, issues[0]))
 	}
 	return resolved, nil
 }

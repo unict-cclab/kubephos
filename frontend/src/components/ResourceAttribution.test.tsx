@@ -1,6 +1,6 @@
 import {render, screen} from '@testing-library/react'
 import {expect, it} from 'vitest'
-import {ResourceAttribution} from './ResourceAttribution'
+import {ResourceAttribution, modifiedByLabel} from './ResourceAttribution'
 import {formatDate} from '../lib'
 
 it('uses the same author/date labels and formatting for editable resources', () => {
@@ -19,4 +19,11 @@ it('keeps immutable resource metadata pertinent and tolerates legacy missing dat
   expect(screen.queryByText('Last updated by')).not.toBeInTheDocument()
   expect(screen.getByText('—')).toBeInTheDocument()
   expect(formatDate('invalid')).toBe('—')
+})
+
+it('uses the creator for an untouched resource without inventing later editors', () => {
+  const resource = {createdBy: 'alice', createdAt: '2026-10-20T10:00:00Z', updatedAt: '2026-10-20T10:00:00Z'}
+  expect(modifiedByLabel(resource)).toBe('alice')
+  expect(modifiedByLabel({...resource, updatedAt: '2026-10-21T10:00:00Z'})).toBe('—')
+  expect(modifiedByLabel({...resource, modifiedBy: 'bob'})).toBe('bob')
 })

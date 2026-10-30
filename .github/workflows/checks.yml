@@ -58,7 +58,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6.0.3
       - name: Check storage and migrations against PostgreSQL
-        run: go test ./internal/storage ./internal/api -v
+        run: go test ./internal/storage ./internal/api ./internal/engine -v
 
   frontend:
     name: Frontend
@@ -88,11 +88,8 @@ jobs:
       - name: Test installer and Compose separation
         run: |
           bash -n install.sh update.sh
-          python3 scripts/test_install.py
-          python3 scripts/test_update.py
-          python3 scripts/test_release.py
+          python3 -m unittest discover -s scripts -p 'test_*.py'
           shellcheck install.sh update.sh scripts/verify_release_checks.sh
-          python3 scripts/test_release_checks.py
           ./install.sh --prepare-only --admin-email admin@example.test --directory "$RUNNER_TEMP/kubephos-install"
           docker compose --project-directory "$RUNNER_TEMP/kubephos-install" config --quiet
           docker compose --env-file deploy/dev.env -f compose.yaml -f compose.dev.yaml config --quiet

@@ -17,7 +17,7 @@ const endpoints: Array<{key: keyof PlatformData; path: string; admin: boolean; l
   {key: 'applications', path: '/catalog/applications', admin: false, live: false, list: true},
   {key: 'strategies', path: '/catalog/strategies', admin: false, live: false, list: true},
   {key: 'credentials', path: '/credentials', admin: true, live: false, list: true},
-  {key: 'connections', path: '/connections', admin: true, live: false, list: true},
+  {key: 'connections', path: '/connections', admin: true, live: true, list: true},
   {key: 'machineTemplates', path: '/machine-templates', admin: true, live: true, list: true},
   {key: 'infrastructureServices', path: '/infrastructure-services', admin: true, live: true, list: true},
   {key: 'kubernetesClusters', path: '/kubernetes-clusters', admin: false, live: true, list: true},
@@ -49,6 +49,7 @@ export function usePlatformData(session: Session | null, setSession: Dispatch<Se
     const pending = (async () => {
       const results = await Promise.allSettled(selected.map(async endpoint => {
         const value = await request<Record<string, unknown>>(endpoint.path, {}, undefined, active.signal)
+        if (!value || typeof value !== 'object' || endpoint.list && !Array.isArray(value.items)) throw new ApiError(200, {code: 'invalid_response', message: 'KubePhos returned incomplete data. Refresh the page and try again.'})
         return {...endpoint, value}
       }))
       if (active.signal.aborted) return

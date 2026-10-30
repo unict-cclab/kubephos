@@ -5,6 +5,7 @@ const standardLabels: Record<string, string> = {
   configFile: 'Configuration',
   intervalSeconds: 'Interval (s)',
   periodSeconds: 'Period (s)',
+  cores: 'CPU (cores)',
   memoryMiB: 'Memory (MiB)',
   diskGiB: 'Disk (GiB)',
   applicationPools: 'Pools',

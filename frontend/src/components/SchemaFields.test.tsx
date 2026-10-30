@@ -228,3 +228,21 @@ it('does not count fixed, hidden or conditionally invisible fields as configurab
   expect(hasConfigurableFields({properties: {serviceCount: {type: 'integer'}}})).toBe(true)
   expect(hasConfigurableFields({properties: {advanced: {type: 'integer', 'x-kubephos-advanced': true}}})).toBe(true)
 })
+
+it('validates JSON objects and arrays before the wizard can submit', () => {
+  const schema: JsonSchema = {type: 'object', properties: {parameters: {type: 'object', title: 'Parameters'}, entries: {type: 'array', title: 'Entries'}}}
+  render(<SchemaFields schema={schema} applications={[]} artifacts={[]} connections={[]} credentials={[]} />)
+  const parameters = screen.getByLabelText('Parameters') as HTMLTextAreaElement
+  fireEvent.change(parameters, {target: {value: '{invalid'}})
+  expect(parameters).toBeInvalid()
+  expect(parameters.validationMessage).toBe('Enter a valid JSON object.')
+  fireEvent.change(parameters, {target: {value: '[]'}})
+  expect(parameters).toBeInvalid()
+  fireEvent.change(parameters, {target: {value: '{"replicas": 2}'}})
+  expect(parameters).toBeValid()
+  const entries = screen.getByLabelText('Entries') as HTMLTextAreaElement
+  fireEvent.change(entries, {target: {value: '{}'}})
+  expect(entries).toBeInvalid()
+  fireEvent.change(entries, {target: {value: '["first"]'}})
+  expect(entries).toBeValid()
+})

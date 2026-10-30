@@ -2,7 +2,9 @@ package catalog
 
 import (
 	"context"
+	"errors"
 	"io"
+	"net"
 	"net/http"
 	"strings"
 	"testing"
@@ -47,6 +49,16 @@ func TestModelURLValidationAndUnavailableFiles(t *testing.T) {
 	for _, source := range []string{"file:///tmp/model.gguf", "https://example.org/model.bin", "https://example.org/model-00001-of-00002.gguf", "https://example.org/missing.gguf"} {
 		if _, err := ImportModel(context.Background(), source, client); err == nil {
 			t.Fatalf("accepted invalid or missing file %s", source)
+		}
+	}
+}
+
+func TestModelConnectionErrorsDoNotExposeURLSecrets(t *testing.T) {
+	for _, problem := range []error{context.DeadlineExceeded, &net.DNSError{Name: "internal-host", Err: "no such host"}, errors.New("transport failure at private-host")} {
+		client := &http.Client{Transport: modelTransport(func(*http.Request) (*http.Response, error) { return nil, problem })}
+		_, err := ImportModel(context.Background(), "https://models.example.test/model.gguf?access_token=private-token", client)
+		if err == nil || strings.Contains(err.Error(), "private-token") || strings.Contains(err.Error(), "private-host") || strings.Contains(err.Error(), "internal-host") {
+			t.Fatalf("unsafe or missing connection error: %v", err)
 		}
 	}
 }

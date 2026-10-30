@@ -32,8 +32,7 @@ requires the optional remote runtime described in [architecture](architecture.md
 
 ## Frontend development
 
-With the development stack running, use the Node version from CI or a compatible
-version supported by `frontend/package.json`:
+With the development stack running, use Node 24.20, matching CI:
 
 ```bash
 npm --prefix frontend ci
@@ -57,18 +56,19 @@ go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
 npm --prefix frontend run build
 npm --prefix frontend run check:bundle
 npm --prefix frontend run check:theme
-python3 scripts/test_install.py
+python3 -m unittest discover -s scripts -p 'test_*.py'
 ```
 
 Database integration tests require a **disposable** PostgreSQL instance. Set
 `KUBEPHOS_TEST_DATABASE_URL` to that instance and run:
 
 ```bash
-go test ./internal/storage -v
+go test ./internal/storage ./internal/api ./internal/engine -v
 ```
 
 The tests create isolated schemas. Never point them at an operational database.
-The CI storage job runs the complete storage test package against its own service.
+The CI PostgreSQL job runs storage, API and pipeline-coordinator tests against its
+own service.
 Frontend tests include accessibility checks and wizard navigation regressions.
 Each managed Go component has a separate module and is included in `make test`.
 

@@ -265,7 +265,7 @@ func resolveMaterializer(invocation Invocation) (materializerSpec, catalog.Descr
 		if err != nil {
 			return spec, descriptor, generatorConfig{}, err
 		}
-		return spec, descriptor, generatorConfig{}, fmt.Errorf("application setting %s is invalid: %s", issues[0].Path, issues[0].Message)
+		return spec, descriptor, generatorConfig{}, errors.New(schema.IssueMessage(definition, issues[0]))
 	}
 	if _, err := workloadresources.Build(values); err != nil {
 		return spec, descriptor, generatorConfig{}, err

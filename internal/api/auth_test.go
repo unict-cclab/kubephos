@@ -5,7 +5,39 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
+
+func TestAuthenticationCookiesUseConfiguredHTTPS(t *testing.T) {
+	for _, test := range []struct {
+		name, publicURL, requestURL, forwardedProtocol string
+		secure                                         bool
+	}{
+		{"local HTTP ignores a spoofed proxy header", "http://localhost:8080", "http://localhost:8080", "https", false},
+		{"TLS termination uses the public origin", "https://kubephos.example.test", "http://app:8080", "http", true},
+		{"direct TLS", "http://localhost:8080", "https://localhost:8080", "", true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			server := &Server{applicationURL: test.publicURL}
+			request := httptest.NewRequest(http.MethodPost, test.requestURL, nil)
+			request.Header.Set("X-Forwarded-Proto", test.forwardedProtocol)
+			response := httptest.NewRecorder()
+			server.setSessionCookie(response, request, "test-session", time.Now().Add(time.Hour))
+			server.setOIDCCookie(response, request, oidcStateCookie, "test-state")
+			server.clearOIDCCookie(response, request, oidcStateCookie)
+			server.authLogout(response, request)
+			cookies := response.Result().Cookies()
+			if len(cookies) != 4 {
+				t.Fatalf("expected four authentication cookies, got %d", len(cookies))
+			}
+			for _, cookie := range cookies {
+				if cookie.Secure != test.secure || !cookie.HttpOnly {
+					t.Errorf("cookie %s: Secure=%t, HttpOnly=%t", cookie.Name, cookie.Secure, cookie.HttpOnly)
+				}
+			}
+		})
+	}
+}
 
 func TestUserMutationAllowed(t *testing.T) {
 	allowed := []string{

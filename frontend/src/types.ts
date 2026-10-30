@@ -527,7 +527,15 @@ export interface Credential extends ResourceAttributionFields {
   fingerprint: string
 }
 
+export interface Connectivity {
+  status: string
+  checkedAt: string
+  message?: string
+  targets?: Array<{name: string; status: string; message?: string}>
+}
+
 export interface Connection extends ResourceAttributionFields {
+  connectivity?: Connectivity
   id: string
   name: string
   description?: string
@@ -538,6 +546,7 @@ export interface Connection extends ResourceAttributionFields {
 }
 
 export interface ManagedResource extends ResourceAttributionFields {
+  connectivity?: Connectivity
   id: string
   workspaceId: string
   name: string

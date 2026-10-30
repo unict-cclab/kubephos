@@ -40,7 +40,7 @@ describe('instance state transfer', () => {
     fireEvent.change(screen.getAllByLabelText('Archive password')[1], {target: {value: 'archive-password'}})
     fireEvent.submit(screen.getByRole('button', {name: 'Review archive'}).closest('form')!)
     expect(await screen.findByRole('table', {name: 'Archive contents'})).toBeInTheDocument()
-    expect(screen.getByRole('heading', {name: 'Archive contents'})).toHaveFocus()
+    await waitFor(() => expect(screen.getByRole('heading', {name: 'Archive contents'})).toHaveFocus())
     expect(fetch.mock.calls[0][0]).toBe('/api/v1/administration/state/inspect')
     expect(fetch.mock.calls[0][1].headers.get('X-CSRF-Token')).toBe('csrf')
     expect(fetch.mock.calls[0][1].headers.has('Content-Type')).toBe(false)

@@ -229,6 +229,7 @@ type Credential struct {
 }
 
 type ProviderConnection struct {
+	Connectivity  *Connectivity   `json:"connectivity,omitempty"`
 	ID            string          `json:"id"`
 	Name          string          `json:"name"`
 	Description   string          `json:"description"`
@@ -240,6 +241,7 @@ type ProviderConnection struct {
 }
 
 type ManagedResource struct {
+	Connectivity            *Connectivity    `json:"connectivity,omitempty"`
 	ID                      string           `json:"id"`
 	WorkspaceID             string           `json:"workspaceId"`
 	Name                    string           `json:"name"`
@@ -264,6 +266,19 @@ type ManagedResource struct {
 	Validation              ValidationReport `json:"validation"`
 	CreatedAt               time.Time        `json:"createdAt"`
 	UpdatedAt               time.Time        `json:"updatedAt"`
+}
+
+type Connectivity struct {
+	Status    string               `json:"status"`
+	CheckedAt time.Time            `json:"checkedAt"`
+	Message   string               `json:"message,omitempty"`
+	Targets   []ConnectivityTarget `json:"targets,omitempty"`
+}
+
+type ConnectivityTarget struct {
+	Name    string `json:"name"`
+	Status  string `json:"status"`
+	Message string `json:"message,omitempty"`
 }
 
 type ManagedResourceDependency struct {

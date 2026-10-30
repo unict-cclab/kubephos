@@ -22,16 +22,13 @@ build: managed-image-archives
 	docker build --build-arg VERSION=dev -t kubephos:dev .
 
 test:
-	python3 scripts/test_install.py
-	python3 scripts/test_update.py
-	python3 scripts/test_release.py
-	python3 scripts/test_release_checks.py
+	python3 -m unittest discover -s scripts -p 'test_*.py'
 	node --test components/cluster-lens/tests/*.test.cjs
 	go test ./...
 	cd components/cluster-lens/backend && go test ./...
 	cd components/mon-agent && go test ./...
 	cd components/mentat && go test ./...
-	npm --prefix frontend test -- --run
+	npm --prefix frontend test
 
 managed-component-images: cluster-lens-image mon-agent-image mentat-image
 

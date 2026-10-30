@@ -6,10 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"math"
 	"net/url"
 	"reflect"
 	"regexp"
+	"slices"
 	"strings"
 )
 
@@ -266,6 +268,10 @@ func Validate(definition, raw json.RawMessage) ([]Issue, error) {
 	if err := decoder.Decode(&value); err != nil {
 		return []Issue{{Path: "$", Message: "Value must be valid JSON."}}, nil
 	}
+	var extra any
+	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
+		return []Issue{{Path: "$", Message: "Value must contain one valid JSON value."}}, nil
+	}
 	return validateValue(rule, value, "$"), nil
 }
 
@@ -289,13 +295,14 @@ func validateValue(rule map[string]any, value any, path string) []Issue {
 	switch current := value.(type) {
 	case map[string]any:
 		required := stringSet(rule["required"])
-		for name := range required {
+		for _, name := range slices.Sorted(maps.Keys(required)) {
 			if _, ok := current[name]; !ok {
 				issues = append(issues, Issue{Path: path + "." + name, Message: "Value is required."})
 			}
 		}
 		properties, _ := rule["properties"].(map[string]any)
-		for name, item := range current {
+		for _, name := range slices.Sorted(maps.Keys(current)) {
+			item := current[name]
 			property, exists := properties[name]
 			if !exists {
 				if allowed, ok := rule["additionalProperties"].(bool); ok && !allowed {

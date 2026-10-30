@@ -319,7 +319,7 @@ func configuration(descriptor catalog.Descriptor, values map[string]any) (genera
 		return config, err
 	}
 	if len(issues) > 0 {
-		return config, fmt.Errorf("application setting %s is invalid: %s", issues[0].Path, issues[0].Message)
+		return config, errors.New(schema.IssueMessage(definition, issues[0]))
 	}
 	if _, err := workloadresources.Build(values); err != nil {
 		return config, err

@@ -5,7 +5,7 @@ umask 077
 fail() { printf 'Error: %s\n' "$*" >&2; exit 1; }
 source_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 install_dir="${HOME}/.local/share/kubephos"
-[[ ! -f "$source_dir/.env" ]] || install_dir=$source_dir
+[[ ! -f "$source_dir/.installer-managed" ]] || install_dir=$source_dir
 pull_images=true
 while (($#)); do
   case "$1" in
@@ -31,22 +31,33 @@ step() {
   printf '%s\n' "$title"
   "$@" >> "$log_file" 2>&1 || fail "Update failed during: $title Details: $log_file"
 }
+compose_file="$install_dir/compose.yaml"
 compose() (
   for key in ${!KUBEPHOS_@} POSTGRES_PASSWORD COMPOSE_PROJECT_NAME; do unset "$key"; done
-  docker compose --project-directory "$install_dir" --env-file "$install_dir/.env" -f "$install_dir/compose.yaml" "$@"
+  docker compose --project-directory "$install_dir" --env-file "$install_dir/.env" -f "$compose_file" "$@"
 )
-# A new release supplies its matching Compose and updater; keep installation state.
+check_activity() {
+  printf 'Checking running operations…\n'
+  local active
+  active=$(compose exec -T postgres psql -v ON_ERROR_STOP=1 -U kubephos -d kubephos -Atc "SELECT (SELECT count(*) FROM operations WHERE status IN ('queued','prechecking','running','verifying')) + (SELECT count(*) FROM pipeline_runs WHERE status='running' OR (status='queued' AND scheduled_for <= now())) + (SELECT count(*) FROM experiments WHERE status='running') + (SELECT count(*) FROM plugin_import_jobs WHERE status IN ('queued','inspecting','validating','activating'))" 2>> "$log_file") || fail "Cannot verify running operations. Details: $log_file"
+  [[ $active == 0 ]] || fail 'Wait for pending or running operations and imports to finish before updating.'
+}
+step 'Checking configuration…' compose config --quiet
+check_activity
+# Validate and download the release before replacing any installation files.
+if [[ $source_dir != "$install_dir" && -f "$source_dir/compose.yaml" ]]; then
+  compose_file="$source_dir/compose.yaml"
+  step 'Checking release configuration…' compose config --quiet
+fi
+if $pull_images; then step 'Downloading release images…' compose pull; fi
+compose_file="$install_dir/compose.yaml"
+check_activity
 if [[ $source_dir != "$install_dir" && -f "$source_dir/compose.yaml" ]]; then
   cp -- "$install_dir/compose.yaml" "$install_dir/compose.previous.yaml"
   cp -- "$source_dir/compose.yaml" "$install_dir/compose.yaml"
   cp -- "$source_dir/update.sh" "$install_dir/update.sh"
   chmod 755 "$install_dir/update.sh"
 fi
-step 'Checking configuration…' compose config --quiet
-if $pull_images; then step 'Downloading release images…' compose pull; fi
-printf 'Checking running operations…\n'
-active=$(compose exec -T postgres psql -U kubephos -d kubephos -Atc "SELECT (SELECT count(*) FROM operations WHERE status IN ('prechecking','running','verifying')) + (SELECT count(*) FROM pipeline_runs WHERE status='running') + (SELECT count(*) FROM experiments WHERE status='running')" 2>> "$log_file") || fail "Cannot verify running operations. Details: $log_file"
-[[ $active == 0 ]] || fail 'Wait for running experiments and operations to finish before updating.'
 step 'Stopping the application and worker…' compose stop app worker
 step 'Updating infrastructure services and database…' compose up -d --wait --wait-timeout 300 postgres keycloak migrate seaweedfs
 step 'Synchronizing authentication…' compose run --rm --no-deps -T auth-sync

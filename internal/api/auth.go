@@ -248,7 +248,7 @@ func (s *Server) authLogout(response http.ResponseWriter, request *http.Request)
 	if cookie != nil {
 		_ = s.store.DeleteSession(request.Context(), tokenHash(cookie.Value))
 	}
-	http.SetCookie(response, &http.Cookie{Name: sessionCookie, Value: "", Path: "/", HttpOnly: true, Secure: request.TLS != nil, SameSite: http.SameSiteStrictMode, MaxAge: -1, Expires: time.Unix(1, 0)})
+	http.SetCookie(response, &http.Cookie{Name: sessionCookie, Value: "", Path: "/", HttpOnly: true, Secure: s.usesHTTPS(request), SameSite: http.SameSiteStrictMode, MaxAge: -1, Expires: time.Unix(1, 0)})
 	logoutURL := s.applicationURL
 	if s.identity != nil {
 		logoutURL = s.identity.LogoutURL()
@@ -282,15 +282,21 @@ func (s *Server) requestSession(request *http.Request) (domain.Session, error) {
 }
 
 func (s *Server) setSessionCookie(response http.ResponseWriter, request *http.Request, token string, expiresAt time.Time) {
-	http.SetCookie(response, &http.Cookie{Name: sessionCookie, Value: token, Path: "/", HttpOnly: true, Secure: request.TLS != nil, SameSite: http.SameSiteStrictMode, MaxAge: int(time.Until(expiresAt).Seconds()), Expires: expiresAt})
+	http.SetCookie(response, &http.Cookie{Name: sessionCookie, Value: token, Path: "/", HttpOnly: true, Secure: s.usesHTTPS(request), SameSite: http.SameSiteStrictMode, MaxAge: int(time.Until(expiresAt).Seconds()), Expires: expiresAt})
 }
 
 func (s *Server) setOIDCCookie(response http.ResponseWriter, request *http.Request, name, value string) {
-	http.SetCookie(response, &http.Cookie{Name: name, Value: value, Path: "/api/v1/auth", HttpOnly: true, Secure: request.TLS != nil, SameSite: http.SameSiteLaxMode, MaxAge: 600})
+	http.SetCookie(response, &http.Cookie{Name: name, Value: value, Path: "/api/v1/auth", HttpOnly: true, Secure: s.usesHTTPS(request), SameSite: http.SameSiteLaxMode, MaxAge: 600})
 }
 
 func (s *Server) clearOIDCCookie(response http.ResponseWriter, request *http.Request, name string) {
-	http.SetCookie(response, &http.Cookie{Name: name, Value: "", Path: "/api/v1/auth", HttpOnly: true, Secure: request.TLS != nil, SameSite: http.SameSiteLaxMode, MaxAge: -1, Expires: time.Unix(1, 0)})
+	http.SetCookie(response, &http.Cookie{Name: name, Value: "", Path: "/api/v1/auth", HttpOnly: true, Secure: s.usesHTTPS(request), SameSite: http.SameSiteLaxMode, MaxAge: -1, Expires: time.Unix(1, 0)})
+}
+
+// The configured public origin remains HTTPS when a reverse proxy terminates TLS.
+// Do not trust arbitrary forwarded headers to determine cookie security.
+func (s *Server) usesHTTPS(request *http.Request) bool {
+	return request.TLS != nil || strings.HasPrefix(s.applicationURL, "https://")
 }
 
 func randomToken(size int) (string, error) {

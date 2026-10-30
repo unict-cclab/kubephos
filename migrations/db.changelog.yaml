@@ -354,3 +354,10 @@ databaseChangeLog:
         - sqlFile:
             path: changes/050-scope-proxmox-ledger.sql
             relativeToChangelogFile: true
+  - changeSet:
+      id: 051-resource-connectivity
+      author: kubephos
+      changes:
+        - sqlFile:
+            path: changes/051-resource-connectivity.sql
+            relativeToChangelogFile: true

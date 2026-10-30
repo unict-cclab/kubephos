@@ -29,6 +29,7 @@ const pairs = [
   ['--primary-foreground', '--primary', 4.5],
   ['--blue', '--card', 4.5],
   ['--success-foreground', '--success-background', 4.5],
+  ['--error-foreground', '--error-background', 4.5],
   ['--field-border', '--card', 3],
   ['--ring', '--card', 3]
 ]

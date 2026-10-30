@@ -219,14 +219,32 @@ func auditTarget(request *http.Request) (string, string, string, bool) {
 }
 
 func decodeJSON(request *http.Request, target any) error {
-	reader := io.LimitReader(request.Body, 1<<20)
-	decoder := json.NewDecoder(reader)
+	const maxBodySize = 1 << 20
+	raw, err := io.ReadAll(io.LimitReader(request.Body, maxBodySize+1))
+	if err != nil {
+		return errors.New("Could not read the request. Try again.")
+	}
+	if len(raw) > maxBodySize {
+		return errors.New("The request is too large. Reduce its size to 1 MiB or less.")
+	}
+	raw = bytes.TrimSpace(raw)
+	if len(raw) == 0 || raw[0] != '{' {
+		return errors.New("The request must contain a JSON object.")
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(target); err != nil {
-		return fmt.Errorf("invalid JSON: %w", err)
+		var valueType *json.UnmarshalTypeError
+		if errors.As(err, &valueType) {
+			return errors.New("Some fields have the wrong type. Check the form values and try again.")
+		}
+		if strings.HasPrefix(err.Error(), "json: unknown field ") {
+			return errors.New("The request contains an unsupported field. Refresh the page and try again.")
+		}
+		return errors.New("The request contains invalid JSON. Check its format and try again.")
 	}
 	if decoder.Decode(&struct{}{}) != io.EOF {
-		return errors.New("request body must contain one JSON object")
+		return errors.New("The request must contain a single JSON object.")
 	}
 	return nil
 }

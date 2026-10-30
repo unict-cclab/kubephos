@@ -6,7 +6,8 @@ Use a Linux host with Bash, OpenSSL, Docker Engine and Docker Compose 2.23.1 or
 newer. Follow Docker's [Linux installation guide](https://docs.docker.com/engine/install/)
 if Docker is not installed. Your account must be able to run `docker info`.
 
-Keep `install.sh`, `update.sh` and `compose.yaml` together. Both scripts can be
+Use the installer archive for your chosen release, keeping `install.sh`,
+`update.sh` and `compose.yaml` together. Both scripts can be
 invoked by absolute path from any working directory. Run:
 
 ```bash
@@ -64,6 +65,19 @@ network checks use reachable guests and the reservations already saved in KubePh
 The selected destination node must still be online. Authentication, permission
 and malformed-response errors remain explicit.
 
+## Resource connectivity
+
+KubePhos checks Proxmox, Kubernetes APIs, NFSv4 and Harbor about once a minute.
+Lists and resource details show **Not reachable** after two failed checks and
+recover automatically after a successful check. Authentication failures show
+**Access denied**; a responding but unavailable service shows **Unavailable**.
+A check older than three minutes shows **Unknown**. Multi cluster details identify
+each member. VM templates use their Proxmox connection's reachability.
+
+Checks are read-only and do not change provisioning history or modification dates.
+They test the service connection; they do not replace workload or ClusterMesh
+health checks. The worker must be running and able to reach the saved endpoints.
+
 ## Network access
 
 The application listens on all host interfaces on port 8080 by default.
@@ -76,7 +90,8 @@ The application listens on all host interfaces on port 8080 by default.
 For HTTPS, use `--url https://kubephos.example.org` and configure a TLS reverse
 proxy to port 8080. Forward the original `Host` and `X-Forwarded-Proto` headers.
 KubePhos proxies authentication under `/auth`; PostgreSQL, Keycloak and SeaweedFS
-have no published host ports.
+have no published host ports. With an HTTPS public URL, authentication cookies
+remain secure even when the proxy connects to KubePhos over HTTP.
 
 To change the instance address, edit `KUBEPHOS_URL` in the installed `.env` and
 run `./update.sh` from your clone or extracted release directory. Change
@@ -108,9 +123,14 @@ It copies its matching Compose and update script into the installation while
 preserving `.env`, credentials, project name and volumes. The installer also
 places a copy of `update.sh` in the installation directory, which can be invoked
 by absolute path when you only need to reapply configuration.
-It downloads images, checks for running operations, stops app and worker,
-applies migrations, synchronizes authentication and restarts the services.
+It checks for active work, validates and downloads the release, checks activity
+again, then replaces the installation files, stops app and worker, applies
+migrations, synchronizes authentication and restarts the services. Queued
+operations, due experiment runs and plugin imports also block an update; future
+scheduled pipeline runs do not.
 `--no-pull` applies configuration using images already present on the host.
+A `.env` in a source checkout does not select that checkout as an installation;
+only the installer marker enables automatic detection beside `update.sh`.
 
 Wait for experiments and cleanup operations to finish and back up the installation
 before updating. Generated database and Keycloak administrator passwords describe
@@ -200,7 +220,7 @@ complete disaster-recovery backup.
 A complete recoverable backup includes the installed `.env`, `credentials.json`,
 Compose file and all persistent data:
 
-- PostgreSQL: users, configuration, state, processing logs and history.
+- PostgreSQL: application and Keycloak users, configuration, state, logs and history.
 - SeaweedFS: datasets, figures, generated manifests and other artifacts.
 - `platform-data`: the encryption key for stored infrastructure credentials.
 

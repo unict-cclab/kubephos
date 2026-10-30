@@ -75,7 +75,7 @@ describe('user account actions',()=>{
  const user={id:'user-1',username:'researcher',email:'old@example.test',role:'user',enabled:true} as User
  const session={authenticated:true,csrfToken:'csrf',user:{id:'admin',username:'admin',role:'admin'}} as Session
  it('edits email and resets passwords without retaining password fields',async()=>{
-  const fetch=vi.fn().mockResolvedValue(new Response('{}',{status:200}));vi.stubGlobal('fetch',fetch)
+  const fetch=vi.fn().mockImplementation(async()=>new Response('{}',{status:200}));vi.stubGlobal('fetch',fetch)
   render(<UsersView users={[user]} assignments={[]} clusters={[]} session={session} changed={vi.fn().mockResolvedValue(undefined)}/>)
   fireEvent.click(screen.getByRole('button',{name:'Edit email for researcher'}))
   let dialog=screen.getByRole('dialog')

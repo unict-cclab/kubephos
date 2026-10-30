@@ -81,7 +81,7 @@ func (s *Store) CreateManagedResource(ctx context.Context, resource domain.Manag
 		INSERT INTO managed_resources (id, workspace_id, name, kind, provider, connection_id, plugin_id, plugin_version, plugin_digest, spec, operation_id)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 		RETURNING created_at, updated_at
-	`, resource.ID, resource.WorkspaceID, resource.Name, resource.Kind, resource.Provider, resource.ConnectionID, resource.PluginID, resource.PluginVersion, resource.PluginDigest, resource.Spec, operation.ID).Scan(&resource.CreatedAt, &resource.UpdatedAt)
+	`, resource.ID, resource.WorkspaceID, resource.Name, resource.Kind, resource.Provider, resource.ConnectionID, resource.PluginID, resource.PluginVersion, resource.PluginDigest, resource.Spec, operation.ID).Scan(&resource.CreatedAt, &resource.UpdatedAt, &resource.Connectivity)
 	if err != nil {
 		return domain.ManagedResource{}, err
 	}
@@ -107,7 +107,7 @@ func (s *Store) CreateManagedPipelineResource(ctx context.Context, resource doma
 		INSERT INTO managed_resources (id, workspace_id, name, kind, provider, connection_id, plugin_id, plugin_version, plugin_digest, spec, pipeline_id, pipeline_run_id)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 		RETURNING created_at, updated_at
-	`, resource.ID, resource.WorkspaceID, resource.Name, resource.Kind, resource.Provider, resource.ConnectionID, resource.PluginID, resource.PluginVersion, resource.PluginDigest, resource.Spec, pipeline.ID, run.ID).Scan(&resource.CreatedAt, &resource.UpdatedAt)
+	`, resource.ID, resource.WorkspaceID, resource.Name, resource.Kind, resource.Provider, resource.ConnectionID, resource.PluginID, resource.PluginVersion, resource.PluginDigest, resource.Spec, pipeline.ID, run.ID).Scan(&resource.CreatedAt, &resource.UpdatedAt, &resource.Connectivity)
 	if err != nil {
 		return domain.ManagedResource{}, err
 	}
@@ -187,7 +187,7 @@ func (s *Store) ListManagedResources(ctx context.Context, kind string) ([]domain
 		       COALESCE(creation.status, creation_run.status), COALESCE(creation.error, creation_run.error, ''), COALESCE(creation.validation, creation_pipeline.validation),
 		       COALESCE(deletion.status, deletion_run.status, ''), COALESCE(deletion.error, deletion_run.error, ''),
 		       COALESCE(resource.recreation_pipeline_id, ''), COALESCE(resource.recreation_pipeline_run_id, ''), COALESCE(recreation_run.status, ''), COALESCE(recreation_run.error, ''), COALESCE(recreation_run.name, ''),
-		       resource.created_at, resource.updated_at
+		       resource.created_at, resource.updated_at, CASE WHEN resource.kind='machine-template' THEN (SELECT connectivity FROM provider_connections WHERE id=resource.connection_id) ELSE resource.connectivity END
 		FROM managed_resources resource
 		LEFT JOIN operations creation ON creation.id = resource.operation_id
 		LEFT JOIN pipelines creation_pipeline ON creation_pipeline.id = resource.pipeline_id
@@ -224,7 +224,7 @@ func (s *Store) GetManagedResource(ctx context.Context, resourceID string) (doma
 		       COALESCE(creation.status, creation_run.status), COALESCE(creation.error, creation_run.error, ''), COALESCE(creation.validation, creation_pipeline.validation),
 		       COALESCE(deletion.status, deletion_run.status, ''), COALESCE(deletion.error, deletion_run.error, ''),
 		       COALESCE(resource.recreation_pipeline_id, ''), COALESCE(resource.recreation_pipeline_run_id, ''), COALESCE(recreation_run.status, ''), COALESCE(recreation_run.error, ''), COALESCE(recreation_run.name, ''),
-		       resource.created_at, resource.updated_at
+		       resource.created_at, resource.updated_at, CASE WHEN resource.kind='machine-template' THEN (SELECT connectivity FROM provider_connections WHERE id=resource.connection_id) ELSE resource.connectivity END
 		FROM managed_resources resource
 		LEFT JOIN operations creation ON creation.id = resource.operation_id
 		LEFT JOIN pipelines creation_pipeline ON creation_pipeline.id = resource.pipeline_id
@@ -248,7 +248,7 @@ func scanManagedResource(row pgx.Row) (domain.ManagedResource, error) {
 	err := row.Scan(&resource.ID, &resource.WorkspaceID, &resource.Name, &resource.Kind, &resource.Provider, &resource.ConnectionID,
 		&resource.PluginID, &resource.PluginVersion, &resource.PluginDigest, &resource.Spec, &resource.OperationID, &resource.PipelineID, &resource.PipelineRunID, &resource.ArtifactID,
 		&resource.DeletionOperationID, &resource.DeletionPipelineID, &resource.DeletionPipelineRunID, &creationStatus, &creationError, &validation, &deletionStatus, &deletionError,
-		&resource.RecreationPipelineID, &resource.RecreationPipelineRunID, &recreationStatus, &recreationError, &recreationName, &resource.CreatedAt, &resource.UpdatedAt)
+		&resource.RecreationPipelineID, &resource.RecreationPipelineRunID, &recreationStatus, &recreationError, &recreationName, &resource.CreatedAt, &resource.UpdatedAt, &resource.Connectivity)
 	if err != nil {
 		return domain.ManagedResource{}, err
 	}

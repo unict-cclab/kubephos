@@ -328,9 +328,9 @@ func (s *Server) validatedExperimentConfiguration(ctx context.Context, input exp
 
 		valuesSchema, _ := json.Marshal(descriptor.Spec.ValuesSchema)
 		if issues, err := schema.Validate(valuesSchema, input.Definition.ApplicationValues); err != nil {
-			return domain.ExperimentConfiguration{}, &managedOperationFailure{status: http.StatusInternalServerError, code: "invalid_schema", message: err.Error()}
+			return domain.ExperimentConfiguration{}, &managedOperationFailure{status: http.StatusInternalServerError, code: "invalid_schema", message: "Could not validate the configuration. Check the application or plugin in the catalog and try again."}
 		} else if len(issues) > 0 {
-			return domain.ExperimentConfiguration{}, experimentConfigurationIssues("applicationValues", issues)
+			return domain.ExperimentConfiguration{}, experimentConfigurationIssues("applicationValues", valuesSchema, issues)
 		}
 	}
 	validation := domain.ValidationReport{Valid: true, CheckedAt: time.Now().UTC()}
@@ -451,12 +451,12 @@ func (s *Server) validatedExperimentConfiguration(ctx context.Context, input exp
 		}
 		configSchema, err := experimentComponentSchema(manifest.Schema)
 		if err != nil {
-			return domain.ExperimentConfiguration{}, &managedOperationFailure{status: http.StatusInternalServerError, code: "invalid_schema", message: err.Error()}
+			return domain.ExperimentConfiguration{}, &managedOperationFailure{status: http.StatusInternalServerError, code: "invalid_schema", message: "Could not validate the configuration. Check the application or plugin in the catalog and try again."}
 		}
 		if issues, err := schema.Validate(configSchema, component.Configuration); err != nil {
-			return domain.ExperimentConfiguration{}, &managedOperationFailure{status: http.StatusInternalServerError, code: "invalid_schema", message: err.Error()}
+			return domain.ExperimentConfiguration{}, &managedOperationFailure{status: http.StatusInternalServerError, code: "invalid_schema", message: "Could not validate the configuration. Check the application or plugin in the catalog and try again."}
 		} else if len(issues) > 0 {
-			return domain.ExperimentConfiguration{}, experimentConfigurationIssues("components."+component.ID+".configuration", issues)
+			return domain.ExperimentConfiguration{}, experimentConfigurationIssues("components."+component.ID+".configuration", configSchema, issues)
 		}
 		if manifest.HasCapability("load.session.control") {
 			report, err := validateExperimentComponentConfiguration(ctx, plugin, component.Configuration, applicationRef)
@@ -517,10 +517,10 @@ func normalizeExternalLoadDestination(value externalLoadDestinationInput) (exter
 	return value, "external:" + hex.EncodeToString(hash[:]), digest, nil
 }
 
-func experimentConfigurationIssues(prefix string, issues []schema.Issue) *managedOperationFailure {
+func experimentConfigurationIssues(prefix string, definition json.RawMessage, issues []schema.Issue) *managedOperationFailure {
 	converted := make([]domain.ValidationIssue, 0, len(issues))
 	for _, issue := range issues {
-		converted = append(converted, domain.ValidationIssue{Level: "error", Path: prefix + "." + strings.TrimPrefix(issue.Path, "$."), Message: issue.Message})
+		converted = append(converted, domain.ValidationIssue{Level: "error", Path: prefix + "." + strings.TrimPrefix(issue.Path, "$."), Message: schema.IssueMessage(definition, issue)})
 	}
 	return &managedOperationFailure{status: http.StatusUnprocessableEntity, payload: map[string]any{"code": "validation_failed", "validation": domain.ValidationReport{Valid: false, Issues: converted, CheckedAt: time.Now().UTC()}}}
 }

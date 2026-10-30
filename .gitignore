@@ -7,7 +7,7 @@ tmp/
 .kubephos/
 *kubeconfig*.yaml
 
-managed-images/*.tar
+managed-images/
 *.orig
 .agents/
 .codex/

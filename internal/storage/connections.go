@@ -64,7 +64,7 @@ func (s *Store) CreateProviderConnection(ctx context.Context, connection domain.
 
 func (s *Store) ListProviderConnections(ctx context.Context) ([]domain.ProviderConnection, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT id, name, description, provider, plugin_id, created_at, updated_at
+		SELECT id, name, description, provider, plugin_id, created_at, updated_at, connectivity
 		FROM provider_connections
 		ORDER BY provider, name
 	`)
@@ -75,7 +75,7 @@ func (s *Store) ListProviderConnections(ctx context.Context) ([]domain.ProviderC
 	result := []domain.ProviderConnection{}
 	for rows.Next() {
 		var connection domain.ProviderConnection
-		if err := rows.Scan(&connection.ID, &connection.Name, &connection.Description, &connection.Provider, &connection.PluginID, &connection.CreatedAt, &connection.UpdatedAt); err != nil {
+		if err := rows.Scan(&connection.ID, &connection.Name, &connection.Description, &connection.Provider, &connection.PluginID, &connection.CreatedAt, &connection.UpdatedAt, &connection.Connectivity); err != nil {
 			return nil, err
 		}
 		result = append(result, connection)
@@ -86,10 +86,10 @@ func (s *Store) ListProviderConnections(ctx context.Context) ([]domain.ProviderC
 func (s *Store) GetProviderConnectionConfiguration(ctx context.Context, connectionID string) (domain.ProviderConnection, error) {
 	var connection domain.ProviderConnection
 	err := s.pool.QueryRow(ctx, `
-		SELECT id, name, description, provider, plugin_id, configuration, created_at, updated_at
+		SELECT id, name, description, provider, plugin_id, configuration, created_at, updated_at, connectivity
 		FROM provider_connections
 		WHERE id = $1
-	`, connectionID).Scan(&connection.ID, &connection.Name, &connection.Description, &connection.Provider, &connection.PluginID, &connection.Configuration, &connection.CreatedAt, &connection.UpdatedAt)
+	`, connectionID).Scan(&connection.ID, &connection.Name, &connection.Description, &connection.Provider, &connection.PluginID, &connection.Configuration, &connection.CreatedAt, &connection.UpdatedAt, &connection.Connectivity)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.ProviderConnection{}, ErrNotFound
 	}

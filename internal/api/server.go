@@ -213,7 +213,7 @@ func NewServer(store *storage.Store, registry *plugins.Registry, artifactStore *
 		proxy.Director = func(request *http.Request) {
 			host := request.Host
 			protocol := "http"
-			if request.TLS != nil {
+			if server.usesHTTPS(request) {
 				protocol = "https"
 			}
 			director(request)

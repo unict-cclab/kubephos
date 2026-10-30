@@ -1,3 +1,7 @@
+import {Status, statusLabel} from './Status'
+export {Status} from './Status'
+import {ResourceStatus} from './ResourceConnectivity'
+import {resourceStatus} from '../connectivity'
 import {ResourceListAction, ResourceListHeading, ResourceListPage} from './ResourceListHeading'
 import {ActionIcon} from './ActionIcon'
 import {useEffect, useState} from 'react'
@@ -90,7 +94,7 @@ export function Views(props: ViewProps) {
 }
 
 function Overview(props: ViewProps) {
-  const clusters = props.kubernetesClusters.filter(item => item.status === 'ready').length
+  const clusters = props.kubernetesClusters.filter(item => resourceStatus(item) === 'ready').length
   const active = props.experiments.filter(item => ['queued', 'running'].includes(item.status)).length
   const completed = props.experiments.filter(item => item.status === 'succeeded').length
   const activity = buildRecentActivity({experiments: props.experiments, configurations: props.experimentConfigurations, connections: props.connections, resources: [...props.machineTemplates, ...props.infrastructureServices, ...props.kubernetesClusters], applications: props.applications})
@@ -207,9 +211,9 @@ function Infrastructure(props: ViewProps) {
   return <>
     <Heading title="Infrastructure" icon="infrastructure" action={props.isAdmin && (activeTab === 'connections' ? <ResourceAction action="create" label="New Proxmox connection" onClick={props.addConnection} /> : activeTab === 'templates' ? <ResourceAction action="create" label="New VM template" disabled={!props.connections.length} onClick={props.addMachineTemplate} /> : <ResourceAction action="create" label={activeTab === 'harbor' ? 'New Harbor' : 'New NFS'} disabled={!props.machineTemplates.some(item => item.status === 'ready')} onClick={() => props.addInfrastructureService(activeTab)} />)} />
     <nav className="resource-tabs" aria-label="Infrastructure resources">{([['connections', 'Proxmox connections', props.connections.length], ['templates', 'VM templates', props.machineTemplates.length], ['harbor', 'Harbor', props.infrastructureServices.filter(item => item.kind === 'harbor').length], ['nfs', 'NFS', props.infrastructureServices.filter(item => item.kind === 'nfs').length]] as const).map(([tab, label, count]) => <button key={tab} className={activeTab === tab ? 'active' : ''} onClick={() => setActiveTab(tab)} aria-current={activeTab === tab ? 'page' : undefined}>{label}<span>{count}</span></button>)}</nav>
-    {activeTab === 'connections' && (props.connections.length ? <ResourceListTable editable items={props.connections} label="Proxmox connections" searchText={item => item.name} columns={[{label: 'Name', render: item => <h3>{item.name}</h3>}]} actions={item => <><ResourceAction action="view" label={`View ${item.name} details`} onClick={() => detail.open('connection', item.id)} />{props.isAdmin && <ResourceAction action="delete" label={`Delete ${item.name}`} onClick={() => void props.deleteConnection(item.id,item.name)} />}</>} /> : <Empty title="No Proxmox connections">Add a connection to provision machines.</Empty>)}
-    {activeTab === 'templates' && (props.machineTemplates.length ? <ResourceListTable editable items={props.machineTemplates} label="VM templates" searchText={item => `${item.name} ${item.status}`} columns={[{label: 'Name', render: item => <h3>{item.name}</h3>}, {label: 'Proxmox connection', render: item => props.connections.find(connection => connection.id === item.connectionId)?.name ?? '—'}, {label: 'Status', render: item => <Status value={item.status} />}]} actions={item => <><ResourceAction action="view" label={`View ${item.name} details`} onClick={() => detail.open('resource',item.id)} />{props.isAdmin && <ResourceAction action="delete" label={`Delete ${item.name}`} disabled={item.status !== 'ready'} onClick={() => void props.deleteMachineTemplate(item.id,item.name)} />}</>} /> : <Empty title="No VM templates">Create a template to provision clusters.</Empty>)}
-    {(activeTab === 'harbor' || activeTab === 'nfs') && (selectedServices.length ? <ResourceListTable editable items={selectedServices} label={activeTab === 'harbor' ? 'Harbor registries' : 'NFS servers'} searchText={item => `${item.name} ${item.status}`} columns={[{label: 'Name', render: item => <h3>{item.name}</h3>}, {label: 'Proxmox connection', render: item => props.connections.find(connection => connection.id === item.connectionId)?.name ?? '—'}, {label: 'Status', render: item => <Status value={item.status} />}]} actions={item => <><ResourceAction action="view" label={`View ${item.name} details`} onClick={() => detail.open('resource',item.id)} />{props.isAdmin && <ResourceAction action="delete" label={`Delete ${item.name}`} disabled={!['ready','failed'].includes(item.status)} onClick={() => void props.deleteInfrastructureService(item.id,item.name)} />}</>} /> : <Empty title={`No ${activeTab === 'harbor' ? 'Harbor registries' : 'NFS servers'}`}>Create one from a VM template.</Empty>)}
+    {activeTab === 'connections' && (props.connections.length ? <ResourceListTable editable items={props.connections} label="Proxmox connections" searchText={item => `${item.name} ${statusLabel(resourceStatus(item))}`} columns={[{label: 'Name', render: item => <h3>{item.name}</h3>}, {label: 'Status', render: item => <ResourceStatus resource={item} />}]} actions={item => <><ResourceAction action="view" label={`View ${item.name} details`} onClick={() => detail.open('connection', item.id)} />{props.isAdmin && <ResourceAction action="delete" label={`Delete ${item.name}`} onClick={() => void props.deleteConnection(item.id,item.name)} />}</>} /> : <Empty title="No Proxmox connections">Add a connection to provision machines.</Empty>)}
+    {activeTab === 'templates' && (props.machineTemplates.length ? <ResourceListTable editable items={props.machineTemplates} label="VM templates" searchText={item => `${item.name} ${statusLabel(resourceStatus(item))}`} columns={[{label: 'Name', render: item => <h3>{item.name}</h3>}, {label: 'Proxmox connection', render: item => props.connections.find(connection => connection.id === item.connectionId)?.name ?? '—'}, {label: 'Status', render: item => <ResourceStatus resource={item} />}]} actions={item => <><ResourceAction action="view" label={`View ${item.name} details`} onClick={() => detail.open('resource',item.id)} />{props.isAdmin && <ResourceAction action="delete" label={`Delete ${item.name}`} disabled={item.status !== 'ready'} onClick={() => void props.deleteMachineTemplate(item.id,item.name)} />}</>} /> : <Empty title="No VM templates">Create a template to provision clusters.</Empty>)}
+    {(activeTab === 'harbor' || activeTab === 'nfs') && (selectedServices.length ? <ResourceListTable editable items={selectedServices} label={activeTab === 'harbor' ? 'Harbor registries' : 'NFS servers'} searchText={item => `${item.name} ${statusLabel(resourceStatus(item))}`} columns={[{label: 'Name', render: item => <h3>{item.name}</h3>}, {label: 'Proxmox connection', render: item => props.connections.find(connection => connection.id === item.connectionId)?.name ?? '—'}, {label: 'Status', render: item => <ResourceStatus resource={item} />}]} actions={item => <><ResourceAction action="view" label={`View ${item.name} details`} onClick={() => detail.open('resource',item.id)} />{props.isAdmin && <ResourceAction action="delete" label={`Delete ${item.name}`} disabled={!['ready','failed'].includes(item.status)} onClick={() => void props.deleteInfrastructureService(item.id,item.name)} />}</>} /> : <Empty title={`No ${activeTab === 'harbor' ? 'Harbor registries' : 'NFS servers'}`}>Create one from a VM template.</Empty>)}
 
   </>
 }
@@ -222,12 +226,12 @@ function Kubernetes(props: ViewProps) {
   if (resource) return <ResourceDetailsPage resource={resource} close={detail.close} connections={props.connections} workspaces={props.workspaces} resources={[...props.machineTemplates, ...props.infrastructureServices, ...props.kubernetesClusters]} runs={props.pipelineRuns} pipelines={props.pipelines} session={props.session} openOperation={props.openOperation} openPipelineRun={props.openPipelineRun} recreate={() => props.recreateKubernetesCluster(resource.id, resource.name)} recreation={props.clusterActions[resource.id]} />
   return <>
     <Heading title="Kubernetes clusters" icon="kubernetes" action={props.isAdmin && <ResourceAction action="create" label="New cluster" disabled={!canCreate} onClick={props.addKubernetesCluster} />} />
-    {props.kubernetesClusters.length ? <ResourceListTable editable items={props.kubernetesClusters} label="Kubernetes clusters" searchText={item => [item.name, item.status, props.connections.find(connection => connection.id === item.connectionId)?.name].filter(Boolean).join(' ')} columns={[
+    {props.kubernetesClusters.length ? <ResourceListTable editable items={props.kubernetesClusters} label="Kubernetes clusters" searchText={item => [item.name, statusLabel(resourceStatus(item)), props.connections.find(connection => connection.id === item.connectionId)?.name].filter(Boolean).join(' ')} columns={[
       {label: 'Name', render: item => <><h3>{item.name}</h3>{item.error && <p className="managed-error">{item.error}</p>}{props.clusterActions[item.id]?.message && <p className={props.clusterActions[item.id].error ? 'managed-error' : 'managed-feedback'}>{props.clusterActions[item.id].message}</p>}</>},
       {label: 'Proxmox connection', render: item => props.connections.find(connection => connection.id === item.connectionId)?.name ?? '—'},
       {label: 'Type', render: item => item.spec.mode === 'multi' ? 'Multi' : 'Single'},
       {label: 'Nodes', render: item => clusterNodeCount(item)},
-      {label: 'Status', render: item => <Status value={props.clusterActions[item.id]?.pending ? 'validating' : item.status} />},
+      {label: 'Status', render: item => <ResourceStatus resource={item} override={props.clusterActions[item.id]?.pending ? 'validating' : undefined} />},
     ]} actions={item => <><ResourceAction action="view" label={`View ${item.name} details`} onClick={() => detail.open('resource', item.id)} />{props.isAdmin && <ResourceAction action="delete" label={`Delete ${item.name}`} disabled={props.clusterActions[item.id]?.pending || !canDeleteKubernetesCluster(item.status)} onClick={() => void props.deleteKubernetesCluster(item.id, item.name)} />}</>} /> : <Empty title="No Kubernetes cluster">Prepare a ready Harbor registry and NFS server in Infrastructure, then create your first cluster.</Empty>}
 
   </>
@@ -253,15 +257,6 @@ function clusterNodeCount(resource: ManagedResource): number {
   return controlPlanes + poolCount(resource, 'managementPool') + applicationPoolCount(resource)
 }
 
-export function Status({value}: {value: string}) {
-  const label = ({
-    'built-in': 'Included', imported: 'Imported', pending: 'Preparing', provisioning: 'Creating',
-    prechecking: 'Checking', verifying: 'Checking', validating: 'Checking', queued: 'Queued', ready: 'Ready', running: 'Running', failed: 'Failed', deleting: 'Deleting', recreating: 'Recreating', maintaining: 'Maintaining', 'maintenance-failed': 'Maintenance failed', validated: 'Validated', invalid: 'Needs review', unavailable: 'Unavailable', available: 'Available', waiting: 'Waiting',
-    succeeded: 'Completed', canceled: 'Stopped', cancelled: 'Stopped',
-    'recreation-failed': 'Recreation failed', 'deletion-failed': 'Deletion failed'
-  } as Record<string, string>)[value.toLowerCase()] ?? value.replaceAll('-', ' ')
-  return <span className={`status ${value.toLowerCase()}`}>{label}</span>
-}
 
 function Empty({title, children}: {title: string; children: React.ReactNode}) {
   return <div className="empty-state"><div><strong>{title}</strong>{children}</div></div>

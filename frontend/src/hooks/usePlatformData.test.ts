@@ -21,6 +21,7 @@ describe('platform refresh', () => {
     await act(async () => {await vi.advanceTimersByTimeAsync(5000)})
     expect(vi.mocked(request).mock.calls.filter(([path]) => path === '/users')).toHaveLength(1)
     expect(vi.mocked(request).mock.calls.filter(([path]) => path === '/operations')).toHaveLength(2)
+    expect(vi.mocked(request).mock.calls.filter(([path]) => path === '/connections')).toHaveLength(2)
     await act(async () => {await vi.advanceTimersByTimeAsync(55000)})
     expect(vi.mocked(request).mock.calls.filter(([path]) => path === '/users')).toHaveLength(2)
   })
@@ -60,4 +61,17 @@ describe('platform refresh', () => {
     unmount()
     expect(signal.aborted).toBe(true)
   })
+})
+
+it('keeps the previous list when a refresh returns incomplete data', async () => {
+  let malformed = false
+  vi.mocked(request).mockImplementation(async path => path === '/operations' ? malformed ? {} : {items: [{id: 'op_saved'}]} : respond(path))
+  const setSession = vi.fn(), notify = vi.fn()
+  const {result} = renderHook(() => usePlatformData(session, setSession, notify))
+  await flush()
+  expect(result.current.data.operations).toEqual([{id: 'op_saved'}])
+  malformed = true
+  await act(async () => {await vi.advanceTimersByTimeAsync(5000)})
+  expect(result.current.data.operations).toEqual([{id: 'op_saved'}])
+  expect(result.current.connected).toBe(false)
 })

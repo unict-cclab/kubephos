@@ -38,6 +38,8 @@ func (w *Worker) Run(ctx context.Context) error {
 	}
 	var group sync.WaitGroup
 	group.Add(1)
+	go func() { defer group.Done(); w.runConnectivityMonitor(ctx) }()
+	group.Add(1)
 	go func() {
 		defer group.Done()
 		for ctx.Err() == nil {

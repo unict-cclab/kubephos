@@ -94,9 +94,8 @@ export const WizardForm = forwardRef<HTMLFormElement, Props>(function WizardForm
     return false
   }
   const blocked = Boolean(steps[current]?.props.blocked)
-  const stepDisabled = (_index: number) => pending
   const chooseStep = (index: number) => {
-    if (!stepDisabled(index)) move(index)
+    if (!pending) move(index)
   }
   const submit = (event: SubmitEvent<HTMLFormElement>) => {
     event.preventDefault()
@@ -114,7 +113,7 @@ export const WizardForm = forwardRef<HTMLFormElement, Props>(function WizardForm
     event.preventDefault()
     event.currentTarget.requestSubmit()
   }} className={`wizard-form ${props.className ?? ''}`}>
-    <nav className="wizard-progress" aria-label="Setup steps"><label className="wizard-step-picker"><span>Step {current + 1} of {steps.length}</span><select aria-label="Setup step" value={current} disabled={pending} onChange={event => chooseStep(Number(event.target.value))}>{steps.map((step, index) => <option key={step.key === null ? `step-${index}` : `key-${step.key}`} value={index} disabled={stepDisabled(index)}>{step.props.title}</option>)}</select></label><ol>{steps.map((step, index) => <li key={step.key === null ? `step-${index}` : `key-${step.key}`}><button type="button" aria-current={index === current ? 'step' : undefined} disabled={stepDisabled(index)} onClick={() => chooseStep(index)}><span className="wizard-step-number" aria-hidden="true">{index < current ? <ActionIcon name="check" /> : index + 1}</span><span>{step.props.title}</span></button></li>)}</ol></nav>
+    <nav className="wizard-progress" aria-label="Setup steps"><label className="wizard-step-picker"><span>Step {current + 1} of {steps.length}</span><select aria-label="Setup step" value={current} disabled={pending} onChange={event => chooseStep(Number(event.target.value))}>{steps.map((step, index) => <option key={step.key === null ? `step-${index}` : `key-${step.key}`} value={index} disabled={pending}>{step.props.title}</option>)}</select></label><ol>{steps.map((step, index) => <li key={step.key === null ? `step-${index}` : `key-${step.key}`}><button type="button" aria-current={index === current ? 'step' : undefined} disabled={pending} onClick={() => chooseStep(index)}><span className="wizard-step-number" aria-hidden="true">{index + 1}</span><span>{step.props.title}</span></button></li>)}</ol></nav>
     <WizardContext.Provider value={{form: formRef.current, step: current}}><fieldset className="wizard-panels" disabled={pending}>{steps.map((step, index) => <section key={step.key === null ? `step-${index}` : `key-${step.key}`} data-wizard-panel={index} hidden={index !== current} aria-labelledby={`${id}-${index}`}><div className="wizard-panel-heading"><span className="wizard-position">{index + 1} / {steps.length}</span><h3 id={`${id}-${index}`} tabIndex={-1}>{step.props.title}</h3></div>{step.props.status && <div className={`wizard-step-status${step.props.status.error ? ' invalid' : ''}`} role={step.props.status.error ? 'alert' : 'status'}>{step.props.status.message}</div>}{step.props.children}</section>)}</fieldset></WizardContext.Provider>
     {error && <p className="form-error" role="alert">{error}</p>}
     <div className="wizard-actions"><button className="button secondary" type="button" disabled={pending} onClick={onCancel}>Cancel</button><div>{current > 0 && <button className="button secondary" type="button" disabled={pending} onClick={() => move(current - 1)}><ActionIcon name="left" />Previous</button>}{current < steps.length - 1 ? <button key="continue" className="button primary" type="button" disabled={pending || blocked} onClick={event => {event.preventDefault(); if (validate(false)) move(current + 1)}}>Continue<ActionIcon name="right" /></button> : <button key="submit" className="button primary" type="submit" disabled={pending || submitDisabled}>{pending ? 'Saving…' : submitLabel}</button>}</div></div>

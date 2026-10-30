@@ -154,7 +154,7 @@ export function ResultsView({artifacts, experiments, operations, workspaces, ses
     for (const variant of experiment?.variants ?? []) for (const trial of variant.trials) if (trial.resultArtifactId) presentation.set(trial.resultArtifactId, {label: `${variant.alias || variant.name} · Run ${trial.position}`, color: variant.color})
     return presentation
   }, [experiment])
-  const displayed = useMemo(() => loaded.map(item => ({...item, label: experimentPresentation.get(item.artifact.id)?.label ?? datasetLabel(item.artifact, operations), color: experimentPresentation.get(item.artifact.id)?.color})), [loaded, experimentPresentation, operations, workspaces])
+  const displayed = useMemo(() => loaded.map(item => ({...item, label: experimentPresentation.get(item.artifact.id)?.label ?? datasetLabel(item.artifact, operations), color: experimentPresentation.get(item.artifact.id)?.color})), [loaded, experimentPresentation, operations])
   const metrics = useMemo(() => [...new Set(displayed.flatMap(item => [...item.dataset.spec.series.map(series => series.metric), ...(item.dataset.spec.controlMetrics ?? []).filter(summary => summary.status !== 'not_configured').map(summary => summary.metric)]))].filter(metric => !['load.mean_response_time', 'load.p50_response_time', 'load.p99_response_time'].includes(metric) && (!metric.startsWith('application.') || metric === 'application.p95_response_time')).sort(), [displayed])
   const statisticsMetrics = [...new Set([...metrics, ...displayed.flatMap(item => item.dataset.spec.controlMetrics?.map(summary => summary.metric) ?? [])])].filter(metric => !['application.p95_response_time', 'redis.operation_p95_response_time'].includes(metric))
   const visibleMetrics = [...groupMetrics(metrics.filter(metric => !isControlMetric(metric))).values()].flat()
@@ -686,7 +686,7 @@ export function aggregatePlotMetric(datasets: LoadedDataset[], metric: string, e
     const runs = group.datasets.map(dataset => {
       const origin = Date.parse(dataset.dataset.spec.workloadStartedAt || dataset.dataset.spec.start)
       const end = Date.parse(dataset.dataset.spec.end)
-      const series = dataset.dataset.spec.series.map(series => ({...series, points: series.points.filter(point => Number.isFinite(point.value) && Date.parse(point.timestamp) >= origin && (!Number.isFinite(end) || Date.parse(point.timestamp) <= end))}))
+      const series = dataset.dataset.spec.series.filter(series => series.metric === metric).map(series => ({...series, points: series.points.filter(point => Number.isFinite(point.value) && Date.parse(point.timestamp) >= origin && (!Number.isFinite(end) || Date.parse(point.timestamp) <= end))}))
       return aggregateMetric([{...dataset, dataset: {...dataset.dataset, spec: {...dataset.dataset.spec, series}}}], metric)[0]
     })
     if (runs.length === 1) return runs[0] ? [{...runs[0], label: group.label, color: group.color}] : []
