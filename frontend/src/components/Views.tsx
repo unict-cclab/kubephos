@@ -1,3 +1,5 @@
+import {ComparisonsView} from './ComparisonsView'
+import type {ClusterAction} from '../clusterActions'
 import {Status, statusLabel} from './Status'
 export {Status} from './Status'
 import {ResourceStatus} from './ResourceConnectivity'
@@ -47,7 +49,7 @@ interface ViewProps {
   users: User[]
   clusterAssignments: ClusterUserAssignment[]
   session: Session
-  changed: () => Promise<void>
+  changed: (message?: string) => Promise<void>
   isAdmin: boolean
   navigate: (view: View) => void
   openOperation: (id: string) => void
@@ -63,7 +65,7 @@ interface ViewProps {
   addKubernetesCluster: () => void
   deleteKubernetesCluster: (id: string, name: string) => Promise<void>
   recreateKubernetesCluster: (id: string, name: string) => Promise<void>
-  clusterActions: Record<string, {pending: boolean; message: string; error: boolean}>
+  clusterActions: Record<string, ClusterAction>
 }
 
 export function Views(props: ViewProps) {
@@ -74,6 +76,7 @@ export function Views(props: ViewProps) {
     {props.view === 'results' && <section className="view active">
       <ExperimentsHistoryView experiments={props.experiments} configurations={props.experimentConfigurations} artifacts={props.artifacts} operations={props.operations} workspaces={props.workspaces} session={props.session} changed={props.changed} openOperation={props.openOperation} openPipelineRun={props.openPipelineRun} />
     </section>}
+    {props.view === 'comparisons' && <section className="view active"><ComparisonsView experiments={props.experiments} artifacts={props.artifacts} operations={props.operations} workspaces={props.workspaces} session={props.session} changed={props.changed} openOperation={props.openOperation} openPipelineRun={props.openPipelineRun} /></section>}
     {props.view === 'catalog' && <section className="view active">
       <CatalogView {...props} />
     </section>}
@@ -223,16 +226,16 @@ function Kubernetes(props: ViewProps) {
   const readyServices = props.infrastructureServices.filter(item => item.status === 'ready')
   const canCreate = props.machineTemplates.some(item => item.status === 'ready') && readyServices.some(item => item.kind === 'harbor') && readyServices.some(item => item.kind === 'nfs')
   const resource = detail.route?.kind === 'resource' ? props.kubernetesClusters.find(item => item.id === detail.route?.id) : undefined
-  if (resource) return <ResourceDetailsPage resource={resource} close={detail.close} connections={props.connections} workspaces={props.workspaces} resources={[...props.machineTemplates, ...props.infrastructureServices, ...props.kubernetesClusters]} runs={props.pipelineRuns} pipelines={props.pipelines} session={props.session} openOperation={props.openOperation} openPipelineRun={props.openPipelineRun} recreate={() => props.recreateKubernetesCluster(resource.id, resource.name)} recreation={props.clusterActions[resource.id]} />
+  if (resource) return <ResourceDetailsPage resource={resource} close={detail.close} connections={props.connections} workspaces={props.workspaces} resources={[...props.machineTemplates, ...props.infrastructureServices, ...props.kubernetesClusters]} runs={props.pipelineRuns} pipelines={props.pipelines} session={props.session} openOperation={props.openOperation} openPipelineRun={props.openPipelineRun} recreate={() => props.recreateKubernetesCluster(resource.id, resource.name)} action={props.clusterActions[resource.id]} />
   return <>
     <Heading title="Kubernetes clusters" icon="kubernetes" action={props.isAdmin && <ResourceAction action="create" label="New cluster" disabled={!canCreate} onClick={props.addKubernetesCluster} />} />
-    {props.kubernetesClusters.length ? <ResourceListTable editable items={props.kubernetesClusters} label="Kubernetes clusters" searchText={item => [item.name, statusLabel(resourceStatus(item)), props.connections.find(connection => connection.id === item.connectionId)?.name].filter(Boolean).join(' ')} columns={[
-      {label: 'Name', render: item => <><h3>{item.name}</h3>{item.error && <p className="managed-error">{item.error}</p>}{props.clusterActions[item.id]?.message && <p className={props.clusterActions[item.id].error ? 'managed-error' : 'managed-feedback'}>{props.clusterActions[item.id].message}</p>}</>},
+    {props.kubernetesClusters.length ? <ResourceListTable editable items={props.kubernetesClusters} label="Kubernetes clusters" searchText={item => [item.name, statusLabel(props.clusterActions[item.id] ?? resourceStatus(item)), props.connections.find(connection => connection.id === item.connectionId)?.name].filter(Boolean).join(' ')} columns={[
+      {label: 'Name', render: item => <h3>{item.name}</h3>},
       {label: 'Proxmox connection', render: item => props.connections.find(connection => connection.id === item.connectionId)?.name ?? '—'},
       {label: 'Type', render: item => item.spec.mode === 'multi' ? 'Multi' : 'Single'},
       {label: 'Nodes', render: item => clusterNodeCount(item)},
-      {label: 'Status', render: item => <ResourceStatus resource={item} override={props.clusterActions[item.id]?.pending ? 'validating' : undefined} />},
-    ]} actions={item => <><ResourceAction action="view" label={`View ${item.name} details`} onClick={() => detail.open('resource', item.id)} />{props.isAdmin && <ResourceAction action="delete" label={`Delete ${item.name}`} disabled={props.clusterActions[item.id]?.pending || !canDeleteKubernetesCluster(item.status)} onClick={() => void props.deleteKubernetesCluster(item.id, item.name)} />}</>} /> : <Empty title="No Kubernetes cluster">Prepare a ready Harbor registry and NFS server in Infrastructure, then create your first cluster.</Empty>}
+      {label: 'Status', render: item => <ResourceStatus resource={item} override={props.clusterActions[item.id]} />},
+    ]} actions={item => <><ResourceAction action="view" label={`View ${item.name} details`} onClick={() => detail.open('resource', item.id)} />{props.isAdmin && <ResourceAction action="delete" label={`Delete ${item.name}`} disabled={Boolean(props.clusterActions[item.id]) || !canDeleteKubernetesCluster(item.status)} onClick={() => void props.deleteKubernetesCluster(item.id, item.name)} />}</>} /> : <Empty title="No Kubernetes cluster">Prepare a ready Harbor registry and NFS server in Infrastructure, then create your first cluster.</Empty>}
 
   </>
 }

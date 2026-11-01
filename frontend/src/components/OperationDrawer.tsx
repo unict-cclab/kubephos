@@ -1,3 +1,4 @@
+import {useErrorState} from './ToastRegion'
 import {useCallback, useEffect, useRef, useState} from 'react'
 import {request} from '../api'
 import type {LogEntry, Operation, PipelineRun, PipelineRunLogEntry, PipelineStrategyLog, Plugin, Session} from '../types'
@@ -137,7 +138,7 @@ export function PipelineRunLogsPage({runID, close, notify}: {runID: string; clos
   const [run, setRun] = useState<PipelineRun | null>(null)
   const [logs, setLogs] = useState<PipelineRunLogEntry[]>([])
   const [strategyLogs, setStrategyLogs] = useState<PipelineStrategyLog[]>([])
-  const [runtimeError, setRuntimeError] = useState('')
+  const [runtimeError, setRuntimeError] = useErrorState({repeat: false})
   const [runtimeLoading, setRuntimeLoading] = useState(true)
   useEffect(() => {
     const controller = new AbortController()

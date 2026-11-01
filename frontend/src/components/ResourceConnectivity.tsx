@@ -4,11 +4,11 @@ import type {Connectivity, Connection, ManagedResource} from '../types'
 import {ResponsiveTable} from './ResponsiveTable'
 import {Status} from './Status'
 
-type Resource = Pick<ManagedResource, 'status' | 'connectivity'> | Pick<Connection, 'connectivity'>
+type Resource = (Pick<ManagedResource, 'status' | 'connectivity'> | Pick<Connection, 'connectivity'>) & {error?: string}
 
 export function ResourceStatus({resource, override}: {resource: Resource; override?: string}) {
   const report = currentConnectivity(resource.connectivity)
-  return <Status value={override ?? resourceStatus(resource)} title={report ? [report.message, `Last checked: ${formatDate(report.checkedAt)}`].filter(Boolean).join(' · ') : undefined} />
+  return <Status value={override ?? resourceStatus(resource)} title={override ? undefined : 'status' in resource && resource.status !== 'ready' && resource.error ? resource.error : report ? [report.message, `Last checked: ${formatDate(report.checkedAt)}`].filter(Boolean).join(' · ') : undefined} />
 }
 
 export function ResourceConnectivity({value}: {value?: Connectivity}) {

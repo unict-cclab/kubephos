@@ -120,7 +120,7 @@ func (s *Server) createExperimentConfiguration(response http.ResponseWriter, req
 	configuration.OwnerUserID = user.ID
 	created, err := s.store.CreateExperimentConfiguration(request.Context(), configuration)
 	if errors.Is(err, storage.ErrConflict) {
-		writeError(response, http.StatusConflict, "configuration_conflict", "An experiment configuration with this name already exists in the environment.")
+		writeError(response, http.StatusConflict, "configuration_conflict", "A configuration with this name already exists.")
 		return
 	}
 	if err != nil {
@@ -210,7 +210,7 @@ func (s *Server) cloneExperimentConfiguration(response http.ResponseWriter, requ
 	configuration.OwnerUserID = user.ID
 	created, err := s.store.CreateExperimentConfiguration(request.Context(), configuration)
 	if errors.Is(err, storage.ErrConflict) {
-		writeError(response, http.StatusConflict, "configuration_conflict", "An experiment configuration with this name already exists in the environment.")
+		writeError(response, http.StatusConflict, "configuration_conflict", "A configuration with this name already exists.")
 		return
 	}
 	if err != nil {

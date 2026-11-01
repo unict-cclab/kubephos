@@ -131,3 +131,11 @@ describe('resource detail', () => {
     expect(openPipelineRun).toHaveBeenCalledWith('run_01')
   })
 })
+
+it('shows deletion validation in the detail status and blocks conflicting maintenance', () => {
+  render(createElement(ResourceDetailsPage, {resource, close: () => {}, connections: [], workspaces: [], resources: [resource], runs: [], session: {authenticated: true, user: {id: 'admin', role: 'admin'}} as Session, openOperation: () => {}, recreate: async () => {}, action: 'validating-deletion'}))
+  expect(screen.getByText('Validating deletion')).toBeInTheDocument()
+  expect(screen.getByRole('button', {name: 'Manage nodes'})).toBeDisabled()
+  expect(screen.getByRole('button', {name: 'Recreate cluster'})).toBeDisabled()
+  expect(screen.queryByText(/Validating cluster health/)).not.toBeInTheDocument()
+})

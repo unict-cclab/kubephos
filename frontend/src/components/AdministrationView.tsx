@@ -1,3 +1,4 @@
+import {ErrorFeedback, useErrorState} from './ToastRegion'
 import {useEffect, useRef, useState, type FormEvent} from 'react'
 import {requestResponse} from '../api'
 import {formatDate} from '../lib'
@@ -19,7 +20,7 @@ export function AdministrationView({session, changed}: {session: Session; change
   const [importPassword, setImportPassword] = useState('')
   const [summary, setSummary] = useState<Summary | null>(null)
   const [pending, setPending] = useState<'export' | 'inspect' | 'import' | null>(null)
-  const [error, setError] = useState('')
+  const [error, setError] = useErrorState()
   const [success, setSuccess] = useState('')
   const [fileKey, setFileKey] = useState(0)
   const [feedbackTab, setFeedbackTab] = useState<'export' | 'import'>('export')
@@ -69,7 +70,7 @@ export function AdministrationView({session, changed}: {session: Session; change
     <p className="state-transfer-scope">Move your infrastructure, catalog and configurations to another instance. Users and experiments are excluded.</p>
     <div className="state-transfer-tabs"><FormTabs label="State transfer" items={[
       {id: 'export', title: 'Export', content: <section className="state-transfer-panel" aria-label="Export state">
-        {feedbackTab === 'export' && error && <p className="form-error" role="alert">{error}</p>}
+        {feedbackTab === 'export' && error && <ErrorFeedback message={error} />}
         {feedbackTab === 'export' && success && <p className="state-transfer-success" role="status">{success}</p>}
         <form onSubmit={exportState}>
           <fieldset disabled={pending !== null}>
@@ -81,7 +82,7 @@ export function AdministrationView({session, changed}: {session: Session; change
         </form>
       </section>},
       {id: 'import', title: 'Import', content: <section className="state-transfer-panel" aria-label="Import state">
-        {feedbackTab === 'import' && error && <p className="form-error" role="alert">{error}</p>}
+        {feedbackTab === 'import' && error && <ErrorFeedback message={error} />}
         {feedbackTab === 'import' && success && <p className="state-transfer-success" role="status">{success}</p>}
         <p>Import into a new instance. Configurations will be private and belong to your account.</p>
         <form onSubmit={inspect}>

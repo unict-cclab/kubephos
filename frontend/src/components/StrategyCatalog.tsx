@@ -1,3 +1,4 @@
+import {ErrorFeedback, useErrorState} from './ToastRegion'
 import {ResourceListAction} from './ResourceListHeading'
 import {FormDisclosure} from './FormDisclosure'
 import {ResourceListTable} from './ResourceListTable'
@@ -27,7 +28,7 @@ export function StrategyCatalog(props: Props) {
   const detail = useDetailRoute('catalog')
   const [open, setOpen] = useState(false)
   const [editing, setEditing] = useState<CatalogStrategy>()
-  const [error, setError] = useState('')
+  const [error, setError] = useErrorState()
   const catalogItems = props.items.filter(item => item.kind === props.kind)
   const remove = async (item: CatalogStrategy) => {
     if (!await confirmDelete(`Remove ${item.name} from the catalog? Previous experiment results will be retained.`)) return
@@ -42,16 +43,16 @@ export function StrategyCatalog(props: Props) {
   const edit = (item: CatalogStrategy) => { setEditing(item); setOpen(true) }
   const editor = <StrategyDialog key={editing?.id ?? 'new'} editing={editing} open={open} kind={props.kind} close={() => setOpen(false)} workspaces={props.workspaces} session={props.session} changed={props.changed} failed={setError} />
   const selected = detail.route?.kind === 'strategy' ? props.items.find(item => item.id === detail.route?.id) : undefined
-  if (selected) return <>{editor}{error && <p className="form-error">{error}</p>}<div className="detail-page"><DetailBreadcrumb parent="Catalog" current={selected.name} back={detail.close} /><div className="detail-page-heading"><div><h2>{selected.name}</h2></div></div><ResourceAttribution resource={selected} editable /><article className="detail-page-card">
+  if (selected) return <>{editor}{error && <ErrorFeedback message={error} />}<div className="detail-page"><DetailBreadcrumb parent="Catalog" current={selected.name} back={detail.close} /><div className="detail-page-heading"><div><h2>{selected.name}</h2></div></div><ResourceAttribution resource={selected} editable /><article className="detail-page-card">
     <div className="details-summary"><div><span>Status</span><strong>{strategyStatus(selected.status)}</strong></div><div><span>Type</span><strong>{selected.kind}</strong></div><div><span>Image</span><strong>{selected.sourceImage}</strong></div></div>
     {hasInputData(selected.defaultConfiguration) && <section className="details-section"><div className="details-heading"><strong>Default settings</strong></div><StrategyDefaults value={selected.defaultConfiguration} /></section>}
     {selected.error && <p className="managed-error">{selected.error}</p>}
-    <div className="managed-actions">{props.isAdmin && <button className="button secondary compact" disabled={!['succeeded', 'failed', 'canceled'].includes(selected.status)} onClick={() => edit(selected)}>Edit settings</button>}{selected.operationId && <button className="button secondary compact" onClick={() => props.openOperation(selected.operationId!)}>Activity</button>}<button className="button primary compact" onClick={() => navigator.clipboard.writeText(selected.sourceImage)}>Copy image</button></div>
+    <div className="managed-actions">{props.isAdmin && <button className="button secondary compact" disabled={!['succeeded', 'failed', 'canceled'].includes(selected.status)} onClick={() => edit(selected)}>Edit settings</button>}{selected.operationId && <button className="button secondary compact" onClick={() => props.openOperation(selected.operationId!)}>Activity</button>}</div>
   </article></div></>
   return <>
     {confirmationDialog}
     {props.isAdmin && <ResourceListAction><ResourceAction action="create" label={`Add ${props.kind}`} onClick={() => { setEditing(undefined); setOpen(true) }} /></ResourceListAction>}
-    {error && <p className="form-error page-error">{error}</p>}
+    {error && <ErrorFeedback message={error} />}
     <ResourceListTable items={catalogItems} label={`${props.kind.charAt(0).toUpperCase()}${props.kind.slice(1)}s`} editable searchText={item => `${item.name} ${item.sourceImage}`} columns={[
       {label: 'Name', render: item => <h3>{item.name}</h3>},
       {label: 'Status', render: item => <span className={`status ${item.status}`}>{strategyStatus(item.status)}</span>}

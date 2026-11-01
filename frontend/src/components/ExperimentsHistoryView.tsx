@@ -1,3 +1,4 @@
+import {ErrorFeedback, useErrorState} from './ToastRegion'
 import {ResourceListHeading} from './ResourceListHeading'
 import {ResourceSharing, canManageResource} from './ResourceSharing'
 import {ResourceListTable} from './ResourceListTable'
@@ -32,7 +33,7 @@ export function ExperimentsHistoryView(props: Props) {
   const [filter, setFilter] = useState<Filter>('all')
   const [deleting, setDeleting] = useState<string | null>(null)
   const [creating, setCreating] = useState(false)
-  const [error, setError] = useState('')
+  const [error, setError] = useErrorState()
   const [owner, setOwner] = useState('')
   const remove = async (item: Experiment) => {
     if (!await confirmDelete(experimentDeletionMessage(item))) return
@@ -54,7 +55,7 @@ export function ExperimentsHistoryView(props: Props) {
   return <>
     {confirmationDialog}
     <ResourceListHeading title="Experiments" icon="experiments" action={<>{Boolean(props.session.user) && <ResourceAction action="create" label="New experiment" disabled={!props.configurations.some(item => item.validation.valid && canManageResource(props.session,item.ownerUserId))} onClick={() => setCreating(true)} />}</>} />
-    {error && <p className="form-error page-error">{error}</p>}
+    {error && <ErrorFeedback message={error} />}
     <div className="history-filters" role="group" aria-label="Filter experiments">{(['all', 'active', 'completed'] as Filter[]).map(value => <button key={value} type="button" className={filter === value ? 'active' : ''} aria-pressed={filter === value} onClick={() => setFilter(value)}>{value === 'all' ? 'All' : value === 'active' ? 'In progress' : 'Completed'}</button>)}</div>
     <ResourceListTable filters={<OwnerFilter items={props.experiments} value={owner} onChange={setOwner} />} empty={<><strong>{filter === 'all' && !owner ? 'No experiments yet' : 'No matching experiments'}</strong><p>{filter === 'all' && !owner ? 'Run an experiment from a validated configuration to start collecting results.' : 'Choose another status or owner filter.'}</p></>} searchText={item => `${item.name} ${ownerLabel(item)} ${item.kind} ${experimentDisplayStatus(item)}`} items={items} label="Experiments" columns={[
       {label: 'Name', render: item => <><h3>{item.name}</h3><small>{item.kind === 'suite' ? `Comparative · ${item.variants.length} configurations` : item.variants[0]?.name ?? props.configurations.find(value => value.id === item.configurationId)?.name ?? 'Single experiment'}</small></>},

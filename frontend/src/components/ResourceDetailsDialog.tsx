@@ -1,3 +1,6 @@
+import {copyText} from '../clipboard'
+import type {ClusterAction} from '../clusterActions'
+import {ErrorFeedback, useErrorState} from './ToastRegion'
 import {ResourceStatus, ResourceConnectivity} from './ResourceConnectivity'
 import {ResponsiveTable} from './ResponsiveTable'
 import {ReadoutTable} from './ReadoutTable'
@@ -26,20 +29,22 @@ interface Props {
   openOperation: (id: string) => void
   openPipelineRun?: (id: string) => void
   recreate?: () => Promise<void>
-  recreation?: {pending: boolean; message: string; error: boolean}
+  action?: ClusterAction
 }
 
-export function ResourceDetailsPage({resource, close, connections, workspaces, resources, runs, session, openOperation, openPipelineRun, recreate, recreation}: Props) {
+export function ResourceDetailsPage({resource, close, connections, workspaces, resources, runs, session, openOperation, openPipelineRun, recreate, action}: Props) {
   const [tab, setTab] = useState<'overview' | 'access' | 'activity' | 'configuration'>(['pending', 'provisioning', 'recreating', 'maintaining', 'deleting'].includes(resource?.status ?? '') ? 'activity' : 'overview')
   if (!resource) return null
   if (['machine-template', 'harbor', 'nfs'].includes(resource.kind)) return <SimpleResourceDetails resource={resource} connections={connections} resources={resources} close={close} runs={runs} openOperation={openOperation} openPipelineRun={openPipelineRun} />
   const connection = connections.find(item => item.id === resource.connectionId)?.name ?? resource.connectionId ?? '—'
   const dependencies = dependencyEntries(resource).map(item => ({...item, name: resources.find(candidate => candidate.id === item.id)?.name ?? item.id}))
   const references = Object.fromEntries([...resources.map(item => [item.id, item.name]), ...connections.map(item => [item.id, item.name]), ...workspaces.map(item => [item.id, item.name])])
-  const run = runs.find(item => item.id === (resource.recreationPipelineRunId ?? resource.deletionPipelineRunId ?? resource.pipelineRunId))
+  const run = runs.find(item => item.id === (resource.deletionPipelineRunId ?? resource.recreationPipelineRunId ?? resource.pipelineRunId))
   const cluster = resource.kind === 'kubernetes-cluster'
+  const busyResource = action ? {...resource, status: action} : resource
+  const validatingRecreation = Boolean(action && action !== 'validating-deletion')
   const retry = ['failed', 'recreation-failed', 'maintenance-failed'].includes(resource.status)
-  return <div className="detail-page"><DetailBreadcrumb parent={cluster ? 'Kubernetes' : 'Infrastructure'} current={resource.name} back={close} /><div className="detail-page-heading"><div className={cluster ? 'cluster-detail-title' : undefined}>{cluster && <KubernetesLogo />}<div><h2>{resource.name}</h2>{!cluster && <p>{resourceLabel(resource.kind)}</p>}</div></div><div className="detail-page-actions">{cluster && resource.spec.mode !== 'multi' && <ClusterMaintenance key={resource.id} resource={resource} runs={runs} session={session} />}{recreate && session.user?.role === 'admin' && <button className="button secondary" disabled={recreation?.pending || resource.status !== 'ready' && !retry} onClick={() => void recreate()}>{recreation?.pending ? (retry ? 'Retrying…' : 'Recreating…') : retry ? 'Retry' : 'Recreate cluster'}</button>}<ResourceStatus resource={resource} /></div></div>{recreation?.message && <p className={recreation.error ? 'managed-error' : 'managed-feedback'}>{recreation.message}</p>}<ResourceAttribution resource={resource} editable={cluster} />{dependencies.length > 0 && <div className="cluster-resource-summary"><ReadoutTable label="Cluster resources" data={{headers: dependencies.map(item => item.relation), rows: [dependencies.map(item => item.name)]}} /></div>}<nav className="detail-tabs" aria-label="Resource details"><button className={tab === 'overview' ? 'active' : ''} aria-current={tab === 'overview' ? 'page' : undefined} onClick={() => setTab('overview')}>Overview</button><button className={tab === 'access' ? 'active' : ''} aria-current={tab === 'access' ? 'page' : undefined} onClick={() => setTab('access')}>Access</button><button className={tab === 'activity' ? 'active' : ''} aria-current={tab === 'activity' ? 'page' : undefined} onClick={() => setTab('activity')}>Activity</button><button className={tab === 'configuration' ? 'active' : ''} aria-current={tab === 'configuration' ? 'page' : undefined} onClick={() => setTab('configuration')}>Configuration</button></nav><article className={`detail-page-card ${cluster ? 'cluster-detail-card' : ''}`}>
+  return <div className="detail-page"><DetailBreadcrumb parent={cluster ? 'Kubernetes' : 'Infrastructure'} current={resource.name} back={close} /><div className="detail-page-heading"><div className={cluster ? 'cluster-detail-title' : undefined}>{cluster && <KubernetesLogo />}<div><h2>{resource.name}</h2>{!cluster && <p>{resourceLabel(resource.kind)}</p>}</div></div><div className="detail-page-actions">{cluster && resource.spec.mode !== 'multi' && <ClusterMaintenance key={resource.id} resource={busyResource} runs={runs} session={session} />}{recreate && session.user?.role === 'admin' && <button className="button secondary" disabled={Boolean(action) || resource.status !== 'ready' && !retry} onClick={() => void recreate()}>{validatingRecreation ? 'Validating…' : retry ? 'Retry' : 'Recreate cluster'}</button>}<ResourceStatus resource={resource} override={action} /></div></div><ResourceAttribution resource={resource} editable={cluster} />{dependencies.length > 0 && <div className="cluster-resource-summary"><ReadoutTable label="Cluster resources" data={{headers: dependencies.map(item => item.relation), rows: [dependencies.map(item => item.name)]}} /></div>}<nav className="detail-tabs" aria-label="Resource details"><button className={tab === 'overview' ? 'active' : ''} aria-current={tab === 'overview' ? 'page' : undefined} onClick={() => setTab('overview')}>Overview</button><button className={tab === 'access' ? 'active' : ''} aria-current={tab === 'access' ? 'page' : undefined} onClick={() => setTab('access')}>Access</button><button className={tab === 'activity' ? 'active' : ''} aria-current={tab === 'activity' ? 'page' : undefined} onClick={() => setTab('activity')}>Activity</button><button className={tab === 'configuration' ? 'active' : ''} aria-current={tab === 'configuration' ? 'page' : undefined} onClick={() => setTab('configuration')}>Configuration</button></nav><article className={`detail-page-card ${cluster ? 'cluster-detail-card' : ''}`}>
     {tab === 'overview' && <><div className={`details-summary${cluster ? ' cluster-summary' : ''}`}>
       {!cluster && <div><span>Type</span><strong>{resourceLabel(resource.kind)}</strong></div>}
       {cluster && <><div><span>Prometheus scraping period</span><strong>{String(resource.spec.scrapeInterval ?? '—')}</strong></div><div><span>Metrics retention</span><strong>{String(resource.spec.retention ?? '—')}</strong></div></>}
@@ -51,7 +56,7 @@ export function ResourceDetailsPage({resource, close, connections, workspaces, r
     {cluster && <section className="details-section"><div className="details-heading"><strong>Topology</strong></div><Topology resource={resource} /></section>}
     <ResourceConnectivity value={resource.connectivity} /><ClusterDashboards key={resource.id} resource={resource} /></>}
     {tab === 'access' && <>{resource.kind === 'kubernetes-cluster' && resource.status === 'ready' && session.user?.role === 'admin' && <section className="details-section"><div className="details-heading"><strong>Kubernetes access</strong></div><a className="button secondary compact" href={`/api/v1/kubernetes-clusters/${resource.id}/kubeconfig`}>Download kubeconfig</a></section>}{session.user?.role === 'admin' && <ClusterSSHAccess resource={resource} resources={resources} />}<AccessPanel key={resource.id} resource={resource} session={session} /></>}
-    {tab === 'activity' && <ResourceActivity key={resource.recreationPipelineRunId ?? resource.deletionPipelineRunId ?? resource.pipelineRunId ?? resource.id} resource={resource} initialRun={run} openOperation={openOperation} openPipelineRun={openPipelineRun} />}
+    {tab === 'activity' && <ResourceActivity key={resource.deletionPipelineRunId ?? resource.recreationPipelineRunId ?? resource.pipelineRunId ?? resource.id} resource={resource} initialRun={run} openOperation={openOperation} openPipelineRun={openPipelineRun} />}
     {tab === 'configuration' && (cluster ? <ClusterConfiguration spec={resource.spec} references={references} /> : hasInputData(resource.spec) && <section className="details-section"><div className="details-heading"><strong>Resource settings</strong></div><InputData value={resource.spec} references={references} /></section>)}
   </article></div>
 }
@@ -79,7 +84,7 @@ function AccessPanel({resource, session}: {resource: ManagedResource; session: S
   const [visible, setVisible] = useState<Record<string, boolean>>({})
   const [copied, setCopied] = useState('')
   const [pending, setPending] = useState(false)
-  const [error, setError] = useState('')
+  const [error, setError] = useErrorState()
   const reveal = async () => {
     setPending(true)
     setError('')
@@ -100,7 +105,7 @@ function AccessPanel({resource, session}: {resource: ManagedResource; session: S
   }
   const copyValue = async (value: string, label: string) => {
     try {
-      await copy(value)
+      await copyText(value)
       setCopied(label)
       window.setTimeout(() => setCopied(current => current === label ? '' : current), 1800)
     } catch {
@@ -109,7 +114,7 @@ function AccessPanel({resource, session}: {resource: ManagedResource; session: S
   }
   return <section className="details-section"><div className="details-heading"><strong>Access and credentials</strong>{items ? <button className="text-button" onClick={hide}>Hide credentials</button> : session.user?.role === 'admin' && <button className="button secondary compact" disabled={pending} onClick={reveal}>{pending ? 'Decrypting…' : 'Reveal access'}</button>}</div>
     {!items && !error && session.user?.role !== 'admin' && <p className="details-copy">Administrator access required</p>}
-    {error && <p className="managed-error">{error}</p>}
+    {error && <ErrorFeedback message={error} />}
     {items && <div className="managed-access-list">{items.length ? items.map((item, endpointIndex) => {
       const credentials = Array.isArray(item.credentials) ? item.credentials : []
       return <article key={`${item.service}-${item.name}`}>
@@ -125,21 +130,6 @@ function AccessPanel({resource, session}: {resource: ManagedResource; session: S
   </section>
 }
 
-async function copy(value: string) {
-  if (navigator.clipboard?.writeText) {
-    await navigator.clipboard.writeText(value)
-    return
-  }
-  const input = document.createElement('textarea')
-  input.value = value
-  input.style.position = 'fixed'
-  input.style.opacity = '0'
-  document.body.appendChild(input)
-  input.select()
-  const copied = document.execCommand('copy')
-  input.remove()
-  if (!copied) throw new Error('copy unavailable')
-}
 
 function dependencyEntries(resource: ManagedResource): Array<{relation: string; id: string}> {
   const fields: Array<[string, string]> = [['templateId', 'VM template'], ['harborId', 'Harbor'], ['nfsId', 'NFS']]

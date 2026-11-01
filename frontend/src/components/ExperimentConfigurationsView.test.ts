@@ -300,3 +300,19 @@ it('shows a removable unavailable component without rendering another plugin sch
   fireEvent.click(screen.getByRole('button', {name: 'Remove component'}))
   expect(screen.queryByText('This component is no longer available. Remove or replace it before saving.')).not.toBeInTheDocument()
 })
+
+
+it.each(['single', 'suite'] as const)('opens an application dialog when cloning a %s configuration', kind => {
+  const prompt = vi.spyOn(window, 'prompt').mockImplementation(() => {throw new Error('Native prompt must not be used')})
+  const item = {id: 'cfg_clone', kind: kind, workspaceId: workspace.id, clusterResourceId: cluster.id, name: 'Baseline', description: '', applicationRef: application.reference, applicationDigest: application.digest, definition: {applicationValues: {}, components: [], variants: []}, validation: {valid: true, issues: []}, createdAt: '', updatedAt: ''} as ExperimentConfiguration
+  window.location.hash = `experiments/configuration/${item.id}`
+  render(createElement(ExperimentConfigurationsView, {items: [item], experiments: [], clusters: [cluster], workspaces: [workspace], applications: [application], plugins: [], strategies: [], session: {authenticated: true}, isAdmin: true, changed: async () => {}, openOperation: () => {}}))
+  fireEvent.click(screen.getByRole('button', {name: 'Clone configuration'}))
+  const dialog = screen.getByRole('dialog', {name: 'Clone configuration'})
+  expect(within(dialog).getByLabelText('Name')).toHaveValue('Baseline copy')
+  fireEvent.click(within(dialog).getByText('Cancel'))
+  expect(screen.queryByRole('dialog', {name: 'Clone configuration'})).not.toBeInTheDocument()
+  expect(prompt).not.toHaveBeenCalled()
+  prompt.mockRestore()
+  window.location.hash = ''
+})

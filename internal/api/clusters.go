@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 
 	"net/http"
 
@@ -83,7 +84,8 @@ func (s *Server) persistManagedCluster(response http.ResponseWriter, request *ht
 			writeError(response, http.StatusConflict, "cluster_conflict", "A cluster with this name already exists for the selected connection.")
 			return
 		}
-		writeError(response, http.StatusInternalServerError, "database_error", "Could not create the Kubernetes cluster workflow.")
+		slog.Error("save Kubernetes cluster workflow", "cluster_id", resourceID, "error", err)
+		writeError(response, http.StatusInternalServerError, "database_error", "Could not save the cluster setup. Provisioning has not started.")
 		return
 	}
 	writeJSON(response, http.StatusAccepted, resource)

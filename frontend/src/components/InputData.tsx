@@ -1,3 +1,4 @@
+import {CodeBlock} from './CodeBlock'
 import {standardFieldLabel} from '../fieldLabels'
 import type {ReactNode} from 'react'
 import type {JsonSchema, SchemaProperty} from '../types'
@@ -44,7 +45,7 @@ function Value({value, keyName, references, schema}: {value: unknown; keyName: s
   if (value === null || value === undefined || value === '') return <span className="input-data-empty">—</span>
   if (typeof value === 'boolean') return <span>{value ? 'Yes' : 'No'}</span>
   const text = String(value)
-  return text.includes('\n') ? <pre className="input-data-code">{text}</pre> : <span className="input-data-value">{references[text] ?? text}</span>
+  return text.includes('\n') ? <CodeBlock className="input-data-code" label={labelFor(keyName)}>{text}</CodeBlock> : <span className="input-data-value">{references[text] ?? text}</span>
 }
 
 export function InputData({value, references = {}, schema}: {value: unknown; references?: Record<string, string>; schema?: JsonSchema}) {

@@ -1,3 +1,4 @@
+import {useErrorState} from './ToastRegion'
 import {WizardForm, WizardStep, WizardReview} from './WizardForm'
 import {useEffect, useState, type FormEvent} from 'react'
 import {request} from '../api'
@@ -24,7 +25,7 @@ export function ComparativeConfigurationDialog({open, close, configurations, app
   const [runs, setRuns] = useState(3)
   const [revision, setRevision] = useState(item?.updatedAt)
   const [pending, setPending] = useState(false)
-  const [error, setError] = useState('')
+  const [error, setError] = useErrorState()
   const reviewMembers: ReadoutTableData = {headers: ['Order', 'Configuration', 'Plot label', 'Color'], rows: selected.map((id, index) => {
     const source = available.find(configuration => configuration.id === id)
     const alias = presentation[id]?.alias ?? source?.name ?? 'Unavailable configuration'

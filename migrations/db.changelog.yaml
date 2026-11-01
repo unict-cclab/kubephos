@@ -361,3 +361,10 @@ databaseChangeLog:
         - sqlFile:
             path: changes/051-resource-connectivity.sql
             relativeToChangelogFile: true
+  - changeSet:
+      id: 052-result-comparisons
+      author: kubephos
+      changes:
+        - sqlFile:
+            path: changes/052-result-comparisons.sql
+            relativeToChangelogFile: true

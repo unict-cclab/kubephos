@@ -192,7 +192,7 @@ Infrastructure provisioning metadata and resource authorship labels are retained
 operation logs and unrelated execution history are excluded.
 
 Users, login passwords, sessions, sharing permissions, cluster assignments,
-experiments, runs and collected experiment results are excluded. Imported
+experiments, runs, saved result comparisons and collected experiment results are excluded. Imported
 configurations become private and belong to the administrator performing the
 import. If different source owners used the same configuration name, additional
 names receive an `(imported N)` suffix; suite references remain intact.

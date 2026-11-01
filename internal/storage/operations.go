@@ -81,7 +81,7 @@ func (s *Store) CreateManagedResource(ctx context.Context, resource domain.Manag
 		INSERT INTO managed_resources (id, workspace_id, name, kind, provider, connection_id, plugin_id, plugin_version, plugin_digest, spec, operation_id)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 		RETURNING created_at, updated_at
-	`, resource.ID, resource.WorkspaceID, resource.Name, resource.Kind, resource.Provider, resource.ConnectionID, resource.PluginID, resource.PluginVersion, resource.PluginDigest, resource.Spec, operation.ID).Scan(&resource.CreatedAt, &resource.UpdatedAt, &resource.Connectivity)
+	`, resource.ID, resource.WorkspaceID, resource.Name, resource.Kind, resource.Provider, resource.ConnectionID, resource.PluginID, resource.PluginVersion, resource.PluginDigest, resource.Spec, operation.ID).Scan(&resource.CreatedAt, &resource.UpdatedAt)
 	if err != nil {
 		return domain.ManagedResource{}, err
 	}
@@ -107,7 +107,7 @@ func (s *Store) CreateManagedPipelineResource(ctx context.Context, resource doma
 		INSERT INTO managed_resources (id, workspace_id, name, kind, provider, connection_id, plugin_id, plugin_version, plugin_digest, spec, pipeline_id, pipeline_run_id)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 		RETURNING created_at, updated_at
-	`, resource.ID, resource.WorkspaceID, resource.Name, resource.Kind, resource.Provider, resource.ConnectionID, resource.PluginID, resource.PluginVersion, resource.PluginDigest, resource.Spec, pipeline.ID, run.ID).Scan(&resource.CreatedAt, &resource.UpdatedAt, &resource.Connectivity)
+	`, resource.ID, resource.WorkspaceID, resource.Name, resource.Kind, resource.Provider, resource.ConnectionID, resource.PluginID, resource.PluginVersion, resource.PluginDigest, resource.Spec, pipeline.ID, run.ID).Scan(&resource.CreatedAt, &resource.UpdatedAt)
 	if err != nil {
 		return domain.ManagedResource{}, err
 	}

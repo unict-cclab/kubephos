@@ -1,3 +1,4 @@
+import {ErrorFeedback, useErrorState} from './ToastRegion'
 import {useEffect, useState, type FormEvent} from 'react'
 import {request} from '../api'
 import type {Experiment, ExperimentConfiguration, Session} from '../types'
@@ -20,7 +21,7 @@ export function ExperimentExecutionDialog({open, configurations, initialConfigur
   const [configurationId, setConfigurationId] = useState('')
   const [name, setName] = useState('')
   const [pending, setPending] = useState(false)
-  const [error, setError] = useState('')
+  const [error, setError] = useErrorState()
   const selected = available.find(item => item.id === configurationId)
 
   useEffect(() => {
@@ -62,7 +63,7 @@ export function ExperimentExecutionDialog({open, configurations, initialConfigur
       {lockConfiguration ? <div className="execution-summary"><span>Configuration</span><strong>{selected?.name}</strong></div> : <label>Configuration<select value={configurationId} onChange={event => selectConfiguration(event.target.value)} required autoFocus><option value="" disabled>Select a configuration</option>{available.map(item => <option key={item.id} value={item.id}>{item.name} · {item.kind === 'suite' ? 'Comparative' : 'Single'}</option>)}</select></label>}
       <label>Name<input name="name" maxLength={120} value={name} onChange={event => setName(event.target.value)} required autoFocus={lockConfiguration} /></label>
       <div className={selected?.kind === 'suite' ? undefined : 'field-row'}>{selected?.kind !== 'suite' && <label>Number of runs<input name="runs" type="number" min={1} max={20} defaultValue={3} required /></label>}<label>Start later (optional)<input name="scheduledFor" type="datetime-local" /></label></div>
-      <p className="form-error">{error}</p>
+      <ErrorFeedback message={error} />
       <div className="modal-actions"><button className="button secondary" type="button" onClick={close}>Cancel</button><button className="button primary" disabled={pending || !selected}>{pending ? 'Validating…' : 'Validate and run'}</button></div>
     </form>
   </Dialog>

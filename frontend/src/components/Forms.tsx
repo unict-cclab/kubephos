@@ -1,3 +1,4 @@
+import {ErrorFeedback, useErrorState} from './ToastRegion'
 import {ResourceAction} from './ResourceAction'
 import {ActionIcon} from './ActionIcon'
 import {useEffect, useMemo, useState, type Dispatch, type FormEvent, type SetStateAction} from 'react'
@@ -23,7 +24,7 @@ export interface CommonProps {
 }
 
 export function AdministratorSetupDialog({onAuthenticated}: {onAuthenticated: (session: Session) => void}) {
-  const [error, setError] = useState('')
+  const [error, setError] = useErrorState()
   const [pending, setPending] = useState(false)
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
@@ -46,7 +47,7 @@ export function AdministratorSetupDialog({onAuthenticated}: {onAuthenticated: (s
     <form onSubmit={submit}>
       <div className="auth-brand"><span className="brand-mark">K</span><strong>KubePhos</strong></div><p className="section-copy">Create the first administrator account to configure KubePhos.</p>
       <><label>Username<input name="username" minLength={3} maxLength={40} autoComplete="username" required autoFocus /></label><label>Email<input name="email" type="email" autoComplete="email" /></label><label>Password<input name="password" type="password" minLength={12} maxLength={128} autoComplete="new-password" required /></label></>
-      <p className="form-error">{error}</p>
+      <ErrorFeedback message={error} />
       <button className="button primary auth-submit" disabled={pending}>{pending ? 'Creating account…' : 'Create administrator'}</button>
     </form>
   </Dialog>
@@ -54,7 +55,7 @@ export function AdministratorSetupDialog({onAuthenticated}: {onAuthenticated: (s
 
 export function ConnectionDialog({open, close, plugins, ...common}: CommonProps & {open: boolean; close: () => void; plugins: Plugin[]}) {
   const compatible = plugins.filter(item => item.provider && item.capabilities?.includes('infrastructure.discovery'))
-  const [error, setError] = useState('')
+  const [error, setError] = useErrorState()
   const [pending, setPending] = useState(false)
   const [createdCredential, setCreatedCredential] = useState<Credential | null>(null)
   const selected = compatible.find(item => item.provider === 'proxmox') ?? compatible[0]
@@ -107,7 +108,7 @@ export function ConnectionDialog({open, close, plugins, ...common}: CommonProps 
       <label className="checkbox-field"><input name="verifyTLS" type="checkbox" defaultChecked /><span>Verify TLS</span></label>
       <label>Token ID<input name="tokenId" maxLength={240} required /></label>
       <label>Token secret<input name="tokenSecret" type="password" minLength={8} maxLength={512} required /></label>
-      <p className="form-error">{error}</p>
+      <ErrorFeedback message={error} />
       <Actions close={close} pending={pending} label="Validate and save" />
     </form>
   </Dialog>
@@ -124,7 +125,7 @@ export function MachineTemplateDialog({open, close, plugins, workspaces, ...comm
     const properties = Object.fromEntries(Object.entries(plugin.schema.properties ?? {}).filter(([name]) => name !== 'connectionRef' && name !== 'name'))
     return {...plugin.schema, required: plugin.schema.required?.filter(name => name !== 'connectionRef' && name !== 'name'), properties}
   }, [plugin])
-  const [error, setError] = useState('')
+  const [error, setError] = useErrorState()
   const [pending, setPending] = useState(false)
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
@@ -171,7 +172,7 @@ export function InfrastructureServiceDialog({open, close, workspaces, templates,
   const defaultConnectionID = common.connections[0]?.id ?? ''
   const [connectionID, setConnectionID] = useState(defaultConnectionID)
   const [kind, setKind] = useState<'harbor' | 'nfs'>(initialKind)
-  const [error, setError] = useState('')
+  const [error, setError] = useErrorState()
   const [pending, setPending] = useState(false)
   useEffect(() => {
     if (!open) return
@@ -252,7 +253,7 @@ export function KubernetesClusterDialog({open, close, workspaces, templates, ser
   const [managementCount, setManagementCount] = useState(1)
   const [machineNodes, setMachineNodes] = useState<Record<string, string>>({})
   const [applicationPools, setApplicationPools] = useState<ClusterPoolDraft[]>([applicationPoolDefaults()])
-  const [error, setError] = useState('')
+  const [error, setError] = useErrorState()
   const [pending, setPending] = useState(false)
   useEffect(() => {
     if (!open) return
@@ -372,7 +373,7 @@ function parseZones(value: string): string[] {
 
 export function ApplicationDialog({open, close, ...common}: CommonProps & {open: boolean; close: () => void; plugins: Plugin[]}) {
   const [file, setFile] = useState<File | null>(null)
-  const [error, setError] = useState('')
+  const [error, setError] = useErrorState()
   const [pending, setPending] = useState(false)
   useEffect(() => {
     if (open) {
@@ -403,7 +404,7 @@ export function ApplicationDialog({open, close, ...common}: CommonProps & {open:
     <form onSubmit={submit}>
       <label>Application descriptor<input type="file" accept=".yaml,.yml,.json,application/yaml,application/json" required onChange={event => setFile(event.target.files?.[0] ?? null)} /></label>
       {file && <span className="field-description">{file.name} · {Math.ceil(file.size / 1024)} KB</span>}
-      <p className="form-error">{error}</p>
+      <ErrorFeedback message={error} />
       <Actions close={close} pending={pending} label="Validate and import" />
     </form>
   </Dialog>

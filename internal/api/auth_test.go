@@ -41,6 +41,8 @@ func TestAuthenticationCookiesUseConfiguredHTTPS(t *testing.T) {
 
 func TestUserMutationAllowed(t *testing.T) {
 	allowed := []string{
+		"/api/v1/comparisons",
+		"/api/v1/comparisons/comparison-1",
 		"/api/v1/experiments/experiment-1/sharing",
 		"/api/v1/experiment-configurations/configuration-1/sharing",
 		"/api/v1/experiment-configurations",

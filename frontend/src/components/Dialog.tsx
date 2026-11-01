@@ -1,5 +1,6 @@
 import {ActionIcon} from './ActionIcon'
 import {EditorPage} from './EditorPage'
+import {useNotifications} from './ToastRegion'
 import {useEffect, useId, useRef, type PropsWithChildren, type ReactNode} from 'react'
 
 interface DialogProps extends PropsWithChildren {
@@ -17,6 +18,7 @@ export function Dialog({open, title, eyebrow, onClose, footer, className = '', d
   const reference = useRef<HTMLDialogElement>(null)
   const titleId = useId()
   const page = presentation === 'page'
+  const clearErrors = useNotifications()?.clearErrors
 
   useEffect(() => {
     if (page) return
@@ -28,9 +30,10 @@ export function Dialog({open, title, eyebrow, onClose, footer, className = '', d
     dialog.querySelector<HTMLElement>('.modal-body input:not([type="hidden"]):not([disabled]):not([readonly]), .modal-body select:not([disabled]), .modal-body textarea:not([disabled]):not([readonly])')?.focus({preventScroll: true})
     return () => {
       if (dialog.open) dialog.close()
+      clearErrors?.()
       if (previous?.isConnected && !dialog.contains(previous)) previous.focus({preventScroll: true})
     }
-  }, [open, page])
+  }, [open, page, clearErrors])
 
   if (page) return open ? <EditorPage title={title} onClose={onClose} className={className}>{children}{footer && <div className="modal-actions">{footer}</div>}</EditorPage> : null
 

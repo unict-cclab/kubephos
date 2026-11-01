@@ -44,3 +44,12 @@ describe('resource activity',()=>{
   expect(screen.getByRole('button',{name:'Retry'})).toBeInTheDocument()
  })
 })
+
+it('shows deletion activity instead of an older failed recreation', async () => {
+  const deletion: PipelineRun = {id: 'delete-run', pipelineId: 'delete', workspaceId: 'ws', name: 'Delete', status: 'succeeded', pipelineHash: 'hash', resultType: '', resultVersion: '', cancelRequested: false, createdAt: '', stages: []}
+  vi.mocked(request).mockImplementation(async path => path.includes('/logs') ? {items: [entry(1, 'Removing dedicated VMs')]} : deletion)
+  render(<ResourceActivity resource={{...resource, status: 'deleting', pipelineRunId: 'create-run', recreationPipelineRunId: 'old-retry', deletionPipelineRunId: 'delete-run'}} openOperation={() => {}} />)
+  expect(await screen.findByText('Removing dedicated VMs')).toBeInTheDocument()
+  expect(vi.mocked(request)).toHaveBeenCalledWith('/pipeline-runs/delete-run', {}, undefined, expect.any(AbortSignal))
+  expect(vi.mocked(request).mock.calls.some(([path]) => path.includes('old-retry'))).toBe(false)
+})

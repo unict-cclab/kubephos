@@ -721,3 +721,25 @@ it('includes every available suite repetition beyond twenty runs', async () => {
   expect(screen.queryByRole('button', {name: 'Change'})).not.toBeInTheDocument()
   expect(vi.mocked(request).mock.calls.filter(([path]) => path.endsWith('/download'))).toHaveLength(24)
 })
+
+it('keeps saved comparisons read-only toward experiments and preserves each source run SLO', async () => {
+  const first = loaded('comparison_first', [[1, 2]])
+  const second = loaded('comparison_second', [[1, 2]])
+  for (const item of [first, second]) {
+    item.dataset.spec.series = [{metric: 'load.p95_response_time', unit: 'milliseconds', aggregation: 'mean', labels: {}, points: [{timestamp: '2026-09-09T09:59:45Z', value: 200}, {timestamp: '2026-09-09T10:00:00Z', value: 300}]}]
+  }
+  vi.mocked(request).mockImplementation(async path => path.includes(first.artifact.id) ? first.dataset as never : second.dataset as never)
+  const config = (sloMilliseconds: number) => ({components: [{capability: 'metrics.timeseries.collect', configuration: {sloMilliseconds}}]})
+  const comparison = {id: 'cmp_paper', ownerUserId: 'alice', name: 'Paper', kind: 'comparison', status: 'succeeded', variants: [{id: 'combined', name: 'Combined', alias: 'Combined', configuration: config(250), trials: [first, second].map((item, index) => ({id: `trial-${index}`, position: index + 1, status: 'succeeded', resultArtifactId: item.artifact.id, operationId: item.artifact.operationId}))}]} as unknown as Experiment
+  render(<ResultsView artifacts={[first.artifact, second.artifact]} experiments={[]} operations={[]} workspaces={[]} session={{authenticated: true, user: {id: 'alice', role: 'user'}} as Session} changed={async () => {}} openOperation={() => {}} focusedExperiment={comparison} onBack={() => {}} comparison={{sourceConfigurations: {[first.artifact.id]: config(250), [second.artifact.id]: config(500)}}} />)
+  const firstTable = await screen.findByRole('table', {name: 'Statistics for Combined · Run 1'})
+  const secondTable = screen.getByRole('table', {name: 'Statistics for Combined · Run 2'})
+  expect(within(firstTable).getByText('SLO violation windows').closest('tr')).toHaveTextContent('50.00%')
+  expect(within(secondTable).getByText('SLO violation windows').closest('tr')).toHaveTextContent('0.00%')
+  expect(screen.queryByRole('button', {name: /Share|Delete experiment|Stop experiment/})).not.toBeInTheDocument()
+  fireEvent.click(screen.getByRole('button', {name: 'Plots'}))
+  expect(document.querySelector('.slo-label')).not.toBeInTheDocument()
+  fireEvent.click(screen.getByRole('button', {name: 'Export'}))
+  expect(screen.getByRole('button', {name: 'Statistics CSV'})).toBeInTheDocument()
+  expect(vi.mocked(request).mock.calls.every(([path]) => path.startsWith('/artifacts/'))).toBe(true)
+})

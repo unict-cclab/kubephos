@@ -1,4 +1,4 @@
-import {useState} from 'react'
+import {useErrorState} from './ToastRegion'
 import type {ApplicationComponent} from '../types'
 import {exportChart} from '../charts'
 
@@ -169,7 +169,7 @@ function edgePath({source, target}: TopologyEdge, position: number, width: numbe
 
 export function ApplicationTopologyGraph({components}: {components: ApplicationComponent[]}) {
   const topology = buildApplicationTopology(components)
-  const [exportError, setExportError] = useState('')
+  const [exportError, setExportError] = useErrorState()
   if (!topology) return null
   const chartID = 'application-topology-graph'
   const output = (format: 'pdf' | 'png') => exportChart(chartID, 'application-topology', format).then(() => setExportError('')).catch(cause => setExportError(cause instanceof Error ? cause.message : 'Could not export application topology.'))

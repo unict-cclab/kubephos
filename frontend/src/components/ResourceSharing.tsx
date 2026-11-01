@@ -1,3 +1,4 @@
+import {ErrorFeedback, useErrorState} from './ToastRegion'
 import {ActionIcon} from './ActionIcon'
 import {useState} from 'react'
 import {request} from '../api'
@@ -21,7 +22,7 @@ export function ResourceSharing({kind, id, name, ownerUserId, session, changed}:
   const [loading, setLoading] = useState(false)
   const [loaded, setLoaded] = useState(false)
   const [saving, setSaving] = useState(false)
-  const [error, setError] = useState('')
+  const [error, setError] = useErrorState()
   if (!canManageResource(session, ownerUserId)) return null
   const show = async () => {
     setOpen(true); setLoading(true); setLoaded(false); setError('')
@@ -51,7 +52,7 @@ export function ResourceSharing({kind, id, name, ownerUserId, session, changed}:
         </select></label>
         {settings.visibility === 'selected' && <fieldset className="sharing-recipients" disabled={saving}><legend>Users</legend><div className="sharing-recipient-list">{users.length ? users.map(user => <label className="checkbox-field" key={user.id}><input type="checkbox" checked={settings.userIds.includes(user.id)} onChange={event => setSettings(value => ({...value, userIds: event.target.checked ? [...value.userIds, user.id] : value.userIds.filter(id => id !== user.id)}))} /><span>{user.username}</span></label>) : <p>No other users available.</p>}</div></fieldset>}
       </>}
-      {error && <div className="sharing-error"><p className="form-error" role="alert">{error}</p>{!loaded && !loading && <button className="button secondary compact" type="button" onClick={() => void show()}>Retry</button>}</div>}
+      {error && <div className="sharing-error"><ErrorFeedback message={error} />{!loaded && !loading && <button className="button secondary compact" type="button" onClick={() => void show()}>Retry</button>}</div>}
     </div>
   </Dialog></>
 }

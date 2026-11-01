@@ -1,3 +1,5 @@
+import {CloneDialog} from './CloneDialog'
+import {ErrorFeedback, useErrorState} from './ToastRegion'
 import {ResourceListHeading} from './ResourceListHeading'
 import {ConfigurationReadout} from './ConfigurationReadout'
 import {FormDisclosure} from './FormDisclosure'
@@ -42,7 +44,7 @@ interface Props {
   strategies: CatalogStrategy[]
   session: Session
   isAdmin: boolean
-  changed: () => Promise<void>
+  changed: (message?: string) => Promise<void>
   openOperation: (id: string) => void
   openExperiment?: (id: string) => void
 }
@@ -70,8 +72,10 @@ export function ExperimentConfigurationsView(props: Props) {
   const [viewing, setViewing] = useState(false)
   const [running, setRunning] = useState<ExperimentConfiguration | null>(null)
   const detail = useDetailRoute('experiments')
-  const [error, setError] = useState('')
+  const [error, setError] = useErrorState()
   const [owner, setOwner] = useState('')
+  const [cloning, setCloning] = useState<ExperimentConfiguration | null>(null)
+  useEffect(() => setCloning(null), [detail.route?.id])
 	const experimentCounts = useMemo(() => {
 		const counts = new Map<string, number>()
 		for (const experiment of props.experiments) {
@@ -81,17 +85,12 @@ export function ExperimentConfigurationsView(props: Props) {
 		return counts
 	}, [props.experiments])
 	const ready = props.clusters.some(item => item.status === 'ready')
-  const clone = async (item: ExperimentConfiguration) => {
-    const name = window.prompt('Name for the cloned configuration', `${item.name} copy`)
-    if (!name) return
-    try {
-      await request(`/experiment-configurations/${item.id}/clone`, {method: 'POST', body: JSON.stringify({name})}, props.session.csrfToken)
-      setError('')
-      await props.changed()
-    } catch (cause) {
-      setError(message(cause))
-    }
-  }
+  const cloneDialog = cloning && <CloneDialog key={cloning.id} sourceName={cloning.name} close={() => setCloning(null)} clone={async name => {
+    await request(`/experiment-configurations/${cloning.id}/clone`, {method: 'POST', body: JSON.stringify({name})}, props.session.csrfToken)
+    setError('')
+    // A refresh failure must not offer to repeat an already successful clone.
+    await props.changed('Configuration cloned.').catch(cause => setError(message(cause)))
+  }} />
   const remove = async (item: ExperimentConfiguration) => {
     if (!await confirmDelete(`Delete experiment configuration ${item.name}? Existing experiment instances, runs, logs and results will be retained.`)) return
     try {
@@ -109,11 +108,11 @@ export function ExperimentConfigurationsView(props: Props) {
   if (selectedConfiguration?.kind === 'suite' && (viewing || editing)) return <ComparativeConfigurationDialog {...props} configurations={props.items} item={selectedConfiguration} readOnly={viewing} open close={() => {setViewing(false); setEditing(false)}} />
   if (selectedConfiguration && viewing) return <ExperimentConfigurationDialog {...props} item={selectedConfiguration} readOnly open close={() => setViewing(false)} />
   if (selectedConfiguration && editing) return <ExperimentConfigurationDialog {...props} item={selectedConfiguration} open close={() => setEditing(false)} />
-  if (selectedConfiguration) return <><ExperimentConfigurationDetailsPage item={selectedConfiguration} clusters={props.clusters} applications={props.applications} plugins={props.plugins} strategies={props.strategies} session={props.session} close={detail.close} canRun={props.isAdmin || canManageResource(props.session, selectedConfiguration.ownerUserId)} configurations={props.items} changed={props.changed} canClone={props.isAdmin || !selectedConfiguration.ownerUserId || selectedConfiguration.ownerUserId === props.session.user?.id} run={() => setRunning(selectedConfiguration)} view={() => setViewing(true)} edit={() => setEditing(true)} clone={() => void clone(selectedConfiguration)} />{error && <p className="form-error page-error">{error}</p>}<ExperimentExecutionDialog open={Boolean(running)} configurations={running ? [running] : []} initialConfigurationId={running?.id} lockConfiguration close={() => setRunning(null)} session={props.session} changed={props.changed} onCreated={props.openExperiment ?? (() => {})} /></>
+  if (selectedConfiguration) return <>{cloneDialog}<ExperimentConfigurationDetailsPage item={selectedConfiguration} clusters={props.clusters} applications={props.applications} plugins={props.plugins} strategies={props.strategies} session={props.session} close={detail.close} canRun={props.isAdmin || canManageResource(props.session, selectedConfiguration.ownerUserId)} configurations={props.items} changed={props.changed} canClone={props.isAdmin || !selectedConfiguration.ownerUserId || selectedConfiguration.ownerUserId === props.session.user?.id} run={() => setRunning(selectedConfiguration)} view={() => setViewing(true)} edit={() => setEditing(true)} clone={() => setCloning(selectedConfiguration)} />{error && <ErrorFeedback message={error} />}<ExperimentExecutionDialog open={Boolean(running)} configurations={running ? [running] : []} initialConfigurationId={running?.id} lockConfiguration close={() => setRunning(null)} session={props.session} changed={props.changed} onCreated={props.openExperiment ?? (() => {})} /></>
   return <>
     {confirmationDialog}
     <ResourceListHeading title="Configurations" icon="configurations" action={<>{(props.isAdmin || Boolean(props.session.user)) && <ResourceAction action="create" label="New configuration" disabled={!ready} onClick={() => setCreating('choose')} />}</>} />
-    {error && <p className="form-error page-error">{error}</p>}
+    {error && <ErrorFeedback message={error} />}
     <ResourceListTable editable filters={<OwnerFilter items={props.items} value={owner} onChange={setOwner} />} empty={<><strong>{props.items.length ? 'No matching configurations' : 'No configurations yet'}</strong><p>{props.items.length ? 'Choose another owner filter to find your configuration.' : 'Start with a ready Kubernetes cluster, then choose an application or an external endpoint.'}</p></>} searchText={item => `${item.name} ${ownerLabel(item)} ${item.kind} ${item.validation.valid ? 'validated' : 'needs review'}`} items={visibleItems} label="Configurations" columns={[
       {label: 'Name', render: item => <h3>{item.name}</h3>},
       {label: 'Type', render: item => item.kind === 'suite' ? 'Comparative' : 'Single'},
@@ -152,7 +151,7 @@ function ConfigurationApplicationTopology({application, values, session}: {appli
 	const dynamic = application?.descriptor.spec?.valuesSchema?.['x-kubephos-dynamic-topology'] === true
 	const [components, setComponents] = useState<ApplicationComponent[]>(dynamic ? [] : application?.descriptor.spec?.interface?.components ?? [])
 	const [pending, setPending] = useState(dynamic)
-	const [error, setError] = useState('')
+	const [error, setError] = useErrorState()
 	const valuesKey = JSON.stringify(values)
 	useEffect(() => {
 		if (!application) {
@@ -212,10 +211,10 @@ export function ExperimentConfigurationDialog({open, close, clusters, workspaces
   const [components, setComponents] = useState<ComponentDraft[]>(initialComponents)
   const [sequence, setSequence] = useState((item?.definition.components?.length ?? 0) + 1)
   const [pending, setPending] = useState(false)
-  const [error, setError] = useState('')
+  const [error, setError] = useErrorState()
 	const [resolvedComponents, setResolvedComponents] = useState<ApplicationComponent[] | null>(null)
 	const [topologyPending, setTopologyPending] = useState(false)
-	const [topologyError, setTopologyError] = useState('')
+	const [topologyError, setTopologyError] = useErrorState()
 	const application = availableApplications.find(item => item.reference === applicationRef)
 	const dynamicTopology = destinationMode === 'application' && application?.descriptor.spec?.valuesSchema?.['x-kubephos-dynamic-topology'] === true
 	const effectiveApplicationComponents = dynamicTopology ? resolvedComponents ?? application?.descriptor.spec?.interface?.components ?? [] : application?.descriptor.spec?.interface?.components ?? []

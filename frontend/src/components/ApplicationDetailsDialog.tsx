@@ -1,3 +1,5 @@
+import {CodeBlock} from './CodeBlock'
+import {useErrorState} from './ToastRegion'
 import {ReadoutTable} from './ReadoutTable'
 import {ResourceAttribution} from './ResourceAttribution'
 import {ResourceAction} from './ResourceAction'
@@ -31,7 +33,7 @@ interface ApplicationPreview {
 export function ApplicationDetailsPage({application, close, canDelete, remove}: Props) {
   const [manifest, setManifest] = useState('')
   const [manifestLoading, setManifestLoading] = useState(false)
-  const [manifestError, setManifestError] = useState('')
+  const [manifestError, setManifestError] = useErrorState()
   const [materializedScenarios, setMaterializedScenarios] = useState<MaterializedLoadScenario[]>([])
   const [selectedScenarioID, setSelectedScenarioID] = useState('')
   useEffect(() => { setManifest(''); setManifestError(''); setManifestLoading(false); setMaterializedScenarios([]); setSelectedScenarioID('') }, [application?.reference])
@@ -107,11 +109,11 @@ export function ApplicationDetailsPage({application, close, canDelete, remove}: 
     <div className="application-file-selectors">
       <details className="technical-disclosure application-file-disclosure" onToggle={event => openDeploymentFiles(event.currentTarget.open)}>
         <summary><strong>{dynamicTopology ? 'Example deployment files' : 'Deployment files'}</strong></summary>
-        <div className="application-file-content">{dynamicTopology && <p className="details-copy">Example deployment manifests generated using the application defaults. Experiment manifests are generated from the selected configuration.</p>}<div className="details-heading"><strong>Manifest YAML</strong><div className="chart-export-actions">{manifest && <button className="button secondary compact" type="button" onClick={downloadManifest}>Download .yml</button>}<button className="button secondary compact" type="button" disabled={manifestLoading} onClick={() => void loadPreview(undefined, Boolean(manifest))}>{manifestLoading ? 'Preparing…' : manifest ? 'Refresh' : 'Load'}</button></div></div>{manifestError && <p className="form-error">{manifestError}</p>}{manifest && <pre aria-label="Deployment manifest YAML">{manifest}</pre>}</div>
+        <div className="application-file-content">{dynamicTopology && <p className="details-copy">Example deployment manifests generated using the application defaults. Experiment manifests are generated from the selected configuration.</p>}<div className="details-heading"><strong>Manifest YAML</strong><div className="chart-export-actions">{manifest && <button className="button secondary compact" type="button" onClick={downloadManifest}>Download .yml</button>}<button className="button secondary compact" type="button" disabled={manifestLoading} onClick={() => void loadPreview(undefined, Boolean(manifest))}>{manifestLoading ? 'Preparing…' : manifest ? 'Refresh' : 'Load'}</button></div></div>{manifestError && <p className="form-error">{manifestError}</p>}{manifest && <CodeBlock label="Deployment manifest YAML">{manifest}</CodeBlock>}</div>
       </details>
       <details className="technical-disclosure application-file-disclosure" onToggle={event => openLocustFile(event.currentTarget.open)}>
         <summary><strong>{dynamicTopology ? 'Example Locust file' : 'Locust file'}</strong></summary>
-        <div className="application-file-content">{dynamicTopology && <p className="details-copy">Example Locust script generated using the application defaults. The experiment script is generated from the selected configuration.</p>}{scenarios.length ? <>{scenarios.length > 1 && <label>Scenario<select value={selectedScenarioID} onChange={event => void showScenario(event.target.value)}>{scenarios.map((scenario, index) => <option key={String(scenario.id ?? index)} value={String(scenario.id ?? index)}>{scenarioLabel(index, scenarios.length)}</option>)}</select></label>}{manifestError && <p className="form-error">{manifestError}</p>}{selectedScenario && <><div className="details-heading"><strong>{selectedScenarioLabel}.py</strong><div className="chart-export-actions"><button className="button secondary compact" type="button" onClick={downloadScenario}>Download .py</button></div></div><pre aria-label={`Locust file for ${selectedScenarioLabel}`}>{selectedScenario.script}</pre></>}</> : <p className="details-copy">No Locust file available.</p>}</div>
+        <div className="application-file-content">{dynamicTopology && <p className="details-copy">Example Locust script generated using the application defaults. The experiment script is generated from the selected configuration.</p>}{scenarios.length ? <>{scenarios.length > 1 && <label>Scenario<select value={selectedScenarioID} onChange={event => void showScenario(event.target.value)}>{scenarios.map((scenario, index) => <option key={String(scenario.id ?? index)} value={String(scenario.id ?? index)}>{scenarioLabel(index, scenarios.length)}</option>)}</select></label>}{manifestError && <p className="form-error">{manifestError}</p>}{selectedScenario && <><div className="details-heading"><strong>{selectedScenarioLabel}.py</strong><div className="chart-export-actions"><button className="button secondary compact" type="button" onClick={downloadScenario}>Download .py</button></div></div><CodeBlock label={`Locust file for ${selectedScenarioLabel}`}>{selectedScenario.script}</CodeBlock></>}</> : <p className="details-copy">No Locust file available.</p>}</div>
       </details>
     </div>
   </article></div>

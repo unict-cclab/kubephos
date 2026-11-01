@@ -1,3 +1,4 @@
+import {ErrorFeedback, useErrorState} from './ToastRegion'
 import {ResponsiveTable} from './ResponsiveTable'
 import {ResourceSharing, canManageResource} from './ResourceSharing'
 import {ResourceAction} from './ResourceAction'
@@ -12,6 +13,7 @@ import type {Artifact, Experiment, ExperimentFigure, ExperimentTrial, MetricPoin
 import {Dialog} from './Dialog'
 import {DetailBreadcrumb} from './DetailBreadcrumb'
 import {LoadProfilePreview, loadProfileSteps, type LoadProfileStep} from './LoadProfileEditor'
+import {comparisonMetricCompatible, comparisonWarnings} from '../comparisons'
 import {ResourceAttribution} from './ResourceAttribution'
 
 export interface ResultsViewProps {
@@ -25,6 +27,7 @@ export interface ResultsViewProps {
   openPipelineRun?: (id: string) => void
   focusedExperiment?: Experiment
   onBack?: () => void
+  comparison?: {sourceConfigurations: Record<string, Record<string, unknown>>; actions?: React.ReactNode; sources?: React.ReactNode}
 }
 
 export interface LoadedDataset {
@@ -47,7 +50,7 @@ export interface AggregateSeries {
 
 type ResultsTab = 'statistics' | 'charts' | 'downloads'
 
-export function ResultsView({artifacts, experiments, operations, workspaces, session, changed, openOperation, openPipelineRun, focusedExperiment, onBack}: ResultsViewProps) {
+export function ResultsView({artifacts, experiments, operations, workspaces, session, changed, openOperation, openPipelineRun, focusedExperiment, onBack, comparison}: ResultsViewProps) {
   const {confirmDelete, confirmAction, confirmationDialog} = useDeleteConfirmation()
   const available = useMemo(() => artifacts.filter(item => !item.sensitive && item.type === 'TimeSeriesDataset' && item.version === 'v1alpha1').sort((left, right) => right.verifiedAt.localeCompare(left.verifiedAt)), [artifacts])
   const datasetCache = useRef(new Map<string, TimeSeriesDataset>())
@@ -57,7 +60,7 @@ export function ResultsView({artifacts, experiments, operations, workspaces, ses
   const availableKey = available.map(item => `${item.id}:${item.digest}`).join('|')
   const [selected, setSelected] = useState<string[]>(() => focusedArtifactIDs.filter(id => availableByID.has(id)))
   const [loaded, setLoaded] = useState<LoadedDataset[]>([])
-  const [error, setError] = useState('')
+  const [error, setError] = useErrorState()
   const [notice, setNotice] = useState('')
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -75,12 +78,12 @@ export function ResultsView({artifacts, experiments, operations, workspaces, ses
   const [stopping, setStopping] = useState(false)
   const [stopRequestedId, setStopRequestedId] = useState<string | null>(null)
   const stopRequested = Boolean(focusedExperiment && (focusedExperiment.cancelRequested || stopRequestedId === focusedExperiment.id))
-  const [actionError, setActionError] = useState('')
+  const [actionError, setActionError] = useErrorState()
   const focusedRuns = focusedExperiment?.variants.flatMap(variant => variant.trials.map(trial => ({variant, trial}))) ?? []
   const activeRun = focusedRuns.find(item => item.trial.id === runTab)
   const liveRun = focusedRuns.find(item => item.trial.status === 'running')
   const viewSelected = activeRun ? activeRun.trial.resultArtifactId && availableByID.has(activeRun.trial.resultArtifactId) ? [activeRun.trial.resultArtifactId] : [] : focusedExperiment ? focusedArtifactIDs.filter(id => availableByID.has(id)) : selected
-  const selectedKey = viewSelected.map(id => `${id}:${availableByID.get(id)?.digest ?? ''}:${responseTimeSLO(focusedExperiment, id) ?? ''}`).join('|')
+  const selectedKey = viewSelected.map(id => `${id}:${availableByID.get(id)?.digest ?? ''}:${responseTimeSLO(focusedExperiment, id, comparison?.sourceConfigurations[id]) ?? ''}`).join('|')
 
   useEffect(() => {setRunTab('summary')}, [focusedExperiment?.id])
 
@@ -112,7 +115,7 @@ export function ResultsView({artifacts, experiments, operations, workspaces, ses
     const loadDataset = async (id: string) => {
       const artifact = availableByID.get(id)
       if (!artifact) throw new Error('A selected run is no longer available.')
-      const slo = responseTimeSLO(focusedExperiment, id)
+      const slo = responseTimeSLO(focusedExperiment, id, comparison?.sourceConfigurations[id])
       const cacheKey = `${id}:${artifact.digest}:${slo ?? ''}`
       let dataset = datasetCache.current.get(cacheKey)
       if (!dataset) {
@@ -155,7 +158,7 @@ export function ResultsView({artifacts, experiments, operations, workspaces, ses
     return presentation
   }, [experiment])
   const displayed = useMemo(() => loaded.map(item => ({...item, label: experimentPresentation.get(item.artifact.id)?.label ?? datasetLabel(item.artifact, operations), color: experimentPresentation.get(item.artifact.id)?.color})), [loaded, experimentPresentation, operations])
-  const metrics = useMemo(() => [...new Set(displayed.flatMap(item => [...item.dataset.spec.series.map(series => series.metric), ...(item.dataset.spec.controlMetrics ?? []).filter(summary => summary.status !== 'not_configured').map(summary => summary.metric)]))].filter(metric => !['load.mean_response_time', 'load.p50_response_time', 'load.p99_response_time'].includes(metric) && (!metric.startsWith('application.') || metric === 'application.p95_response_time')).sort(), [displayed])
+  const metrics = useMemo(() => [...new Set(displayed.flatMap(item => [...item.dataset.spec.series.map(series => series.metric), ...(item.dataset.spec.controlMetrics ?? []).filter(summary => summary.status !== 'not_configured').map(summary => summary.metric)]))].filter(metric => !['load.mean_response_time', 'load.p50_response_time', 'load.p99_response_time'].includes(metric) && (!metric.startsWith('application.') || metric === 'application.p95_response_time')).filter(metric => !comparison || comparisonMetricCompatible(displayed, metric)).sort(), [displayed, Boolean(comparison)])
   const statisticsMetrics = [...new Set([...metrics, ...displayed.flatMap(item => item.dataset.spec.controlMetrics?.map(summary => summary.metric) ?? [])])].filter(metric => !['application.p95_response_time', 'redis.operation_p95_response_time'].includes(metric))
   const visibleMetrics = [...groupMetrics(metrics.filter(metric => !isControlMetric(metric))).values()].flat()
   const plotHeight = activeTab === 'charts' ? sharedChartHeight(displayed, visibleMetrics, activeRun ? undefined : experiment) : 465
@@ -210,10 +213,11 @@ export function ResultsView({artifacts, experiments, operations, workspaces, ses
   const stopLabel = focusedExperiment?.kind === 'suite' ? 'suite' : 'experiment'
   return <>
     {confirmationDialog}
-    {focusedExperiment && onBack && <DetailBreadcrumb parent="Experiments" current={focusedExperiment.name} back={onBack} />}
-    <div className={`results-heading ${focusedExperiment ? 'focused' : ''}`}><div><h2>{focusedExperiment?.name ?? 'Results'}</h2></div><div className="results-detail-actions">{focusedExperiment && <ResourceSharing kind="experiments" id={focusedExperiment.id} name={focusedExperiment.name} ownerUserId={focusedExperiment.ownerUserId} session={session} changed={changed} />}{focusedExperiment && <span className={`status ${activeRun?.trial.status ?? displayStatus}`}>{activeRun?.trial.status ?? displayStatus}</span>}{focusedExperiment && canManageResource(session,focusedExperiment.ownerUserId) && canStop && <button className="button danger" disabled={stopping || stopRequested} onClick={stopExperiment}>{stopping || stopRequested ? `Stopping ${stopLabel}…` : `Stop ${stopLabel}`}</button>}{focusedExperiment && canManageResource(session,focusedExperiment.ownerUserId) && <ResourceAction action="delete" label={deleting ? 'Deleting…' : `Delete ${stopLabel}`} disabled={deleting || !isTerminalExperiment(focusedExperiment.status)} title={isTerminalExperiment(focusedExperiment.status) ? undefined : `Stop this ${stopLabel} before deleting it`} onClick={removeExperiment} />}{!focusedExperiment && <div className="results-count" aria-label={`${selectable.length} datasets`}><strong>{selectable.length}</strong><span>datasets</span></div>}</div></div>
-    {focusedExperiment && <ResourceAttribution resource={focusedExperiment} />}
-    {actionError && <div className="validation-item error">{actionError}</div>}
+    {focusedExperiment && onBack && <DetailBreadcrumb parent={comparison ? 'Comparisons' : 'Experiments'} current={focusedExperiment.name} back={onBack} />}
+    <div className={`results-heading ${focusedExperiment ? 'focused' : ''}`}><div><h2>{focusedExperiment?.name ?? 'Results'}</h2></div><div className="results-detail-actions">{comparison?.actions}{!comparison && focusedExperiment && <ResourceSharing kind="experiments" id={focusedExperiment.id} name={focusedExperiment.name} ownerUserId={focusedExperiment.ownerUserId} session={session} changed={changed} />}{!comparison && focusedExperiment && <span className={`status ${activeRun?.trial.status ?? displayStatus}`}>{activeRun?.trial.status ?? displayStatus}</span>}{!comparison && focusedExperiment && canManageResource(session,focusedExperiment.ownerUserId) && canStop && <button className="button danger" disabled={stopping || stopRequested} onClick={stopExperiment}>{stopping || stopRequested ? `Stopping ${stopLabel}…` : `Stop ${stopLabel}`}</button>}{!comparison && focusedExperiment && canManageResource(session,focusedExperiment.ownerUserId) && <ResourceAction action="delete" label={deleting ? 'Deleting…' : `Delete ${stopLabel}`} disabled={deleting || !isTerminalExperiment(focusedExperiment.status)} title={isTerminalExperiment(focusedExperiment.status) ? undefined : `Stop this ${stopLabel} before deleting it`} onClick={removeExperiment} />}{!focusedExperiment && <div className="results-count" aria-label={`${selectable.length} datasets`}><strong>{selectable.length}</strong><span>datasets</span></div>}</div></div>
+    {focusedExperiment && <ResourceAttribution resource={focusedExperiment} editable={Boolean(comparison)} />}
+    {comparison?.sources}
+    <ErrorFeedback message={actionError} />
     {!focusedExperiment && experiments.length > 0 && <div className="experiment-history"><div className="experiment-history-title"><span><b>1</b><strong>Choose an experiment</strong></span><span>{experiments.length} saved</span></div><div className="experiment-cards">{experiments.map(item => <button key={item.id} className={activeExperiment === item.id ? 'active' : ''} onClick={() => openExperiment(item)}><span className={`status-dot ${experimentDisplayStatus(item)}`} /><span><strong>{item.name}</strong><small>{item.status === 'queued' && item.scheduledFor && new Date(item.scheduledFor).getTime() > Date.now() ? `Scheduled ${formatDate(item.scheduledFor)}` : `${experimentDisplayStatus(item)} · ${item.variants.length} strategies · ${item.variants.reduce((total, variant) => total + variant.trials.length, 0)} runs`}</small></span><ActionIcon name="right" /></button>)}</div></div>}
     {focusedExperiment && <nav className="experiment-run-tabs" aria-label="Experiment runs"><button className="run-tab summary" aria-current={runTab === 'summary' ? 'page' : undefined} data-active={runTab === 'summary'} onClick={() => {setRunTab('summary'); setActiveTab('statistics')}}><span className="run-tab-label">All runs</span></button>{focusedRuns.map(({variant, trial}) => <button key={trial.id} className={`run-tab ${trial.status}`} aria-current={runTab === trial.id ? 'page' : undefined} data-active={runTab === trial.id} onClick={() => {setRunTab(trial.id); setActiveTab('statistics')}}><span className={`status-dot ${trial.status}`} /><span className="run-tab-label">{variant.name} · Run {trial.position}</span></button>)}</nav>}
     {experiment && (!activeRun ? <>{experiment.status !== 'succeeded' && <ExperimentProgress experiment={experiment} />}{liveRun && <RunLoadProgress name={`${liveRun.variant.name} · Run ${liveRun.trial.position}`} trial={liveRun.trial} configuration={liveRun.variant.configuration} operation={operations.find(item => item.id === liveRun.trial.operationId)} />}</> : <><RunDiagnostics status={activeRun.trial.status} error={activeRun.trial.error} pipelineRunId={activeRun.trial.pipelineRunId} operationId={activeRun.trial.operationId} openPipelineRun={openPipelineRun} openOperation={openOperation} /><RunLoadProgress trial={activeRun.trial} configuration={activeRun.variant.configuration} operation={operations.find(item => item.id === activeRun.trial.operationId)} /></>)}
@@ -231,18 +235,19 @@ export function ResultsView({artifacts, experiments, operations, workspaces, ses
       </aside> : null}
       <div className="results-content">
         {notice && <div className="validation-item warning">{notice}</div>}
+        {comparison && !loading && comparisonWarnings(displayed, comparison.sourceConfigurations).map(warning => <div key={warning} className="validation-item warning">{warning}</div>)}
         {!viewSelected.length && <div className="results-placeholder"><strong>Select runs</strong></div>}
         {loading && <div className="results-placeholder"><span className="results-spinner" /><strong>Loading verified data…</strong></div>}
-        {error && <div className="validation-item error">{error}</div>}
+        {error && <><ErrorFeedback message={error} /><div className="validation-item error">{error}</div></>}
         {!loading && !error && loaded.length > 0 && <>
           {!focusedExperiment && <div className="results-workbench-head">
             <div><h3>{activeRun ? `${activeRun.variant.name} · Run ${activeRun.trial.position}` : focusedExperiment ? 'Aggregated results' : experiment?.name ?? displayed[0].label}</h3><p>{displayed.length} run{displayed.length === 1 ? '' : 's'} · {metrics.length} metric{metrics.length === 1 ? '' : 's'}</p></div>
             <div className="results-heading-actions">{!focusedExperiment && <button className="button primary" disabled={selected.length < 2} onClick={() => setSaving(true)}>Save comparison</button>}</div>
           </div>}
           <nav className="results-tabs" aria-label="Result sections">{(['statistics', 'charts', 'downloads'] as ResultsTab[]).map(tab => <button key={tab} className={activeTab === tab ? 'active' : ''} aria-current={activeTab === tab ? 'page' : undefined} onClick={() => setActiveTab(tab)}>{({statistics: 'Statistics', charts: 'Plots', downloads: 'Export'} as Record<ResultsTab, string>)[tab]}</button>)}</nav>
-          {activeTab === 'charts' && <div className="chart-grid" style={{'--plot-aspect-ratio': plotHeight / 860} as CSSProperties}>{visibleMetrics.map(metric => <Fragment key={metric}>{!['application.p95_response_time', 'redis.operation_rps', 'redis.operation_p95_response_time'].includes(metric) && <MetricChart metric={metric} series={aggregatePlotMetric(displayed, metric, activeRun ? undefined : experiment)} canvasHeight={plotHeight} />}{serviceStatisticsMetrics.includes(metric) && <ServiceMetricChart metric={metric} datasets={displayed} experiment={activeRun ? undefined : experiment} canvasHeight={plotHeight} />}</Fragment>)}</div>}
+          {activeTab === 'charts' && <div className="chart-grid" style={{'--plot-aspect-ratio': plotHeight / 860} as CSSProperties}>{visibleMetrics.map(metric => <Fragment key={metric}>{!['application.p95_response_time', 'redis.operation_rps', 'redis.operation_p95_response_time'].includes(metric) && <MetricChart omitSLO={Boolean(comparison) && new Set(displayed.map(item => item.dataset.spec.sloMilliseconds)).size > 1} metric={metric} series={aggregatePlotMetric(displayed, metric, activeRun ? undefined : experiment)} canvasHeight={plotHeight} />}{serviceStatisticsMetrics.includes(metric) && <ServiceMetricChart metric={metric} datasets={displayed} experiment={activeRun ? undefined : experiment} canvasHeight={plotHeight} />}</Fragment>)}</div>}
           {activeTab === 'statistics' && <><StatisticsTable datasets={displayed} metrics={statisticsMetrics} experiment={activeRun ? undefined : experiment} /></>}
-          {activeTab === 'downloads' && <ResultsExport datasets={displayed} metrics={statisticsMetrics} experiment={experiment} activeRun={Boolean(activeRun)} onPrint={() => {setActiveTab('statistics'); setPrintPending(true)}} />}
+          {activeTab === 'downloads' && <ResultsExport savedFigures={!comparison} datasets={displayed} metrics={statisticsMetrics} experiment={experiment} activeRun={Boolean(activeRun)} onPrint={() => {setActiveTab('statistics'); setPrintPending(true)}} />}
         </>}
       </div>
     </div>}
@@ -319,9 +324,10 @@ function loadStepsFromConfiguration(configuration: Record<string, unknown> | und
   return []
 }
 
-function responseTimeSLO(experiment: Experiment | undefined, artifactID: string): number | undefined {
+function responseTimeSLO(experiment: Experiment | undefined, artifactID: string, sourceConfiguration?: Record<string, unknown>): number | undefined {
   const variant = experiment?.variants.find(item => item.trials.some(trial => trial.resultArtifactId === artifactID))
-  const components = Array.isArray(variant?.configuration?.components) ? variant.configuration.components : []
+  const configuration = sourceConfiguration ?? variant?.configuration
+  const components = Array.isArray(configuration?.components) ? configuration.components : []
   for (const value of components) {
     if (!value || typeof value !== 'object') continue
     const component = value as Record<string, unknown>
@@ -353,7 +359,7 @@ export function experimentProgress(experiment: Experiment): {completed: number; 
 
 function SaveExperimentDialog({open, close, selected, operations, workspaces, session, changed}: {open: boolean; close: () => void; selected: Artifact[]; operations: Operation[]; workspaces: Workspace[]; session: Session; changed: () => Promise<void>}) {
   const [pending, setPending] = useState(false)
-  const [error, setError] = useState('')
+  const [error, setError] = useErrorState()
   const workspace = workspaces.find(item => item.id === selected[0]?.workspaceId)
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
@@ -388,7 +394,7 @@ function SaveExperimentDialog({open, close, selected, operations, workspaces, se
     <form onSubmit={submit}>
       <label>Name<input name="name" maxLength={120} placeholder="Default vs custom strategy" required autoFocus /></label>
       <div className="trial-mapping"><span className="field-description">Shared names group repeated runs.</span>{selected.map(artifact => <label key={artifact.id}><span>{operations.find(item => item.id === artifact.operationId)?.title ?? artifact.name}</span><input name={`variant-${artifact.id}`} maxLength={80} defaultValue={operations.find(item => item.id === artifact.operationId)?.title ?? artifact.name} required /></label>)}</div>
-      <p className="form-error">{error}</p>
+      <ErrorFeedback message={error} />
       <div className="modal-actions"><button className="button secondary" type="button" onClick={close}>Cancel</button><button className="button primary" disabled={pending}>{pending ? 'Saving…' : 'Save experiment'}</button></div>
     </form>
   </Dialog>
@@ -437,7 +443,7 @@ function sharedChartHeight(datasets: LoadedDataset[], metrics: string[], experim
 }
 
 
-function MetricChart({metric, series, canvasHeight}: {metric: string; series: AggregateSeries[]; canvasHeight: number}) {
+function MetricChart({metric, series, canvasHeight, omitSLO = false}: {metric: string; series: AggregateSeries[]; canvasHeight: number; omitSLO?: boolean}) {
   const width = 860
   const multiple = series.length > 1 || series.some(item => item.deviation !== undefined)
   const legend = chartLegendLayout(series.map(item => item.label), 112, width - 28, 37, 15)
@@ -450,7 +456,7 @@ function MetricChart({metric, series, canvasHeight}: {metric: string; series: Ag
   const timestamps = allPoints.map(point => new Date(point.timestamp).getTime())
   const values = series.flatMap(item => item.points.map((point, index) => point.value + (item.deviation?.[index]?.value ?? 0)))
   const maxX = Math.max(0, ...timestamps) / 60000
-  const sloMilliseconds = metric === 'load.p95_response_time' ? series.find(item => item.sloMilliseconds)?.sloMilliseconds : undefined
+  const sloMilliseconds = !omitSLO && metric === 'load.p95_response_time' ? series.find(item => item.sloMilliseconds)?.sloMilliseconds : undefined
   const maxY = Math.max(0, ...values, sloMilliseconds ?? 0)
   const unit = series[0]?.unit ?? ''
   const xAxis = timeAxis(maxX, true)
@@ -782,17 +788,18 @@ function SummaryCells({summary, unit}: {summary: ScientificSummary; unit: string
   return <>{[summary.mean, summary.standardDeviation, summary.min, summary.median, summary.max].map((value, index) => <td key={index}>{formatMetric(value, unit)}</td>)}</>
 }
 
-function ResultsExport({datasets, metrics, experiment, activeRun, onPrint}: {datasets: LoadedDataset[]; metrics: string[]; experiment?: Experiment; activeRun: boolean; onPrint: () => void}) {
+function ResultsExport({datasets, metrics, experiment, activeRun, onPrint, savedFigures = true}: {datasets: LoadedDataset[]; metrics: string[]; experiment?: Experiment; activeRun: boolean; onPrint: () => void; savedFigures?: boolean}) {
   const [figures, setFigures] = useState<ExperimentFigure[]>([])
-  const [error, setError] = useState('')
+  const [error, setError] = useErrorState()
   useEffect(() => {
-    if (!experiment) return
+    setFigures([])
+    if (!experiment || !savedFigures) return
     const controller = new AbortController()
     request<{items: ExperimentFigure[]}>(`/experiments/${experiment.id}/figures`, {}, undefined, controller.signal).then(result => {if (!controller.signal.aborted) setFigures(result.items ?? [])}).catch(cause => {if (!controller.signal.aborted) setError(cause instanceof Error ? cause.message : 'Could not load saved figures.')})
     return () => controller.abort()
-  }, [experiment?.id])
+  }, [experiment?.id, savedFigures])
   const visibleFigures = figures.filter(figure => figure.sourceArtifactIds.some(id => datasets.some(dataset => dataset.artifact.id === id)))
-  return <section className="results-download-panel"><div><h3>Export results</h3></div><div className="results-export-actions"><button className="button secondary" onClick={() => downloadBlob('kubephos-statistics.csv', new Blob([statisticsCSV(datasets, metrics, activeRun ? undefined : experiment)], {type: 'text/csv;charset=utf-8'}))}>Statistics CSV</button><button className="button secondary" onClick={onPrint}>Print statistics</button></div>{error && <p className="form-error">{error}</p>}{visibleFigures.length > 0 && <div className="saved-figures"><strong>Saved figures</strong><div className="dataset-downloads">{visibleFigures.map(figure => <a key={figure.id} href={`/api/v1/figures/${figure.id}/download`}><span>↓</span><span><strong>{metricTitle(figure.metric)} · {figure.format.toUpperCase()}</strong><small>{figure.sourceArtifactIds.length} runs · {formatDate(figure.createdAt)}</small></span></a>)}</div></div>}<div className="results-raw-data"><strong>Complete run data</strong><div className="dataset-downloads">{datasets.map(item => <a key={item.artifact.id} href={`/api/v1/artifacts/${item.artifact.id}/download`}><span>↓</span><span><strong>{item.label}</strong><small>Metric samples</small></span></a>)}</div></div></section>
+  return <section className="results-download-panel"><div><h3>Export results</h3></div><div className="results-export-actions"><button className="button secondary" onClick={() => downloadBlob('kubephos-statistics.csv', new Blob([statisticsCSV(datasets, metrics, activeRun ? undefined : experiment)], {type: 'text/csv;charset=utf-8'}))}>Statistics CSV</button><button className="button secondary" onClick={onPrint}>Print statistics</button></div>{error && <ErrorFeedback message={error} />}{visibleFigures.length > 0 && <div className="saved-figures"><strong>Saved figures</strong><div className="dataset-downloads">{visibleFigures.map(figure => <a key={figure.id} href={`/api/v1/figures/${figure.id}/download`}><span>↓</span><span><strong>{metricTitle(figure.metric)} · {figure.format.toUpperCase()}</strong><small>{figure.sourceArtifactIds.length} runs · {formatDate(figure.createdAt)}</small></span></a>)}</div></div>}<div className="results-raw-data"><strong>Complete run data</strong><div className="dataset-downloads">{datasets.map(item => <a key={item.artifact.id} href={`/api/v1/artifacts/${item.artifact.id}/download`}><span>↓</span><span><strong>{item.label}</strong><small>Metric samples</small></span></a>)}</div></div></section>
 }
 
 export function statisticsCSV(datasets: LoadedDataset[], metrics: string[], experiment?: Experiment): string {

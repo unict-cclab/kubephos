@@ -99,7 +99,7 @@ services:
     image: *kubephos-image
     user: "0:0"
     entrypoint: ["/bin/sh", "-ec"]
-    command: ["cp -R /opt/kubephos/migrations/. /liquibase/changelog/"]
+    command: ["cp -R /opt/kubephos/migrations/. /liquibase/changelog/; find /liquibase/changelog -type d -exec chmod 755 {} +; find /liquibase/changelog -type f -exec chmod 644 {} +"]
     volumes:
       - migration-data:/liquibase/changelog
     restart: "no"

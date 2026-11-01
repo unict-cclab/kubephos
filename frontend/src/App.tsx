@@ -1,3 +1,4 @@
+import type {ClusterAction} from './clusterActions'
 import {ActionIcon} from './components/ActionIcon'
 import {useDeleteConfirmation} from './components/ConfirmationDialog'
 import {useCallback, useEffect, useMemo, useRef, useState} from 'react'
@@ -5,7 +6,7 @@ import {request} from './api'
 import {usePlatformData} from './hooks/usePlatformData'
 import {ApplicationDialog, AdministratorSetupDialog, ConnectionDialog, InfrastructureServiceDialog, KubernetesClusterDialog, MachineTemplateDialog} from './components/Forms'
 import {OperationDetailsPage, PipelineRunLogsPage} from './components/OperationDrawer'
-import {ToastRegion, type ToastMessage} from './components/ToastRegion'
+import {NotificationProvider, useNotifications} from './components/ToastRegion'
 import {ThemeToggle} from './components/ThemeToggle'
 import {Views} from './components/Views'
 import type {Application, Session, View} from './types'
@@ -15,6 +16,7 @@ import {hashView} from './detailRoute'
 const viewMetadata: Record<View, string> = {
   overview: 'Overview',
   results: 'Experiments',
+  comparisons: 'Comparisons',
   catalog: 'Catalog',
   infrastructure: 'Infrastructure',
   kubernetes: 'Kubernetes',
@@ -28,7 +30,8 @@ const navigation: Array<[View, string]> = [
   ['kubernetes', 'Kubernetes'],
   ['catalog', 'Catalog'],
   ['experiments', 'Configurations'],
-  ['results', 'Experiments']
+  ['results', 'Experiments'],
+  ['comparisons', 'Comparisons']
 ]
 
 function NavigationIcon({view}: {view: View}) {
@@ -39,6 +42,7 @@ function NavigationIcon({view}: {view: View}) {
     kubernetes: <><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3"/><path d="M12 3v6m0 6v6M3 12h6m6 0h6"/></>,
     catalog: <><path d="M4 5h16v14H4zM4 12h16M9 5v7m6 0v7"/></>,
     experiments: <><path d="M6 4h12v16H6zM9 8h6M9 12h6M9 16h4"/></>,
+    comparisons: <><path d="M4 18V9m8 9V4m8 14v-7M2 21h20"/></>,
     results: <><circle cx="12" cy="12" r="9"/><path d="m10 8 6 4-6 4z"/></>,
     administration: <><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M8 8h8M8 12h8M8 16h5"/></>,
     users: <><circle cx="9" cy="8" r="3"/><path d="M3.5 19c.5-4 2.3-6 5.5-6s5 2 5.5 6M16 7h5M18.5 4.5v5"/></>
@@ -49,6 +53,10 @@ function NavigationIcon({view}: {view: View}) {
 type Modal = 'connection' | 'machineTemplate' | 'infrastructureService' | 'kubernetesCluster' | 'application' | null
 
 export default function App() {
+  return <NotificationProvider><PlatformApp /></NotificationProvider>
+}
+
+function PlatformApp() {
   const {confirmDelete, confirmAction, confirmationDialog} = useDeleteConfirmation()
   const [session, setSession] = useState<Session | null>(null)
   const [checkingSession, setCheckingSession] = useState(true)
@@ -56,17 +64,12 @@ export default function App() {
   const [modal, setModal] = useState<Modal>(null)
   const [operationID, setOperationID] = useState<string | null>(null)
   const [pipelineRunID, setPipelineRunID] = useState<string | null>(null)
-  const [toasts, setToasts] = useState<ToastMessage[]>([])
-  const [clusterActions, setClusterActions] = useState<Record<string, {pending: boolean; message: string; error: boolean}>>({})
+  const {notify} = useNotifications()!
+  const [clusterActions, setClusterActions] = useState<Record<string, ClusterAction>>({})
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [mobileNavigationOpen, setMobileNavigationOpen] = useState(false)
   const mobileNavigationButton = useRef<HTMLButtonElement>(null)
   const [serviceKind, setServiceKind] = useState<'harbor' | 'nfs'>('harbor')
-
-  const notify = useCallback((message: string, error = false) => {
-    setToasts(items => [...items, {id: Date.now() + Math.random(), message, error}])
-  }, [])
-  const dismiss = useCallback((id: number) => setToasts(items => items.filter(item => item.id !== id)), [])
 
   const {data, connected, refreshing, ready, load} = usePlatformData(session, setSession, notify)
 
@@ -108,7 +111,7 @@ export default function App() {
     notify(message)
   }, [load, notify])
   const refreshAfterChange = useCallback(async () => {await load(true)}, [load])
-  const changesApplied = useCallback(() => afterMutation('Changes saved.'), [afterMutation])
+  const changesApplied = useCallback((message = 'Changes saved.') => afterMutation(message), [afterMutation])
   const common = useMemo(() => ({session: session ?? {authenticated: false}, applications: data.applications, artifacts: data.artifacts, connections: data.connections, credentials: data.credentials, onDone: afterMutation}), [afterMutation, data.applications, data.artifacts, data.connections, data.credentials, session])
 
   const logout = async () => {
@@ -166,16 +169,15 @@ export default function App() {
 
   const deleteKubernetesCluster = async (clusterID: string, name: string) => {
     if (!await confirmDelete(`Delete cluster ${name}, its Kubernetes components and all dedicated VMs?`)) return
-    setClusterActions(items => ({...items, [clusterID]: {pending: true, message: 'Validating cluster health and cleanup targets…', error: false}}))
-    notify('Validating cluster deletion. This can take up to a minute.')
+    setClusterActions(items => ({...items, [clusterID]: 'validating-deletion'}))
     try {
       await request(`/kubernetes-clusters/${clusterID}`, {method: 'DELETE'}, session?.csrfToken)
-      await afterMutation('Cluster deletion validated and queued.')
-      setClusterActions(items => ({...items, [clusterID]: {pending: false, message: 'Deletion queued. Progress is available in View activity.', error: false}}))
+      await afterMutation('Cluster deletion queued.')
     } catch (cause) {
       const message = cause instanceof Error ? cause.message : 'Could not delete the cluster.'
-      setClusterActions(items => ({...items, [clusterID]: {pending: false, message, error: true}}))
       notify(message, true)
+    } finally {
+      setClusterActions(items => {const next = {...items}; delete next[clusterID]; return next})
     }
   }
 
@@ -184,23 +186,22 @@ export default function App() {
     const retry = ['failed', 'recreation-failed', 'maintenance-failed'].includes(resource?.status ?? '')
     const meshOnly = retriesOnlyClusterMesh(resource, data.pipelineRuns)
     if (!await confirmAction(meshOnly ? `Retry the ClusterMesh connection for ${name} using the existing clusters?` : retry ? `Retry ${name}? Existing cluster VMs will be replaced using the saved settings.` : `Recreate ${name}? Its VMs will be replaced using the saved topology.`, {title: retry ? 'Retry cluster creation' : 'Recreate cluster', label: retry ? 'Retry' : 'Recreate'})) return
-    setClusterActions(items => ({...items, [clusterID]: {pending: true, message: meshOnly ? 'Validating existing clusters and mesh inputs…' : 'Validating cluster health, ownership and cleanup targets…', error: false}}))
-    notify(retry ? 'Validating cluster retry.' : 'Validating cluster recreation.')
+    setClusterActions(items => ({...items, [clusterID]: retry ? 'validating-retry' : 'validating-recreation'}))
     try {
       await request(`/kubernetes-clusters/${clusterID}/recreate`, {method: 'POST', body: '{}'}, session?.csrfToken)
-      await afterMutation(retry ? 'Cluster retry queued.' : 'Cluster recreation validated and queued.')
-      setClusterActions(items => ({...items, [clusterID]: {pending: false, message: retry ? 'Retry queued. Progress is available in Activity.' : 'Recreation queued. Progress is available in Activity.', error: false}}))
+      await afterMutation(retry ? 'Cluster retry queued.' : 'Cluster recreation queued.')
     } catch (cause) {
       const message = cause instanceof Error ? cause.message : retry ? 'Could not retry cluster creation.' : 'Could not recreate the cluster.'
-      setClusterActions(items => ({...items, [clusterID]: {pending: false, message, error: true}}))
       notify(message, true)
+    } finally {
+      setClusterActions(items => {const next = {...items}; delete next[clusterID]; return next})
     }
   }
 
   if (checkingSession) return <div className="startup-screen"><span className="brand-mark">K</span><strong>Loading…</strong></div>
-  if (!session) return <div className="startup-screen"><strong>Could not check session.</strong><button className="button" onClick={() => window.location.reload()}>Retry</button><ToastRegion items={toasts} dismiss={dismiss} /></div>
+  if (!session) return <div className="startup-screen"><strong>Could not check session.</strong><button className="button" onClick={() => window.location.reload()}>Retry</button></div>
   if (!session.authenticated && !session.setupRequired) return <div className="startup-screen"><span className="brand-mark">K</span><strong>Redirecting to sign in…</strong></div>
-  if (!session.authenticated) return <><div className="auth-theme-toggle"><ThemeToggle /></div><AdministratorSetupDialog onAuthenticated={result => {setSession(result); notify(session?.setupRequired ? 'Administrator created.' : 'Signed in.')}} /><ToastRegion items={toasts} dismiss={dismiss} /></>
+  if (!session.authenticated) return <><div className="auth-theme-toggle"><ThemeToggle /></div><AdministratorSetupDialog onAuthenticated={result => {setSession(result); notify(session?.setupRequired ? 'Administrator created.' : 'Signed in.')}} /></>
 
   const title = pipelineRunID ? 'Run logs' : operationID ? 'Activity' : viewMetadata[view]
   return <>
@@ -246,7 +247,7 @@ export default function App() {
 	{modal === 'infrastructureService' && <InfrastructureServiceDialog {...common} open close={() => setModal(null)} workspaces={data.workspaces} templates={data.machineTemplates} initialKind={serviceKind} />}
 	{modal === 'kubernetesCluster' && <KubernetesClusterDialog {...common} open close={() => setModal(null)} workspaces={data.workspaces} templates={data.machineTemplates} services={data.infrastructureServices} />}
     {modal === 'application' && <ApplicationDialog {...common} plugins={data.plugins} open close={() => setModal(null)} />}
-    <ToastRegion items={toasts} dismiss={dismiss} />
+
   </>
 }
 

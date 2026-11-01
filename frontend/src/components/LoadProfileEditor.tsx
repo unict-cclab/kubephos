@@ -1,3 +1,4 @@
+import {useErrorState} from './ToastRegion'
 import {workloadTable, trafficTable} from './PhaseReadout'
 import {FormTabs} from './FormTabs'
 import {ResourceAction} from './ResourceAction'
@@ -87,7 +88,7 @@ export function LoadProfileEditor({prefix, zones, values = {}, distribution = 'z
 
 export function LoadProfilePreview({steps, progressSeconds, progressLabel}: {steps: LoadProfileStep[]; progressSeconds?: number; progressLabel?: string}) {
   const svgID = `input-load-${useId()}`
-  const [exportError, setExportError] = useState('')
+  const [exportError, setExportError] = useErrorState()
   const width = 700
   const height = 525
   const plot = {left: 112, right: 28, top: 28, bottom: 82}

@@ -1,3 +1,4 @@
+import {useErrorState} from './ToastRegion'
 import {useState, type FormEvent} from 'react'
 import {request} from '../api'
 import type {ManagedResource, Workspace} from '../types'
@@ -33,7 +34,7 @@ export function MultiClusterForm({open, close, workspaces, templates, services, 
   const [name, setName] = useState('')
   const [members, setMembers] = useState<Member[]>([member(1), member(2)])
   const [sequence, setSequence] = useState(3)
-  const [error, setError] = useState('')
+  const [error, setError] = useErrorState()
   const [pending, setPending] = useState(false)
   const compatible = (item: ManagedResource) => item.status === 'ready' && item.connectionId === connectionID
   const availableTemplates = templates.filter(compatible)

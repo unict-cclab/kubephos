@@ -1,3 +1,4 @@
+import {ErrorFeedback, useErrorState} from './ToastRegion'
 import {useEffect, useId, useState} from 'react'
 import {request} from '../api'
 import type {ManagedResource, PipelineRun, Session} from '../types'
@@ -27,7 +28,7 @@ function MaintenanceEditor({spec, resource, session, onClose, onQueued}: {spec: 
   const [newVMIDStart, setNewVMIDStart] = useState<number | ''>('')
   const [newAddressStart, setNewAddressStart] = useState('')
   const [pending, setPending] = useState(false)
-  const [error, setError] = useState('')
+  const [error, setError] = useErrorState()
   const [confirmed, setConfirmed] = useState(false)
   const names = clusterMachineNames(spec, pools)
   const originalNames = clusterMachineNames(spec, spec.applicationPools ?? [])
@@ -76,6 +77,6 @@ function MaintenanceEditor({spec, resource, session, onClose, onQueued}: {spec: 
       {names.length > 12 && <p role="alert" className="managed-error">The cluster limit is 12 nodes. Reduce the node count before applying maintenance.</p>}
       {removed.length > 0 && <div className="maintenance-removal"><ul>{removed.map(name => <li key={name}><code>{name}</code></li>)}</ul><label className="checkbox-field"><input type="checkbox" checked={confirmed} onChange={event => setConfirmed(event.target.checked)} required disabled={pending} /><span>Confirm removal of these nodes and their ephemeral data</span></label></div>}
     </section>
-    {error && <p role="alert" className="managed-error">{error}</p>}
+    <ErrorFeedback message={error} />
   </form></Dialog>
 }

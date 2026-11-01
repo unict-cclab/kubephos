@@ -1,3 +1,4 @@
+import {ErrorFeedback, useErrorState} from './ToastRegion'
 import {ResourceStatus, ResourceConnectivity} from './ResourceConnectivity'
 import {ResourceAttribution} from './ResourceAttribution'
 import {useEffect, useState} from 'react'
@@ -11,7 +12,7 @@ interface ConnectionDetails extends Connection {
 
 export function ConnectionDetailsPage({connection, session, close}: {connection: Connection; session: Session; close: () => void}) {
   const [details, setDetails] = useState<ConnectionDetails | null>(null)
-  const [error, setError] = useState('')
+  const [error, setError] = useErrorState()
   const [secret, setSecret] = useState('')
   const [visible, setVisible] = useState(false)
   const [pending, setPending] = useState(false)
@@ -55,8 +56,8 @@ export function ConnectionDetailsPage({connection, session, close}: {connection:
       <div className="simple-secret-field"><dt>Token secret</dt><dd><input aria-label="Token secret" type={visible ? 'text' : 'password'} value={visible ? secret : details.configuration.tokenSecret ?? '••••••••'} readOnly />{session.user?.role === 'admin' && <button className="text-button" type="button" disabled={pending} onClick={() => void reveal()}>{pending ? 'Loading…' : visible ? 'Hide' : 'Show'}</button>}</dd></div>
 
 
-    </dl> : error ? <p className="managed-error">{error}</p> : <p className="details-copy">Loading…</p>}
+    </dl> : error ? <ErrorFeedback message={error} persistent /> : <p className="details-copy">Loading…</p>}
     <ResourceConnectivity value={connection.connectivity} />
-    {details && error && <p className="managed-error">{error}</p>}
+    {details && error && <ErrorFeedback message={error} persistent />}
   </article></div>
 }

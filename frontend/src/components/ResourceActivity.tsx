@@ -1,3 +1,4 @@
+import {useErrorState} from './ToastRegion'
 import {useEffect, useState} from 'react'
 import {request} from '../api'
 import type {ManagedResource, Operation, PipelineRun, PipelineRunLogEntry} from '../types'
@@ -8,13 +9,13 @@ import {operationProgressNodes} from '../operationProgress'
 const finished = (status: string) => ['succeeded','failed','canceled'].includes(status)
 
 export function ResourceActivity({resource, initialRun, openOperation, openPipelineRun}: {resource: ManagedResource; initialRun?: PipelineRun; openOperation: (id: string) => void; openPipelineRun?: (id: string) => void}) {
- const runID = resource.deletionOperationId ? undefined : resource.recreationPipelineRunId ?? resource.deletionPipelineRunId ?? resource.pipelineRunId
+ const runID = resource.deletionOperationId ? undefined : resource.deletionPipelineRunId ?? resource.recreationPipelineRunId ?? resource.pipelineRunId
  const operationID = resource.deletionOperationId ?? resource.operationId
  const source = runID ? `/pipeline-runs/${runID}` : operationID ? `/operations/${operationID}` : ''
  const [run,setRun] = useState<PipelineRun | undefined>(initialRun?.id === runID ? initialRun : undefined)
  const [operation,setOperation] = useState<Operation>()
  const [logs,setLogs] = useState<PipelineRunLogEntry[]>([])
- const [error,setError] = useState('')
+ const [error,setError] = useErrorState()
  const [loaded,setLoaded] = useState(false)
  const [retry,setRetry] = useState(0)
  useEffect(()=>{
