@@ -93,3 +93,21 @@ it('preserves generator settings while switching between workload and generator 
   fireEvent.click(screen.getByRole('tab', {name: 'Workload'}))
   expect(new FormData(container.querySelector('form')!).get('workers')).toBe('3')
 })
+
+
+it('clones workload and distribution phases without sharing editable weights',()=>{
+ const {container}=render(<form><LoadProfileEditor prefix="load" zones={['a','b']} values={{steps:[{type:'constant',durationSeconds:120,rps:10}],geographicSteps:[{type:'constant',durationSeconds:120,weights:{a:3,b:1}}]}}/></form>)
+ fireEvent.click(screen.getByRole('button',{name:'Clone 1'}))
+ const workload=JSON.parse((container.querySelector('[name="load.steps"]') as HTMLInputElement).value)
+ expect(workload).toMatchObject([{type:'constant',durationSeconds:120,rps:10},{type:'constant',durationSeconds:120,rps:10}])
+ fireEvent.click(screen.getByRole('tab',{name:'Traffic distribution'}))
+ fireEvent.click(screen.getByRole('button',{name:'Clone 1'}))
+ const geography=JSON.parse((container.querySelector('[name="load.geographicSteps"]') as HTMLInputElement).value)
+ expect(geography).toHaveLength(2)
+ expect(geography[0]).toEqual(geography[1])
+ fireEvent.change(screen.getAllByRole('spinbutton',{name:'a'})[0],{target:{value:'7'}})
+ fireEvent.blur(screen.getAllByRole('spinbutton',{name:'a'})[0])
+ const edited=JSON.parse((container.querySelector('[name="load.geographicSteps"]') as HTMLInputElement).value)
+ expect(edited[0].weights.a).toBe(7)
+ expect(edited[1].weights.a).toBe(3)
+})

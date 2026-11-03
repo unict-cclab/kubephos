@@ -82,3 +82,28 @@ describe('experiments history creation', () => {
     expect(screen.queryByText('stopping')).not.toBeInTheDocument()
   })
 })
+
+it('starts the exact initialized run from the list and hides play for viewers, stopping and other states', async () => {
+  window.location.hash = '#results'
+  vi.mocked(request).mockReset()
+  let complete: () => void = () => {}
+  vi.mocked(request).mockImplementation(() => new Promise<void>(resolve => {complete = resolve}) as never)
+  const changed = vi.fn(async () => {})
+  const experiment = {id:'manual',name:'Prepared',ownerUserId:'owner',status:'initialized',createdAt:'2026-09-17T00:00:00Z',variants:[{id:'variant',name:'Approach',trials:[{id:'done',status:'succeeded',pipelineRunId:'run-old'},{id:'ready',status:'initialized',pipelineRunId:'run-ready'}]}]} as Experiment
+  const props = {experiments:[experiment],configurations:[],artifacts:[],operations:[],workspaces:[],changed,openOperation:()=>{},session:{authenticated:true,csrfToken:'csrf',user:{id:'owner',username:'owner',role:'user' as const}}}
+  const view = render(<ExperimentsHistoryView {...props} />)
+  fireEvent.click(screen.getByRole('button',{name:'Start Prepared'}))
+  expect(screen.getByRole('button',{name:'Starting Prepared…'})).toBeDisabled()
+  expect(request).toHaveBeenCalledExactlyOnceWith('/experiments/manual/start-traffic',{method:'POST',body:JSON.stringify({runId:'run-ready'})},'csrf')
+  complete()
+  await waitFor(()=>expect(changed).toHaveBeenCalledOnce())
+  await waitFor(()=>expect(screen.getByRole('button',{name:'Start Prepared'})).toBeEnabled())
+  view.rerender(<ExperimentsHistoryView {...props} session={{authenticated:true,user:{id:'viewer',username:'viewer',role:'user'}}} />)
+  expect(screen.queryByRole('button',{name:'Start Prepared'})).not.toBeInTheDocument()
+  view.rerender(<ExperimentsHistoryView {...props} session={{authenticated:true,user:{id:'admin',username:'admin',role:'admin'}}} />)
+  expect(screen.getByRole('button',{name:'Start Prepared'})).toBeEnabled()
+  for (const value of [{...experiment,cancelRequested:true},{...experiment,status:'initializing'},{...experiment,status:'running'},{...experiment,status:'succeeded'}]) {
+    view.rerender(<ExperimentsHistoryView {...props} experiments={[value]} />)
+    expect(screen.queryByRole('button',{name:'Start Prepared'})).not.toBeInTheDocument()
+  }
+})

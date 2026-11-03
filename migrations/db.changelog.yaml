@@ -368,3 +368,10 @@ databaseChangeLog:
         - sqlFile:
             path: changes/052-result-comparisons.sql
             relativeToChangelogFile: true
+  - changeSet:
+      id: 053-experiment-initialization
+      author: kubephos
+      changes:
+        - sqlFile:
+            path: changes/053-experiment-initialization.sql
+            relativeToChangelogFile: true

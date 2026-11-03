@@ -3,7 +3,7 @@ kind: Plugin
 metadata:
   id: io.kubephos.chaos.network.zones
   name: Inter-zone network injection
-  version: 0.3.1
+  version: 0.5.0
   description: Applies latency, jitter, bandwidth and packet loss to directed links
     between application zones.
 spec:
@@ -37,6 +37,72 @@ spec:
     - enablePacketLoss
     - packetLossPercent
     properties:
+      phases:
+        type: array
+        minItems: 1
+        maxItems: 32
+        items:
+          type: object
+          additionalProperties: false
+          required:
+          - durationSeconds
+          properties:
+            enableLatency:
+              type: boolean
+              title: Inject latency
+              default: true
+            latencyMilliseconds:
+              type: integer
+              title: Latency in ms
+              minimum: 1
+              maximum: 60000
+              default: 50
+            jitterMilliseconds:
+              type: integer
+              title: Jitter in ms
+              minimum: 0
+              maximum: 60000
+              default: 0
+            correlationPercent:
+              type: number
+              title: Correlation %
+              minimum: 0
+              maximum: 100
+              default: 0
+            enableBandwidth:
+              type: boolean
+              title: Limit bandwidth
+              default: false
+            bandwidthBytesPerSecond:
+              type: integer
+              title: Bandwidth bytes / second
+              minimum: 1
+              maximum: 1000000000000
+              default: 12500000
+            enablePacketLoss:
+              type: boolean
+              title: Inject packet loss
+              default: false
+            packetLossPercent:
+              type: number
+              title: Packet loss %
+              minimum: 0
+              maximum: 100
+              default: 0
+            linkOverrides:
+              type: array
+              title: Directed zone overrides
+              maxItems: 225
+              items:
+                type: object
+                properties:
+                  bidirectional:
+                    type: boolean
+                    title: Bidirectional
+            durationSeconds:
+              type: integer
+              minimum: 1
+              maximum: 86400
       clusterConnectionRef:
         type: string
         format: kubephos-artifact-ref
@@ -116,6 +182,10 @@ spec:
         maxItems: 225
         items:
           type: object
+          properties:
+            bidirectional:
+              type: boolean
+              title: Bidirectional
       clusterName:
         type: string
         x-kubephos-hidden: true

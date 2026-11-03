@@ -47,7 +47,13 @@ export async function requestResponse(path: string, options: RequestInit = {}, c
 export async function request<T>(path: string, options: RequestInit = {}, csrfToken?: string, signal?: AbortSignal): Promise<T> {
   const response = await requestResponse(path, options, csrfToken, signal)
   if (response.status === 204) return undefined as T
-  try {return await response.json() as T} catch (cause) {
+  try {
+    if (response.status === 202) {
+      const body = await response.text()
+      return body.trim() ? JSON.parse(body) as T : undefined as T
+    }
+    return await response.json() as T
+  } catch (cause) {
     if (isAbort(cause)) throw cause
     throw new ApiError(response.status, {code: 'invalid_response', message: 'KubePhos returned an incomplete response. Refresh the page and try again.'})
   }

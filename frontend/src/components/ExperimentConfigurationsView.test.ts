@@ -231,12 +231,12 @@ it('keeps network injection available for native Redis while omitting HTTP geogr
     await goToStep('Application')
   expect(screen.getByRole('spinbutton', {name: 'Minimum available replicas'})).toHaveValue(0)
   expect(screen.getByRole('spinbutton', {name: 'Minimum available replicas'})).toHaveAttribute('min', '0')
-  await goToStep('Monitoring')
-  fireEvent.click(screen.getByText('Network between zones', {selector: 'strong'}))
-  await waitFor(() => expect(screen.getByRole('checkbox', {name: 'Enable injection'})).toBeEnabled())
   await goToStep('Load profile')
   expect(screen.queryByText('Geographic timeline')).not.toBeInTheDocument()
   expect(screen.getByText('Total duration')).toBeInTheDocument()
+  await goToStep('Monitoring')
+  fireEvent.click(screen.getByText('Network between zones', {selector: 'strong'}))
+  await waitFor(() => expect(screen.getByRole('checkbox', {name: 'Enable injection'})).toBeEnabled())
 })
 
 async function goToStep(title: string) {
@@ -315,4 +315,43 @@ it.each(['single', 'suite'] as const)('opens an application dialog when cloning 
   expect(prompt).not.toHaveBeenCalled()
   prompt.mockRestore()
   window.location.hash = ''
+})
+
+
+it('shows Istio controls only in their application tab and preserves changes across steps',async()=>{
+ const {container}=render(createElement(ExperimentConfigurationDialog,{open:true,close:()=>{},items:[],experiments:[],clusters:[cluster],workspaces:[workspace],applications:[application],plugins:[loadPlugin,metricsPlugin],strategies:[],session:{authenticated:true},isAdmin:true,changed:async()=>{},openOperation:()=>{}}))
+ await goToStep('Application')
+ expect(screen.queryByRole('checkbox',{name:'Enable Istio injection'})).not.toBeInTheDocument()
+ fireEvent.click(screen.getByRole('tab',{name:'Istio'}))
+ expect(screen.getByRole('checkbox',{name:'Enable Istio injection'})).toBeChecked()
+ fireEvent.click(screen.getByRole('checkbox',{name:'Enable Istio injection'}))
+ fireEvent.click(screen.getByRole('tab',{name:'Topology'}))
+ expect(screen.queryByRole('checkbox',{name:'Enable Istio injection'})).not.toBeInTheDocument()
+ await goToStep('Load profile')
+ expect(screen.queryByRole('checkbox',{name:'Enable Istio injection'})).not.toBeInTheDocument()
+ fireEvent.change(screen.getByRole('combobox',{name:'Setup step'}),{target:{value:'1'}})
+ fireEvent.click(screen.getByRole('tab',{name:'Istio'}))
+ expect(screen.getByRole('checkbox',{name:'Enable Istio injection'})).not.toBeChecked()
+ expect((container.querySelector('[name="istioInjection"]') as HTMLInputElement).value).toBe('false')
+})
+
+
+it('defaults to automatic start and allows changing saved namespace and start mode in edit',async()=>{
+ const base={open:true,close:()=>{},items:[],experiments:[],clusters:[cluster],workspaces:[workspace],applications:[application],plugins:[loadPlugin,metricsPlugin],strategies:[],session:{authenticated:true},isAdmin:true,changed:async()=>{},openOperation:()=>{}}
+ const view=render(createElement(ExperimentConfigurationDialog,base))
+ expect(screen.getByLabelText('Start mode')).toHaveValue('automatic')
+ expect(screen.getByRole('textbox',{name:/^Namespace/})).toHaveValue('')
+ view.unmount()
+ const item={id:'saved',name:'Saved',workspaceId:workspace.id,clusterResourceId:cluster.id,applicationRef:application.reference,definition:{namespace:'benchmark',twoPhaseStart:true,applicationValues:{},components:[]}} as unknown as ExperimentConfiguration
+ const edited=render(createElement(ExperimentConfigurationDialog,{...base,item}))
+ expect(screen.getByLabelText('Start mode')).toHaveValue('manual')
+ expect(screen.getByRole('textbox',{name:/^Namespace/})).toHaveValue('benchmark')
+ fireEvent.change(screen.getByLabelText('Start mode'),{target:{value:'automatic'}})
+ fireEvent.change(screen.getByRole('textbox',{name:/^Namespace/}),{target:{value:'another-app'}})
+ await goToStep('Application')
+ fireEvent.change(screen.getByRole('combobox',{name:'Setup step'}),{target:{value:'0'}})
+ expect(screen.getByLabelText('Start mode')).toHaveValue('automatic')
+ const values=new FormData(edited.container.querySelector('form')!)
+ expect(values.get('namespace')).toBe('another-app')
+ expect(values.get('startMode')).toBe('automatic')
 })

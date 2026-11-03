@@ -33,7 +33,7 @@ func transferSchema(ctx context.Context, tx pgx.Tx) (string, error) {
 }
 func transferIdle(ctx context.Context, tx pgx.Tx) error {
 	var active bool
-	err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM operations WHERE status IN ('queued','prechecking','running','verifying')) OR EXISTS(SELECT 1 FROM pipeline_runs WHERE status IN ('queued','running')) OR EXISTS(SELECT 1 FROM experiments WHERE status IN ('queued','running')) OR EXISTS(SELECT 1 FROM plugin_import_jobs WHERE status IN ('queued','inspecting','validating','activating'))`).Scan(&active)
+	err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM operations WHERE status IN ('queued','prechecking','running','verifying')) OR EXISTS(SELECT 1 FROM pipeline_runs WHERE status IN ('queued','running')) OR EXISTS(SELECT 1 FROM experiments WHERE status IN ('queued','initializing','initialized','running')) OR EXISTS(SELECT 1 FROM plugin_import_jobs WHERE status IN ('queued','inspecting','validating','activating'))`).Scan(&active)
 	if err != nil {
 		return err
 	}

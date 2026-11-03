@@ -63,7 +63,8 @@ CREATE TABLE pipeline_runs (
  status text NOT NULL DEFAULT 'succeeded', pipeline_hash text NOT NULL DEFAULT 'hash', result_type text NOT NULL DEFAULT '',
  result_version text NOT NULL DEFAULT '', result_artifact_id text, cancel_requested boolean NOT NULL DEFAULT false,
  terminal_status text, error text NOT NULL DEFAULT '', created_at timestamptz NOT NULL DEFAULT now(),
- queued_at timestamptz NOT NULL DEFAULT now(), scheduled_for timestamptz, started_at timestamptz, completed_at timestamptz
+ queued_at timestamptz NOT NULL DEFAULT now(), scheduled_for timestamptz, started_at timestamptz, completed_at timestamptz,
+ pause_before_stage text NOT NULL DEFAULT '', application_namespace text NOT NULL DEFAULT '', execution_requested boolean NOT NULL DEFAULT false, initialized_at timestamptz
 );
 CREATE TABLE pipeline_run_stages (
  id text PRIMARY KEY, run_id text NOT NULL, position integer NOT NULL, stage_id text NOT NULL DEFAULT 'stage',

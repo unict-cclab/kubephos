@@ -193,6 +193,7 @@ func NewServer(store *storage.Store, registry *plugins.Registry, artifactStore *
 	router.HandleFunc("POST /api/v1/experiments", server.createCompletedExperiment)
 	router.HandleFunc("GET /api/v1/experiments/{id}/configuration-snapshot", server.getExperimentConfigurationSnapshot)
 	router.HandleFunc("POST /api/v1/experiments/{id}/cancel", server.cancelExperiment)
+	router.HandleFunc("POST /api/v1/experiments/{id}/start-traffic", server.startExperimentTraffic)
 	router.HandleFunc("DELETE /api/v1/experiments/{id}", server.deleteExperiment)
 	router.HandleFunc("GET /api/v1/experiments/{id}/figures", server.listExperimentFigures)
 	router.HandleFunc("POST /api/v1/experiments/{id}/figures", server.saveExperimentFigure)

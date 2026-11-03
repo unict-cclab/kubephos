@@ -53,3 +53,19 @@ describe('request', () => {
     expect(apiErrorMessage({issues: [null, {message: 4}, {message: 'Required field.'}]})).toBe('Required field.')
   })
 })
+
+
+it('accepts an empty 202 from Start while preserving JSON accepted responses and detecting malformed payloads', async () => {
+  const fetch = vi.fn()
+    .mockResolvedValueOnce(new Response(null, {status: 202}))
+    .mockResolvedValueOnce(new Response('{"id":"created-experiment"}', {status: 202}))
+    .mockResolvedValueOnce(new Response('<html>proxy</html>', {status: 202}))
+    .mockResolvedValueOnce(new Response(null, {status: 200}))
+  vi.stubGlobal('fetch', fetch)
+  try {
+    await expect(request('/experiments/prepared/start-traffic', {method: 'POST', body: JSON.stringify({runId: 'run-ready'})}, 'csrf')).resolves.toBeUndefined()
+    await expect(request('/experiments/start', {method: 'POST'})).resolves.toEqual({id: 'created-experiment'})
+    await expect(request('/experiments/prepared/start-traffic', {method: 'POST'})).rejects.toMatchObject({status: 202, body: {code: 'invalid_response'}})
+    await expect(request('/experiments')).rejects.toMatchObject({status: 200, body: {code: 'invalid_response'}})
+  } finally {vi.unstubAllGlobals()}
+})

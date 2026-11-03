@@ -196,7 +196,7 @@ export function PipelineRunLogsPage({runID, close, notify}: {runID: string; clos
   const progressNodes = run?.stages.map(stage => ({id: stage.stageId, title: stage.title, status: stage.status, detail: stage.error || undefined})) ?? []
   return <div className="detail-page operation-detail-page pipeline-log-page">
     <DetailBreadcrumb parent="Experiment" current="Run logs" back={close} />
-    <div className="detail-page-heading"><div><h2>{run?.name ?? 'Loading…'}</h2></div>{run && <Status value={run.status} />}</div>
+    <div className="detail-page-heading"><div><h2>{run?.name ?? 'Loading…'}</h2></div>{run && <Status value={run.phase ?? run.status} />}</div>
     {run && <div className="operation-live-layout">
       <section className="operation-page-section"><div className="operation-section-heading"><h3>Progress</h3></div><ExecutionProgressGraph nodes={progressNodes} label={`${run.name} execution progress`} /></section>
       <div className="operation-log-stack">

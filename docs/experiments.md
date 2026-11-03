@@ -15,6 +15,34 @@ sequentially. Starting an experiment freezes its complete configuration: later e
 do not change recorded settings or results. Single configurations referenced by a
 suite cannot be deleted until that reference is removed.
 
+**Namespace** is optional: leaving it empty keeps the generated namespace behavior.
+A named application namespace is deleted and recreated before every run, then
+removed during cleanup. System and platform namespaces are protected. Concurrent
+runs cannot share a named namespace on the same cluster.
+
+**Start mode** defaults to **Automatic**. Choose **Manual**
+to deploy the application and configured components first. The run becomes
+**Initialized** and waits while you prepare any external orchestration tooling.
+Select **Start** in the experiment detail or use the play button in the list to begin the load and measurement
+window. Each repetition waits separately, including runs inside a suite. You can
+stop a waiting experiment to clean up its resources. Editing the configuration
+changes future executions; existing experiments keep their saved settings.
+
+**Application → Istio** enables injection by default for HTTP applications, with
+per-service overrides. Native TCP applications retain their default opt-out.
+Cilium multi cluster groups do not use Istio.
+
+Monitoring follows Load profile. Network conditions can remain static
+or use phases with individual latency, jitter, bandwidth, packet loss and directed
+link overrides. Phase durations must sum to the load profile duration. A phase
+without effects restores the unshaped channel. Network and load profiles share
+the same start time; setup and readiness checks do not consume phase time.
+New zone and cluster links are bidirectional by default; disable **Bidirectional**
+to configure one direction. Existing links retain their saved direction. Latency
+is added per direction, so a symmetric link with X ms adds approximately 2X ms
+to the round-trip time.
+Workload, traffic distribution and network phases can be cloned independently.
+
 Multi cluster provisioning uses Cilium ClusterMesh. Running experiments on a
 multi cluster group awaits the multicluster deployment integration.
 

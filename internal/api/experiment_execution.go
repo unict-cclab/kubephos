@@ -147,6 +147,7 @@ func (s *Server) createExperimentExecution(response http.ResponseWriter, request
 			Name: fmt.Sprintf("%s · Run %d", input.Name, position), Status: domain.OperationQueued, PipelineHash: pipeline.Hash,
 			ResultType: experiment.ResultType, ResultVersion: experiment.ResultVersion, ScheduledFor: input.ScheduledFor,
 		}
+		configureInitializationRun(&run, definition)
 		for stagePosition, stage := range validated.Definition.Stages {
 			run.Stages = append(run.Stages, domain.PipelineRunStage{ID: id.New("runstage"), RunID: run.ID, Position: stagePosition + 1, StageID: stage.ID, PluginID: stage.PluginID, Title: stage.Title, Status: domain.StepPending, CleanupStatus: domain.StepPending})
 		}
@@ -357,6 +358,7 @@ func (s *Server) executeExperimentSuite(response http.ResponseWriter, request *h
 				Name: fmt.Sprintf("%s · %s · Run %d", input.Name, item.Configuration.Name, trialPosition), Status: domain.OperationQueued,
 				PipelineHash: pipeline.Hash, ResultType: experiment.ResultType, ResultVersion: experiment.ResultVersion, ScheduledFor: input.ScheduledFor,
 			}
+			configureInitializationRun(&run, item.Definition)
 			for stagePosition, stage := range item.Pipeline.Definition.Stages {
 				run.Stages = append(run.Stages, domain.PipelineRunStage{ID: id.New("runstage"), RunID: run.ID, Position: stagePosition + 1, StageID: stage.ID, PluginID: stage.PluginID, Title: stage.Title, Status: domain.StepPending, CleanupStatus: domain.StepPending})
 			}
@@ -449,6 +451,9 @@ func (s *Server) experimentPipelineForCluster(ctx context.Context, configuration
 	}
 	registerExperimentOutputs(sources, "application", inspectPlugin.Manifest())
 	prepareSpec := map[string]any{"mode": "prepare"}
+	if definition.Namespace != "" {
+		prepareSpec["applicationNamespace"] = definition.Namespace
+	}
 	if controlNamespace {
 		prepareSpec["controlNamespace"] = true
 	}
@@ -484,6 +489,9 @@ func (s *Server) experimentPipelineForCluster(ctx context.Context, configuration
 		var componentSpec map[string]any
 		if err := json.Unmarshal(component.Configuration, &componentSpec); err != nil || componentSpec == nil {
 			return &managedOperationFailure{status: http.StatusConflict, code: "invalid_snapshot", message: "Component configuration " + component.ID + " is invalid."}
+		}
+		if component.Capability == "load.session.control" && hasNetworkTimeline(definition) {
+			componentSpec["networkTimeline"] = true
 		}
 		bindings, failure := experimentArtifactBindings(componentSpec, manifest, sources, configuration.ApplicationRef)
 		if failure != nil {
@@ -527,6 +535,15 @@ func (s *Server) experimentPipelineForCluster(ctx context.Context, configuration
 		}
 	}
 	deploySpec := map[string]any{"mode": "deploy"}
+	if definition.Namespace != "" {
+		deploySpec["applicationNamespace"] = definition.Namespace
+	}
+	if definition.IstioInjection != nil {
+		deploySpec["istioInjection"] = *definition.IstioInjection
+	}
+	if len(definition.IstioInjectionOverrides) > 0 {
+		deploySpec["istioInjectionOverrides"] = definition.IstioInjectionOverrides
+	}
 	if controlNamespace {
 		deploySpec["controlNamespace"] = true
 	}

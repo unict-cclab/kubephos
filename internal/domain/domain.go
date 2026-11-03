@@ -99,27 +99,32 @@ type ResolvedPipelineStage struct {
 }
 
 type PipelineRun struct {
-	ID                string             `json:"id"`
-	PipelineID        string             `json:"pipelineId"`
-	WorkspaceID       string             `json:"workspaceId"`
-	ClusterResourceID string             `json:"clusterResourceId,omitempty"`
-	OwnerUserID       string             `json:"ownerUserId,omitempty"`
-	IsolationMode     string             `json:"isolationMode,omitempty"`
-	Name              string             `json:"name"`
-	Status            string             `json:"status"`
-	PipelineHash      string             `json:"pipelineHash"`
-	ResultType        string             `json:"resultType"`
-	ResultVersion     string             `json:"resultVersion"`
-	ResultArtifactID  string             `json:"resultArtifactId,omitempty"`
-	CancelRequested   bool               `json:"cancelRequested"`
-	TerminalStatus    string             `json:"-"`
-	Error             string             `json:"error,omitempty"`
-	CreatedAt         time.Time          `json:"createdAt"`
-	QueuedAt          *time.Time         `json:"queuedAt,omitempty"`
-	ScheduledFor      *time.Time         `json:"scheduledFor,omitempty"`
-	StartedAt         *time.Time         `json:"startedAt,omitempty"`
-	CompletedAt       *time.Time         `json:"completedAt,omitempty"`
-	Stages            []PipelineRunStage `json:"stages"`
+	ApplicationNamespace string             `json:"applicationNamespace,omitempty"`
+	PauseBeforeStage     string             `json:"pauseBeforeStage,omitempty"`
+	ExecutionRequested   bool               `json:"executionRequested,omitempty"`
+	InitializedAt        *time.Time         `json:"initializedAt,omitempty"`
+	Phase                string             `json:"phase,omitempty"`
+	ID                   string             `json:"id"`
+	PipelineID           string             `json:"pipelineId"`
+	WorkspaceID          string             `json:"workspaceId"`
+	ClusterResourceID    string             `json:"clusterResourceId,omitempty"`
+	OwnerUserID          string             `json:"ownerUserId,omitempty"`
+	IsolationMode        string             `json:"isolationMode,omitempty"`
+	Name                 string             `json:"name"`
+	Status               string             `json:"status"`
+	PipelineHash         string             `json:"pipelineHash"`
+	ResultType           string             `json:"resultType"`
+	ResultVersion        string             `json:"resultVersion"`
+	ResultArtifactID     string             `json:"resultArtifactId,omitempty"`
+	CancelRequested      bool               `json:"cancelRequested"`
+	TerminalStatus       string             `json:"-"`
+	Error                string             `json:"error,omitempty"`
+	CreatedAt            time.Time          `json:"createdAt"`
+	QueuedAt             *time.Time         `json:"queuedAt,omitempty"`
+	ScheduledFor         *time.Time         `json:"scheduledFor,omitempty"`
+	StartedAt            *time.Time         `json:"startedAt,omitempty"`
+	CompletedAt          *time.Time         `json:"completedAt,omitempty"`
+	Stages               []PipelineRunStage `json:"stages"`
 }
 
 type PipelineRunStage struct {

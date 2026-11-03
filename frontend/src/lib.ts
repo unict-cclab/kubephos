@@ -21,7 +21,7 @@ export function experimentDeletionMessage(experiment: Pick<Experiment, 'name' | 
 }
 
 export function experimentDisplayStatus(experiment: Pick<Experiment, 'status' | 'cancelRequested'>): string {
-  return experiment.cancelRequested && ['queued', 'running'].includes(experiment.status) ? 'stopping' : experiment.status
+  return experiment.cancelRequested && ['queued', 'running', 'initializing', 'initialized'].includes(experiment.status) ? 'stopping' : experiment.status
 }
 
 export function humanize(value: string): string {

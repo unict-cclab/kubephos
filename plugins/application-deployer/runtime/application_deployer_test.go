@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -311,6 +312,7 @@ spec:
 func discardLog(string, string) error { return nil }
 
 type fakeRunner struct {
+	mu               sync.Mutex
 	installed        bool
 	marker           string
 	controlInstalled bool
@@ -322,6 +324,8 @@ type fakeRunner struct {
 }
 
 func (runner *fakeRunner) Run(_ context.Context, _ string, stdin []byte, args ...string) (string, error) {
+	runner.mu.Lock()
+	defer runner.mu.Unlock()
 	command := strings.Join(args, " ")
 	if command == "get --raw=/readyz" {
 		return "ok", nil

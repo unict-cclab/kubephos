@@ -1,6 +1,6 @@
 import {ActionIcon} from './ActionIcon'
 
-type Action = 'view' | 'delete' | 'create' | 'add' | 'remove' | 'edit' | 'archive'
+type Action = 'start' | 'view' | 'delete' | 'create' | 'add' | 'remove' | 'edit' | 'archive'
 
 export function ResourceAction({action, label, onClick, disabled, title}: {action: Action; label: string; onClick: () => void; disabled?: boolean; title?: string}) {
   const text = action === 'create' || action === 'add'

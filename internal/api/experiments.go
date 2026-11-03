@@ -170,7 +170,7 @@ func (s *Server) cancelExperiment(response http.ResponseWriter, request *http.Re
 		return
 	}
 	if errors.Is(err, storage.ErrConflict) {
-		writeError(response, http.StatusConflict, "invalid_transition", "Only a queued or running experiment can be stopped.")
+		writeError(response, http.StatusConflict, "invalid_transition", "Only an active experiment can be stopped.")
 		return
 	}
 	if err != nil {

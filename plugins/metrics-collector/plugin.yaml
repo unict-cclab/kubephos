@@ -3,7 +3,7 @@ kind: Plugin
 metadata:
   id: io.kubephos.metrics.prometheus.collect
   name: Kubernetes metrics collector
-  version: 0.7.0
+  version: 0.8.0
   description: Collects a normalized workload dataset through a compatible metrics
     capability.
 spec:

@@ -98,7 +98,7 @@ export function Views(props: ViewProps) {
 
 function Overview(props: ViewProps) {
   const clusters = props.kubernetesClusters.filter(item => resourceStatus(item) === 'ready').length
-  const active = props.experiments.filter(item => ['queued', 'running'].includes(item.status)).length
+  const active = props.experiments.filter(item => ['queued', 'running', 'initializing', 'initialized'].includes(item.status)).length
   const completed = props.experiments.filter(item => item.status === 'succeeded').length
   const activity = buildRecentActivity({experiments: props.experiments, configurations: props.experimentConfigurations, connections: props.connections, resources: [...props.machineTemplates, ...props.infrastructureServices, ...props.kubernetesClusters], applications: props.applications})
   return <>

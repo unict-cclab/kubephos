@@ -3,29 +3,35 @@ kind: Plugin
 metadata:
   id: io.kubephos.applications.kubernetes.deploy
   name: Kubernetes application deployer
-  version: 0.7.0
-  description: Deploys any validated application package into an isolated Kubernetes namespace and prepares shared experiment control resources when requested.
+  version: 0.9.0
+  description: Deploys any validated application package into an isolated Kubernetes
+    namespace and prepares shared experiment control resources when requested.
 spec:
   protocol: v1alpha1
   commands:
-    - describe
-    - validate
-    - plan
-    - precheck
-    - execute
-    - verify
-    - status
-    - cancel
-    - cleanup
+  - describe
+  - validate
+  - plan
+  - precheck
+  - execute
+  - verify
+  - status
+  - cancel
+  - cleanup
   configurationSchema:
     type: object
     additionalProperties: false
     required:
-      - clusterConnectionRef
-      - manifestSetRef
-      - workloadTargetsRef
-      - serviceEndpointsRef
+    - clusterConnectionRef
+    - manifestSetRef
+    - workloadTargetsRef
+    - serviceEndpointsRef
     properties:
+      istioInjection:
+        type: boolean
+      istioInjectionOverrides:
+        type: object
+        additionalProperties: true
       clusterConnectionRef:
         type: string
         title: Kubernetes cluster
@@ -53,8 +59,8 @@ spec:
       mode:
         type: string
         enum:
-          - prepare
-          - deploy
+        - prepare
+        - deploy
       schedulerName:
         type: string
       schedulerInclude:
@@ -74,26 +80,29 @@ spec:
       controlNamespace:
         type: boolean
         x-kubephos-hidden: true
+      applicationNamespace:
+        type: string
+        maxLength: 63
   runtime:
     executable: application-deployer-plugin
     timeout: 25m
   artifacts:
     inputs:
-      - type: ClusterConnection
-        version: v1alpha1
-      - type: ManifestSet
-        version: v1alpha1
-      - type: WorkloadTargets
-        version: v1alpha1
-      - type: ServiceEndpoints
-        version: v1alpha1
+    - type: ClusterConnection
+      version: v1alpha1
+    - type: ManifestSet
+      version: v1alpha1
+    - type: WorkloadTargets
+      version: v1alpha1
+    - type: ServiceEndpoints
+      version: v1alpha1
     outputs:
-      - type: ApplicationDeployment
-        version: v1alpha1
+    - type: ApplicationDeployment
+      version: v1alpha1
   capabilities:
-    - applications.kubernetes.deploy
-    - applications.kubernetes.preflight
-    - applications.kubernetes.cleanup
-    - lifecycle.cleanup
+  - applications.kubernetes.deploy
+  - applications.kubernetes.preflight
+  - applications.kubernetes.cleanup
+  - lifecycle.cleanup
   permissions:
-    - cluster.admin
+  - cluster.admin

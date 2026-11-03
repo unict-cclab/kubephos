@@ -23,7 +23,7 @@ describe('configuration readout', () => {
     expect(network.getByRole('columnheader', {name: 'Packet loss (%)'})).toBeInTheDocument()
     expect(network.queryByRole('columnheader', {name: 'Correlation (%)'})).not.toBeInTheDocument()
     expect(network.getAllByRole('cell', {name: '—'})).toHaveLength(3)
-    expect(network.getByRole('columnheader', {name: 'Latency (ms)'})).toBeInTheDocument()
+    expect(network.getByRole('columnheader', {name: 'One-way latency (ms)'})).toBeInTheDocument()
     expect(network.getByText('100')).toBeInTheDocument()
     expect(network.queryByText('50')).not.toBeInTheDocument()
     expect(network.queryByText('Shared profile')).not.toBeInTheDocument()

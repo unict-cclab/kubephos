@@ -492,7 +492,7 @@ func (s *Store) createManagedResourceRecreation(ctx context.Context, resourceID,
           LEFT JOIN experiment_configurations c ON c.id=v.configuration_id
           LEFT JOIN experiment_trials t ON t.variant_id=v.id
           LEFT JOIN pipeline_runs r ON r.id=t.pipeline_run_id
-          WHERE e.status IN ('queued','running') AND (c.cluster_resource_id=$1 OR r.cluster_resource_id=$1)
+          WHERE e.status IN ('queued','initializing','initialized','running') AND (c.cluster_resource_id=$1 OR r.cluster_resource_id=$1)
         )
 	`, resourceID, domain.OperationQueued, domain.OperationRunning).Scan(&active); err != nil {
 		return err

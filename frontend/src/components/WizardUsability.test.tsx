@@ -126,3 +126,19 @@ it('keeps Enter as a newline in multiline configuration fields', async () => {
   expect(screen.getByRole('heading', {name: 'Policy'})).toBeVisible()
   expect(submit).not.toHaveBeenCalled()
 })
+
+
+it('selects the first available tab when application settings arrive without overriding an explicit selection', async () => {
+  const user = userEvent.setup()
+  const replicas = {id: 'replicas', title: 'Initial replicas', content: <label>Replica count<input defaultValue="2" /></label>}
+  const parameters = {id: 'parameters', title: 'Parameters', content: <label>Service count<input defaultValue="15" /></label>}
+  const {rerender} = render(<FormTabs label="Application settings" items={[replicas]} />)
+  rerender(<FormTabs label="Application settings" items={[parameters, replicas]} />)
+  expect(screen.getByRole('tab', {name: 'Parameters'})).toHaveAttribute('aria-selected', 'true')
+  await user.click(screen.getByRole('tab', {name: 'Initial replicas'}))
+  await user.clear(screen.getByRole('textbox', {name: 'Replica count'}))
+  await user.type(screen.getByRole('textbox', {name: 'Replica count'}), '3')
+  rerender(<FormTabs label="Application settings" items={[parameters, replicas, {id: 'istio', title: 'Istio', content: <p>Injection</p>}]} />)
+  expect(screen.getByRole('tab', {name: 'Initial replicas'})).toHaveAttribute('aria-selected', 'true')
+  expect(screen.getByRole('textbox', {name: 'Replica count'})).toHaveValue('3')
+})

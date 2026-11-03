@@ -1344,3 +1344,24 @@
 .comparison-series-layout .form-section-actions { margin-top: 16px; }
 .comparison-series-layout table { width: 100%; }
 .comparison-series-layout input[type="color"] { width: 44px; min-width: 44px; height: 36px; padding: 4px; }
+
+.network-phase-actions { display:flex; flex-wrap:wrap; align-items:flex-end; gap:12px; }
+.network-phase-actions > label { width:160px; max-width:100%; margin:0; }
+.network-phase-panel { min-width:0; padding-block:12px; }
+.network-phases-editor .form-tab-list { flex-wrap:wrap; }
+.istio-injection-editor .form-section-actions { margin-bottom:12px; }
+
+.network-links-editor .network-link-direction { text-align:center; }
+.network-links-editor .network-link-direction input[type="checkbox"] { width:16px; min-width:16px; padding:0; }
+
+/* Field/value readouts retain adjacent cells inside compact dialogs. */
+@media screen {
+  .readout-field-value { display: table; width: 100%; min-width: 0; table-layout: fixed; }
+  .readout-field-value thead { position: static; display: table-header-group; width: auto; height: auto; clip-path: none; }
+  .readout-field-value tbody { display: table-row-group; }
+  .readout-field-value tbody tr { display: table-row; }
+  .readout-field-value tbody td { display: table-cell; vertical-align: middle; padding: 10px 12px; border: 1px solid var(--line); }
+  .readout-field-value tbody td::before { display: none; }
+  .readout-field-value :is(th, td):first-child { width: 40%; font-size: inherit; }
+  .readout-field-value tbody td:first-child { font-weight: 700; }
+}

@@ -36,6 +36,7 @@ type Invocation struct {
 }
 
 type Spec struct {
+	Phases                   []Phase           `json:"phases,omitempty"`
 	ClusterName              string            `json:"clusterName,omitempty"`
 	ClusterNetworks          map[string]string `json:"clusterNetworks,omitempty"`
 	ClusterConnectionRef     string            `json:"clusterConnectionRef"`
@@ -57,6 +58,7 @@ type Spec struct {
 }
 
 type LinkOverride struct {
+	Bidirectional           bool     `json:"bidirectional,omitempty"`
 	SourceZone              string   `json:"sourceZone"`
 	TargetZone              string   `json:"targetZone"`
 	LatencyMilliseconds     *int     `json:"latencyMilliseconds,omitempty"`
@@ -160,9 +162,9 @@ type commandRunner interface {
 
 func (Plugin) Manifest() plugins.Manifest {
 	return plugins.Manifest{
-		ID: pluginID, Name: "Inter-zone network injection", Version: "0.3.1",
+		ID: pluginID, Name: "Inter-zone network injection", Version: "0.5.0",
 		Description:     "Applies latency, jitter, bandwidth and packet loss to directed links between application zones.",
-		Schema:          json.RawMessage(`{"type":"object","additionalProperties":false,"required":["clusterConnectionRef","applicationDeploymentRef","managedPlatformRef","nodeGroupLabel","networkInterface","hostNetwork","enableLatency","latencyMilliseconds","jitterMilliseconds","correlationPercent","enableBandwidth","bandwidthBytesPerSecond","enablePacketLoss","packetLossPercent"],"properties":{"clusterConnectionRef":{"type":"string","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ClusterConnection","x-kubephos-artifact-version":"v1alpha1"},"applicationDeploymentRef":{"type":"string","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ApplicationDeployment","x-kubephos-artifact-version":"v1alpha1"},"managedPlatformRef":{"type":"string","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ManagedPlatformCapability","x-kubephos-artifact-version":"v1alpha1"},"nodeGroupLabel":{"type":"string","title":"Node group label","default":"topology.kubernetes.io/zone"},"nodeSelector":{"type":"string","title":"Affected node selector","default":"kubephos.dev/role=application"},"networkInterface":{"type":"string","title":"Network interface","default":"flannel.1"},"hostNetwork":{"type":"boolean","title":"Shape host-network traffic","default":false},"enableLatency":{"type":"boolean","title":"Inject latency","default":true},"latencyMilliseconds":{"type":"integer","title":"Latency in ms","minimum":1,"maximum":60000,"default":50},"jitterMilliseconds":{"type":"integer","title":"Jitter in ms","minimum":0,"maximum":60000,"default":0},"correlationPercent":{"type":"number","title":"Correlation %","minimum":0,"maximum":100,"default":0},"enableBandwidth":{"type":"boolean","title":"Limit bandwidth","default":false},"bandwidthBytesPerSecond":{"type":"integer","title":"Bandwidth bytes / second","minimum":1,"maximum":1000000000000,"default":12500000},"enablePacketLoss":{"type":"boolean","title":"Inject packet loss","default":false},"packetLossPercent":{"type":"number","title":"Packet loss %","minimum":0,"maximum":100,"default":0},"linkOverrides":{"type":"array","title":"Directed zone overrides","maxItems":225,"items":{"type":"object"}},"clusterName":{"type":"string","x-kubephos-hidden":true},"clusterNetworks":{"type":"object","additionalProperties":true,"x-kubephos-hidden":true}}}`),
+		Schema:          json.RawMessage(`{"type":"object","additionalProperties":false,"required":["clusterConnectionRef","applicationDeploymentRef","managedPlatformRef","nodeGroupLabel","networkInterface","hostNetwork","enableLatency","latencyMilliseconds","jitterMilliseconds","correlationPercent","enableBandwidth","bandwidthBytesPerSecond","enablePacketLoss","packetLossPercent"],"properties":{"clusterConnectionRef":{"type":"string","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ClusterConnection","x-kubephos-artifact-version":"v1alpha1"},"applicationDeploymentRef":{"type":"string","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ApplicationDeployment","x-kubephos-artifact-version":"v1alpha1"},"managedPlatformRef":{"type":"string","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ManagedPlatformCapability","x-kubephos-artifact-version":"v1alpha1"},"nodeGroupLabel":{"type":"string","title":"Node group label","default":"topology.kubernetes.io/zone"},"nodeSelector":{"type":"string","title":"Affected node selector","default":"kubephos.dev/role=application"},"networkInterface":{"type":"string","title":"Network interface","default":"flannel.1"},"hostNetwork":{"type":"boolean","title":"Shape host-network traffic","default":false},"enableLatency":{"type":"boolean","title":"Inject latency","default":true},"latencyMilliseconds":{"type":"integer","title":"Latency in ms","minimum":1,"maximum":60000,"default":50},"jitterMilliseconds":{"type":"integer","title":"Jitter in ms","minimum":0,"maximum":60000,"default":0},"correlationPercent":{"type":"number","title":"Correlation %","minimum":0,"maximum":100,"default":0},"enableBandwidth":{"type":"boolean","title":"Limit bandwidth","default":false},"bandwidthBytesPerSecond":{"type":"integer","title":"Bandwidth bytes / second","minimum":1,"maximum":1000000000000,"default":12500000},"enablePacketLoss":{"type":"boolean","title":"Inject packet loss","default":false},"packetLossPercent":{"type":"number","title":"Packet loss %","minimum":0,"maximum":100,"default":0},"linkOverrides":{"type":"array","title":"Directed zone overrides","maxItems":225,"items":{"type":"object","properties":{"bidirectional":{"type":"boolean","title":"Bidirectional"}}}},"clusterName":{"type":"string","x-kubephos-hidden":true},"clusterNetworks":{"type":"object","additionalProperties":true,"x-kubephos-hidden":true},"phases":{"type":"array","minItems":1,"maxItems":32,"items":{"type":"object","additionalProperties":false,"required":["durationSeconds"],"properties":{"enableLatency":{"type":"boolean","title":"Inject latency","default":true},"latencyMilliseconds":{"type":"integer","title":"Latency in ms","minimum":1,"maximum":60000,"default":50},"jitterMilliseconds":{"type":"integer","title":"Jitter in ms","minimum":0,"maximum":60000,"default":0},"correlationPercent":{"type":"number","title":"Correlation %","minimum":0,"maximum":100,"default":0},"enableBandwidth":{"type":"boolean","title":"Limit bandwidth","default":false},"bandwidthBytesPerSecond":{"type":"integer","title":"Bandwidth bytes / second","minimum":1,"maximum":1000000000000,"default":12500000},"enablePacketLoss":{"type":"boolean","title":"Inject packet loss","default":false},"packetLossPercent":{"type":"number","title":"Packet loss %","minimum":0,"maximum":100,"default":0},"linkOverrides":{"type":"array","title":"Directed zone overrides","maxItems":225,"items":{"type":"object","properties":{"bidirectional":{"type":"boolean","title":"Bidirectional"}}}},"durationSeconds":{"type":"integer","minimum":1,"maximum":86400}}}}}}`),
 		ArtifactInputs:  []domain.ArtifactContract{{Type: "ClusterConnection", Version: "v1alpha1"}, {Type: "ApplicationDeployment", Version: "v1alpha1"}, {Type: "ManagedPlatformCapability", Version: "v1alpha1"}},
 		ArtifactOutputs: []domain.ArtifactContract{{Type: "NetworkInjection", Version: "v1alpha1"}},
 		Capabilities:    []string{"chaos.network.zones", "chaos.network.preflight", "chaos.network.cleanup", "lifecycle.cleanup"}, Permissions: []string{"cluster.admin"},
@@ -411,6 +413,10 @@ func validateConfiguration(spec Spec) error {
 	if !iface.MatchString(spec.NetworkInterface) {
 		return errors.New("network interface is invalid")
 	}
+	if len(spec.Phases) > 0 {
+		_, err := ValidatePhases(spec)
+		return err
+	}
 	if !spec.EnableLatency && !spec.EnableBandwidth && !spec.EnablePacketLoss && len(spec.LinkOverrides) == 0 {
 		return errors.New("enable a shared network effect or configure at least one directed zone link")
 	}
@@ -487,6 +493,14 @@ func discoverNodes(ctx context.Context, runner commandRunner, kubeconfig string,
 }
 
 func validateOverrides(overrides []LinkOverride, zones []string, spec Spec) error {
+	if len(spec.Phases) > 0 {
+		for _, phase := range spec.Phases {
+			if err := validateOverrides(phase.LinkOverrides, zones, phaseSpec(spec, phase)); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
 	available := map[string]bool{}
 	for _, zone := range zones {
 		available[zone] = true
@@ -498,6 +512,13 @@ func validateOverrides(overrides []LinkOverride, zones []string, spec Spec) erro
 			return fmt.Errorf("directed override %s is invalid or duplicated", key)
 		}
 		seen[key] = true
+		if override.Bidirectional {
+			reverse := override.TargetZone + ">" + override.SourceZone
+			if seen[reverse] {
+				return fmt.Errorf("network link %s overlaps another link", reverse)
+			}
+			seen[reverse] = true
+		}
 		link := effective(spec, override.SourceZone, override.TargetZone)
 		if !link.EnableLatency && !link.EnableBandwidth && !link.EnablePacketLoss {
 			return fmt.Errorf("directed override %s does not define a network effect", key)
@@ -512,7 +533,7 @@ func validateOverrides(overrides []LinkOverride, zones []string, spec Spec) erro
 func effective(spec Spec, source, target string) effectiveLink {
 	value := effectiveLink{EnableLatency: spec.EnableLatency, EnableBandwidth: spec.EnableBandwidth, EnablePacketLoss: spec.EnablePacketLoss, Latency: spec.LatencyMilliseconds, Jitter: spec.JitterMilliseconds, Correlation: spec.CorrelationPercent, Bandwidth: spec.BandwidthBytesPerSecond, PacketLoss: spec.PacketLossPercent}
 	for _, override := range spec.LinkOverrides {
-		if override.SourceZone != source || override.TargetZone != target {
+		if !(override.SourceZone == source && override.TargetZone == target || override.Bidirectional && override.SourceZone == target && override.TargetZone == source) {
 			continue
 		}
 		if override.LatencyMilliseconds != nil {
@@ -547,7 +568,7 @@ func profileDimensions(nodes []node, zones []string, spec Spec) (int, int) {
 	links := 0
 	for _, source := range zones {
 		for _, target := range zones {
-			if source != target && linkEnabled(effective(spec, source, target)) {
+			if source != target && anyPhaseLink(spec, source, target) {
 				activeZones[source] = true
 				links++
 			}
@@ -578,7 +599,7 @@ func networkManifest(application applicationDeployment, nodes []node, spec Spec)
 	for _, source := range nodes {
 		targetZones := make([]string, 0, len(byZone)-1)
 		for zone := range byZone {
-			if zone != source.Zone && linkEnabled(effective(spec, source.Zone, zone)) {
+			if zone != source.Zone && anyPhaseLink(spec, source.Zone, zone) {
 				targetZones = append(targetZones, zone)
 			}
 		}
@@ -591,7 +612,17 @@ func networkManifest(application applicationDeployment, nodes []node, spec Spec)
 		}
 		name := resourceName("kubephos-net-" + application.Metadata.OwnershipMarker + "-" + source.Name)
 		labels := map[string]string{"app.kubernetes.io/name": name, "app.kubernetes.io/managed-by": "kubephos", profileLabel: application.Metadata.OwnershipMarker, "kubephos.dev/source-zone": source.Zone}
-		resources = append(resources, map[string]any{"apiVersion": "apps/v1", "kind": "DaemonSet", "metadata": map[string]any{"name": name, "namespace": chaosNS, "labels": labels}, "spec": map[string]any{"selector": map[string]any{"matchLabels": map[string]string{"app.kubernetes.io/name": name}}, "template": map[string]any{"metadata": map[string]any{"labels": labels}, "spec": map[string]any{"hostPID": true, "nodeSelector": map[string]string{"kubernetes.io/hostname": source.Name}, "tolerations": []map[string]string{{"operator": "Exists"}}, "terminationGracePeriodSeconds": 15, "containers": []map[string]any{{"name": "node-shaper", "image": chaosImage, "imagePullPolicy": "IfNotPresent", "securityContext": map[string]bool{"privileged": true}, "command": []string{"/bin/sh", "-ec"}, "args": []string{shapingScript(spec, source.Zone, targetZones, byZone)}, "readinessProbe": map[string]any{"exec": map[string]any{"command": []string{"/bin/sh", "-ec", "nsenter -t 1 -n -- tc qdisc show dev " + spec.NetworkInterface + " | grep -q 'qdisc netem'"}}, "initialDelaySeconds": 1, "periodSeconds": 2}}}}}}})
+		if len(spec.Phases) > 0 {
+			total, _ := ValidatePhases(spec)
+			labels["kubephos.dev/network-timeline"] = "true"
+			labels["kubephos.dev/network-duration"] = fmt.Sprint(total)
+		}
+		resources = append(resources, map[string]any{"apiVersion": "apps/v1", "kind": "DaemonSet", "metadata": map[string]any{"name": name, "namespace": chaosNS, "labels": labels}, "spec": map[string]any{"selector": map[string]any{"matchLabels": map[string]string{"app.kubernetes.io/name": name}}, "template": map[string]any{"metadata": map[string]any{"labels": labels}, "spec": map[string]any{"hostPID": true, "nodeSelector": map[string]string{"kubernetes.io/hostname": source.Name}, "tolerations": []map[string]string{{"operator": "Exists"}}, "terminationGracePeriodSeconds": 15, "containers": []map[string]any{{"name": "node-shaper", "image": chaosImage, "imagePullPolicy": "IfNotPresent", "securityContext": map[string]bool{"privileged": true}, "command": []string{"/bin/sh", "-ec"}, "args": []string{func() string {
+			if len(spec.Phases) > 0 {
+				return phasedShapingScript(spec, source.Zone, targetZones, byZone)
+			}
+			return shapingScript(spec, source.Zone, targetZones, byZone)
+		}()}, "readinessProbe": map[string]any{"exec": map[string]any{"command": []string{"/bin/sh", "-ec", "nsenter -t 1 -n -- tc qdisc show dev " + spec.NetworkInterface + " | grep -q 'qdisc netem'"}}, "initialDelaySeconds": 1, "periodSeconds": 2}}}}}}})
 	}
 	return json.Marshal(map[string]any{"apiVersion": "v1", "kind": "List", "items": resources})
 }
@@ -702,13 +733,16 @@ func verifyAppliedProfile(ctx context.Context, runner commandRunner, kubeconfig 
 	for _, source := range nodes {
 		targets := make([]string, 0, len(zones)-1)
 		for _, target := range zones {
-			if source.Zone != target && linkEnabled(effective(spec, source.Zone, target)) {
+			if source.Zone != target && anyPhaseLink(spec, source.Zone, target) {
 				targets = append(targets, target)
 			}
 		}
 		if len(targets) > 0 {
 			expectedTargets[source.Name] = targets
 			expectedScripts[source.Name] = shapingScript(spec, source.Zone, targets, byZone)
+			if len(spec.Phases) > 0 {
+				expectedScripts[source.Name] = phasedShapingScript(spec, source.Zone, targets, byZone)
+			}
 		}
 	}
 	selector := profileLabel + "=" + application.Metadata.OwnershipMarker
@@ -774,6 +808,9 @@ func podReady(conditions []struct {
 }
 
 func verifyQdiscs(raw []byte, nodeName, sourceZone string, targetZones []string, spec Spec) error {
+	if len(spec.Phases) > 0 {
+		spec = phaseSpec(spec, Phase{})
+	}
 	var qdiscs []trafficQdisc
 	if err := json.Unmarshal(raw, &qdiscs); err != nil {
 		return fmt.Errorf("decode kernel profile on %s: %w", nodeName, err)

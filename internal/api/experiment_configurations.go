@@ -27,6 +27,7 @@ import (
 	"kubephos.dev/kubephos/internal/schema"
 
 	"kubephos.dev/kubephos/internal/storage"
+	applicationdeployer "kubephos.dev/kubephos/plugins/application-deployer/runtime"
 )
 
 type experimentConfigurationInput struct {
@@ -41,6 +42,10 @@ type experimentConfigurationInput struct {
 }
 
 type experimentConfigurationDefinitionInput struct {
+	Namespace                       string                                  `json:"namespace,omitempty"`
+	TwoPhaseStart                   bool                                    `json:"twoPhaseStart,omitempty"`
+	IstioInjection                  *bool                                   `json:"istioInjection,omitempty"`
+	IstioInjectionOverrides         map[string]bool                         `json:"istioInjectionOverrides,omitempty"`
 	Kind                            string                                  `json:"kind,omitempty"`
 	Variants                        []experimentSuiteVariantInput           `json:"variants,omitempty"`
 	Runs                            int                                     `json:"runs,omitempty"`
@@ -280,6 +285,14 @@ func (s *Server) validatedExperimentConfiguration(ctx context.Context, input exp
 		input.Definition.DestinationMode = "application"
 	}
 	external := input.Definition.DestinationMode == "external"
+	input.Definition.Namespace = strings.TrimSpace(input.Definition.Namespace)
+	if err := applicationdeployer.ValidateApplicationNamespace(input.Definition.Namespace); err != nil {
+		return domain.ExperimentConfiguration{}, &managedOperationFailure{status: http.StatusUnprocessableEntity, code: "invalid_namespace", message: err.Error()}
+	}
+	if external && input.Definition.Namespace != "" {
+		return domain.ExperimentConfiguration{}, &managedOperationFailure{status: http.StatusUnprocessableEntity, code: "invalid_namespace", message: "Namespace is available only for catalog applications."}
+	}
+
 	if !external && input.Definition.DestinationMode != "application" {
 		return domain.ExperimentConfiguration{}, &managedOperationFailure{status: http.StatusUnprocessableEntity, code: "invalid_destination_mode", message: "Destination mode must be application or external."}
 	}
@@ -477,6 +490,17 @@ func (s *Server) validatedExperimentConfiguration(ctx context.Context, input exp
 	}
 	if external && (externalLoadComponents != 1 || externalMetricsComponents != 1 || len(input.Definition.Components) != 2) {
 		return domain.ExperimentConfiguration{}, &managedOperationFailure{status: http.StatusUnprocessableEntity, code: "invalid_external_components", message: "External destination configurations require exactly one load profile and one metrics collector."}
+	}
+	if input.Definition.TwoPhaseStart && initializationStage(input.Definition) == "" {
+		return domain.ExperimentConfiguration{}, &managedOperationFailure{status: http.StatusUnprocessableEntity, code: "invalid_start_mode", message: "Two-phase start requires a load session component."}
+	}
+	if err := validateExperimentNetworkTimeline(input.Definition); err != nil {
+		return domain.ExperimentConfiguration{}, &managedOperationFailure{status: http.StatusUnprocessableEntity, code: "invalid_network_timeline", message: err.Error()}
+	}
+	for service := range input.Definition.IstioInjectionOverrides {
+		if !applicationComponents[service] {
+			return domain.ExperimentConfiguration{}, &managedOperationFailure{status: http.StatusUnprocessableEntity, code: "invalid_istio_service", message: "Istio override refers to an unknown application service: " + service}
+		}
 	}
 	validation.Issues = append(validation.Issues, domain.ValidationIssue{Level: "info", Path: "clusterResourceId", Message: "Cluster health and every runtime dependency will be checked again before each run step."})
 	definition, _ := json.Marshal(input.Definition)

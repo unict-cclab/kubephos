@@ -41,6 +41,7 @@ type Invocation struct {
 }
 
 type Spec struct {
+	NetworkTimeline          bool             `json:"networkTimeline,omitempty"`
 	ClusterName              string           `json:"clusterName,omitempty"`
 	Peers                    []ClusterPeer    `json:"peers,omitempty"`
 	ClusterConnectionRef     string           `json:"clusterConnectionRef"`
@@ -252,9 +253,9 @@ type commandRunner interface {
 
 func (Plugin) Manifest() plugins.Manifest {
 	return plugins.Manifest{
-		ID: pluginID, Name: "Interactive Kubernetes load session", Version: "0.9.0",
+		ID: pluginID, Name: "Interactive Kubernetes load session", Version: "0.10.0",
 		Description:     "Runs an ordered RPS timeline using a verified Locust journey against a catalog application or external HTTP destination.",
-		Schema:          json.RawMessage(`{"type":"object","additionalProperties":false,"required":["clusterConnectionRef","applicationDeploymentRef","loadScenarioSetRef","scenarioId","action","replicas","maxUsers","spawnRate"],"properties":{"clusterConnectionRef":{"type":"string","title":"Kubernetes cluster","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ClusterConnection","x-kubephos-artifact-version":"v1alpha1"},"applicationDeploymentRef":{"type":"string","title":"Application deployment","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ApplicationDeployment","x-kubephos-artifact-version":"v1alpha1"},"loadScenarioSetRef":{"type":"string","title":"Load scenarios","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"LoadScenarioSet","x-kubephos-artifact-version":"v1alpha1"},"scenarioId":{"type":"string","title":"Load scenario","description":"User behavior implemented by the Locust file supplied by the selected application.","minLength":1,"maxLength":63,"default":"storefront-journey"},"action":{"type":"string","title":"Action","x-kubephos-primary-action":true,"enum":["start","stop","resume"],"default":"start"},"interactive":{"type":"boolean","title":"Interactive session","default":false},"replicas":{"type":"integer","title":"Load workers","minimum":1,"maximum":100,"default":1},"maxUsers":{"type":"integer","title":"Maximum concurrent users per worker","minimum":1,"maximum":100000,"default":1000},"spawnRate":{"type":"number","title":"Users started per second","minimum":0.1,"maximum":100000,"default":10},"steps":{"type":"array","title":"Temporal workload timeline","maxItems":100,"items":{"type":"object"}},"geographicSteps":{"type":"array","title":"Geographic traffic timeline","maxItems":100,"items":{"type":"object"}},"clusterName":{"type":"string","x-kubephos-hidden":true},"peers":{"type":"array","minItems":1,"maxItems":5,"x-kubephos-hidden":true,"items":{"type":"object","required":["name","clusterConnectionRef","applicationDeploymentRef"],"additionalProperties":false,"properties":{"name":{"type":"string"},"clusterConnectionRef":{"type":"string","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ClusterConnection","x-kubephos-artifact-version":"v1alpha1"},"applicationDeploymentRef":{"type":"string","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ApplicationDeployment","x-kubephos-artifact-version":"v1alpha1"}}}}}}`),
+		Schema:          json.RawMessage(`{"type":"object","additionalProperties":false,"required":["clusterConnectionRef","applicationDeploymentRef","loadScenarioSetRef","scenarioId","action","replicas","maxUsers","spawnRate"],"properties":{"clusterConnectionRef":{"type":"string","title":"Kubernetes cluster","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ClusterConnection","x-kubephos-artifact-version":"v1alpha1"},"applicationDeploymentRef":{"type":"string","title":"Application deployment","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ApplicationDeployment","x-kubephos-artifact-version":"v1alpha1"},"loadScenarioSetRef":{"type":"string","title":"Load scenarios","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"LoadScenarioSet","x-kubephos-artifact-version":"v1alpha1"},"scenarioId":{"type":"string","title":"Load scenario","description":"User behavior implemented by the Locust file supplied by the selected application.","minLength":1,"maxLength":63,"default":"storefront-journey"},"action":{"type":"string","title":"Action","x-kubephos-primary-action":true,"enum":["start","stop","resume"],"default":"start"},"interactive":{"type":"boolean","title":"Interactive session","default":false},"replicas":{"type":"integer","title":"Load workers","minimum":1,"maximum":100,"default":1},"maxUsers":{"type":"integer","title":"Maximum concurrent users per worker","minimum":1,"maximum":100000,"default":1000},"spawnRate":{"type":"number","title":"Users started per second","minimum":0.1,"maximum":100000,"default":10},"steps":{"type":"array","title":"Temporal workload timeline","maxItems":100,"items":{"type":"object"}},"geographicSteps":{"type":"array","title":"Geographic traffic timeline","maxItems":100,"items":{"type":"object"}},"clusterName":{"type":"string","x-kubephos-hidden":true},"peers":{"type":"array","minItems":1,"maxItems":5,"x-kubephos-hidden":true,"items":{"type":"object","required":["name","clusterConnectionRef","applicationDeploymentRef"],"additionalProperties":false,"properties":{"name":{"type":"string"},"clusterConnectionRef":{"type":"string","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ClusterConnection","x-kubephos-artifact-version":"v1alpha1"},"applicationDeploymentRef":{"type":"string","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ApplicationDeployment","x-kubephos-artifact-version":"v1alpha1"}}}},"networkTimeline":{"type":"boolean","x-kubephos-hidden":true}}}`),
 		ArtifactInputs:  []domain.ArtifactContract{{Type: "ClusterConnection", Version: "v1alpha1"}, {Type: "ApplicationDeployment", Version: "v1alpha1"}, {Type: "LoadScenarioSet", Version: "v1alpha1"}},
 		ArtifactOutputs: []domain.ArtifactContract{{Type: "LoadSession", Version: "v1alpha1"}},
 		Capabilities:    []string{"load.session.control", "load.session.preflight", "load.session.cleanup", "lifecycle.cleanup"},
@@ -395,7 +396,7 @@ func (plugin Plugin) Precheck(ctx context.Context, step domain.PlanStep, log plu
 		if err != nil {
 			return unhealthy(err.Error(), "geographicDistribution", "invalid"), nil
 		}
-		manifest, err := loadManifest(profile, deployment.Metadata.OwnershipMarker, spec, targets)
+		manifest, err := loadManifest(profile, deployment.Metadata.OwnershipMarker, spec, targets, deployment.Spec.Namespace)
 		if err != nil {
 			return unhealthy(err.Error(), "manifest", "invalid"), nil
 		}
@@ -449,7 +450,7 @@ func (plugin Plugin) Execute(ctx context.Context, step domain.PlanStep, log plug
 		if err != nil {
 			return nil, err
 		}
-		manifest, err := loadManifest(profile, deployment.Metadata.OwnershipMarker, spec, targets)
+		manifest, err := loadManifest(profile, deployment.Metadata.OwnershipMarker, spec, targets, deployment.Spec.Namespace)
 		if err != nil {
 			return nil, err
 		}
@@ -464,8 +465,22 @@ func (plugin Plugin) Execute(ctx context.Context, step domain.PlanStep, log plug
 				return nil, err
 			}
 			started := plugin.now().UTC()
+			checks := []func() error{}
+			if spec.NetworkTimeline {
+				if err := log("info", "Synchronizing network phases with the load profile"); err != nil {
+					return nil, err
+				}
+				started, err = armNetworkTimeline(ctx, runner, cluster.Spec.Kubeconfig, deployment, profile, durationSeconds, spec.Replicas)
+				if err != nil {
+					return nil, err
+				}
+				checks = append(checks, func() error {
+					_, err := networkShapers(ctx, runner, cluster.Spec.Kubeconfig, deployment.Metadata.OwnershipMarker, durationSeconds)
+					return err
+				})
+			}
 			startedAt = &started
-			if err := waitForLoadDuration(ctx, runner, cluster.Spec.Kubeconfig, deployment.Spec.Namespace, profile, spec.Replicas, time.Duration(durationSeconds)*time.Second, log); err != nil {
+			if err := waitForLoadDuration(ctx, runner, cluster.Spec.Kubeconfig, deployment.Spec.Namespace, profile, spec.Replicas, time.Duration(durationSeconds)*time.Second, log, checks...); err != nil {
 				return nil, err
 			}
 			if _, err := runner.Run(ctx, cluster.Spec.Kubeconfig, nil, "scale", resource, "-n", deployment.Spec.Namespace, "--replicas", "0"); err != nil {
@@ -596,7 +611,13 @@ func (plugin Plugin) Cleanup(ctx context.Context, step domain.PlanStep, raw json
 		if err := log("warning", "Removing the load workload created by the failed start operation"); err != nil {
 			return err
 		}
-		_, err = runner.Run(ctx, cluster.Spec.Kubeconfig, nil, "delete", resource, "configmap/"+profile.Workload.Name, "-n", deployment.Spec.Namespace, "--ignore-not-found", "--wait=true", "--timeout=5m")
+		args := []string{"delete", resource, "configmap/" + profile.Workload.Name}
+		if spec.NetworkTimeline {
+			name := networkClockName(deployment.Metadata.OwnershipMarker)
+			args = append(args, "configmap/"+name, "serviceaccount/"+name, "role/"+name, "rolebinding/"+name)
+		}
+		args = append(args, "-n", deployment.Spec.Namespace, "--ignore-not-found", "--wait=true", "--timeout=5m")
+		_, err = runner.Run(ctx, cluster.Spec.Kubeconfig, nil, args...)
 		return err
 	}
 	previous, err := storedPreviousReplicas(state)
@@ -930,6 +951,9 @@ func validateLoadTimeline(steps []LoadStep) (int, error) {
 }
 
 func validateSpecTimeline(spec Spec) (int, error) {
+	if spec.NetworkTimeline && (spec.Action != "start" || spec.Interactive || len(spec.Steps) == 0) {
+		return 0, errors.New("Network phases require a finite start load profile.")
+	}
 	if spec.Interactive {
 		if len(spec.Steps) > 0 || len(spec.GeographicSteps) > 0 {
 			return 0, errors.New("an interactive session cannot also define a finite timeline")
@@ -1108,7 +1132,7 @@ func resolveLoadTargets(ctx context.Context, runner commandRunner, kubeconfig, n
 	return targets, nil
 }
 
-func waitForLoadDuration(ctx context.Context, runner commandRunner, kubeconfig, namespace string, profile loadProfile, replicas int, duration time.Duration, log plugins.Logger) error {
+func waitForLoadDuration(ctx context.Context, runner commandRunner, kubeconfig, namespace string, profile loadProfile, replicas int, duration time.Duration, log plugins.Logger, networkChecks ...func() error) error {
 	deadline := time.NewTimer(duration)
 	defer deadline.Stop()
 	ticker := time.NewTicker(2 * time.Second)
@@ -1121,7 +1145,15 @@ func waitForLoadDuration(ctx context.Context, runner commandRunner, kubeconfig, 
 		if err != nil || !exists || state.Spec.Replicas != replicas || state.Status.ReadyReplicas != replicas {
 			return errors.New("load driver lost the requested ready replicas")
 		}
-		return inspectLoadPods(ctx, runner, kubeconfig, namespace, profile, replicas, true)
+		if err := inspectLoadPods(ctx, runner, kubeconfig, namespace, profile, replicas, true); err != nil {
+			return err
+		}
+		for _, check := range networkChecks {
+			if err := check(); err != nil {
+				return err
+			}
+		}
+		return nil
 	}
 	if err := check(); err != nil {
 		return err
@@ -1148,7 +1180,7 @@ func waitForLoadDuration(ctx context.Context, runner commandRunner, kubeconfig, 
 	}
 }
 
-func loadManifest(profile loadProfile, marker string, spec Spec, targets []loadTarget) ([]byte, error) {
+func loadManifest(profile loadProfile, marker string, spec Spec, targets []loadTarget, namespaces ...string) ([]byte, error) {
 	annotations := map[string]any{applicationOwnershipKey: marker, loadProfileKey: profile.ID}
 	labels := map[string]any{"app.kubernetes.io/name": "kubephos-load", "kubephos.dev/load-scenario": profile.ID}
 	podAnnotations := map[string]any{applicationOwnershipKey: marker, loadProfileKey: profile.ID, "prometheus.io/scrape": "true", "prometheus.io/path": "/stats/prometheus", "prometheus.io/port": "9646"}
@@ -1221,6 +1253,16 @@ func loadManifest(profile loadProfile, marker string, spec Spec, targets []loadT
 			},
 		},
 	}
+	if spec.NetworkTimeline {
+		if len(namespaces) != 1 || namespaces[0] == "" {
+			return nil, errors.New("Network clock requires the load namespace.")
+		}
+		pod := deployment["spec"].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)
+		pod["serviceAccountName"] = networkClockName(marker)
+		pod["automountServiceAccountToken"] = true
+		environment = append(environment, map[string]any{"name": "KUBEPHOS_NETWORK_CLOCK", "value": networkClockName(marker)}, map[string]any{"name": "KUBEPHOS_NETWORK_NAMESPACE", "valueFrom": map[string]any{"fieldRef": map[string]string{"fieldPath": "metadata.namespace"}}})
+		pod["containers"].([]any)[0].(map[string]any)["env"] = environment
+	}
 	configValue, err := yaml.Marshal(configMap)
 	if err != nil {
 		return nil, err
@@ -1229,7 +1271,17 @@ func loadManifest(profile loadProfile, marker string, spec Spec, targets []loadT
 	if err != nil {
 		return nil, err
 	}
-	return append(append(configValue, []byte("---\n")...), deploymentValue...), nil
+	result := append(append(configValue, []byte("---\n")...), deploymentValue...)
+	if spec.NetworkTimeline {
+		for _, resource := range networkTimelineResources(marker, namespaces[0]) {
+			value, err := yaml.Marshal(resource)
+			if err != nil {
+				return nil, err
+			}
+			result = append(append(result, []byte("---\n")...), value...)
+		}
+	}
+	return result, nil
 }
 
 const locustWrapper = `import importlib.util
@@ -1255,6 +1307,32 @@ geographic_steps = json.loads(os.environ["KUBEPHOS_GEOGRAPHIC_STEPS"])
 max_users = int(os.environ["KUBEPHOS_MAX_USERS"])
 spawn_rate = float(os.environ["KUBEPHOS_SPAWN_RATE"])
 started_at = time.monotonic()
+network_clock = os.environ.get("KUBEPHOS_NETWORK_CLOCK", "")
+network_start = None
+
+def profile_elapsed():
+    global network_start
+    if not network_clock:
+        return time.monotonic() - started_at
+    if network_start is None:
+        import ssl
+        import urllib.request
+        service_account = "/var/run/secrets/kubernetes.io/serviceaccount/"
+        namespace = os.environ["KUBEPHOS_NETWORK_NAMESPACE"]
+        with open(service_account + "token") as source:
+            token = source.read().strip()
+        request = urllib.request.Request(
+            "https://kubernetes.default.svc/api/v1/namespaces/" + namespace + "/configmaps/" + network_clock,
+            headers={"Authorization": "Bearer " + token})
+        with urllib.request.urlopen(request, context=ssl.create_default_context(cafile=service_account + "ca.crt"), timeout=2) as response:
+            value = json.load(response).get("data", {}).get("startUnix", "")
+        if not value:
+            return None
+        network_start = int(value)
+        with open("/tmp/kubephos-network-clock-ready.tmp", "w") as target:
+            target.write(str(network_start))
+        os.replace("/tmp/kubephos-network-clock-ready.tmp", "/tmp/kubephos-network-clock-ready")
+    return time.time() - network_start
 request_lock = Semaphore()
 next_request_at = time.monotonic()
 
@@ -1317,7 +1395,7 @@ def choose_target():
         by_zone.setdefault(target.get("zone", "default"), []).append(target)
     if not geographic_steps:
         return choose_weighted(targets)["url"]
-    elapsed = time.monotonic() - started_at
+    elapsed = profile_elapsed()
     zones = sorted(zone for zone in by_zone if zone != "default")
     weights = zone_weights_at(elapsed, zones)
     candidates = [{"zone": zone, "weight": weights[zone]} for zone in zones if weights[zone] > 0]
@@ -1332,7 +1410,11 @@ def request_url(url):
 def wait_for_request_slot():
     global next_request_at
     while True:
-        target_rps = rps_at(time.monotonic() - started_at)
+        elapsed = profile_elapsed()
+        if elapsed is None or elapsed < 0:
+            gevent.sleep(0.1)
+            continue
+        target_rps = rps_at(elapsed)
         if target_rps <= 0:
             with request_lock:
                 next_request_at = time.monotonic()
@@ -1427,7 +1509,9 @@ if os.environ.get("KUBEPHOS_LOAD_METRICS") == "true":
 
 class KubePhosLoadShape(LoadTestShape):
     def tick(self):
-        elapsed = self.get_run_time()
+        elapsed = profile_elapsed() if network_clock else self.get_run_time()
+        if elapsed is None or elapsed < 0:
+            return 0, spawn_rate
         if elapsed > duration(steps):
             return 0, spawn_rate
         requested = math.ceil(rps_at(elapsed))

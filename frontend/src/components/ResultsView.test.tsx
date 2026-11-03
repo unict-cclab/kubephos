@@ -145,10 +145,11 @@ describe('focused experiment results', () => {
     expect(screen.queryByText('Run in progress')).not.toBeInTheDocument()
   })
 
-  it('stops an active suite from its detail page', async () => {
+  it.each(['running','initializing','initialized'])('stops an active %s suite from its detail page', async status => {
+    vi.mocked(request).mockClear()
     vi.mocked(request).mockResolvedValue({items: []} as never)
     const changed = vi.fn(async () => {})
-    const experiment = {id: 'exp_stop', kind: 'suite', name: 'Scheduler suite', description: '', status: 'running', variants: [{id: 'variant_stop', name: 'Baseline', trials: [{id: 'trial_stop', position: 1, status: 'running', resultArtifactId: '', operationId: 'op_stop'}]}]} as unknown as Experiment
+    const experiment = {id: 'exp_stop', kind: 'suite', name: 'Scheduler suite', description: '', status, variants: [{id: 'variant_stop', name: 'Baseline', trials: [{id: 'trial_stop', position: 1, status, resultArtifactId: '', operationId: 'op_stop'}]}]} as unknown as Experiment
 
     render(<ResultsView artifacts={[]} experiments={[experiment]} operations={[]} workspaces={[]} session={{authenticated: true, csrfToken: 'csrf', user: {role: 'admin'}} as Session} changed={changed} openOperation={() => {}} focusedExperiment={experiment} />)
     fireEvent.click(screen.getByRole('button', {name: 'Stop suite'}))
@@ -742,4 +743,19 @@ it('keeps saved comparisons read-only toward experiments and preserves each sour
   fireEvent.click(screen.getByRole('button', {name: 'Export'}))
   expect(screen.getByRole('button', {name: 'Statistics CSV'})).toBeInTheDocument()
   expect(vi.mocked(request).mock.calls.every(([path]) => path.startsWith('/artifacts/'))).toBe(true)
+})
+
+
+it('starts traffic only for the initialized run and keeps it restricted to the owner',async()=>{
+ const experiment={id:'manual',name:'Manual',ownerUserId:'owner',status:'initialized',variants:[{id:'variant',name:'Approach',trials:[{id:'trial',position:1,status:'initialized',pipelineRunId:'run-prepared',operationId:''}],configuration:{}}]} as Experiment
+ const changed=vi.fn(async()=>{})
+ vi.mocked(request).mockResolvedValue({} as never)
+ const props={artifacts:[],experiments:[experiment],operations:[],workspaces:[],changed,openOperation:()=>{},focusedExperiment:experiment}
+ const view=render(<ResultsView {...props} session={{authenticated:true,csrfToken:'csrf',user:{id:'owner',role:'user'}} as Session}/>)
+ fireEvent.click(screen.getByRole('button',{name:'Start'}))
+ await waitFor(()=>expect(request).toHaveBeenCalledWith('/experiments/manual/start-traffic',{method:'POST',body:JSON.stringify({runId:'run-prepared'})},'csrf'))
+ await waitFor(()=>expect(changed).toHaveBeenCalled())
+ view.unmount()
+ render(<ResultsView {...props} session={{authenticated:true,user:{id:'viewer',role:'user'}} as Session}/>)
+ expect(screen.queryByRole('button',{name:'Start'})).not.toBeInTheDocument()
 })

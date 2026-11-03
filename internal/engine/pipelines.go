@@ -123,6 +123,41 @@ func (w *Worker) reconcilePipelineRun(ctx context.Context, owner string, run dom
 		return w.deferPipelineTermination(ctx, owner, run, pipeline, -1, domain.OperationCanceled, errors.New("pipeline cancellation requested"))
 	}
 	positions := readyPipelineStages(pipeline.Definition, run.Stages)
+	if run.PauseBeforeStage != "" && !run.ExecutionRequested {
+		gate := -1
+		for i, stage := range pipeline.Definition.Stages {
+			if stage.ID == run.PauseBeforeStage {
+				gate = i
+				break
+			}
+		}
+		if gate < 0 {
+			return w.deferPipelineTermination(ctx, owner, run, pipeline, -1, domain.OperationFailed, errors.New("manual start stage is unavailable"))
+		}
+		ready := true
+		for i := 0; i < gate; i++ {
+			if run.Stages[i].Status != domain.OperationSucceeded {
+				ready = false
+			}
+		}
+		if ready {
+			if run.InitializedAt == nil {
+				if err := w.store.MarkPipelineInitialized(ctx, run.ID, owner); err != nil {
+					return err
+				}
+			}
+			release()
+			return nil
+		}
+		allowed := positions[:0]
+		for _, position := range positions {
+			if position < gate {
+				allowed = append(allowed, position)
+			}
+		}
+		positions = allowed
+	}
+
 	for _, position := range positions {
 		if err := w.startPipelineStage(ctx, owner, run, pipeline, position, produced); err != nil {
 			return w.deferPipelineTermination(ctx, owner, run, pipeline, position, domain.OperationFailed, err)

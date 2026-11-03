@@ -81,7 +81,7 @@ export function ResultsView({artifacts, experiments, operations, workspaces, ses
   const [actionError, setActionError] = useErrorState()
   const focusedRuns = focusedExperiment?.variants.flatMap(variant => variant.trials.map(trial => ({variant, trial}))) ?? []
   const activeRun = focusedRuns.find(item => item.trial.id === runTab)
-  const liveRun = focusedRuns.find(item => item.trial.status === 'running')
+  const liveRun = focusedRuns.find(item => ['running','initializing','initialized'].includes(item.trial.status))
   const viewSelected = activeRun ? activeRun.trial.resultArtifactId && availableByID.has(activeRun.trial.resultArtifactId) ? [activeRun.trial.resultArtifactId] : [] : focusedExperiment ? focusedArtifactIDs.filter(id => availableByID.has(id)) : selected
   const selectedKey = viewSelected.map(id => `${id}:${availableByID.get(id)?.digest ?? ''}:${responseTimeSLO(focusedExperiment, id, comparison?.sourceConfigurations[id]) ?? ''}`).join('|')
 
@@ -193,7 +193,7 @@ export function ResultsView({artifacts, experiments, operations, workspaces, ses
     }
   }
   const stopExperiment = async () => {
-    if (!focusedExperiment || !['queued', 'running'].includes(focusedExperiment.status)) return
+    if (!focusedExperiment || !['queued', 'running', 'initializing', 'initialized'].includes(focusedExperiment.status)) return
     const label = focusedExperiment.kind === 'suite' ? 'suite' : 'experiment'
     if (!await confirmAction(`Stop ${label} ${focusedExperiment.name}? The current run will stop and the remaining runs will be canceled.`, {title: 'Stop experiment', label: 'Stop'})) return
     setStopping(true)
@@ -208,13 +208,20 @@ export function ResultsView({artifacts, experiments, operations, workspaces, ses
       setStopping(false)
     }
   }
+  const [startingTraffic,setStartingTraffic]=useState(false)
+  const startTraffic=async()=>{
+    const initializedRun=focusedRuns.find(item=>item.trial.status==='initialized')
+    if(!focusedExperiment||!initializedRun?.trial.pipelineRunId)return
+    setStartingTraffic(true)
+    try{await request(`/experiments/${focusedExperiment.id}/start-traffic`,{method:'POST',body:JSON.stringify({runId:initializedRun.trial.pipelineRunId})},session.csrfToken);await changed()}catch(cause){setActionError(cause instanceof Error?cause.message:"Could not start experiment traffic.")}finally{setStartingTraffic(false)}
+  }
   const displayStatus = focusedExperiment ? experimentDisplayStatus({...focusedExperiment, cancelRequested: stopRequested}) : ''
-  const canStop = Boolean(focusedExperiment && ['queued', 'running'].includes(focusedExperiment.status))
+  const canStop = Boolean(focusedExperiment && ['queued', 'running', 'initializing', 'initialized'].includes(focusedExperiment.status))
   const stopLabel = focusedExperiment?.kind === 'suite' ? 'suite' : 'experiment'
   return <>
     {confirmationDialog}
     {focusedExperiment && onBack && <DetailBreadcrumb parent={comparison ? 'Comparisons' : 'Experiments'} current={focusedExperiment.name} back={onBack} />}
-    <div className={`results-heading ${focusedExperiment ? 'focused' : ''}`}><div><h2>{focusedExperiment?.name ?? 'Results'}</h2></div><div className="results-detail-actions">{comparison?.actions}{!comparison && focusedExperiment && <ResourceSharing kind="experiments" id={focusedExperiment.id} name={focusedExperiment.name} ownerUserId={focusedExperiment.ownerUserId} session={session} changed={changed} />}{!comparison && focusedExperiment && <span className={`status ${activeRun?.trial.status ?? displayStatus}`}>{activeRun?.trial.status ?? displayStatus}</span>}{!comparison && focusedExperiment && canManageResource(session,focusedExperiment.ownerUserId) && canStop && <button className="button danger" disabled={stopping || stopRequested} onClick={stopExperiment}>{stopping || stopRequested ? `Stopping ${stopLabel}…` : `Stop ${stopLabel}`}</button>}{!comparison && focusedExperiment && canManageResource(session,focusedExperiment.ownerUserId) && <ResourceAction action="delete" label={deleting ? 'Deleting…' : `Delete ${stopLabel}`} disabled={deleting || !isTerminalExperiment(focusedExperiment.status)} title={isTerminalExperiment(focusedExperiment.status) ? undefined : `Stop this ${stopLabel} before deleting it`} onClick={removeExperiment} />}{!focusedExperiment && <div className="results-count" aria-label={`${selectable.length} datasets`}><strong>{selectable.length}</strong><span>datasets</span></div>}</div></div>
+    <div className={`results-heading ${focusedExperiment ? 'focused' : ''}`}><div><h2>{focusedExperiment?.name ?? 'Results'}</h2></div><div className="results-detail-actions">{comparison?.actions}{!comparison && focusedExperiment && <ResourceSharing kind="experiments" id={focusedExperiment.id} name={focusedExperiment.name} ownerUserId={focusedExperiment.ownerUserId} session={session} changed={changed} />}{!comparison && focusedExperiment && <span className={`status ${activeRun?.trial.status ?? displayStatus}`}>{activeRun?.trial.status ?? displayStatus}</span>}{!comparison&&focusedExperiment?.status==='initialized'&&canManageResource(session,focusedExperiment.ownerUserId)&&!stopRequested&&<button className="button primary" disabled={startingTraffic} onClick={startTraffic}>{startingTraffic?'Starting…':'Start'}</button>}{!comparison && focusedExperiment && canManageResource(session,focusedExperiment.ownerUserId) && canStop && <button className="button danger" disabled={stopping || stopRequested} onClick={stopExperiment}>{stopping || stopRequested ? `Stopping ${stopLabel}…` : `Stop ${stopLabel}`}</button>}{!comparison && focusedExperiment && canManageResource(session,focusedExperiment.ownerUserId) && <ResourceAction action="delete" label={deleting ? 'Deleting…' : `Delete ${stopLabel}`} disabled={deleting || !isTerminalExperiment(focusedExperiment.status)} title={isTerminalExperiment(focusedExperiment.status) ? undefined : `Stop this ${stopLabel} before deleting it`} onClick={removeExperiment} />}{!focusedExperiment && <div className="results-count" aria-label={`${selectable.length} datasets`}><strong>{selectable.length}</strong><span>datasets</span></div>}</div></div>
     {focusedExperiment && <ResourceAttribution resource={focusedExperiment} editable={Boolean(comparison)} />}
     {comparison?.sources}
     <ErrorFeedback message={actionError} />
@@ -258,9 +265,9 @@ export function ResultsView({artifacts, experiments, operations, workspaces, ses
 function ExperimentProgress({experiment}: {experiment: Experiment}) {
   const progress = experimentProgress(experiment)
   const trials = experiment.variants.flatMap(variant => variant.trials.map(trial => ({variant: variant.name, trial})))
-  const running = trials.find(item => item.trial.status === 'running')
+  const running = trials.find(item => ['running','initializing','initialized'].includes(item.trial.status))
   const failed = trials.filter(item => ['failed', 'canceled'].includes(item.trial.status)).length
-  const detail = running ? `${running.variant} · Run ${running.trial.position} in progress` : failed ? `${failed} run${failed === 1 ? '' : 's'} did not complete` : progress.completed === progress.total ? 'All runs completed' : 'Waiting for the next run'
+  const detail = running ? `${running.variant} · Run ${running.trial.position} ${running.trial.status==='initialized'?'ready to start':running.trial.status==='initializing'?'initializing':'in progress'}` : failed ? `${failed} run${failed === 1 ? '' : 's'} did not complete` : progress.completed === progress.total ? 'All runs completed' : 'Waiting for the next run'
   return <article className="experiment-progress-card">
     <div><strong>{progress.completed} of {progress.total} runs finished</strong><small>{detail}</small></div>
     <div className="experiment-progress" aria-label={`${progress.completed} of ${progress.total} runs finished`}><span style={{width: `${progress.total ? progress.completed / progress.total * 100 : 0}%`}} /></div>
@@ -268,9 +275,9 @@ function ExperimentProgress({experiment}: {experiment: Experiment}) {
 }
 
 function RunDiagnostics({status, error, pipelineRunId, operationId, openPipelineRun, openOperation}: {status: string; error?: string; pipelineRunId?: string; operationId: string; openPipelineRun?: (id: string) => void; openOperation?: (id: string) => void}) {
-  const running = ['running', 'starting', 'prechecking', 'verifying'].includes(status)
+  const running = ['running', 'initializing', 'starting', 'prechecking', 'verifying'].includes(status)
   const failed = ['failed', 'canceled'].includes(status)
-  const label = status === 'queued' ? 'Run waiting to start' : status === 'canceled' ? 'Run canceled' : failed ? 'Run needs attention' : running ? 'Run in progress' : status === 'succeeded' ? 'Run completed' : 'Run status unavailable'
+  const label = status === 'initialized' ? 'Initialization complete' : status==='initializing'?'Run initializing':status === 'queued' ? 'Run waiting to start' : status === 'canceled' ? 'Run canceled' : failed ? 'Run needs attention' : running ? 'Run in progress' : status === 'succeeded' ? 'Run completed' : 'Run status unavailable'
   if (!error && !running && !failed && !(pipelineRunId && openPipelineRun)) return null
   return <div className={`run-diagnostics ${failed ? 'failed' : ''}`}><div><strong>{label}</strong>{error && <p>{error}</p>}</div>{pipelineRunId && openPipelineRun ? <button className="button secondary compact" onClick={() => openPipelineRun(pipelineRunId)}>{running ? 'Live process logs' : 'Process logs'}</button> : operationId && openOperation ? <button className="button secondary compact" onClick={() => openOperation(operationId)}>{running ? 'Live logs' : 'Error logs'}</button> : null}</div>
 }
@@ -1047,6 +1054,7 @@ function formatMetric(value: number, unit: string): string {
 
 function EmptyResults({experiment, runStatus}: {experiment?: Experiment; runStatus?: string}) {
   const status = runStatus ?? experiment?.status
+  if(status==='initialized'||status==='initializing')return <div className="empty-state"><div><strong>{status==='initialized'?'Initialization complete':'Initializing'}</strong><p>{status==='initialized'?'Select Start when ready.':'Preparing the application and experiment components.'}</p></div></div>
   const queued = status === 'queued'
   const running = status && ['running', 'starting', 'prechecking', 'verifying'].includes(status)
   const failed = status === 'failed'

@@ -43,16 +43,19 @@ type Invocation struct {
 }
 
 type Spec struct {
-	ClusterConnectionRef            string   `json:"clusterConnectionRef"`
-	ManifestSetRef                  string   `json:"manifestSetRef"`
-	WorkloadTargetsRef              string   `json:"workloadTargetsRef"`
-	ServiceEndpointsRef             string   `json:"serviceEndpointsRef"`
-	Mode                            string   `json:"mode,omitempty"`
-	SchedulerName                   string   `json:"schedulerName,omitempty"`
-	SchedulerInclude                []string `json:"schedulerInclude,omitempty"`
-	SchedulerExclude                []string `json:"schedulerExclude,omitempty"`
-	PodDisruptionBudgetMinAvailable int      `json:"podDisruptionBudgetMinAvailable,omitempty"`
-	ControlNamespace                bool     `json:"controlNamespace,omitempty"`
+	ApplicationNamespace            string          `json:"applicationNamespace,omitempty"`
+	IstioInjection                  *bool           `json:"istioInjection,omitempty"`
+	IstioInjectionOverrides         map[string]bool `json:"istioInjectionOverrides,omitempty"`
+	ClusterConnectionRef            string          `json:"clusterConnectionRef"`
+	ManifestSetRef                  string          `json:"manifestSetRef"`
+	WorkloadTargetsRef              string          `json:"workloadTargetsRef"`
+	ServiceEndpointsRef             string          `json:"serviceEndpointsRef"`
+	Mode                            string          `json:"mode,omitempty"`
+	SchedulerName                   string          `json:"schedulerName,omitempty"`
+	SchedulerInclude                []string        `json:"schedulerInclude,omitempty"`
+	SchedulerExclude                []string        `json:"schedulerExclude,omitempty"`
+	PodDisruptionBudgetMinAvailable int             `json:"podDisruptionBudgetMinAvailable,omitempty"`
+	ControlNamespace                bool            `json:"controlNamespace,omitempty"`
 }
 
 type stepInput struct {
@@ -138,17 +141,18 @@ type controlMetricsScope struct {
 }
 
 type applicationDeploymentSpec struct {
-	ClusterName      string               `json:"clusterName,omitempty"`
-	Networking       string               `json:"networking,omitempty"`
-	ControlMetrics   *controlMetricsScope `json:"controlMetrics,omitempty"`
-	ApplicationRef   string               `json:"applicationRef"`
-	Prepared         bool                 `json:"prepared,omitempty"`
-	ClusterServer    string               `json:"clusterServer"`
-	Namespace        string               `json:"namespace"`
-	ControlNamespace string               `json:"controlNamespace,omitempty"`
-	ManifestDigest   string               `json:"manifestDigest"`
-	Workloads        []workloadTarget     `json:"workloads"`
-	Endpoints        []serviceEndpoint    `json:"endpoints"`
+	NamespaceCreatedAt *time.Time           `json:"namespaceCreatedAt,omitempty"`
+	ClusterName        string               `json:"clusterName,omitempty"`
+	Networking         string               `json:"networking,omitempty"`
+	ControlMetrics     *controlMetricsScope `json:"controlMetrics,omitempty"`
+	ApplicationRef     string               `json:"applicationRef"`
+	Prepared           bool                 `json:"prepared,omitempty"`
+	ClusterServer      string               `json:"clusterServer"`
+	Namespace          string               `json:"namespace"`
+	ControlNamespace   string               `json:"controlNamespace,omitempty"`
+	ManifestDigest     string               `json:"manifestDigest"`
+	Workloads          []workloadTarget     `json:"workloads"`
+	Endpoints          []serviceEndpoint    `json:"endpoints"`
 }
 
 type result struct {
@@ -161,9 +165,9 @@ type commandRunner interface {
 
 func (Plugin) Manifest() plugins.Manifest {
 	return plugins.Manifest{
-		ID: pluginID, Name: "Kubernetes application deployer", Version: "0.7.0",
+		ID: pluginID, Name: "Kubernetes application deployer", Version: "0.9.0",
 		Description:     "Deploys any validated application package into an isolated Kubernetes namespace and prepares shared experiment control resources when requested.",
-		Schema:          json.RawMessage(`{"type":"object","additionalProperties":false,"required":["clusterConnectionRef","manifestSetRef","workloadTargetsRef","serviceEndpointsRef"],"properties":{"clusterConnectionRef":{"type":"string","title":"Kubernetes cluster","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ClusterConnection","x-kubephos-artifact-version":"v1alpha1"},"manifestSetRef":{"type":"string","title":"Application manifests","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ManifestSet","x-kubephos-artifact-version":"v1alpha1"},"workloadTargetsRef":{"type":"string","title":"Application workloads","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"WorkloadTargets","x-kubephos-artifact-version":"v1alpha1"},"serviceEndpointsRef":{"type":"string","title":"Application endpoints","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ServiceEndpoints","x-kubephos-artifact-version":"v1alpha1"},"mode":{"type":"string","enum":["prepare","deploy"]},"schedulerName":{"type":"string"},"schedulerInclude":{"type":"array","items":{"type":"string"}},"schedulerExclude":{"type":"array","items":{"type":"string"}},"podDisruptionBudgetMinAvailable":{"type":"integer","title":"Minimum available replicas","description":"PDB minAvailable generated for every deschedulable workload.","minimum":1,"maximum":20},"controlNamespace":{"type":"boolean","x-kubephos-hidden":true}}}`),
+		Schema:          json.RawMessage(`{"type":"object","additionalProperties":false,"required":["clusterConnectionRef","manifestSetRef","workloadTargetsRef","serviceEndpointsRef"],"properties":{"clusterConnectionRef":{"type":"string","title":"Kubernetes cluster","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ClusterConnection","x-kubephos-artifact-version":"v1alpha1"},"manifestSetRef":{"type":"string","title":"Application manifests","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ManifestSet","x-kubephos-artifact-version":"v1alpha1"},"workloadTargetsRef":{"type":"string","title":"Application workloads","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"WorkloadTargets","x-kubephos-artifact-version":"v1alpha1"},"serviceEndpointsRef":{"type":"string","title":"Application endpoints","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ServiceEndpoints","x-kubephos-artifact-version":"v1alpha1"},"mode":{"type":"string","enum":["prepare","deploy"]},"schedulerName":{"type":"string"},"schedulerInclude":{"type":"array","items":{"type":"string"}},"schedulerExclude":{"type":"array","items":{"type":"string"}},"podDisruptionBudgetMinAvailable":{"type":"integer","title":"Minimum available replicas","description":"PDB minAvailable generated for every deschedulable workload.","minimum":1,"maximum":20},"controlNamespace":{"type":"boolean","x-kubephos-hidden":true},"istioInjection":{"type":"boolean"},"istioInjectionOverrides":{"type":"object","additionalProperties":true},"applicationNamespace":{"type":"string","maxLength":63}}}`),
 		ArtifactInputs:  []domain.ArtifactContract{{Type: "ClusterConnection", Version: "v1alpha1"}, {Type: "ManifestSet", Version: "v1alpha1"}, {Type: "WorkloadTargets", Version: "v1alpha1"}, {Type: "ServiceEndpoints", Version: "v1alpha1"}},
 		ArtifactOutputs: []domain.ArtifactContract{{Type: "ApplicationDeployment", Version: "v1alpha1"}},
 		Capabilities:    []string{"applications.kubernetes.deploy", "applications.kubernetes.preflight", "applications.kubernetes.cleanup", "lifecycle.cleanup"},
@@ -179,6 +183,12 @@ func (Plugin) Validate(ctx context.Context, invocation Invocation) domain.Valida
 	var spec Spec
 	if err := json.Unmarshal(invocation.Input, &spec); err != nil {
 		return invalid(report, "$", "Configuration must be valid JSON.")
+	}
+	if err := ValidateApplicationNamespace(spec.ApplicationNamespace); err != nil {
+		return invalid(report, "applicationNamespace", err.Error())
+	}
+	if len(spec.IstioInjectionOverrides) > 200 {
+		return invalid(report, "istioInjectionOverrides", "At most 200 service overrides are supported.")
 	}
 	if spec.Mode != "" && spec.Mode != "prepare" && spec.Mode != "deploy" {
 		return invalid(report, "mode", "Deployment mode is invalid.")
@@ -212,12 +222,19 @@ func (Plugin) Plan(ctx context.Context, raw json.RawMessage) (domain.Plan, error
 	if err := json.Unmarshal(raw, &spec); err != nil {
 		return domain.Plan{}, err
 	}
+	if err := ValidateApplicationNamespace(spec.ApplicationNamespace); err != nil {
+		return domain.Plan{}, err
+	}
 	marker := domain.RuntimeExecutionIDToken
 	controlNamespace := ""
 	if spec.ControlNamespace && (spec.Mode == "prepare" || spec.Mode == "deploy") {
 		controlNamespace = "kubephos-control-" + marker
 	}
-	input, err := json.Marshal(stepInput{Spec: spec, Marker: marker, Namespace: "kubephos-app-" + marker, ControlNamespace: controlNamespace})
+	namespace := "kubephos-app-" + marker
+	if spec.ApplicationNamespace != "" {
+		namespace = spec.ApplicationNamespace
+	}
+	input, err := json.Marshal(stepInput{Spec: spec, Marker: marker, Namespace: namespace, ControlNamespace: controlNamespace})
 	if err != nil {
 		return domain.Plan{}, err
 	}
@@ -279,13 +296,13 @@ func (plugin Plugin) Precheck(ctx context.Context, step domain.PlanStep, log plu
 		}
 		return domain.HealthReport{Status: domain.HealthHealthy, Summary: "The isolated application namespace is safe to remove", Checks: map[string]string{"api": "ready", "authorization": "cluster-admin", "ownership": state}}, nil
 	}
-	if err != nil {
+	if err != nil && !(resetApplicationNamespace(input) && errors.Is(err, errNamespaceNotOwned)) {
 		return unhealthy(err.Error(), "namespace", "conflict"), nil
 	}
 	if input.Mode == "deploy" && !owned {
 		return unhealthy("The prepared application namespace is unavailable", "namespace", "missing"), nil
 	}
-	if input.Mode != "deploy" && owned {
+	if input.Mode != "deploy" && owned && !resetApplicationNamespace(input) {
 		return unhealthy("The generated application namespace already exists", "namespace", "conflict"), nil
 	}
 	if input.ControlNamespace != "" {
@@ -307,7 +324,11 @@ func (plugin Plugin) Precheck(ctx context.Context, step domain.PlanStep, log plu
 	if err := validateManifestIsolation([]byte(manifests.Spec.Content), clusterScoped); err != nil {
 		return unhealthy(err.Error(), "isolation", "rejected"), nil
 	}
-	runtimeManifest, effectiveWorkloads, endpoints, proxyNodes, err := prepareNetworkPackage(ctx, runner, cluster, manifests.Spec.Content, workloads, endpoints, input.PodDisruptionBudgetMinAvailable)
+	content, err := configureIstioInjection(manifests.Spec.Content, workloads, input.IstioInjection, input.IstioInjectionOverrides)
+	if err != nil {
+		return domain.HealthReport{}, err
+	}
+	runtimeManifest, effectiveWorkloads, endpoints, proxyNodes, err := prepareNetworkPackage(ctx, runner, cluster, content, workloads, endpoints, input.PodDisruptionBudgetMinAvailable)
 	if err != nil {
 		return unhealthy(err.Error(), "trafficEntrypoints", "rejected"), nil
 	}
@@ -337,7 +358,23 @@ func (plugin Plugin) Execute(ctx context.Context, step domain.PlanStep, log plug
 	}
 	startedAt := time.Now().UTC()
 	runner := plugin.runner()
-	runtimeManifest, effectiveWorkloads, endpoints, proxyNodes, err := prepareNetworkPackage(ctx, runner, cluster, manifests.Spec.Content, workloads, endpoints, input.PodDisruptionBudgetMinAvailable)
+	if resetApplicationNamespace(input) {
+		if err := ValidateApplicationNamespace(input.ApplicationNamespace); err != nil {
+			return nil, err
+		}
+		if err := log("warning", "Recreating application namespace "+input.Namespace); err != nil {
+			return nil, err
+		}
+		if err := deleteNamespace(ctx, runner, cluster.Spec.Kubeconfig, input.Namespace, log, 10*time.Minute, 5*time.Second); err != nil {
+			return nil, fmt.Errorf("reset application namespace: %w", err)
+		}
+	}
+
+	content, err := configureIstioInjection(manifests.Spec.Content, workloads, input.IstioInjection, input.IstioInjectionOverrides)
+	if err != nil {
+		return nil, err
+	}
+	runtimeManifest, effectiveWorkloads, endpoints, proxyNodes, err := prepareNetworkPackage(ctx, runner, cluster, content, workloads, endpoints, input.PodDisruptionBudgetMinAvailable)
 	if err != nil {
 		return nil, err
 	}
@@ -347,13 +384,22 @@ func (plugin Plugin) Execute(ctx context.Context, step domain.PlanStep, log plug
 			return nil, err
 		}
 	}
-	injection := "enabled"
-	if nativeTCPEndpoints(endpoints) || cluster.Spec.Networking == "cilium" {
-		injection = "disabled"
-	}
+	injection := namespaceIstioInjection(input, cluster, endpoints)
 	namespaceManifest, _ := json.Marshal(map[string]any{"apiVersion": "v1", "kind": "Namespace", "metadata": map[string]any{"name": input.Namespace, "annotations": map[string]string{ownershipKey: input.Marker}, "labels": map[string]string{"app.kubernetes.io/managed-by": "kubephos", "istio-injection": injection, "kubephos.dev/monitored": "true", "kubephos.dev/application": input.Namespace}}})
 	if _, err := runner.Run(ctx, cluster.Spec.Kubeconfig, namespaceManifest, "apply", "-f", "-"); err != nil {
 		return nil, fmt.Errorf("create isolated namespace: %w", err)
+	}
+	var namespaceCreatedAt *time.Time
+	if input.ApplicationNamespace != "" {
+		rawCreated, err := runner.Run(ctx, cluster.Spec.Kubeconfig, nil, "get", "namespace", input.Namespace, "-o", "jsonpath={.metadata.creationTimestamp}")
+		if err != nil {
+			return nil, fmt.Errorf("verify application namespace creation time: %w", err)
+		}
+		created, err := time.Parse(time.RFC3339, strings.TrimSpace(rawCreated))
+		if err != nil {
+			return nil, errors.New("Could not verify application namespace creation time.")
+		}
+		namespaceCreatedAt = &created
 	}
 	if input.Mode == "prepare" && input.ControlNamespace != "" {
 		controlManifest, _ := json.Marshal(map[string]any{"apiVersion": "v1", "kind": "Namespace", "metadata": map[string]any{"name": input.ControlNamespace, "annotations": map[string]string{ownershipKey: input.Marker}, "labels": map[string]string{"app.kubernetes.io/managed-by": "kubephos", "istio-injection": "disabled", "kubephos.dev/monitored": "true", "kubephos.dev/role": "experiment-control"}}})
@@ -412,7 +458,7 @@ func (plugin Plugin) Execute(ctx context.Context, step domain.PlanStep, log plug
 	value := result{ApplicationDeployment: applicationDeployment{
 		APIVersion: artifactAPI, Kind: "ApplicationDeployment",
 		Metadata: applicationDeploymentMetadata{Name: input.Namespace, Version: "v1alpha1", OwnershipMarker: input.Marker},
-		Spec:     applicationDeploymentSpec{ClusterName: cluster.Metadata.Name, Networking: cluster.Spec.Networking, ControlMetrics: metricsScope, ApplicationRef: manifests.Metadata.ApplicationRef, Prepared: input.Mode == "prepare", ClusterServer: cluster.Spec.Server, Namespace: input.Namespace, ControlNamespace: input.ControlNamespace, ManifestDigest: manifests.Metadata.Digest, Workloads: effectiveWorkloads, Endpoints: endpoints},
+		Spec:     applicationDeploymentSpec{NamespaceCreatedAt: namespaceCreatedAt, ClusterName: cluster.Metadata.Name, Networking: cluster.Spec.Networking, ControlMetrics: metricsScope, ApplicationRef: manifests.Metadata.ApplicationRef, Prepared: input.Mode == "prepare", ClusterServer: cluster.Spec.Server, Namespace: input.Namespace, ControlNamespace: input.ControlNamespace, ManifestDigest: manifests.Metadata.Digest, Workloads: effectiveWorkloads, Endpoints: endpoints},
 	}}
 	return json.Marshal(value)
 }
@@ -446,7 +492,11 @@ func (plugin Plugin) Verify(ctx context.Context, step domain.PlanStep, raw json.
 	if err := json.Unmarshal(raw, &value); err != nil {
 		return domain.HealthReport{}, err
 	}
-	runtimeManifest, effectiveWorkloads, endpoints, proxyNodes, err := prepareNetworkPackage(ctx, runner, cluster, manifests.Spec.Content, workloads, endpoints, input.PodDisruptionBudgetMinAvailable)
+	content, err := configureIstioInjection(manifests.Spec.Content, workloads, input.IstioInjection, input.IstioInjectionOverrides)
+	if err != nil {
+		return domain.HealthReport{}, err
+	}
+	runtimeManifest, effectiveWorkloads, endpoints, proxyNodes, err := prepareNetworkPackage(ctx, runner, cluster, content, workloads, endpoints, input.PodDisruptionBudgetMinAvailable)
 	if err != nil {
 		return unhealthy(err.Error(), "trafficEntrypoints", "unhealthy"), nil
 	}
@@ -556,6 +606,14 @@ func resolve(step domain.PlanStep) (stepInput, clusterConnection, manifestSet, [
 	var input stepInput
 	if err := json.Unmarshal(step.Input, &input); err != nil {
 		return stepInput{}, clusterConnection{}, manifestSet{}, nil, nil, err
+	}
+	if input.ApplicationNamespace != "" {
+		if err := ValidateApplicationNamespace(input.ApplicationNamespace); err != nil {
+			return stepInput{}, clusterConnection{}, manifestSet{}, nil, nil, err
+		}
+		if input.Namespace != input.ApplicationNamespace {
+			return stepInput{}, clusterConnection{}, manifestSet{}, nil, nil, errors.New("Application namespace does not match the validated configuration.")
+		}
 	}
 	values := step.ResolvedInputs
 	clusterRaw, clusterOK := values["cluster-connection"]
@@ -703,7 +761,7 @@ func namespaceOwnership(ctx context.Context, runner commandRunner, kubeconfig, n
 		return false, nil
 	}
 	if strings.TrimSpace(value) != marker {
-		return false, errors.New("application namespace is not owned by this operation")
+		return false, errNamespaceNotOwned
 	}
 	return true, nil
 }

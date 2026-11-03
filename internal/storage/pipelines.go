@@ -35,10 +35,10 @@ func (s *Store) CreatePipelineRun(ctx context.Context, run domain.PipelineRun) (
 		return domain.PipelineRun{}, ErrConflict
 	}
 	err = tx.QueryRow(ctx, `
-		INSERT INTO pipeline_runs (id, pipeline_id, workspace_id, cluster_resource_id, owner_user_id, isolation_mode, name, status, pipeline_hash, result_type, result_version, scheduled_for)
-		VALUES ($1, $2, $3, NULLIF($4, ''), NULLIF($5, ''), COALESCE(NULLIF($6, ''), 'exclusive'), $7, $8, $9, $10, $11, COALESCE($12, now()))
+		INSERT INTO pipeline_runs (id, pipeline_id, workspace_id, cluster_resource_id, owner_user_id, isolation_mode, name, status, pipeline_hash, result_type, result_version, scheduled_for, pause_before_stage, application_namespace)
+		VALUES ($1, $2, $3, NULLIF($4, ''), NULLIF($5, ''), COALESCE(NULLIF($6, ''), 'exclusive'), $7, $8, $9, $10, $11, COALESCE($12, now()), $13, $14)
 		RETURNING created_at, queued_at, scheduled_for
-	`, run.ID, run.PipelineID, run.WorkspaceID, run.ClusterResourceID, run.OwnerUserID, run.IsolationMode, run.Name, domain.OperationQueued, run.PipelineHash, run.ResultType, run.ResultVersion, run.ScheduledFor).Scan(&run.CreatedAt, &run.QueuedAt, &run.ScheduledFor)
+	`, run.ID, run.PipelineID, run.WorkspaceID, run.ClusterResourceID, run.OwnerUserID, run.IsolationMode, run.Name, domain.OperationQueued, run.PipelineHash, run.ResultType, run.ResultVersion, run.ScheduledFor, run.PauseBeforeStage, run.ApplicationNamespace).Scan(&run.CreatedAt, &run.QueuedAt, &run.ScheduledFor)
 	if err != nil {
 		return domain.PipelineRun{}, err
 	}
@@ -116,10 +116,10 @@ func (s *Store) CreatePipelineExperiment(ctx context.Context, experiment domain.
 				return domain.Experiment{}, ErrConflict
 			}
 			err = tx.QueryRow(ctx, `
-				INSERT INTO pipeline_runs (id, pipeline_id, workspace_id, cluster_resource_id, owner_user_id, isolation_mode, name, status, pipeline_hash, result_type, result_version, scheduled_for)
-				VALUES ($1, $2, $3, NULLIF($4, ''), NULLIF($5, ''), COALESCE(NULLIF($6, ''), 'exclusive'), $7, $8, $9, $10, $11, COALESCE($12, now()))
+				INSERT INTO pipeline_runs (id, pipeline_id, workspace_id, cluster_resource_id, owner_user_id, isolation_mode, name, status, pipeline_hash, result_type, result_version, scheduled_for, pause_before_stage, application_namespace)
+				VALUES ($1, $2, $3, NULLIF($4, ''), NULLIF($5, ''), COALESCE(NULLIF($6, ''), 'exclusive'), $7, $8, $9, $10, $11, COALESCE($12, now()), $13, $14)
 				RETURNING created_at, queued_at, scheduled_for
-			`, run.ID, run.PipelineID, run.WorkspaceID, run.ClusterResourceID, run.OwnerUserID, run.IsolationMode, run.Name, domain.OperationQueued, run.PipelineHash, run.ResultType, run.ResultVersion, run.ScheduledFor).Scan(&run.CreatedAt, &run.QueuedAt, &run.ScheduledFor)
+			`, run.ID, run.PipelineID, run.WorkspaceID, run.ClusterResourceID, run.OwnerUserID, run.IsolationMode, run.Name, domain.OperationQueued, run.PipelineHash, run.ResultType, run.ResultVersion, run.ScheduledFor, run.PauseBeforeStage, run.ApplicationNamespace).Scan(&run.CreatedAt, &run.QueuedAt, &run.ScheduledFor)
 			if err != nil {
 				return domain.Experiment{}, err
 			}
@@ -166,7 +166,7 @@ func (s *Store) readListPipelineRunsForUser(ctx context.Context, userID string, 
 	}
 	rows, err := s.pool.Query(ctx, `
 		SELECT id, pipeline_id, workspace_id, COALESCE(cluster_resource_id, ''), COALESCE(owner_user_id, ''), isolation_mode, name, status, pipeline_hash, result_type, result_version,
-		       COALESCE(result_artifact_id, ''), cancel_requested, COALESCE(terminal_status, ''), error, created_at, queued_at, scheduled_for, started_at, completed_at
+		       COALESCE(result_artifact_id, ''), cancel_requested, COALESCE(terminal_status, ''), error, created_at, queued_at, scheduled_for, started_at, completed_at, pause_before_stage, execution_requested, initialized_at, application_namespace
 		FROM pipeline_runs
 		WHERE `+visibility+`
 		ORDER BY created_at DESC
@@ -206,7 +206,7 @@ func (s *Store) readListPipelineRunsForUser(ctx context.Context, userID string, 
 func (s *Store) GetPipelineRun(ctx context.Context, runID string) (domain.PipelineRun, error) {
 	run, err := scanPipelineRun(s.pool.QueryRow(ctx, `
 		SELECT id, pipeline_id, workspace_id, COALESCE(cluster_resource_id, ''), COALESCE(owner_user_id, ''), isolation_mode, name, status, pipeline_hash, result_type, result_version,
-		       COALESCE(result_artifact_id, ''), cancel_requested, COALESCE(terminal_status, ''), error, created_at, queued_at, scheduled_for, started_at, completed_at
+		       COALESCE(result_artifact_id, ''), cancel_requested, COALESCE(terminal_status, ''), error, created_at, queued_at, scheduled_for, started_at, completed_at, pause_before_stage, execution_requested, initialized_at, application_namespace
 		FROM pipeline_runs
 		WHERE id = $1
 	`, runID))
@@ -300,7 +300,13 @@ func (s *Store) ListPipelineRunArtifacts(ctx context.Context, runID string) ([]d
 
 func scanPipelineRun(row scanner) (domain.PipelineRun, error) {
 	var run domain.PipelineRun
-	err := row.Scan(&run.ID, &run.PipelineID, &run.WorkspaceID, &run.ClusterResourceID, &run.OwnerUserID, &run.IsolationMode, &run.Name, &run.Status, &run.PipelineHash, &run.ResultType, &run.ResultVersion, &run.ResultArtifactID, &run.CancelRequested, &run.TerminalStatus, &run.Error, &run.CreatedAt, &run.QueuedAt, &run.ScheduledFor, &run.StartedAt, &run.CompletedAt)
+	err := row.Scan(&run.ID, &run.PipelineID, &run.WorkspaceID, &run.ClusterResourceID, &run.OwnerUserID, &run.IsolationMode, &run.Name, &run.Status, &run.PipelineHash, &run.ResultType, &run.ResultVersion, &run.ResultArtifactID, &run.CancelRequested, &run.TerminalStatus, &run.Error, &run.CreatedAt, &run.QueuedAt, &run.ScheduledFor, &run.StartedAt, &run.CompletedAt, &run.PauseBeforeStage, &run.ExecutionRequested, &run.InitializedAt, &run.ApplicationNamespace)
+	if run.Status == domain.OperationRunning && run.TerminalStatus == "" && !run.CancelRequested && run.PauseBeforeStage != "" && !run.ExecutionRequested {
+		run.Phase = "initializing"
+		if run.InitializedAt != nil {
+			run.Phase = "initialized"
+		}
+	}
 	return run, err
 }
 
@@ -373,7 +379,7 @@ func (s *Store) ClaimPipelineRun(ctx context.Context, owner string) (domain.Pipe
 				  AND active.cluster_resource_id = candidate.cluster_resource_id
 				  AND active.id <> candidate.id
 				  AND active.status = $2
-				  AND (candidate.isolation_mode = 'exclusive' OR active.isolation_mode = 'exclusive')
+				  AND (candidate.isolation_mode = 'exclusive' OR active.isolation_mode = 'exclusive' OR candidate.application_namespace<>'' AND active.application_namespace=candidate.application_namespace)
 			  )
 			ORDER BY candidate.scheduled_for, candidate.created_at
 			FOR UPDATE OF candidate SKIP LOCKED
@@ -799,7 +805,7 @@ func (s *Store) RequestExperimentCancel(ctx context.Context, experimentID string
 }
 
 func cancelableExperimentStatus(status string) bool {
-	return status == domain.OperationQueued || status == domain.OperationRunning
+	return status == domain.OperationQueued || status == domain.OperationRunning || status == "initializing" || status == "initialized"
 }
 
 func (s *Store) SyncExperimentPipelineRun(ctx context.Context, runID string) error {
@@ -809,9 +815,16 @@ func (s *Store) SyncExperimentPipelineRun(ctx context.Context, runID string) err
 	}
 	defer tx.Rollback(ctx)
 	var experimentID string
+	err = tx.QueryRow(ctx, `SELECT e.id FROM experiments e JOIN experiment_variants v ON v.experiment_id=e.id JOIN experiment_trials t ON t.variant_id=v.id WHERE t.pipeline_run_id=$1 FOR UPDATE OF e`, runID).Scan(&experimentID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
 	err = tx.QueryRow(ctx, `
 		UPDATE experiment_trials t
-		SET status = r.status,
+		SET status = CASE WHEN r.status='running' AND r.terminal_status IS NULL AND NOT r.cancel_requested AND r.pause_before_stage<>'' AND NOT r.execution_requested THEN CASE WHEN r.initialized_at IS NULL THEN 'initializing' ELSE 'initialized' END ELSE r.status END,
 		    operation_id = (SELECT operation_id FROM pipeline_run_stages WHERE run_id = r.id AND operation_id IS NOT NULL ORDER BY position DESC LIMIT 1),
 		    result_artifact_id = r.result_artifact_id,
 		    error = r.error,
@@ -837,7 +850,9 @@ func (s *Store) SyncExperimentPipelineRun(ctx context.Context, runID string) err
 			           WHEN bool_and(t.status = $2) THEN $2
 			           WHEN bool_and(t.status IN ($2, $3, $4)) AND bool_or(t.status = $3) THEN $3
 			           WHEN bool_and(t.status IN ($2, $3, $4)) THEN $4
-			           WHEN bool_or(t.status <> $5) THEN $6
+			           WHEN bool_or(t.status = 'initialized') THEN 'initialized'
+                   WHEN bool_or(t.status = 'initializing') THEN 'initializing'
+		           WHEN bool_or(t.status <> $5) THEN $6
 			           ELSE $5
 			       END AS status
 			FROM experiment_variants v

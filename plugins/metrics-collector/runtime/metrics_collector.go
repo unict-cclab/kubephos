@@ -69,14 +69,15 @@ type applicationDeployment struct {
 		OwnershipMarker string `json:"ownershipMarker"`
 	} `json:"metadata"`
 	Spec struct {
-		ControlMetrics *controlMetricsScope `json:"controlMetrics,omitempty"`
-		ClusterName    string               `json:"clusterName,omitempty"`
-		Networking     string               `json:"networking,omitempty"`
-		ApplicationRef string               `json:"applicationRef"`
-		External       bool                 `json:"external,omitempty"`
-		ClusterServer  string               `json:"clusterServer"`
-		Namespace      string               `json:"namespace"`
-		Endpoints      []struct {
+		NamespaceCreatedAt *time.Time           `json:"namespaceCreatedAt,omitempty"`
+		ControlMetrics     *controlMetricsScope `json:"controlMetrics,omitempty"`
+		ClusterName        string               `json:"clusterName,omitempty"`
+		Networking         string               `json:"networking,omitempty"`
+		ApplicationRef     string               `json:"applicationRef"`
+		External           bool                 `json:"external,omitempty"`
+		ClusterServer      string               `json:"clusterServer"`
+		Namespace          string               `json:"namespace"`
+		Endpoints          []struct {
 			Protocol string `json:"protocol"`
 		} `json:"endpoints"`
 		Workloads []struct {
@@ -227,7 +228,7 @@ type commandRunner interface {
 
 func (Plugin) Manifest() plugins.Manifest {
 	return plugins.Manifest{
-		ID: pluginID, Name: "Kubernetes metrics collector", Version: "0.7.0",
+		ID: pluginID, Name: "Kubernetes metrics collector", Version: "0.8.0",
 		Description:     "Collects a normalized workload dataset through a compatible metrics capability.",
 		Schema:          json.RawMessage(`{"type":"object","additionalProperties":false,"required":["clusterConnectionRef","applicationDeploymentRef","observabilityCapabilityRef","loadSessionRef","window","resolution"],"properties":{"clusterConnectionRef":{"type":"string","title":"Kubernetes cluster","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ClusterConnection","x-kubephos-artifact-version":"v1alpha1"},"applicationDeploymentRef":{"type":"string","title":"Application deployment","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ApplicationDeployment","x-kubephos-artifact-version":"v1alpha1"},"observabilityCapabilityRef":{"type":"string","title":"Metrics service","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ObservabilityCapability","x-kubephos-artifact-version":"v1alpha1"},"loadSessionRef":{"type":"string","title":"Completed load session","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"LoadSession","x-kubephos-artifact-version":"v1alpha1"},"window":{"type":"string","title":"Metrics fallback window","x-kubephos-hidden":true,"enum":["5m","15m","30m","1h"],"default":"15m"},"resolution":{"type":"string","title":"Data resolution","enum":["5s","15s","30s","1m"],"default":"15s"},"sloMilliseconds":{"type":"integer","title":"Response time SLO (optional, ms)","minimum":1,"maximum":600000},"clusterName":{"type":"string","x-kubephos-hidden":true},"peers":{"type":"array","minItems":1,"maxItems":5,"x-kubephos-hidden":true,"items":{"type":"object","required":["name","clusterConnectionRef","applicationDeploymentRef","observabilityCapabilityRef"],"additionalProperties":false,"properties":{"name":{"type":"string"},"clusterConnectionRef":{"type":"string","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ClusterConnection","x-kubephos-artifact-version":"v1alpha1"},"applicationDeploymentRef":{"type":"string","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ApplicationDeployment","x-kubephos-artifact-version":"v1alpha1"},"observabilityCapabilityRef":{"type":"string","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ObservabilityCapability","x-kubephos-artifact-version":"v1alpha1"}}}}}}`),
 		ArtifactInputs:  []domain.ArtifactContract{{Type: "ClusterConnection", Version: "v1alpha1"}, {Type: "ApplicationDeployment", Version: "v1alpha1"}, {Type: "ObservabilityCapability", Version: "v1alpha1"}, {Type: "LoadSession", Version: "v1alpha1"}},
@@ -353,7 +354,7 @@ func (plugin Plugin) executeSingle(ctx context.Context, step domain.PlanStep, lo
 		return nil, err
 	}
 	start, end := metricWindow(load, plugin.now().UTC(), windows()[spec.Window])
-	definitions := deploymentMetricDefinitions(deployment)
+	definitions := scopeReusableNamespaceMetrics(deploymentMetricDefinitions(deployment), deployment)
 	if spec.PeerOnly {
 		definitions = ciliumMetricDefinitions(deployment, true)
 	}

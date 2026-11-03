@@ -242,11 +242,11 @@ input[type="checkbox"]:focus-visible, input[type="radio"]:focus-visible { outlin
 .status::before { width: 6px; height: 6px; border-radius: 50%; background: currentColor; content: ""; }
 .status.ready, .status.available { background: var(--muted); color: var(--muted-foreground); }
 .status.failed, .status.canceled, .status.deletion-failed { background: #fae9e8; color: var(--red); }
-.status.queued, .status.prechecking, .status.running, .status.verifying, .status.provisioning, .status.deleting { background: #e9f0f8; color: var(--blue); }
+.status.initializing, .status.initialized, .status.queued, .status.prechecking, .status.running, .status.verifying, .status.provisioning, .status.deleting { background: #e9f0f8; color: var(--blue); }
 .status-dot { width: 8px; height: 8px; flex: 0 0 auto; border-radius: 50%; background: var(--muted); }
 .status-dot.succeeded, .status-dot.ready { background: var(--primary); }
 .status-dot.failed, .status-dot.canceled { background: var(--red); }
-.status-dot.queued, .status-dot.prechecking, .status-dot.running, .status-dot.verifying, .status-dot.inspecting, .status-dot.validating, .status-dot.activating { background: var(--blue); box-shadow: 0 0 0 3px rgba(49,105,168,.12); }
+.status-dot.initializing, .status-dot.initialized, .status-dot.queued, .status-dot.prechecking, .status-dot.running, .status-dot.verifying, .status-dot.inspecting, .status-dot.validating, .status-dot.activating { background: var(--blue); box-shadow: 0 0 0 3px rgba(49,105,168,.12); }
 .status-pill { border-radius: 999px; padding: 5px 8px; background: var(--muted); color: var(--muted-foreground); font-size: 12px; font-weight: 500; text-transform: none; }
 
 .status-pill.failed, .status-pill.canceled { background: #fae9e8; color: var(--red); }
@@ -1313,6 +1313,8 @@ summary { color: var(--muted-foreground); font-size: 13px; font-weight: 500; cur
 :root[data-theme="dark"] .validation-item.error,
 :root[data-theme="dark"] .details-gates > div.error { background: #402426; }
 
+:root[data-theme="dark"] .status.initializing,
+:root[data-theme="dark"] .status.initialized,
 :root[data-theme="dark"] .status.queued,
 :root[data-theme="dark"] .status.prechecking,
 :root[data-theme="dark"] .status.running,

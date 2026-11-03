@@ -373,10 +373,14 @@ export interface ExperimentConfiguration extends ResourceAttributionFields {
   applicationRef: string
   applicationDigest: string
 	definition: {
+    namespace?: string
+    twoPhaseStart?: boolean
     kind?: 'single' | 'suite'
     variants?: Array<{configurationId: string; alias: string; color: string}>
     runs?: number
 	applicationValues: Record<string, unknown>
+    istioInjection?: boolean
+    istioInjectionOverrides?: Record<string, boolean>
 		destinationMode?: 'application' | 'external'
 		externalDestination?: {targetUrl: string; runtimeImage: string; script: string; parameters?: Record<string, string>}
 		podDisruptionBudgetMinAvailable?: number
@@ -436,6 +440,11 @@ export interface PipelineRunStage {
 }
 
 export interface PipelineRun extends ResourceAttributionFields {
+  phase?: string
+  pauseBeforeStage?: string
+  executionRequested?: boolean
+  initializedAt?: string
+  applicationNamespace?: string
   id: string
   pipelineId: string
   workspaceId: string
