@@ -43,6 +43,7 @@ type Invocation struct {
 }
 
 type Spec struct {
+	NamespacePolicy                 string          `json:"namespacePolicy,omitempty"`
 	ApplicationNamespace            string          `json:"applicationNamespace,omitempty"`
 	IstioInjection                  *bool           `json:"istioInjection,omitempty"`
 	IstioInjectionOverrides         map[string]bool `json:"istioInjectionOverrides,omitempty"`
@@ -165,9 +166,9 @@ type commandRunner interface {
 
 func (Plugin) Manifest() plugins.Manifest {
 	return plugins.Manifest{
-		ID: pluginID, Name: "Kubernetes application deployer", Version: "0.9.0",
+		ID: pluginID, Name: "Kubernetes application deployer", Version: "0.10.0",
 		Description:     "Deploys any validated application package into an isolated Kubernetes namespace and prepares shared experiment control resources when requested.",
-		Schema:          json.RawMessage(`{"type":"object","additionalProperties":false,"required":["clusterConnectionRef","manifestSetRef","workloadTargetsRef","serviceEndpointsRef"],"properties":{"clusterConnectionRef":{"type":"string","title":"Kubernetes cluster","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ClusterConnection","x-kubephos-artifact-version":"v1alpha1"},"manifestSetRef":{"type":"string","title":"Application manifests","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ManifestSet","x-kubephos-artifact-version":"v1alpha1"},"workloadTargetsRef":{"type":"string","title":"Application workloads","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"WorkloadTargets","x-kubephos-artifact-version":"v1alpha1"},"serviceEndpointsRef":{"type":"string","title":"Application endpoints","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ServiceEndpoints","x-kubephos-artifact-version":"v1alpha1"},"mode":{"type":"string","enum":["prepare","deploy"]},"schedulerName":{"type":"string"},"schedulerInclude":{"type":"array","items":{"type":"string"}},"schedulerExclude":{"type":"array","items":{"type":"string"}},"podDisruptionBudgetMinAvailable":{"type":"integer","title":"Minimum available replicas","description":"PDB minAvailable generated for every deschedulable workload.","minimum":1,"maximum":20},"controlNamespace":{"type":"boolean","x-kubephos-hidden":true},"istioInjection":{"type":"boolean"},"istioInjectionOverrides":{"type":"object","additionalProperties":true},"applicationNamespace":{"type":"string","maxLength":63}}}`),
+		Schema:          json.RawMessage(`{"type":"object","additionalProperties":false,"required":["clusterConnectionRef","manifestSetRef","workloadTargetsRef","serviceEndpointsRef"],"properties":{"clusterConnectionRef":{"type":"string","title":"Kubernetes cluster","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ClusterConnection","x-kubephos-artifact-version":"v1alpha1"},"manifestSetRef":{"type":"string","title":"Application manifests","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ManifestSet","x-kubephos-artifact-version":"v1alpha1"},"workloadTargetsRef":{"type":"string","title":"Application workloads","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"WorkloadTargets","x-kubephos-artifact-version":"v1alpha1"},"serviceEndpointsRef":{"type":"string","title":"Application endpoints","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ServiceEndpoints","x-kubephos-artifact-version":"v1alpha1"},"mode":{"type":"string","enum":["prepare","deploy"]},"schedulerName":{"type":"string"},"schedulerInclude":{"type":"array","items":{"type":"string"}},"schedulerExclude":{"type":"array","items":{"type":"string"}},"podDisruptionBudgetMinAvailable":{"type":"integer","title":"Minimum available replicas","description":"PDB minAvailable generated for every deschedulable workload.","minimum":1,"maximum":20},"controlNamespace":{"type":"boolean","x-kubephos-hidden":true},"istioInjection":{"type":"boolean"},"istioInjectionOverrides":{"type":"object","additionalProperties":true},"namespacePolicy":{"type":"string","enum":["create"],"x-kubephos-hidden":true},"applicationNamespace":{"type":"string","maxLength":63}}}`),
 		ArtifactInputs:  []domain.ArtifactContract{{Type: "ClusterConnection", Version: "v1alpha1"}, {Type: "ManifestSet", Version: "v1alpha1"}, {Type: "WorkloadTargets", Version: "v1alpha1"}, {Type: "ServiceEndpoints", Version: "v1alpha1"}},
 		ArtifactOutputs: []domain.ArtifactContract{{Type: "ApplicationDeployment", Version: "v1alpha1"}},
 		Capabilities:    []string{"applications.kubernetes.deploy", "applications.kubernetes.preflight", "applications.kubernetes.cleanup", "lifecycle.cleanup"},
@@ -189,6 +190,9 @@ func (Plugin) Validate(ctx context.Context, invocation Invocation) domain.Valida
 	}
 	if len(spec.IstioInjectionOverrides) > 200 {
 		return invalid(report, "istioInjectionOverrides", "At most 200 service overrides are supported.")
+	}
+	if spec.NamespacePolicy != "" && spec.NamespacePolicy != "create" {
+		return invalid(report, "namespacePolicy", "Namespace policy is invalid.")
 	}
 	if spec.Mode != "" && spec.Mode != "prepare" && spec.Mode != "deploy" {
 		return invalid(report, "mode", "Deployment mode is invalid.")
@@ -282,6 +286,9 @@ func (plugin Plugin) Precheck(ctx context.Context, step domain.PlanStep, log plu
 	}
 	owned, err := namespaceOwnership(ctx, runner, cluster.Spec.Kubeconfig, input.Namespace, input.Marker)
 	if step.Cleanup {
+		if input.NamespacePolicy == "create" && errors.Is(err, errNamespaceNotOwned) {
+			return domain.HealthReport{Status: domain.HealthHealthy, Summary: "No namespace owned by this deployment remains", Checks: map[string]string{"ownership": "not-owned"}}, nil
+		}
 		if err != nil {
 			return unhealthy(err.Error(), "ownership", "blocked"), nil
 		}
@@ -295,6 +302,9 @@ func (plugin Plugin) Precheck(ctx context.Context, step domain.PlanStep, log plu
 			state = "verified"
 		}
 		return domain.HealthReport{Status: domain.HealthHealthy, Summary: "The isolated application namespace is safe to remove", Checks: map[string]string{"api": "ready", "authorization": "cluster-admin", "ownership": state}}, nil
+	}
+	if input.NamespacePolicy == "create" && (owned || errors.Is(err, errNamespaceNotOwned)) {
+		return unhealthy("The namespace already exists on this cluster. Choose another namespace.", "namespace", "conflict"), nil
 	}
 	if err != nil && !(resetApplicationNamespace(input) && errors.Is(err, errNamespaceNotOwned)) {
 		return unhealthy(err.Error(), "namespace", "conflict"), nil
@@ -386,7 +396,11 @@ func (plugin Plugin) Execute(ctx context.Context, step domain.PlanStep, log plug
 	}
 	injection := namespaceIstioInjection(input, cluster, endpoints)
 	namespaceManifest, _ := json.Marshal(map[string]any{"apiVersion": "v1", "kind": "Namespace", "metadata": map[string]any{"name": input.Namespace, "annotations": map[string]string{ownershipKey: input.Marker}, "labels": map[string]string{"app.kubernetes.io/managed-by": "kubephos", "istio-injection": injection, "kubephos.dev/monitored": "true", "kubephos.dev/application": input.Namespace}}})
-	if _, err := runner.Run(ctx, cluster.Spec.Kubeconfig, namespaceManifest, "apply", "-f", "-"); err != nil {
+	namespaceAction := "apply"
+	if input.NamespacePolicy == "create" {
+		namespaceAction = "create"
+	}
+	if _, err := runner.Run(ctx, cluster.Spec.Kubeconfig, namespaceManifest, namespaceAction, "-f", "-"); err != nil {
 		return nil, fmt.Errorf("create isolated namespace: %w", err)
 	}
 	var namespaceCreatedAt *time.Time
@@ -470,6 +484,15 @@ func (plugin Plugin) Verify(ctx context.Context, step domain.PlanStep, raw json.
 	}
 	runner := plugin.runner()
 	if step.Cleanup {
+		if input.NamespacePolicy == "create" {
+			_, ownershipErr := namespaceOwnership(ctx, runner, cluster.Spec.Kubeconfig, input.Namespace, input.Marker)
+			if errors.Is(ownershipErr, errNamespaceNotOwned) {
+				return domain.HealthReport{Status: domain.HealthHealthy, Summary: "No namespace owned by this deployment remains", Checks: map[string]string{"ownership": "not-owned"}}, nil
+			}
+			if ownershipErr != nil {
+				return domain.HealthReport{}, ownershipErr
+			}
+		}
 		value, err := runner.Run(ctx, cluster.Spec.Kubeconfig, nil, "get", "namespace", input.Namespace, "--ignore-not-found", "-o", "name")
 		if err != nil {
 			return domain.HealthReport{}, err
@@ -577,6 +600,9 @@ func (plugin Plugin) Cleanup(ctx context.Context, step domain.PlanStep, _ json.R
 	}
 	runner := plugin.runner()
 	owned, err := namespaceOwnership(ctx, runner, cluster.Spec.Kubeconfig, input.Namespace, input.Marker)
+	if input.NamespacePolicy == "create" && errors.Is(err, errNamespaceNotOwned) {
+		return log("info", "Leaving the namespace unchanged because it is not owned by this deployment")
+	}
 	if err != nil {
 		return err
 	}

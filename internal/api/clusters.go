@@ -778,7 +778,11 @@ func (s *Server) deleteManagedPipelineResource(response http.ResponseWriter, req
 		validation.Issues = append(validation.Issues, cleanup.Validation.Issues...)
 	}
 	if len(definition.Stages) == 0 {
-		if err := s.store.DeleteFailedManagedResource(request.Context(), resource.ID); errors.Is(err, storage.ErrConflict) {
+		dismiss := s.store.DeleteFailedManagedResource
+		if resource.Kind == "application-deployment" {
+			dismiss = s.store.DismissFailedApplicationDeployment
+		}
+		if err := dismiss(request.Context(), resource.ID); errors.Is(err, storage.ErrConflict) {
 			writeError(response, http.StatusConflict, "cleanup_unavailable", "The failed lifecycle cannot be dismissed in its current state.")
 			return
 		} else if err != nil {
@@ -796,6 +800,15 @@ func (s *Server) deleteManagedPipelineResource(response http.ResponseWriter, req
 	pipelineID := id.New("pipe")
 	pipeline := domain.Pipeline{ID: pipelineID, WorkspaceID: resource.WorkspaceID, Name: "delete-managed-" + resource.ID + "-" + strings.TrimPrefix(pipelineID, "pipe_")[:8], Definition: definition, Resolution: resolution, Validation: validation, Hash: hash}
 	run := pipelineRunForManagedPipeline(pipeline, "Delete "+resource.Name)
+	if resource.Kind == "application-deployment" {
+		var input applicationDeploymentInput
+		if json.Unmarshal(resource.Spec, &input) == nil {
+			run.OwnerUserID = input.OwnerUserID
+			run.ClusterResourceID = input.ClusterResourceID
+			run.ApplicationNamespace = input.Definition.Namespace
+			run.IsolationMode = "namespaced"
+		}
+	}
 	if err := s.store.CreateManagedPipelineResourceDeletion(request.Context(), resource.ID, pipeline, run); errors.Is(err, storage.ErrConflict) {
 		writeError(response, http.StatusConflict, label+"_in_use", "The resource is still in use or already being deleted.")
 		return

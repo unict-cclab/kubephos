@@ -2,9 +2,10 @@ import {useCallback, useEffect, useRef, useState, type Dispatch, type SetStateAc
 import {ApiError, request} from '../api'
 import type {PlatformData, Session} from '../types'
 
-export const emptyData: PlatformData = {system: null, pluginRuntime: null, workspaces: [], pipelines: [], pipelineRuns: [], experiments: [], experimentConfigurations: [], operations: [], artifacts: [], plugins: [], pluginPackages: [], pluginImports: [], applications: [], strategies: [], credentials: [], connections: [], machineTemplates: [], infrastructureServices: [], kubernetesClusters: [], resources: [], audit: [], users: [], clusterAssignments: []}
+export const emptyData: PlatformData = {system: null, pluginRuntime: null, workspaces: [], pipelines: [], pipelineRuns: [], experiments: [], experimentConfigurations: [], operations: [], artifacts: [], plugins: [], pluginPackages: [], pluginImports: [], applications: [], strategies: [], credentials: [], connections: [], machineTemplates: [], infrastructureServices: [], kubernetesClusters: [], deployments: [], resources: [], audit: [], users: [], clusterAssignments: []}
 
 const endpoints: Array<{key: keyof PlatformData; path: string; admin: boolean; live: boolean; list: boolean}> = [
+  {key: 'deployments', path: '/application-deployments', admin: false, live: true, list: true},
   {key: 'system', path: '/system', admin: false, live: true, list: false},
   {key: 'workspaces', path: '/workspaces', admin: false, live: false, list: true},
   {key: 'pipelines', path: '/pipelines', admin: true, live: false, list: true},

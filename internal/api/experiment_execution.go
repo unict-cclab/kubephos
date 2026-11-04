@@ -376,6 +376,15 @@ func (s *Server) executeExperimentSuite(response http.ResponseWriter, request *h
 }
 
 func (s *Server) experimentInstancePipeline(ctx context.Context, configuration domain.ExperimentConfiguration, definition experimentConfigurationDefinitionInput) (domain.PipelineDefinition, *managedOperationFailure) {
+	if definition.Namespace != "" {
+		reserved, err := s.store.ApplicationNamespaceReserved(ctx, configuration.ClusterResourceID, definition.Namespace)
+		if err != nil {
+			return domain.PipelineDefinition{}, &managedOperationFailure{status: 500, code: "database_error", message: "Could not check the application namespace."}
+		}
+		if reserved {
+			return domain.PipelineDefinition{}, &managedOperationFailure{status: 409, code: "namespace_in_use", message: "This namespace is reserved by an application deployment. Choose another namespace."}
+		}
+	}
 	cluster, err := s.store.GetManagedResource(ctx, configuration.ClusterResourceID)
 	if err != nil || cluster.Status != "ready" || cluster.PipelineRunID == "" {
 		return domain.PipelineDefinition{}, &managedOperationFailure{status: http.StatusConflict, code: "cluster_not_ready", message: "The configured cluster is not ready."}

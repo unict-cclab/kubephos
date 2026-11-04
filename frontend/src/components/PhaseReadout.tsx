@@ -23,8 +23,8 @@ function minutes(seconds: number) {return Number((seconds / 60).toFixed(2)).toLo
 export function workloadTable(phases: LoadProfileStep[]): ReadoutTableData {
   const fields: Array<{title: string; show: boolean; value: (phase: LoadProfileStep) => string}> = [
     {title: 'Rate (req/s)', show: phases.some(phase => phase.type === 'constant'), value: (phase: LoadProfileStep) => phase.type === 'constant' ? String(phase.rps) : '—'},
-    {title: 'Baseline (req/s)', show: phases.some(phase => phase.type === 'sinusoidal'), value: (phase: LoadProfileStep) => phase.type === 'sinusoidal' ? String(phase.baselineRps) : '—'},
-    {title: 'Amplitude (req/s)', show: phases.some(phase => phase.type === 'sinusoidal'), value: (phase: LoadProfileStep) => phase.type === 'sinusoidal' ? String(phase.amplitudeRps) : '—'},
+    {title: 'Minimum (req/s)', show: phases.some(phase => phase.type === 'sinusoidal'), value: (phase: LoadProfileStep) => phase.type === 'sinusoidal' ? String(sinusoidalRange(phase).min) : '—'},
+    {title: 'Maximum (req/s)', show: phases.some(phase => phase.type === 'sinusoidal'), value: (phase: LoadProfileStep) => phase.type === 'sinusoidal' ? String(sinusoidalRange(phase).max) : '—'},
     {title: 'Period (min)', show: phases.some(phase => phase.type === 'sinusoidal'), value: (phase: LoadProfileStep) => phase.type === 'sinusoidal' ? minutes(phase.periodSeconds) : '—'},
     {title: 'Phase offset (min)', show: phases.some(phase => phase.type === 'sinusoidal'), value: (phase: LoadProfileStep) => phase.type === 'sinusoidal' ? minutes(phase.phaseSeconds) : '—'},
     {title: 'Start (req/s)', show: phases.some(phase => phase.type === 'exponential'), value: (phase: LoadProfileStep) => phase.type === 'exponential' ? String(phase.startRps) : '—'},
@@ -52,4 +52,8 @@ function weights(value: unknown): Record<string, number> {
 function share(values: Record<string, number>, zone: string): string {
   const total = Object.values(values).reduce((sum, value) => sum + value, 0)
   return total > 0 ? `${Number(((values[zone] ?? 0) / total * 100).toFixed(2))}` : '—'
+}
+
+export function sinusoidalRange(step: LoadProfileStep): {min:number;max:number} {
+  return {min:step.minRps ?? Math.max(0,step.baselineRps-step.amplitudeRps),max:step.maxRps ?? step.baselineRps+step.amplitudeRps}
 }

@@ -135,7 +135,7 @@ func auditTarget(request *http.Request) (string, string, string, bool) {
 	// Keep a resource ID on updates as well as creation, so attribution can be read back.
 	if len(parts) >= 2 {
 		switch parts[0] {
-		case "experiment-configurations", "users", "connections", "credentials", "machine-templates", "infrastructure-services", "kubernetes-clusters", "workspaces":
+		case "application-deployments", "experiment-configurations", "users", "connections", "credentials", "machine-templates", "infrastructure-services", "kubernetes-clusters", "workspaces":
 			if parts[0] != "experiment-configurations" || len(parts) < 3 || parts[2] != "clone" {
 				return strings.TrimSuffix(parts[0], "s") + "." + strings.ToLower(request.Method), parts[0], parts[1], true
 			}

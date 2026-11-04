@@ -3,7 +3,7 @@ kind: Plugin
 metadata:
   id: io.kubephos.applications.kubernetes.deploy
   name: Kubernetes application deployer
-  version: 0.9.0
+  version: 0.10.0
   description: Deploys any validated application package into an isolated Kubernetes
     namespace and prepares shared experiment control resources when requested.
 spec:
@@ -79,6 +79,10 @@ spec:
         maximum: 20
       controlNamespace:
         type: boolean
+        x-kubephos-hidden: true
+      namespacePolicy:
+        type: string
+        enum: [create]
         x-kubephos-hidden: true
       applicationNamespace:
         type: string

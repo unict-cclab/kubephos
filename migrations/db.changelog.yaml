@@ -375,3 +375,11 @@ databaseChangeLog:
         - sqlFile:
             path: changes/053-experiment-initialization.sql
             relativeToChangelogFile: true
+  - changeSet:
+      id: 054-application-deployments
+      author: kubephos
+      changes:
+        - sqlFile:
+            path: changes/054-application-deployments.sql
+            relativeToChangelogFile: true
+            splitStatements: false

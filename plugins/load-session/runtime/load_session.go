@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"gopkg.in/yaml.v3"
 	kubeconfigutil "kubephos.dev/kubephos/internal/kubeconfig"
+	"math"
 	"net"
 	"net/url"
 
@@ -58,16 +59,18 @@ type Spec struct {
 }
 
 type LoadStep struct {
-	Type            string  `json:"type"`
-	DurationSeconds int     `json:"durationSeconds"`
-	RPS             float64 `json:"rps,omitempty"`
-	BaselineRPS     float64 `json:"baselineRps,omitempty"`
-	AmplitudeRPS    float64 `json:"amplitudeRps,omitempty"`
-	PeriodSeconds   int     `json:"periodSeconds,omitempty"`
-	PhaseSeconds    int     `json:"phaseSeconds,omitempty"`
-	StartRPS        float64 `json:"startRps,omitempty"`
-	EndRPS          float64 `json:"endRps,omitempty"`
-	Curve           float64 `json:"curve,omitempty"`
+	MinRPS          *float64 `json:"minRps,omitempty"`
+	MaxRPS          *float64 `json:"maxRps,omitempty"`
+	Type            string   `json:"type"`
+	DurationSeconds int      `json:"durationSeconds"`
+	RPS             float64  `json:"rps,omitempty"`
+	BaselineRPS     float64  `json:"baselineRps,omitempty"`
+	AmplitudeRPS    float64  `json:"amplitudeRps,omitempty"`
+	PeriodSeconds   int      `json:"periodSeconds,omitempty"`
+	PhaseSeconds    int      `json:"phaseSeconds,omitempty"`
+	StartRPS        float64  `json:"startRps,omitempty"`
+	EndRPS          float64  `json:"endRps,omitempty"`
+	Curve           float64  `json:"curve,omitempty"`
 }
 
 type GeographicStep struct {
@@ -253,7 +256,7 @@ type commandRunner interface {
 
 func (Plugin) Manifest() plugins.Manifest {
 	return plugins.Manifest{
-		ID: pluginID, Name: "Interactive Kubernetes load session", Version: "0.10.0",
+		ID: pluginID, Name: "Interactive Kubernetes load session", Version: "0.11.0",
 		Description:     "Runs an ordered RPS timeline using a verified Locust journey against a catalog application or external HTTP destination.",
 		Schema:          json.RawMessage(`{"type":"object","additionalProperties":false,"required":["clusterConnectionRef","applicationDeploymentRef","loadScenarioSetRef","scenarioId","action","replicas","maxUsers","spawnRate"],"properties":{"clusterConnectionRef":{"type":"string","title":"Kubernetes cluster","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ClusterConnection","x-kubephos-artifact-version":"v1alpha1"},"applicationDeploymentRef":{"type":"string","title":"Application deployment","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ApplicationDeployment","x-kubephos-artifact-version":"v1alpha1"},"loadScenarioSetRef":{"type":"string","title":"Load scenarios","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"LoadScenarioSet","x-kubephos-artifact-version":"v1alpha1"},"scenarioId":{"type":"string","title":"Load scenario","description":"User behavior implemented by the Locust file supplied by the selected application.","minLength":1,"maxLength":63,"default":"storefront-journey"},"action":{"type":"string","title":"Action","x-kubephos-primary-action":true,"enum":["start","stop","resume"],"default":"start"},"interactive":{"type":"boolean","title":"Interactive session","default":false},"replicas":{"type":"integer","title":"Load workers","minimum":1,"maximum":100,"default":1},"maxUsers":{"type":"integer","title":"Maximum concurrent users per worker","minimum":1,"maximum":100000,"default":1000},"spawnRate":{"type":"number","title":"Users started per second","minimum":0.1,"maximum":100000,"default":10},"steps":{"type":"array","title":"Temporal workload timeline","maxItems":100,"items":{"type":"object"}},"geographicSteps":{"type":"array","title":"Geographic traffic timeline","maxItems":100,"items":{"type":"object"}},"clusterName":{"type":"string","x-kubephos-hidden":true},"peers":{"type":"array","minItems":1,"maxItems":5,"x-kubephos-hidden":true,"items":{"type":"object","required":["name","clusterConnectionRef","applicationDeploymentRef"],"additionalProperties":false,"properties":{"name":{"type":"string"},"clusterConnectionRef":{"type":"string","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ClusterConnection","x-kubephos-artifact-version":"v1alpha1"},"applicationDeploymentRef":{"type":"string","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ApplicationDeployment","x-kubephos-artifact-version":"v1alpha1"}}}},"networkTimeline":{"type":"boolean","x-kubephos-hidden":true}}}`),
 		ArtifactInputs:  []domain.ArtifactContract{{Type: "ClusterConnection", Version: "v1alpha1"}, {Type: "ApplicationDeployment", Version: "v1alpha1"}, {Type: "LoadScenarioSet", Version: "v1alpha1"}},
@@ -936,6 +939,15 @@ func validateLoadTimeline(steps []LoadStep) (int, error) {
 				return 0, fmt.Errorf("step %d RPS must be between zero and 100000", index+1)
 			}
 		case "sinusoidal":
+			if step.MinRPS != nil || step.MaxRPS != nil {
+				if step.MinRPS == nil || step.MaxRPS == nil {
+					return 0, fmt.Errorf("step %d requires both minimum and maximum requests per second", index+1)
+				}
+				min, max := *step.MinRPS, *step.MaxRPS
+				if math.IsNaN(min) || math.IsNaN(max) || math.IsInf(min, 0) || math.IsInf(max, 0) || min < 0 || max <= min || min > 100000 || max > 200000 || (min+max)/2 > 100000 {
+					return 0, fmt.Errorf("step %d requires minimum >= 0 and maximum > minimum, within supported request rates", index+1)
+				}
+			}
 			if step.BaselineRPS < 0 || step.BaselineRPS > 100000 || step.AmplitudeRPS < 0 || step.AmplitudeRPS > 100000 || step.PeriodSeconds < 1 || step.PeriodSeconds > 86400 || step.PhaseSeconds < 0 || step.PhaseSeconds > 86400 {
 				return 0, fmt.Errorf("step %d has invalid sinusoidal parameters", index+1)
 			}
@@ -1367,7 +1379,13 @@ def rps_at(elapsed):
     if kind == "sinusoidal":
         period = float(step["periodSeconds"])
         phase = float(step.get("phaseSeconds", 0))
-        return max(0.0, float(step["baselineRps"]) + float(step["amplitudeRps"]) * math.sin((2.0 * math.pi * (local_time + phase)) / period))
+        if "minRps" in step and "maxRps" in step:
+            baseline = (float(step["minRps"]) + float(step["maxRps"])) / 2.0
+            amplitude = (float(step["maxRps"]) - float(step["minRps"])) / 2.0
+        else:
+            baseline = float(step["baselineRps"])
+            amplitude = float(step["amplitudeRps"])
+        return max(0.0, baseline + amplitude * math.sin((2.0 * math.pi * (local_time + phase)) / period))
     start = float(step["startRps"])
     end = float(step["endRps"])
     progress = min(max(local_time / max(float(step["durationSeconds"]), 1.0), 0.0), 1.0)

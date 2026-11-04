@@ -6,7 +6,7 @@ export interface ResourceAttributionFields {
 }
 
 export type Role = 'admin' | 'user'
-export type View = 'overview' | 'infrastructure' | 'kubernetes' | 'experiments' | 'results' | 'catalog' | 'users' | 'administration' | 'comparisons'
+export type View = 'deployments' | 'overview' | 'infrastructure' | 'kubernetes' | 'experiments' | 'results' | 'catalog' | 'users' | 'administration' | 'comparisons'
 
 export interface User extends ResourceAttributionFields {
   id: string
@@ -652,6 +652,7 @@ export interface PlatformData {
   connections: Connection[]
   machineTemplates: ManagedResource[]
   infrastructureServices: ManagedResource[]
+  deployments: ManagedResource[]
   kubernetesClusters: ManagedResource[]
   resources: InfrastructureResource[]
   audit: AuditEvent[]

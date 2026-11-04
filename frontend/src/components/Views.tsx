@@ -1,3 +1,4 @@
+import {ApplicationDeploymentsView} from './ApplicationDeploymentsView'
 import {ComparisonsView} from './ComparisonsView'
 import type {ClusterAction} from '../clusterActions'
 import {Status, statusLabel} from './Status'
@@ -43,6 +44,7 @@ interface ViewProps {
   connections: Connection[]
   machineTemplates: ManagedResource[]
   infrastructureServices: ManagedResource[]
+  deployments?: ManagedResource[]
   kubernetesClusters: ManagedResource[]
   resources: InfrastructureResource[]
   audit: AuditEvent[]
@@ -70,6 +72,7 @@ interface ViewProps {
 
 export function Views(props: ViewProps) {
   return <>
+    {props.view === 'deployments' && <section className="view active"><ApplicationDeploymentsView {...props} /></section>}
     {props.view === 'overview' && <section className="view active">
       <Overview {...props} />
     </section>}

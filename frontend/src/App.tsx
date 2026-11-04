@@ -14,6 +14,7 @@ import {retriesOnlyClusterMesh} from './clusterRetry'
 import {hashView} from './detailRoute'
 
 const viewMetadata: Record<View, string> = {
+  deployments: 'Deployments',
   overview: 'Overview',
   results: 'Experiments',
   comparisons: 'Comparisons',
@@ -28,6 +29,7 @@ const navigation: Array<[View, string]> = [
   ['overview', 'Overview'],
   ['infrastructure', 'Infrastructure'],
   ['kubernetes', 'Kubernetes'],
+  ['deployments', 'Deployments'],
   ['catalog', 'Catalog'],
   ['experiments', 'Configurations'],
   ['results', 'Experiments'],
@@ -38,6 +40,7 @@ function NavigationIcon({view}: {view: View}) {
   const common = {fill: 'none', stroke: 'currentColor', strokeWidth: 1.8, strokeLinecap: 'round' as const, strokeLinejoin: 'round' as const}
   const shape = {
     overview: <><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></>,
+    deployments: <><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M7 13h5m-5 3h9"/></>,
     infrastructure: <><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 8h10M7 12h10M7 16h4"/></>,
     kubernetes: <><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3"/><path d="M12 3v6m0 6v6M3 12h6m6 0h6"/></>,
     catalog: <><path d="M4 5h16v14H4zM4 12h16M9 5v7m6 0v7"/></>,
@@ -212,6 +215,7 @@ function PlatformApp() {
         <button className="sidebar-toggle" type="button" aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'} onClick={() => setSidebarCollapsed(value => !value)}><ActionIcon name={sidebarCollapsed ? 'right' : 'left'} /></button>
 		<button ref={mobileNavigationButton} className="mobile-navigation-toggle icon-button" type="button" aria-label={mobileNavigationOpen ? 'Close navigation' : 'Open navigation'} aria-controls="main-navigation" aria-expanded={mobileNavigationOpen} onClick={() => setMobileNavigationOpen(value => !value)}><ActionIcon name={mobileNavigationOpen ? 'close' : 'menu'} /></button>
 		<nav id="main-navigation" className={`navigation${mobileNavigationOpen ? ' is-open' : ''}`} aria-label="Main navigation" onKeyDown={event => {if (event.key === 'Escape' && mobileNavigationOpen) {setMobileNavigationOpen(false); mobileNavigationButton.current?.focus()}}}>{visibleNavigation(session.user?.role === 'admin').map((group, index) => <div className="navigation-group" key={index}>{group.map(([target, label]) => <button className={`nav-item ${view === target ? 'active' : ''}`} title={sidebarCollapsed ? label : undefined} aria-label={label} key={target} onClick={() => navigate(target)} aria-current={view === target ? 'page' : undefined}><NavigationIcon view={target} /><span className="nav-label">{label}</span></button>)}</div>)}</nav>
+        {data.system?.version && <div className="sidebar-version" title={`KubePhos ${data.system.version}`}>{data.system.version}</div>}
       </aside>
       <main className="main">
 		<header className="topbar"><nav className="app-breadcrumbs" aria-label="Breadcrumb"><button onClick={() => navigate('overview')}>KubePhos</button><ActionIcon name="right" /><strong aria-current="page">{title}</strong></nav><div className="topbar-actions"><span className="signed-user">{session.user?.username}</span><ThemeToggle /><button className="button secondary compact" disabled={refreshing} onClick={() => load(false)}>{refreshing ? 'Refreshing…' : 'Refresh'}</button><button className="button secondary compact" onClick={logout}>Sign out</button></div></header>

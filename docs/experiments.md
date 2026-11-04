@@ -42,6 +42,10 @@ to configure one direction. Existing links retain their saved direction. Latency
 is added per direction, so a symmetric link with X ms adds approximately 2X ms
 to the round-trip time.
 Workload, traffic distribution and network phases can be cloned independently.
+Sinusoidal workload phases use minimum and maximum requests per second, with
+minimum >= 0 and maximum > minimum. Period and phase offset retain their meaning.
+Existing baseline/amplitude profiles keep their original curve until their range
+is edited.
 
 Multi cluster provisioning uses Cilium ClusterMesh. Running experiments on a
 multi cluster group awaits the multicluster deployment integration.
@@ -144,3 +148,23 @@ counts remain fixed. Maintenance requires a ready cluster with no queued or
 running experiments; experiment admission is blocked during maintenance.
 Existing VMIDs, addresses and keys are preserved. New nodes require unused
 VMID/IP allocations; removed nodes are drained before their VMs are deleted.
+
+## Independent application deployments
+
+In **Deployments**, select **Deploy application**, a ready cluster, a catalog
+application and a namespace. The Application step uses the same parameters,
+initial replicas, resources, topology and Istio settings as experiment
+configurations. No load generator or experiment is started.
+
+A multi cluster group receives a complete copy on every member, using the same
+namespace. Cilium groups keep Istio disabled. Activity records each member's
+installation and readiness checks. Deployments stay installed until removed;
+removal deletes only the namespaces owned by their saved deployment lifecycle.
+If installation fails on a member, Activity retains the details and removal can
+clean up the members that were already deployed.
+
+Namespaces must be new. A namespace used by an active experiment, including an
+initialized run or a run undergoing cleanup, cannot be used for an independent
+deployment. Conversely, experiments cannot use a namespace reserved by an
+independent deployment until its cleanup succeeds. Owners and administrators
+can view and remove deployments; users can target only their assigned clusters.

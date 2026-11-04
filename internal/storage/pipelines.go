@@ -354,6 +354,7 @@ func (s *Store) ClaimPipelineRun(ctx context.Context, owner string) (domain.Pipe
 			LEFT JOIN experiment_variants candidate_variant ON candidate_variant.id = candidate_trial.variant_id
 			WHERE candidate.status IN ($1, $2)
 			  AND candidate.scheduled_for <= now()
+              AND (candidate.application_namespace='' OR NOT application_namespace_reserved(candidate.cluster_resource_id,candidate.application_namespace,candidate.id))
 			  AND (candidate.lease_until IS NULL OR candidate.lease_until < now())
 			  AND NOT EXISTS (
 				SELECT 1

@@ -372,6 +372,15 @@ func (s *Store) ImportState(ctx context.Context, state *transfer.State, ownerID 
 	for _, row := range state.Tables["pipeline_runs"] {
 		transfer.Set(row, "owner_user_id", ownerID)
 	}
+	for _, row := range state.Tables["managed_resources"] {
+		if transfer.String(row, "kind") == "application-deployment" {
+			var spec map[string]any
+			if json.Unmarshal(row["spec"], &spec) == nil && spec != nil {
+				spec["ownerUserId"] = ownerID
+				row["spec"], _ = json.Marshal(spec)
+			}
+		}
+	}
 	for _, table := range transferTables {
 		for _, row := range state.Tables[table] {
 			if table == "provider_connections" || table == "managed_resources" {

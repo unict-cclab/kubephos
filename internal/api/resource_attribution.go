@@ -11,7 +11,7 @@ import (
 )
 
 func attributionBase(path string) string {
-	for _, resource := range []string{"catalog/applications", "catalog/strategies", "catalog/models", "experiment-configurations", "experiments", "connections", "credentials", "machine-templates", "infrastructure-services", "kubernetes-clusters", "users", "workspaces", "pipelines", "pipeline-runs", "operations", "plugin-packages", "plugin-imports"} {
+	for _, resource := range []string{"application-deployments", "catalog/applications", "catalog/strategies", "catalog/models", "experiment-configurations", "experiments", "connections", "credentials", "machine-templates", "infrastructure-services", "kubernetes-clusters", "users", "workspaces", "pipelines", "pipeline-runs", "operations", "plugin-packages", "plugin-imports"} {
 		base := "/api/v1/" + resource
 		if path == base || strings.HasPrefix(path, base+"/") && !strings.Contains(strings.TrimPrefix(path, base+"/"), "/") {
 			return base

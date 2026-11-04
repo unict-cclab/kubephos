@@ -24,5 +24,5 @@ func ValidateApplicationNamespace(name string) error {
 }
 
 func resetApplicationNamespace(input stepInput) bool {
-	return input.ApplicationNamespace != "" && input.Mode != "deploy"
+	return input.NamespacePolicy != "create" && input.ApplicationNamespace != "" && input.Mode != "deploy"
 }

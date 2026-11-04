@@ -1365,3 +1365,12 @@
   .readout-field-value :is(th, td):first-child { width: 40%; font-size: inherit; }
   .readout-field-value tbody td:first-child { font-weight: 700; }
 }
+
+@media screen {
+  .sidebar-version { margin-top: auto; padding: 16px 10px 0; border-top: 1px solid var(--line); color: var(--muted-foreground); font-size: 12px; overflow-wrap: anywhere; }
+  .sidebar-collapsed .sidebar-version { padding-inline: 0; text-align: center; font-size: 10px; }
+}
+@media screen and (max-width: 720px) {
+  .sidebar-version, .sidebar-collapsed .sidebar-version { margin-top: 8px; padding: 8px 0 0; text-align: left; font-size: 12px; }
+  .navigation:not(.is-open) + .sidebar-version { display: none; }
+}

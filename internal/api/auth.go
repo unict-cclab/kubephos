@@ -78,7 +78,7 @@ func adminReadPath(path string) bool {
 }
 
 func userMutationAllowed(path string) bool {
-	return path == "/api/v1/comparisons" || strings.HasPrefix(path, "/api/v1/comparisons/") ||
+	return strings.HasPrefix(path, "/api/v1/application-deployments") || path == "/api/v1/comparisons" || strings.HasPrefix(path, "/api/v1/comparisons/") ||
 		strings.HasPrefix(path, "/api/v1/experiment-configurations") ||
 		path == "/api/v1/experiments/start" ||
 		path == "/api/v1/experiment-instances" ||

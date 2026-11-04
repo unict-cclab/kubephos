@@ -1,5 +1,5 @@
 import {useErrorState} from './ToastRegion'
-import {workloadTable, trafficTable} from './PhaseReadout'
+import {workloadTable, trafficTable, sinusoidalRange} from './PhaseReadout'
 import {FormTabs} from './FormTabs'
 import {ResourceAction} from './ResourceAction'
 import {ActionIcon} from './ActionIcon'
@@ -13,6 +13,8 @@ export type LoadProfileStep = {
   rps: number
   baselineRps: number
   amplitudeRps: number
+  minRps?: number
+  maxRps?: number
   periodSeconds: number
   phaseSeconds: number
   startRps: number
@@ -54,14 +56,21 @@ export function LoadProfileEditor({prefix, zones, values = {}, distribution = 'z
     setGeographicSteps(current => [...current, newGeographicStep(sequence, zones, Math.max(60, duration - geographicDuration))])
     setSequence(value => value + 1)
   }
-  const serializedSteps = steps.map(({id: _, ...step}) => step)
+  const serializedSteps = steps.map(({id: _, ...step}) => {
+    if (step.type === 'sinusoidal' && step.minRps !== undefined && step.maxRps !== undefined) {
+      const {baselineRps: _base, amplitudeRps: _amplitude, ...range} = step
+      return range
+    }
+    const {minRps: _min, maxRps: _max, ...legacy} = step
+    return legacy
+  })
   const serializedGeography = zones.length ? geographicSteps.map(({id: _, ...step}) => step.type === 'constant' ? {type: step.type, durationSeconds: step.durationSeconds, weights: step.weights} : {type: step.type, durationSeconds: step.durationSeconds, startWeights: step.startWeights, endWeights: step.endWeights}) : []
   const workload = <div className="form-stack" data-review-skip="true"><div className="timeline-heading"><strong>Total duration</strong><span className="timeline-duration">{formatDuration(duration)}</span></div>
     <div className="timeline-list">{steps.map((step, index) => <article className="timeline-card" key={step.id}>
       <div className="timeline-card-head"><h4>Phase {index + 1}</h4><TimelineActions index={index} count={steps.length} clone={() => {setSteps(current => [...current.slice(0,index+1), {...structuredClone(step),id:sequence}, ...current.slice(index+1)]);setSequence(value=>value+1)}} move={direction => setSteps(items => move(items, index, direction))} remove={() => setSteps(items => items.filter(item => item.id !== step.id))} /></div>
       <div className="timeline-fields"><label>Type<select aria-label={`Workload phase ${index + 1} type`} value={step.type} onChange={event => updateLoadStep(setSteps, step.id, {type: event.target.value as LoadStep['type']})}><option value="constant">Constant</option><option value="sinusoidal">Sinusoidal</option><option value="exponential">Exponential</option></select></label><Minutes label="Duration" value={step.durationSeconds} set={value => updateLoadStep(setSteps, step.id, {durationSeconds: value})} />
         {step.type === 'constant' && <NumberField label="Requests / second" value={step.rps} min={0} set={value => updateLoadStep(setSteps, step.id, {rps: value})} />}
-        {step.type === 'sinusoidal' && <><NumberField label="Baseline RPS" value={step.baselineRps} min={0} set={value => updateLoadStep(setSteps, step.id, {baselineRps: value})} /><NumberField label="Amplitude RPS" value={step.amplitudeRps} min={0} set={value => updateLoadStep(setSteps, step.id, {amplitudeRps: value})} /><Minutes label="Period" value={step.periodSeconds} set={value => updateLoadStep(setSteps, step.id, {periodSeconds: value})} /><Minutes label="Phase offset" value={step.phaseSeconds} allowZero set={value => updateLoadStep(setSteps, step.id, {phaseSeconds: value})} /></>}
+        {step.type === 'sinusoidal' && <><NumberField label="Minimum (req/s)" value={sinusoidalRange(step).min} min={0} step="any" set={value => updateLoadStep(setSteps, step.id, {minRps: value, maxRps: sinusoidalRange(step).max})} /><NumberField label="Maximum (req/s)" value={sinusoidalRange(step).max} min={0} max={200000} step="any" validationMessage={sinusoidalRange(step).max > sinusoidalRange(step).min ? '' : 'Maximum must be greater than minimum.'} set={value => updateLoadStep(setSteps, step.id, {minRps: sinusoidalRange(step).min, maxRps: value})} /><Minutes label="Period" value={step.periodSeconds} set={value => updateLoadStep(setSteps, step.id, {periodSeconds: value})} /><Minutes label="Phase offset" value={step.phaseSeconds} allowZero set={value => updateLoadStep(setSteps, step.id, {phaseSeconds: value})} /></>}
         {step.type === 'exponential' && <><NumberField label="Start RPS" value={step.startRps} min={0} set={value => updateLoadStep(setSteps, step.id, {startRps: value})} /><NumberField label="End RPS" value={step.endRps} min={0} set={value => updateLoadStep(setSteps, step.id, {endRps: value})} /><NumberField label="Curve" value={step.curve} min={-20} max={20} step={0.1} set={value => updateLoadStep(setSteps, step.id, {curve: value})} /></>}
       </div>
     </article>)}</div>
@@ -74,9 +83,10 @@ export function LoadProfileEditor({prefix, zones, values = {}, distribution = 'z
       </article>)}</div>
       <ResourceAction action="add" label="Add geographic phase" onClick={addGeographicStep} />
       {duration !== geographicDuration && <p className="timeline-error">Geographic phases must cover exactly {formatDuration(duration)} before this configuration can be saved.</p>}</div>
-  const preview = <LoadProfilePreview steps={serializedSteps} />
+  const previewSteps = loadProfileSteps(serializedSteps)
+  const preview = <LoadProfilePreview steps={previewSteps} />
   return <div className={`load-profile-editor${tabbed ? ' load-profile-editor-tabbed' : ''}`}>
-    <input type="hidden" data-review-title="Workload phases" data-review-table={JSON.stringify(workloadTable(serializedSteps))} name={`${prefix}.steps`} value={JSON.stringify(serializedSteps)} readOnly />
+    <input type="hidden" data-review-title="Workload phases" data-review-table={JSON.stringify(workloadTable(previewSteps))} name={`${prefix}.steps`} value={JSON.stringify(serializedSteps)} readOnly />
     <input type="hidden" data-review-title={distribution === 'cluster' ? 'Traffic phases by cluster' : 'Traffic phases by zone'} data-review-table={zones.length ? JSON.stringify(trafficTable(serializedGeography, distribution === 'cluster')) : undefined} name={`${prefix}.geographicSteps`} value={JSON.stringify(serializedGeography)} readOnly />
     {tabbed ? <FormTabs label="Load profile settings" items={[
       {id: 'workload', title: 'Workload', content: workload},
@@ -131,6 +141,7 @@ export function loadProfileSteps(value: unknown): LoadProfileStep[] {
     if (!['constant', 'sinusoidal', 'exponential'].includes(String(type)) || durationSeconds <= 0) return []
     return [{
       type: type as LoadProfileStep['type'], durationSeconds,
+      ...(typeof step.minRps === 'number' && typeof step.maxRps === 'number' ? {minRps:step.minRps,maxRps:step.maxRps} : {}),
       rps: validNumber(step.rps), baselineRps: validNumber(step.baselineRps), amplitudeRps: validNumber(step.amplitudeRps),
       periodSeconds: validNumber(step.periodSeconds), phaseSeconds: validNumber(step.phaseSeconds), startRps: validNumber(step.startRps),
       endRps: validNumber(step.endRps), curve: validNumber(step.curve)
@@ -183,7 +194,11 @@ function rpsAt(steps: LoadProfileStep[], seconds: number): number {
 
 function stepRps(step: LoadProfileStep, localSeconds: number): number {
   if (step.type === 'constant') return step.rps
-  if (step.type === 'sinusoidal') return step.baselineRps + step.amplitudeRps * Math.sin(2 * Math.PI * (localSeconds + step.phaseSeconds) / Math.max(1, step.periodSeconds))
+  if (step.type === 'sinusoidal') {
+    const baseline = step.minRps !== undefined && step.maxRps !== undefined ? (step.minRps + step.maxRps) / 2 : step.baselineRps
+    const amplitude = step.minRps !== undefined && step.maxRps !== undefined ? (step.maxRps - step.minRps) / 2 : step.amplitudeRps
+    return baseline + amplitude * Math.sin(2 * Math.PI * (localSeconds + step.phaseSeconds) / Math.max(1, step.periodSeconds))
+  }
   const progress = Math.min(1, localSeconds / Math.max(1, step.durationSeconds))
   if (Math.abs(step.curve) < .0001) return step.startRps + (step.endRps - step.startRps) * progress
   const curved = (Math.exp(step.curve * progress) - 1) / (Math.exp(step.curve) - 1)
@@ -204,8 +219,8 @@ function TimelineActions({index, count, move: moveItem, remove, clone}: {clone: 
   return <div className="timeline-actions"><button type="button" className="button secondary compact" aria-label={`Clone ${index+1}`} disabled={count>=100} onClick={clone}>Clone</button>{count>1&&<><button type="button" className="icon-button" aria-label="Move up" title="Move up" disabled={index === 0} onClick={() => moveItem(-1)}><ActionIcon name="up" /></button><button type="button" className="icon-button" aria-label="Move down" title="Move down" disabled={index === count - 1} onClick={() => moveItem(1)}><ActionIcon name="down" /></button><button type="button" className="icon-button" aria-label="Remove" title="Remove" disabled={count === 1} onClick={remove}><ActionIcon name="close" /></button></>}</div>
 }
 
-function NumberField({label, value, set, min, max = 100000, step = 1}: {label: string; value: number; set: (value: number) => void; min: number; max?: number; step?: number}) {
-  return <label>{label}<NumericInput value={value} min={min} max={max} step={step} required onValueChange={set} /></label>
+function NumberField({label, value, set, min, max = 100000, step = 1, validationMessage}: {validationMessage?: string; label: string; value: number; set: (value: number) => void; min: number; max?: number; step?: number | 'any'}) {
+  return <label>{label}<NumericInput validationMessage={validationMessage} value={value} min={min} max={max} step={step} required onValueChange={set} /></label>
 }
 
 function Minutes({label, value, set, allowZero = false}: {label: string; value: number; set: (value: number) => void; allowZero?: boolean}) {
@@ -218,7 +233,7 @@ function WeightGrid({title, zones, values, set}: {title: string; zones: string[]
 }
 
 function newLoadStep(id: number): LoadStep {
-  return {id, type: 'constant', durationSeconds: 900, rps: 30, baselineRps: 100, amplitudeRps: 50, periodSeconds: 300, phaseSeconds: 0, startRps: 30, endRps: 300, curve: 3}
+  return {id, type: 'constant', durationSeconds: 900, rps: 30, baselineRps: 100, amplitudeRps: 50, minRps:50, maxRps:150, periodSeconds: 300, phaseSeconds: 0, startRps: 30, endRps: 300, curve: 3}
 }
 
 function newGeographicStep(id: number, zones: string[], durationSeconds: number): GeographicStep {

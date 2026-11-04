@@ -190,7 +190,7 @@ function record(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
 }
 
-export function ExperimentConfigurationDialog({open, close, clusters, workspaces, applications, plugins, strategies, session, changed, item, readOnly = false}: Props & {open: boolean; close: () => void; item?: ExperimentConfiguration; readOnly?: boolean}) {
+export function ExperimentConfigurationDialog({open, close, clusters, workspaces, applications, plugins, strategies, session, changed, item, readOnly = false, deploymentMode = false}: Props & {deploymentMode?: boolean; open: boolean; close: () => void; item?: ExperimentConfiguration; readOnly?: boolean}) {
 	const formRef = useRef<HTMLFormElement>(null)
 	const topologyTimer = useRef<number | undefined>(undefined)
 	const topologyRequest = useRef(0)
@@ -341,7 +341,7 @@ export function ExperimentConfigurationDialog({open, close, clusters, workspaces
 	setComponents(items => items.filter(item => !(item.capability.startsWith('chaos.') && (zones.length < 2 || !managedNetworkAvailable)) && !(item.capability.startsWith('monitoring.') && !managedNetworkAvailable)))
   }, [open, item, clusterResourceId, zones.length, managedNetworkAvailable])
   useEffect(() => {
-	if (!open || item || components.length) return
+	if (!open || item || components.length || deploymentMode) return
 	const defaults = ['load.', 'metrics.'].flatMap(prefix => {
 	  const plugin = compatiblePlugins.find(item => primaryCapabilities(item).some(capability => capability.startsWith(prefix)))
 	  const capability = plugin && primaryCapabilities(plugin).find(value => value.startsWith(prefix))
@@ -404,7 +404,7 @@ export function ExperimentConfigurationDialog({open, close, clusters, workspaces
 		externalParameterValues = parsed as Record<string, string>
 	  }
 	  const submittedComponents = destinationMode === 'external' ? components.filter(component => component.capability.startsWith('load.') || component.capability.startsWith('metrics.')) : components
-      await request(item ? `/experiment-configurations/${item.id}` : '/experiment-configurations', {method: item ? 'PUT' : 'POST', body: JSON.stringify({
+      await request(deploymentMode ? '/application-deployments' : item ? `/experiment-configurations/${item.id}` : '/experiment-configurations', {method: item ? 'PUT' : 'POST', body: JSON.stringify({
         workspaceId,
         clusterResourceId,
         name: values.get('name'),
@@ -414,13 +414,13 @@ export function ExperimentConfigurationDialog({open, close, clusters, workspaces
         definition: {
 		  destinationMode,
           namespace: destinationMode==='application'?String(values.get('namespace')??'').trim():undefined,
-          twoPhaseStart:values.get('startMode')==='manual',
+          twoPhaseStart:!deploymentMode && values.get('startMode')==='manual',
 		  externalDestination: destinationMode === 'external' ? {targetUrl: externalTargetUrl, runtimeImage: externalRuntimeImage, script: externalScript, parameters: externalParameterValues} : undefined,
 		  applicationValues: destinationMode === 'application' ? readSchemaValues(form, application?.descriptor.spec?.valuesSchema ?? emptySchema, 'applicationValues', availableApplications) : {},
           istioInjection: destinationMode === 'application' ? values.get('istioInjection') === 'true' : undefined,
           istioInjectionOverrides: destinationMode === 'application' ? JSON.parse(String(values.get('istioInjectionOverrides') ?? '{}')) : undefined,
           podDisruptionBudgetMinAvailable: destinationMode === 'application' ? Number(values.get('podDisruptionBudgetMinAvailable')) : 0,
-          components: submittedComponents.map((component, index) => {
+          components: (deploymentMode ? [] : submittedComponents).map((component, index) => {
             const plugin = compatiblePlugins.find(item => item.id === component.pluginId)
             if (!plugin) throw new Error(`Component ${component.pluginId} is no longer available. Remove or replace it before saving.`)
             const configuration = readSchemaValues(form, configurableSchema(plugin.schema), `component-${component.key}`, applications)
@@ -441,16 +441,17 @@ export function ExperimentConfigurationDialog({open, close, clusters, workspaces
       setPending(false)
     }
   }
-  const form = readOnly && item ? <ConfigurationReadout item={item} clusters={clusters} applications={applications} plugins={plugins} strategies={strategies} /> : <WizardForm ref={formRef} onSubmit={submit} onCancel={close} pending={pending} error={error} submitLabel={item ? 'Save changes' : 'Create configuration'} submitDisabled={topologyPending || Boolean(topologyError) || !workspaceId || !clusterResourceId || destinationMode === 'application' && !application || destinationMode === 'external' && (!externalTargetUrl || !externalRuntimeImage || !externalScript)} onChange={event => {
+  const namespaceField = <label>Namespace<input aria-label="Namespace" name="namespace" required={deploymentMode} defaultValue={item?.definition.namespace??''} maxLength={63} pattern={'[a-z0-9]([a-z0-9\\-]*[a-z0-9])?'}/></label>
+  const form = readOnly && item ? <ConfigurationReadout item={item} clusters={clusters} applications={applications} plugins={plugins} strategies={strategies} /> : <WizardForm ref={formRef} onSubmit={submit} onCancel={close} pending={pending} error={error} submitLabel={deploymentMode ? 'Deploy' : item ? 'Save changes' : 'Create configuration'} submitDisabled={topologyPending || Boolean(topologyError) || !workspaceId || !clusterResourceId || destinationMode === 'application' && !application || destinationMode === 'external' && (!externalTargetUrl || !externalRuntimeImage || !externalScript)} onChange={event => {
         const target = event.nativeEvent.target as HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement
         if (target.name.startsWith('applicationValues.')) resolveApplicationTopology(event.currentTarget)
       }}>
       <WizardStep key="general" title="General" status={topologyStatus} blocked={destinationMode === 'application' && (topologyPending || Boolean(topologyError))}>
-      <div className="field-row"><label>Name<input name="name" maxLength={120} placeholder="Scheduler baseline" defaultValue={item?.name} required autoFocus /></label>
+      <div className="field-row"><label>Name<input name="name" maxLength={120} placeholder={deploymentMode ? undefined : 'Scheduler baseline'} defaultValue={item?.name} required autoFocus /></label>
       <label>Kubernetes cluster<select name="clusterResourceId" value={clusterResourceId} onChange={event => setClusterResourceId(event.target.value)} required disabled={!availableClusters.length}>{availableClusters.length ? availableClusters.map(item => <option key={item.id} value={item.id}>{item.name}</option>) : <option value="">No ready cluster available</option>}</select></label></div>
-      <div className="field-row field-row-destination"><label>Destination type<select aria-label="Destination type" value={destinationMode} onChange={event => changeDestinationMode(event.target.value as DestinationMode)}><option value="application">Catalog application</option><option value="external">External destination</option></select></label>
-      {destinationMode === 'application' && <label>Application<select value={applicationRef} onChange={event => setApplicationRef(event.target.value)} required disabled={!availableApplications.length}>{availableApplications.length ? availableApplications.map(item => <option key={item.reference} value={item.reference}>{item.name}</option>) : <option value="">No catalog application available</option>}</select></label>}</div>
-      <div className="field-row">{destinationMode==='application'&&<label>Namespace<input aria-label="Namespace" name="namespace" defaultValue={item?.definition.namespace??''} maxLength={63} pattern={'[a-z0-9]([a-z0-9\\-]*[a-z0-9])?'}/></label>}<label>Start mode<select name="startMode" defaultValue={item?.definition.twoPhaseStart?'manual':'automatic'}><option value="automatic">Automatic</option><option value="manual">Manual</option></select></label></div>
+      <div className={deploymentMode ? 'field-row' : 'field-row field-row-destination'}>{!deploymentMode && <label>Destination type<select aria-label="Destination type" value={destinationMode} onChange={event => changeDestinationMode(event.target.value as DestinationMode)}><option value="application">Catalog application</option><option value="external">External destination</option></select></label>}
+      {destinationMode === 'application' && <label>Application<select value={applicationRef} onChange={event => setApplicationRef(event.target.value)} required disabled={!availableApplications.length}>{availableApplications.length ? availableApplications.map(item => <option key={item.reference} value={item.reference}>{item.name}</option>) : <option value="">No catalog application available</option>}</select></label>}{deploymentMode && namespaceField}</div>
+      {!deploymentMode && <div className="field-row">{destinationMode==='application'&&namespaceField}<label>Start mode<select name="startMode" defaultValue={item?.definition.twoPhaseStart?'manual':'automatic'}><option value="automatic">Automatic</option><option value="manual">Manual</option></select></label></div>}
       </WizardStep><WizardStep key="application" status={topologyStatus} title={destinationMode === 'external' ? 'External destination' : 'Application'} blocked={topologyPending || Boolean(topologyError)}>
       {destinationMode === 'application' ? <>
         {!hasParameters && application && <div hidden><SchemaFields schema={parametersSchema} prefix="applicationValues" values={applicationValues} applications={availableApplications} artifacts={[]} connections={[]} credentials={[]} /></div>}
@@ -473,7 +474,7 @@ export function ExperimentConfigurationDialog({open, close, clusters, workspaces
         {id: 'script', title: 'Locustfile', content: <label>Locust file template<textarea value={externalScript} onChange={event => setExternalScript(event.target.value)} rows={14} maxLength={262144} spellCheck={false} required /></label>},
         {id: 'variables', title: 'Variables', content: <label>Locustfile variables (JSON)<textarea value={externalParameters} onChange={event => setExternalParameters(event.target.value)} rows={5} spellCheck={false} placeholder={'{"tenant":"demo"}'} /></label>}
       ]} />}
-      </WizardStep><WizardStep key="load" title="Load profile">
+      </WizardStep>{!deploymentMode && <><WizardStep key="load" title="Load profile">
       {destinationMode === 'application' && (application?.descriptor.spec?.interface?.loadScenarios?.length ?? 0) > 1 && <label>Load scenario<select value={loadScenarioId} onChange={event => setLoadScenarioId(event.target.value)} required>{application?.descriptor.spec?.interface?.loadScenarios?.map(item => <option key={item.id} value={item.id}>{item.id} · {item.engine ?? 'load'}</option>)}</select></label>}
       {loadComponent && (() => {const plugin = compatiblePlugins.find(item => item.id === loadComponent.pluginId)!; return <section className="experiment-component"><LoadProfileEditor onDurationChange={setExperimentDuration} settings={<SchemaFields schema={experimentSchema(plugin.schema, loadComponent.capability)} prefix={`component-${loadComponent.key}`} values={loadComponent.configuration ?? {}} applications={applications} artifacts={[]} connections={[]} credentials={[]} />} key={`${item?.id ?? 'new'}-${loadComponent.key}`} prefix={`component-${loadComponent.key}`} zones={nativeTCP && selectedCluster?.spec.mode !== 'multi' ? [] : zones} distribution={selectedCluster?.spec.mode === 'multi' ? 'cluster' : 'zone'} values={loadComponent.configuration} /></section>})()}
       </WizardStep><WizardStep key="monitoring" title="Monitoring" blocked={Boolean(networkComponent)&&!networkTimelineValid}>
@@ -499,10 +500,10 @@ export function ExperimentConfigurationDialog({open, close, clusters, workspaces
           {(strategyKind === 'scheduler' || strategyKind === 'descheduler') && <StrategyTargetEditor componentKey={component.key} components={effectiveApplicationComponents} trait={strategyKind !== 'scheduler' ? 'deschedulable' : 'schedulable'} resetKey={`${item?.id ?? 'new'}-${applicationRef}-${component.strategyId ?? ''}-${effectiveApplicationComponents.map(item => item.id).join(':')}`} included={component.targets?.include ?? []} excluded={component.targets?.exclude ?? []} />}
         </section>
       })}</div></>}))} /></WizardStep>}
-      <WizardStep key="review" title="Review"><WizardReview /></WizardStep>
+      </>}<WizardStep key="review" title="Review"><WizardReview /></WizardStep>
     </WizardForm>
 
-  return open ? <EditorPage title={item ? `${readOnly ? 'View' : 'Edit'} configuration` : 'Create experiment configuration'} onClose={close} className="experiment-modal">{form}</EditorPage> : null
+  return open ? <EditorPage title={deploymentMode ? 'Deploy application' : item ? `${readOnly ? 'View' : 'Edit'} configuration` : 'Create experiment configuration'} onClose={close} className="experiment-modal">{form}</EditorPage> : null
 }
 
 const emptySchema: JsonSchema = {type: 'object', properties: {}}

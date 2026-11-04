@@ -3,7 +3,7 @@ kind: Plugin
 metadata:
   id: io.kubephos.load.kubernetes.session
   name: Interactive Kubernetes load session
-  version: 0.10.0
+  version: 0.11.0
   description: Runs an ordered RPS timeline using a verified Locust journey against
     a catalog application or external HTTP destination.
 spec:

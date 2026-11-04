@@ -79,7 +79,7 @@ func (s *Store) CreateManagedResource(ctx context.Context, resource domain.Manag
 	}
 	err = tx.QueryRow(ctx, `
 		INSERT INTO managed_resources (id, workspace_id, name, kind, provider, connection_id, plugin_id, plugin_version, plugin_digest, spec, operation_id)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+		VALUES ($1, $2, $3, $4, $5, NULLIF($6,''), $7, $8, $9, $10, $11)
 		RETURNING created_at, updated_at
 	`, resource.ID, resource.WorkspaceID, resource.Name, resource.Kind, resource.Provider, resource.ConnectionID, resource.PluginID, resource.PluginVersion, resource.PluginDigest, resource.Spec, operation.ID).Scan(&resource.CreatedAt, &resource.UpdatedAt)
 	if err != nil {
@@ -105,7 +105,7 @@ func (s *Store) CreateManagedPipelineResource(ctx context.Context, resource doma
 	}
 	err = tx.QueryRow(ctx, `
 		INSERT INTO managed_resources (id, workspace_id, name, kind, provider, connection_id, plugin_id, plugin_version, plugin_digest, spec, pipeline_id, pipeline_run_id)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+		VALUES ($1, $2, $3, $4, $5, NULLIF($6,''), $7, $8, $9, $10, $11, $12)
 		RETURNING created_at, updated_at
 	`, resource.ID, resource.WorkspaceID, resource.Name, resource.Kind, resource.Provider, resource.ConnectionID, resource.PluginID, resource.PluginVersion, resource.PluginDigest, resource.Spec, pipeline.ID, run.ID).Scan(&resource.CreatedAt, &resource.UpdatedAt)
 	if err != nil {
@@ -157,10 +157,10 @@ func insertPipelineLifecycle(ctx context.Context, tx pgx.Tx, pipeline *domain.Pi
 		return ErrConflict
 	}
 	err = tx.QueryRow(ctx, `
-		INSERT INTO pipeline_runs (id, pipeline_id, workspace_id, name, status, pipeline_hash, result_type, result_version, scheduled_for)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, COALESCE($9, now()))
+		INSERT INTO pipeline_runs (id, pipeline_id, workspace_id, name, status, pipeline_hash, result_type, result_version, scheduled_for, cluster_resource_id, owner_user_id, isolation_mode, application_namespace)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, COALESCE($9, now()), NULLIF($10,''),NULLIF($11,''),COALESCE(NULLIF($12,''),'exclusive'),$13)
 		RETURNING created_at, queued_at, scheduled_for
-	`, run.ID, run.PipelineID, run.WorkspaceID, run.Name, domain.OperationQueued, run.PipelineHash, run.ResultType, run.ResultVersion, run.ScheduledFor).Scan(&run.CreatedAt, &run.QueuedAt, &run.ScheduledFor)
+	`, run.ID, run.PipelineID, run.WorkspaceID, run.Name, domain.OperationQueued, run.PipelineHash, run.ResultType, run.ResultVersion, run.ScheduledFor, run.ClusterResourceID, run.OwnerUserID, run.IsolationMode, run.ApplicationNamespace).Scan(&run.CreatedAt, &run.QueuedAt, &run.ScheduledFor)
 	if err != nil {
 		return err
 	}
