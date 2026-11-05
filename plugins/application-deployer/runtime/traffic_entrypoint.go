@@ -284,6 +284,9 @@ func trafficEntrypointDeployment(source map[string]any, workload workloadTarget,
 	templateLabels["topology.kubernetes.io/zone"] = node.Zone
 	podSpec := ensureMap(copyTemplate, "spec")
 	nodeSelector := ensureMap(podSpec, "nodeSelector")
+	if existing, ok := nodeSelector["kubernetes.io/hostname"]; ok && existing != node.Hostname {
+		return nil, fmt.Errorf("Node selector for traffic entrypoint %s conflicts with its managed node placement.", workload.ID)
+	}
 	nodeSelector["kubernetes.io/hostname"] = node.Hostname
 	return map[string]any{
 		"apiVersion": "apps/v1",

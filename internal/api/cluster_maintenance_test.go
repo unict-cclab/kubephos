@@ -1,6 +1,8 @@
 package api
 
 import (
+	"fmt"
+	"kubephos.dev/kubephos/internal/placement"
 	"reflect"
 	"testing"
 )
@@ -54,5 +56,25 @@ func TestMaintenancePreservesProtectedNodesAndRetainedIdentity(t *testing.T) {
 	}
 	if _, _, err := maintenanceMachines(saved, input, old[1:], "pve"); err == nil {
 		t.Fatal("replaced missing protected node")
+	}
+}
+
+func TestMaintenanceCanChangePoolSchedulingWithoutChangingMachines(t *testing.T) {
+	c := managedMachineCapacity{2, 4096, 80}
+	saved := managedKubernetesClusterInput{Name: "demo", ControlPlanes: 1, ManagementPool: managedNodePoolInput{Name: "management", Count: 1, Zones: []string{"cloud"}, Capacity: c}, ApplicationPools: []managedNodePoolInput{{Name: "apps", Count: 1, Zones: []string{"edge"}, Capacity: c}}, AddressStart: "10.0.0.10", PrefixLength: 24, Gateway: "10.0.0.1"}
+	previous := []maintenanceMachine{}
+	for i, name := range managedClusterMachineNames(saved) {
+		previous = append(previous, maintenanceMachine{VMID: 100 + i, Name: name, Node: "pve", Address: fmt.Sprintf("10.0.0.%d", 10+i), Cores: 2, MemoryMiB: 4096, DiskGiB: 80})
+	}
+	pools := append([]managedNodePoolInput{}, saved.ApplicationPools...)
+	pools[0].Labels = map[string]string{"hardware": "gpu"}
+	pools[0].Taints = []placement.Taint{{Key: "gpu", Effect: "NoSchedule"}}
+	desired, machines, err := maintenanceMachines(saved, clusterMaintenanceInput{ApplicationPools: pools}, previous, "pve")
+	if err != nil || !reflect.DeepEqual(machines, previous) || !reflect.DeepEqual(desired.ManagementPool, saved.ManagementPool) || len(desired.ApplicationPools[0].Taints) != 1 {
+		t.Fatal("pool settings changed topology", err, desired, machines)
+	}
+	pools[0].Labels = map[string]string{"kubephos.dev/role": "management"}
+	if _, _, err = maintenanceMachines(saved, clusterMaintenanceInput{ApplicationPools: pools}, previous, "pve"); err == nil {
+		t.Fatal("accepted a managed label override")
 	}
 }

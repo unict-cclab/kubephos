@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"kubephos.dev/kubephos/internal/domain"
+	"kubephos.dev/kubephos/internal/placement"
 	"kubephos.dev/kubephos/internal/plugins"
 	applicationdeployer "kubephos.dev/kubephos/plugins/application-deployer/runtime"
 )
@@ -38,7 +39,7 @@ func TestStandaloneDeploymentTargetsEveryMemberWithoutExperimentComponents(t *te
 	}
 	server.registry = plugins.NewRegistry(manifestOnlyPlugin{plugins.Manifest{ID: "test-materializer", Version: "1", Capabilities: []string{"applications.materialize"}, ArtifactOutputs: outputs}}, manifestOnlyPlugin{(applicationdeployer.Plugin{}).Manifest()})
 	injection := true
-	input := applicationDeploymentInput{ApplicationRef: "app:test.application", Definition: experimentConfigurationDefinitionInput{Namespace: "my-app", ApplicationValues: json.RawMessage(`{"replicas":3}`), IstioInjection: &injection}}
+	input := applicationDeploymentInput{ApplicationRef: "app:test.application", Definition: experimentConfigurationDefinitionInput{Namespace: "my-app", ApplicationValues: json.RawMessage(`{"replicas":3}`), IstioInjection: &injection, ApplicationPlacement: &placement.ApplicationSettings{NodeSelector: map[string]string{"hardware": "gpu"}, Tolerations: []placement.Toleration{{Key: "gpu", Operator: "Exists"}}, ServiceOverrides: map[string]placement.ServiceOverride{"db": {NodeSelectorMode: "none"}}}}}
 	cluster := domain.ManagedResource{Name: "Multi", PipelineRunID: "run", Spec: json.RawMessage(`{"mode":"multi","members":[{"name":"one"},{"name":"two"},{"name":"three"}]}`)}
 	def, failure := server.applicationDeploymentPipeline(ctx, input, cluster)
 	if failure != nil {
@@ -52,6 +53,9 @@ func TestStandaloneDeploymentTargetsEveryMemberWithoutExperimentComponents(t *te
 		_ = json.Unmarshal(stage.Spec, &spec)
 		if spec["applicationNamespace"] != "my-app" || spec["namespacePolicy"] != "create" || spec["istioInjection"] != false || spec["clusterConnectionRef"] != fmt.Sprintf("art_%d", i+1) {
 			t.Fatalf("member target: %v", spec)
+		}
+		if spec["applicationPlacement"] == nil {
+			t.Fatal("member placement missing")
 		}
 		if len(stage.Bindings) != 3 {
 			t.Fatal("application artifact bindings missing", stage.Bindings)

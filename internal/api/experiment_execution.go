@@ -544,6 +544,9 @@ func (s *Server) experimentPipelineForCluster(ctx context.Context, configuration
 		}
 	}
 	deploySpec := map[string]any{"mode": "deploy"}
+	if definition.ApplicationPlacement != nil {
+		deploySpec["applicationPlacement"] = definition.ApplicationPlacement
+	}
 	if definition.Namespace != "" {
 		deploySpec["applicationNamespace"] = definition.Namespace
 	}

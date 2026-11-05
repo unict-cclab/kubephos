@@ -17,6 +17,7 @@ import (
 
 	"kubephos.dev/kubephos/internal/domain"
 	"kubephos.dev/kubephos/internal/id"
+	"kubephos.dev/kubephos/internal/placement"
 
 	"kubephos.dev/kubephos/internal/storage"
 )
@@ -368,6 +369,7 @@ func (s *Server) createInfrastructureService(response http.ResponseWriter, reque
 }
 
 type managedNodePoolInput struct {
+	Taints   []placement.Taint      `json:"taints,omitempty"`
 	Labels   map[string]string      `json:"labels,omitempty"`
 	Name     string                 `json:"name"`
 	Count    int                    `json:"count"`

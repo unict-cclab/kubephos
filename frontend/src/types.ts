@@ -361,6 +361,11 @@ export interface ExperimentConfigurationComponent {
   targets: {include: string[]; exclude: string[]}
 }
 
+export interface NodeTaint {key: string; value?: string; effect: 'NoSchedule' | 'PreferNoSchedule' | 'NoExecute'}
+export interface PodToleration {key?: string; operator?: 'Equal' | 'Exists'; value?: string; effect?: '' | NodeTaint['effect']; tolerationSeconds?: number}
+export interface ServicePlacementOverride {nodeSelectorMode?: 'inherit' | 'custom' | 'none'; nodeSelector?: Record<string,string>; tolerationsMode?: 'inherit' | 'custom' | 'none'; tolerations?: PodToleration[]}
+export interface ApplicationPlacement {nodeSelector?: Record<string,string>; tolerations?: PodToleration[]; serviceOverrides?: Record<string,ServicePlacementOverride>}
+
 export interface ExperimentConfiguration extends ResourceAttributionFields {
   kind?: 'single' | 'suite'
   id: string
@@ -379,6 +384,7 @@ export interface ExperimentConfiguration extends ResourceAttributionFields {
     variants?: Array<{configurationId: string; alias: string; color: string}>
     runs?: number
 	applicationValues: Record<string, unknown>
+    applicationPlacement?: ApplicationPlacement
     istioInjection?: boolean
     istioInjectionOverrides?: Record<string, boolean>
 		destinationMode?: 'application' | 'external'

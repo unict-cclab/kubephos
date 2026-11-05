@@ -1,3 +1,5 @@
+import {PoolPlacementFields} from './PlacementFields'
+import type {NodeTaint} from '../types'
 import {ErrorFeedback, useErrorState} from './ToastRegion'
 import {useEffect, useId, useState} from 'react'
 import {request} from '../api'
@@ -5,7 +7,7 @@ import type {ManagedResource, PipelineRun, Session} from '../types'
 import {Dialog} from './Dialog'
 
 type Capacity = {cores: number; memoryMiB: number; diskGiB: number}
-type Pool = {name: string; count: number; zones: string[]; capacity: Capacity}
+type Pool = {labels?: Record<string,string>; taints?: NodeTaint[]; name: string; count: number; zones: string[]; capacity: Capacity}
 type ClusterSpec = {name: string; controlPlanes: number; managementPool: Pool; applicationPools: Pool[]; machineNodes: Record<string, string>; baseVMID: number; addressStart: string}
 export function clusterMachineNames(spec: ClusterSpec, pools: Pool[]) {
   return [{name: 'control-plane', count: spec.controlPlanes}, spec.managementPool, ...pools].flatMap(pool => Array.from({length: Math.max(0, Math.min(12, pool.count || 0))}, (_, index) => `${spec.name}-${pool.name}-${index + 1}`))
@@ -36,7 +38,8 @@ function MaintenanceEditor({spec, resource, session, onClose, onQueued}: {spec: 
   const removed = originalNames.filter(name => !names.includes(name))
   const defaultNode = Object.values(spec.machineNodes ?? {})[0] ?? ''
   const moved = names.filter(name => originalNames.includes(name) && (nodes[name] ?? defaultNode) !== (spec.machineNodes?.[name] ?? defaultNode))
-  const changed = added.length + removed.length + moved.length > 0
+  const settingsChanged = pools.filter(pool => {const old=spec.applicationPools?.find(item=>item.name===pool.name);return old && (JSON.stringify(old.labels??{})!==JSON.stringify(pool.labels??{}) || JSON.stringify(old.taints??[])!==JSON.stringify(pool.taints??[]))}).length
+  const changed = added.length + removed.length + moved.length > 0 || JSON.stringify(pools) !== JSON.stringify(spec.applicationPools ?? [])
   const updatePool = (index: number, change: Partial<Pool>) => {setConfirmed(false); setPools(items => items.map((item, position) => position === index ? {...item, ...change} : item))}
   const submit = async (event: React.FormEvent) => {
     event.preventDefault(); setPending(true); setError('')
@@ -62,6 +65,7 @@ function MaintenanceEditor({spec, resource, session, onClose, onQueued}: {spec: 
             <label>Nodes<input aria-label={`${pool.name} nodes`} type="number" min={1} max={12} required value={pool.count} onChange={event => updatePool(index, {count: Number(event.target.value)})} /></label>
             {!existing && <><label>Zones<input aria-label={`${pool.name} zones`} required value={pool.zones.join(', ')} onChange={event => updatePool(index, {zones: event.target.value.split(',').map(value => value.trim())})} /></label>{(['cores', 'memoryMiB', 'diskGiB'] as const).map(key => <label key={key}>{({cores: 'CPU (cores)', memoryMiB: 'Memory (MiB)', diskGiB: 'Disk (GiB)'})[key]}<input aria-label={`${pool.name} ${key}`} type="number" min={key === 'cores' ? 1 : key === 'memoryMiB' ? 1024 : 8} max={key === 'cores' ? 32 : key === 'memoryMiB' ? 131072 : 2048} value={pool.capacity[key]} required onChange={event => updatePool(index, {capacity: {...pool.capacity, [key]: Number(event.target.value)}})} /></label>)}</>}
           </div>
+          <PoolPlacementFields labels={pool.labels} taints={pool.taints} onChange={change => updatePool(index,change)} />
         </section>
       })}</div>
       {pools.length === 0 && <p>No pools.</p>}
@@ -73,7 +77,7 @@ function MaintenanceEditor({spec, resource, session, onClose, onQueued}: {spec: 
     {added.length > 0 && <fieldset disabled={pending} className="maintenance-section"><legend>New VM allocation</legend>
       <div className="maintenance-fields"><label>First new VMID<input aria-label="First new VMID" type="number" min={100} max={999999999} required value={newVMIDStart} onChange={event => setNewVMIDStart(Number(event.target.value))} /></label><label>First new IPv4 address<input aria-label="First new IPv4 address" required value={newAddressStart} onChange={event => setNewAddressStart(event.target.value)} /></label></div>
     </fieldset>}
-    <section className="maintenance-review" aria-label="Maintenance summary"><h3>Review changes</h3><div className="maintenance-change-counts"><span><strong>{added.length}</strong> nodes to add</span><span><strong>{removed.length}</strong> nodes to remove</span><span><strong>{moved.length}</strong> VMs to migrate</span></div>
+    <section className="maintenance-review" aria-label="Maintenance summary"><h3>Review changes</h3><div className="maintenance-change-counts"><span><strong>{added.length}</strong> nodes to add</span><span><strong>{removed.length}</strong> nodes to remove</span><span><strong>{moved.length}</strong> VMs to migrate</span>{settingsChanged>0 && <span><strong>{settingsChanged}</strong> pool settings to update</span>}</div>
       {names.length > 12 && <p role="alert" className="managed-error">The cluster limit is 12 nodes. Reduce the node count before applying maintenance.</p>}
       {removed.length > 0 && <div className="maintenance-removal"><ul>{removed.map(name => <li key={name}><code>{name}</code></li>)}</ul><label className="checkbox-field"><input type="checkbox" checked={confirmed} onChange={event => setConfirmed(event.target.checked)} required disabled={pending} /><span>Confirm removal of these nodes and their ephemeral data</span></label></div>}
     </section>

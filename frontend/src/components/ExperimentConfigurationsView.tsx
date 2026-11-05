@@ -1,3 +1,4 @@
+import {ApplicationPlacementEditor} from './ApplicationPlacementEditor'
 import {IstioInjectionEditor} from './IstioInjectionEditor'
 import {CloneDialog} from './CloneDialog'
 import {ErrorFeedback, useErrorState} from './ToastRegion'
@@ -417,6 +418,7 @@ export function ExperimentConfigurationDialog({open, close, clusters, workspaces
           twoPhaseStart:!deploymentMode && values.get('startMode')==='manual',
 		  externalDestination: destinationMode === 'external' ? {targetUrl: externalTargetUrl, runtimeImage: externalRuntimeImage, script: externalScript, parameters: externalParameterValues} : undefined,
 		  applicationValues: destinationMode === 'application' ? readSchemaValues(form, application?.descriptor.spec?.valuesSchema ?? emptySchema, 'applicationValues', availableApplications) : {},
+          applicationPlacement: destinationMode === 'application' ? JSON.parse(String(values.get('applicationPlacement') ?? 'null')) ?? undefined : undefined,
           istioInjection: destinationMode === 'application' ? values.get('istioInjection') === 'true' : undefined,
           istioInjectionOverrides: destinationMode === 'application' ? JSON.parse(String(values.get('istioInjectionOverrides') ?? '{}')) : undefined,
           podDisruptionBudgetMinAvailable: destinationMode === 'application' ? Number(values.get('podDisruptionBudgetMinAvailable')) : 0,
@@ -467,6 +469,7 @@ export function ExperimentConfigurationDialog({open, close, clusters, workspaces
           {id: 'topology', title: 'Topology', content: <>
         {application && !topologyError && <ApplicationTopologyGraph components={effectiveApplicationComponents} />}
           </>},
+          {id: 'placement', title: 'Placement', content: <ApplicationPlacementEditor key={`placement-${item?.id ?? 'new'}-${applicationRef}`} services={effectiveApplicationComponents} initial={item?.definition.applicationPlacement} />},
           {id: 'istio', title: 'Istio', content: <IstioInjectionEditor key={`istio-${item?.id ?? 'new'}-${applicationRef}-${clusterResourceId}`} services={effectiveApplicationComponents} enabled={typeof item?.definition.istioInjection === 'boolean' ? item.definition.istioInjection : !nativeTCP} overrides={item?.definition.istioInjectionOverrides as Record<string, boolean> | undefined} disabled={selectedCluster?.spec.mode === 'multi'} />}
         ]} />
       </> : <FormTabs label="External destination settings" items={[

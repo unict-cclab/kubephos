@@ -21,6 +21,7 @@ import (
 	"kubephos.dev/kubephos/internal/catalog"
 	"kubephos.dev/kubephos/internal/domain"
 	"kubephos.dev/kubephos/internal/id"
+	"kubephos.dev/kubephos/internal/placement"
 
 	"kubephos.dev/kubephos/internal/plugins"
 
@@ -42,6 +43,7 @@ type experimentConfigurationInput struct {
 }
 
 type experimentConfigurationDefinitionInput struct {
+	ApplicationPlacement            *placement.ApplicationSettings          `json:"applicationPlacement,omitempty"`
 	Namespace                       string                                  `json:"namespace,omitempty"`
 	TwoPhaseStart                   bool                                    `json:"twoPhaseStart,omitempty"`
 	IstioInjection                  *bool                                   `json:"istioInjection,omitempty"`
@@ -496,6 +498,16 @@ func (s *Server) validatedExperimentConfiguration(ctx context.Context, input exp
 	}
 	if err := validateExperimentNetworkTimeline(input.Definition); err != nil {
 		return domain.ExperimentConfiguration{}, &managedOperationFailure{status: http.StatusUnprocessableEntity, code: "invalid_network_timeline", message: err.Error()}
+	}
+	if err := placement.ValidateApplication(input.Definition.ApplicationPlacement); err != nil {
+		return domain.ExperimentConfiguration{}, &managedOperationFailure{status: 422, code: "invalid_placement", message: err.Error()}
+	}
+	if input.Definition.ApplicationPlacement != nil {
+		for service := range input.Definition.ApplicationPlacement.ServiceOverrides {
+			if !applicationComponents[service] {
+				return domain.ExperimentConfiguration{}, &managedOperationFailure{status: 422, code: "invalid_placement_service", message: "Placement override refers to an unknown application service: " + service}
+			}
+		}
 	}
 	for service := range input.Definition.IstioInjectionOverrides {
 		if !applicationComponents[service] {
