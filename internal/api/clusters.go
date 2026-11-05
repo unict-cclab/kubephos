@@ -25,6 +25,7 @@ import (
 
 	"kubephos.dev/kubephos/internal/domain"
 	"kubephos.dev/kubephos/internal/id"
+	"kubephos.dev/kubephos/internal/placement"
 
 	kubeconfigutil "kubephos.dev/kubephos/internal/kubeconfig"
 	"kubephos.dev/kubephos/internal/plugins"
@@ -148,6 +149,10 @@ func (s *Server) prepareManagedCluster(response http.ResponseWriter, request *ht
 	if len(input.ApplicationPools) == 0 {
 		input.ApplicationPools = []managedNodePoolInput{{Name: "applications", Count: 2, Zones: []string{"zone-a"}, Capacity: managedMachineCapacity{Cores: 4, MemoryMiB: 8192, DiskGiB: 80}}}
 	}
+	if len(input.ManagementPool.Taints) > 0 {
+		writeError(response, 422, "invalid_pool", "Taints are supported only for application pools.")
+		return nil
+	}
 	seenPools := map[string]bool{input.ManagementPool.Name: true}
 	if !validManagedPool(input.ManagementPool, shortResourceNamePattern) {
 		writeError(response, http.StatusUnprocessableEntity, "invalid_pool", "The management pool requires a valid name, node count and at least one zone.")
@@ -156,6 +161,10 @@ func (s *Server) prepareManagedCluster(response http.ResponseWriter, request *ht
 	totalMachines := input.ControlPlanes + input.ManagementPool.Count
 	for index := range input.ApplicationPools {
 		pool := &input.ApplicationPools[index]
+		if err := placement.ValidatePool(placement.PoolSettings{Labels: pool.Labels, Taints: pool.Taints}); err != nil {
+			writeError(response, 422, "invalid_pool", err.Error())
+			return nil
+		}
 		pool.Capacity = managedCapacityDefaults(pool.Capacity, managedMachineCapacity{Cores: 4, MemoryMiB: 8192, DiskGiB: 80})
 		if !validManagedPool(*pool, shortResourceNamePattern) || seenPools[pool.Name] {
 			writeError(response, http.StatusUnprocessableEntity, "invalid_pool", "Application pools require unique names, a node count and at least one valid zone.")

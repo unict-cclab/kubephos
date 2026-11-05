@@ -12,6 +12,7 @@ import (
 
 	"kubephos.dev/kubephos/internal/domain"
 	"kubephos.dev/kubephos/internal/id"
+	"kubephos.dev/kubephos/internal/placement"
 	"kubephos.dev/kubephos/internal/storage"
 )
 
@@ -45,6 +46,9 @@ func maintenanceMachines(saved managedKubernetesClusterInput, input clusterMaint
 	total := saved.ControlPlanes + saved.ManagementPool.Count
 	for i := range desired.ApplicationPools {
 		p := &desired.ApplicationPools[i]
+		if err := placement.ValidatePool(placement.PoolSettings{Labels: p.Labels, Taints: p.Taints}); err != nil {
+			return desired, nil, err
+		}
 		if !validManagedPool(*p, shortResourceNamePattern) || seen[p.Name] {
 			return desired, nil, errors.New("Application pools require unique names, a positive node count and valid zones.")
 		}
@@ -249,6 +253,7 @@ func (s *Server) reconfigureKubernetesCluster(w http.ResponseWriter, r *http.Req
 			spec["reconcile"] = true
 			spec["previousMachineSetRef"] = machineArtifact.ID
 			spec["nodePools"] = pools
+			spec["previousNodeSettings"] = managedApplicationNodeSettings(saved)
 			stage.Spec, _ = json.Marshal(spec)
 			stage.Title = "Reconcile Kubernetes nodes"
 		}
@@ -287,4 +292,14 @@ func (s *Server) reconfigureKubernetesCluster(w http.ResponseWriter, r *http.Req
 		return
 	}
 	writeJSON(w, 202, updated)
+}
+
+func managedApplicationNodeSettings(input managedKubernetesClusterInput) map[string]placement.PoolSettings {
+	result := map[string]placement.PoolSettings{}
+	for _, pool := range input.ApplicationPools {
+		for index := 1; index <= pool.Count; index++ {
+			result[fmt.Sprintf("%s-%s-%d", input.Name, pool.Name, index)] = placement.PoolSettings{Labels: pool.Labels, Taints: pool.Taints}
+		}
+	}
+	return result
 }

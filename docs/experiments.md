@@ -68,6 +68,19 @@ these settings from application containers, init containers and auxiliary jobs.
 Service overrides inherit the shared values. Kubernetes admission policies may
 supply namespace defaults; a limit without a request becomes the request.
 
+**Application → Placement** defines a shared node selector and tolerations.
+Service overrides can inherit these values, replace them with custom values, or
+select **None** to omit the shared custom settings for that service. Existing
+KubePhos placement constraints remain in force; conflicting selectors are rejected.
+These settings also apply to standalone application deployments.
+
+Application pools support **Labels** and **Taints** in single and multi cluster
+creation. Master and Management retain their managed settings. For single clusters,
+**Manage nodes** can update application pool settings when no experiments are active.
+A toleration permits placement on a tainted node; use a matching node selector when
+placement on that pool is required. `NoExecute` taints can evict existing pods that
+do not tolerate them.
+
 Catalog deployment manifests and Locust scripts are examples. Experiment manifests
 and load scripts are generated from the saved configuration.
 

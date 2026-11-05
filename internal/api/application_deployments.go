@@ -173,6 +173,9 @@ func (s *Server) applicationDeploymentPipeline(ctx context.Context, input applic
 		sources := map[string]experimentArtifactSource{artifactContractKey("ClusterConnection", "v1alpha1"): {ExternalID: connection.ID}}
 		registerExperimentOutputs(sources, "application", materializer.Manifest())
 		spec := map[string]any{"applicationNamespace": input.Definition.Namespace, "namespacePolicy": "create"}
+		if input.Definition.ApplicationPlacement != nil {
+			spec["applicationPlacement"] = input.Definition.ApplicationPlacement
+		}
 		if input.Definition.PodDisruptionBudgetMinAvailable > 0 {
 			spec["podDisruptionBudgetMinAvailable"] = input.Definition.PodDisruptionBudgetMinAvailable
 		}

@@ -172,6 +172,9 @@ func (p Plugin) reconcile(ctx context.Context, step domain.PlanStep, spec Spec, 
 			return nil, err
 		}
 	}
+	if err := reconcileNodeSettings(ctx, runner, primary, machines.Spec.Machines, access, spec); err != nil {
+		return nil, err
+	}
 	inventory, err = waitForInventory(ctx, runner, primary, access, spec.ClusterName, len(machines.Spec.Machines), 5*time.Minute, version)
 	if err != nil {
 		return nil, err

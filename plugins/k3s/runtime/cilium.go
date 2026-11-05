@@ -7,9 +7,9 @@ import (
 	"fmt"
 	"net/netip"
 	"regexp"
-	"strings"
 
 	"gopkg.in/yaml.v3"
+	"kubephos.dev/kubephos/internal/placement"
 )
 
 const ciliumVersion = "1.20.3"
@@ -48,6 +48,13 @@ func installCommandForSpec(spec Spec, role, nodeName, server, token string, firs
 			dnsAddress = dnsAddress.Next()
 		}
 		command += " --cluster-dns=" + shellQuote(dnsAddress.String()) + " --flannel-backend=none --disable-network-policy --disable-kube-proxy --disable=traefik --disable=servicelb --cluster-cidr=" + shellQuote(spec.PodCIDR) + " --service-cidr=" + shellQuote(spec.ServiceCIDR)
+	}
+	for _, taint := range machineTaints(spec, nodeName) {
+		value := taint.Key
+		if taint.Value != "" {
+			value += "=" + taint.Value
+		}
+		command += " --node-taint " + shellQuote(value+":"+taint.Effect)
 	}
 	return command
 }
@@ -106,20 +113,7 @@ func ciliumPoolLabels(spec Spec, labels map[string]string, poolLabels map[string
 	return labels
 }
 func validPoolLabels(labels map[string]string) bool {
-	name := regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9_.-]{0,61}[A-Za-z0-9])?$`)
-	for key, value := range labels {
-		if strings.HasPrefix(key, "kubephos.dev/") || strings.HasPrefix(key, "kubernetes.io/") || strings.HasPrefix(key, "node-role.kubernetes.io/") || strings.HasPrefix(key, "topology.kubernetes.io/") {
-			return false
-		}
-		parts := strings.Split(key, "/")
-		if len(parts) > 2 || !name.MatchString(parts[len(parts)-1]) || len(value) > 63 || value != "" && !name.MatchString(value) {
-			return false
-		}
-		if len(parts) == 2 && !regexp.MustCompile(`^[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?$`).MatchString(parts[0]) {
-			return false
-		}
-	}
-	return true
+	return placement.ValidateLabels(labels, true) == nil
 }
 
 func nodePlacementLabel(labels map[string]string) string {

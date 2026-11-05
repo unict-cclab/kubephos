@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"kubephos.dev/kubephos/internal/domain"
+	"kubephos.dev/kubephos/internal/placement"
 	"kubephos.dev/kubephos/internal/plugins"
 	"kubephos.dev/kubephos/internal/podscheduling"
 )
@@ -43,20 +44,21 @@ type Invocation struct {
 }
 
 type Spec struct {
-	NamespacePolicy                 string          `json:"namespacePolicy,omitempty"`
-	ApplicationNamespace            string          `json:"applicationNamespace,omitempty"`
-	IstioInjection                  *bool           `json:"istioInjection,omitempty"`
-	IstioInjectionOverrides         map[string]bool `json:"istioInjectionOverrides,omitempty"`
-	ClusterConnectionRef            string          `json:"clusterConnectionRef"`
-	ManifestSetRef                  string          `json:"manifestSetRef"`
-	WorkloadTargetsRef              string          `json:"workloadTargetsRef"`
-	ServiceEndpointsRef             string          `json:"serviceEndpointsRef"`
-	Mode                            string          `json:"mode,omitempty"`
-	SchedulerName                   string          `json:"schedulerName,omitempty"`
-	SchedulerInclude                []string        `json:"schedulerInclude,omitempty"`
-	SchedulerExclude                []string        `json:"schedulerExclude,omitempty"`
-	PodDisruptionBudgetMinAvailable int             `json:"podDisruptionBudgetMinAvailable,omitempty"`
-	ControlNamespace                bool            `json:"controlNamespace,omitempty"`
+	ApplicationPlacement            *placement.ApplicationSettings `json:"applicationPlacement,omitempty"`
+	NamespacePolicy                 string                         `json:"namespacePolicy,omitempty"`
+	ApplicationNamespace            string                         `json:"applicationNamespace,omitempty"`
+	IstioInjection                  *bool                          `json:"istioInjection,omitempty"`
+	IstioInjectionOverrides         map[string]bool                `json:"istioInjectionOverrides,omitempty"`
+	ClusterConnectionRef            string                         `json:"clusterConnectionRef"`
+	ManifestSetRef                  string                         `json:"manifestSetRef"`
+	WorkloadTargetsRef              string                         `json:"workloadTargetsRef"`
+	ServiceEndpointsRef             string                         `json:"serviceEndpointsRef"`
+	Mode                            string                         `json:"mode,omitempty"`
+	SchedulerName                   string                         `json:"schedulerName,omitempty"`
+	SchedulerInclude                []string                       `json:"schedulerInclude,omitempty"`
+	SchedulerExclude                []string                       `json:"schedulerExclude,omitempty"`
+	PodDisruptionBudgetMinAvailable int                            `json:"podDisruptionBudgetMinAvailable,omitempty"`
+	ControlNamespace                bool                           `json:"controlNamespace,omitempty"`
 }
 
 type stepInput struct {
@@ -166,12 +168,12 @@ type commandRunner interface {
 
 func (Plugin) Manifest() plugins.Manifest {
 	return plugins.Manifest{
-		ID: pluginID, Name: "Kubernetes application deployer", Version: "0.10.0",
+		ID: pluginID, Name: "Kubernetes application deployer", Version: "0.11.0",
 		Description:     "Deploys any validated application package into an isolated Kubernetes namespace and prepares shared experiment control resources when requested.",
-		Schema:          json.RawMessage(`{"type":"object","additionalProperties":false,"required":["clusterConnectionRef","manifestSetRef","workloadTargetsRef","serviceEndpointsRef"],"properties":{"clusterConnectionRef":{"type":"string","title":"Kubernetes cluster","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ClusterConnection","x-kubephos-artifact-version":"v1alpha1"},"manifestSetRef":{"type":"string","title":"Application manifests","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ManifestSet","x-kubephos-artifact-version":"v1alpha1"},"workloadTargetsRef":{"type":"string","title":"Application workloads","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"WorkloadTargets","x-kubephos-artifact-version":"v1alpha1"},"serviceEndpointsRef":{"type":"string","title":"Application endpoints","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ServiceEndpoints","x-kubephos-artifact-version":"v1alpha1"},"mode":{"type":"string","enum":["prepare","deploy"]},"schedulerName":{"type":"string"},"schedulerInclude":{"type":"array","items":{"type":"string"}},"schedulerExclude":{"type":"array","items":{"type":"string"}},"podDisruptionBudgetMinAvailable":{"type":"integer","title":"Minimum available replicas","description":"PDB minAvailable generated for every deschedulable workload.","minimum":1,"maximum":20},"controlNamespace":{"type":"boolean","x-kubephos-hidden":true},"istioInjection":{"type":"boolean"},"istioInjectionOverrides":{"type":"object","additionalProperties":true},"namespacePolicy":{"type":"string","enum":["create"],"x-kubephos-hidden":true},"applicationNamespace":{"type":"string","maxLength":63}}}`),
+		Schema:          json.RawMessage(`{"type":"object","additionalProperties":false,"required":["clusterConnectionRef","manifestSetRef","workloadTargetsRef","serviceEndpointsRef"],"properties":{"clusterConnectionRef":{"type":"string","title":"Kubernetes cluster","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ClusterConnection","x-kubephos-artifact-version":"v1alpha1"},"manifestSetRef":{"type":"string","title":"Application manifests","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ManifestSet","x-kubephos-artifact-version":"v1alpha1"},"workloadTargetsRef":{"type":"string","title":"Application workloads","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"WorkloadTargets","x-kubephos-artifact-version":"v1alpha1"},"serviceEndpointsRef":{"type":"string","title":"Application endpoints","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ServiceEndpoints","x-kubephos-artifact-version":"v1alpha1"},"mode":{"type":"string","enum":["prepare","deploy"]},"schedulerName":{"type":"string"},"schedulerInclude":{"type":"array","items":{"type":"string"}},"schedulerExclude":{"type":"array","items":{"type":"string"}},"podDisruptionBudgetMinAvailable":{"type":"integer","title":"Minimum available replicas","description":"PDB minAvailable generated for every deschedulable workload.","minimum":1,"maximum":20},"controlNamespace":{"type":"boolean","x-kubephos-hidden":true},"istioInjection":{"type":"boolean"},"istioInjectionOverrides":{"type":"object","additionalProperties":true},"applicationPlacement":{"type":"object"},"namespacePolicy":{"type":"string","enum":["create"],"x-kubephos-hidden":true},"applicationNamespace":{"type":"string","maxLength":63}}}`),
 		ArtifactInputs:  []domain.ArtifactContract{{Type: "ClusterConnection", Version: "v1alpha1"}, {Type: "ManifestSet", Version: "v1alpha1"}, {Type: "WorkloadTargets", Version: "v1alpha1"}, {Type: "ServiceEndpoints", Version: "v1alpha1"}},
 		ArtifactOutputs: []domain.ArtifactContract{{Type: "ApplicationDeployment", Version: "v1alpha1"}},
-		Capabilities:    []string{"applications.kubernetes.deploy", "applications.kubernetes.preflight", "applications.kubernetes.cleanup", "lifecycle.cleanup"},
+		Capabilities:    []string{"applications.kubernetes.deploy", "applications.kubernetes.preflight", "applications.kubernetes.cleanup", "lifecycle.cleanup", "lifecycle.cleanup.compatible"},
 		Permissions:     []string{"cluster.admin"},
 	}
 }
@@ -190,6 +192,9 @@ func (Plugin) Validate(ctx context.Context, invocation Invocation) domain.Valida
 	}
 	if len(spec.IstioInjectionOverrides) > 200 {
 		return invalid(report, "istioInjectionOverrides", "At most 200 service overrides are supported.")
+	}
+	if err := placement.ValidateApplication(spec.ApplicationPlacement); err != nil {
+		return invalid(report, "applicationPlacement", err.Error())
 	}
 	if spec.NamespacePolicy != "" && spec.NamespacePolicy != "create" {
 		return invalid(report, "namespacePolicy", "Namespace policy is invalid.")
@@ -334,7 +339,7 @@ func (plugin Plugin) Precheck(ctx context.Context, step domain.PlanStep, log plu
 	if err := validateManifestIsolation([]byte(manifests.Spec.Content), clusterScoped); err != nil {
 		return unhealthy(err.Error(), "isolation", "rejected"), nil
 	}
-	content, err := configureIstioInjection(manifests.Spec.Content, workloads, input.IstioInjection, input.IstioInjectionOverrides)
+	content, err := configureApplicationManifest(manifests.Spec.Content, workloads, input)
 	if err != nil {
 		return domain.HealthReport{}, err
 	}
@@ -380,7 +385,7 @@ func (plugin Plugin) Execute(ctx context.Context, step domain.PlanStep, log plug
 		}
 	}
 
-	content, err := configureIstioInjection(manifests.Spec.Content, workloads, input.IstioInjection, input.IstioInjectionOverrides)
+	content, err := configureApplicationManifest(manifests.Spec.Content, workloads, input)
 	if err != nil {
 		return nil, err
 	}
@@ -515,7 +520,7 @@ func (plugin Plugin) Verify(ctx context.Context, step domain.PlanStep, raw json.
 	if err := json.Unmarshal(raw, &value); err != nil {
 		return domain.HealthReport{}, err
 	}
-	content, err := configureIstioInjection(manifests.Spec.Content, workloads, input.IstioInjection, input.IstioInjectionOverrides)
+	content, err := configureApplicationManifest(manifests.Spec.Content, workloads, input)
 	if err != nil {
 		return domain.HealthReport{}, err
 	}

@@ -1,3 +1,5 @@
+import {PoolPlacementFields} from './PlacementFields'
+import type {NodeTaint} from '../types'
 import {ErrorFeedback, useErrorState} from './ToastRegion'
 import {ResourceAction} from './ResourceAction'
 import {ActionIcon} from './ActionIcon'
@@ -238,7 +240,7 @@ export function InfrastructureServiceDialog({open, close, workspaces, templates,
 }
 
 type MachineCapacityDraft = {cores: number; memoryMiB: number; diskGiB: number}
-type ClusterPoolDraft = {name: string; count: number; zones: string; capacity: MachineCapacityDraft}
+type ClusterPoolDraft = {labels?: Record<string,string>; taints?: NodeTaint[]; name: string; count: number; zones: string; capacity: MachineCapacityDraft}
 
 const applicationPoolDefaults = (): ClusterPoolDraft => ({name: 'applications', count: 2, zones: 'zone-a', capacity: {cores: 4, memoryMiB: 8192, diskGiB: 80}})
 
@@ -301,7 +303,7 @@ export function KubernetesClusterDialog({open, close, workspaces, templates, ser
         controlPlaneZones: parseZones(String(values.get('controlPlaneZones') ?? '')),
         controlPlaneCapacity: readCapacity(values, 'controlPlane'),
         managementPool: {name: 'management', count: Number(values.get('managementCount')), zones: parseZones(String(values.get('managementZones') ?? '')), capacity: readCapacity(values, 'management')},
-        applicationPools: applicationPools.map(pool => ({name: pool.name, count: pool.count, zones: parseZones(pool.zones), capacity: pool.capacity}))
+        applicationPools: applicationPools.map(pool => ({name: pool.name, count: pool.count, zones: parseZones(pool.zones), capacity: pool.capacity, labels: pool.labels, taints: pool.taints}))
       })}, common.session.csrfToken)
       close()
       await common.onDone('Cluster creation started.')
@@ -332,7 +334,7 @@ export function KubernetesClusterDialog({open, close, workspaces, templates, ser
         </>},
         {id: 'applications', title: 'Pools', content: <>
       <div className="pool-section pool-toolbar"><ResourceAction action="add" label="Add pool" disabled={applicationPools.length >= 8} onClick={() => setApplicationPools(items => [...items, {...applicationPoolDefaults(), name: `applications-${items.length + 1}`, count: 1}])} /></div>
-      <div className="pool-editor">{applicationPools.map((pool, index) => <div className="pool-card" key={index}><div className="pool-row"><label>Name<input value={pool.name} pattern="[a-z0-9][a-z0-9-]{0,31}" onChange={event => updateApplicationPool(setApplicationPools, index, {name: event.target.value})} required /></label><label>Nodes<NumericInput value={pool.count} min={1} max={12} onValueChange={count => updateApplicationPool(setApplicationPools, index, {count})} required /></label><label>Zones<input value={pool.zones} pattern="[a-z0-9,-]+" onChange={event => updateApplicationPool(setApplicationPools, index, {zones: event.target.value})} required /></label>{applicationPools.length > 1 && <button type="button" className="icon-button pool-remove" aria-label={`Remove ${pool.name}`} title={`Remove ${pool.name}`} onClick={() => setApplicationPools(items => items.filter((_, position) => position !== index))}><ActionIcon name="close" /></button>}</div><div className="capacity-grid"><label>CPU (cores)<NumericInput value={pool.capacity.cores} min={1} max={32} onValueChange={cores => updateApplicationPoolCapacity(setApplicationPools, index, {cores})} required /></label><label>Memory (MiB)<NumericInput value={pool.capacity.memoryMiB} min={1024} max={131072} onValueChange={memoryMiB => updateApplicationPoolCapacity(setApplicationPools, index, {memoryMiB})} required /></label><label>Disk (GiB)<NumericInput value={pool.capacity.diskGiB} min={8} max={2048} onValueChange={diskGiB => updateApplicationPoolCapacity(setApplicationPools, index, {diskGiB})} required /></label></div></div>)}</div>
+      <div className="pool-editor">{applicationPools.map((pool, index) => <div className="pool-card" key={index}><div className="pool-row"><label>Name<input value={pool.name} pattern="[a-z0-9][a-z0-9-]{0,31}" onChange={event => updateApplicationPool(setApplicationPools, index, {name: event.target.value})} required /></label><label>Nodes<NumericInput value={pool.count} min={1} max={12} onValueChange={count => updateApplicationPool(setApplicationPools, index, {count})} required /></label><label>Zones<input value={pool.zones} pattern="[a-z0-9,-]+" onChange={event => updateApplicationPool(setApplicationPools, index, {zones: event.target.value})} required /></label>{applicationPools.length > 1 && <button type="button" className="icon-button pool-remove" aria-label={`Remove ${pool.name}`} title={`Remove ${pool.name}`} onClick={() => setApplicationPools(items => items.filter((_, position) => position !== index))}><ActionIcon name="close" /></button>}</div><div className="capacity-grid"><label>CPU (cores)<NumericInput value={pool.capacity.cores} min={1} max={32} onValueChange={cores => updateApplicationPoolCapacity(setApplicationPools, index, {cores})} required /></label><label>Memory (MiB)<NumericInput value={pool.capacity.memoryMiB} min={1024} max={131072} onValueChange={memoryMiB => updateApplicationPoolCapacity(setApplicationPools, index, {memoryMiB})} required /></label><label>Disk (GiB)<NumericInput value={pool.capacity.diskGiB} min={8} max={2048} onValueChange={diskGiB => updateApplicationPoolCapacity(setApplicationPools, index, {diskGiB})} required /></label></div><PoolPlacementFields name={pool.name} labels={pool.labels} taints={pool.taints} onChange={change => updateApplicationPool(setApplicationPools,index,change)} /></div>)}</div>
         </>}
       ]} /></WizardStep>
       <WizardStep title="Network">

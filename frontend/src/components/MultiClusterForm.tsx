@@ -1,3 +1,5 @@
+import {PoolPlacementFields} from './PlacementFields'
+import type {NodeTaint} from '../types'
 import {useErrorState} from './ToastRegion'
 import {useState, type FormEvent} from 'react'
 import {request} from '../api'
@@ -11,16 +13,16 @@ import {WizardForm, WizardStep, WizardReview} from './WizardForm'
 import {FormTabs} from './FormTabs'
 
 type Capacity = {cores: number; memoryMiB: number; diskGiB: number}
-type Pool = {name: string; count: number; labels: string; capacity: Capacity}
+type Pool = {taints?: NodeTaint[]; name: string; count: number; labels: string | Record<string,string>; capacity: Capacity}
 type Member = {key: number; name: string; clusterId: number; podCIDR: string; serviceCIDR: string; master: Pool; management: Pool; applications: Pool[]; machineNodes: Record<string, string>}
 const pool = (name: string, count: number, cores: number, memoryMiB: number): Pool => ({name, count, labels: '', capacity: {cores, memoryMiB, diskGiB: 80}})
 const member = (id: number): Member => ({key: id, name: `cluster-${id}`, clusterId: id, podCIDR: `10.${63 + id}.0.0/16`, serviceCIDR: `10.${127 + id}.0.0/16`, master: pool('control-plane', 1, 2, 4096), management: pool('management', 1, 4, 8192), applications: [pool('applications', 2, 4, 8192)], machineNodes: {}})
 const count = (value: Member) => value.master.count + value.management.count + value.applications.reduce((total, item) => total + item.count, 0)
-const labels = (value: string) => Object.fromEntries(value.split(',').map(part => part.trim()).filter(Boolean).map(part => {
+const labels = (value: string | Record<string,string>): Record<string,string> => typeof value === 'string' ? Object.fromEntries(value.split(',').map(part => part.trim()).filter(Boolean).map(part => {
   const split = part.indexOf('=')
   if (split < 1) throw new Error('Pool labels must use key=value, separated by commas.')
   return [part.slice(0, split).trim(), part.slice(split + 1).trim()]
-}))
+})) : value
 export function addIPv4(value: string, offset: number): string {
   const parts = value.split('.').map(Number)
   if (parts.length !== 4 || parts.some(part => !Number.isInteger(part) || part < 0 || part > 255)) throw new Error('Use a valid first node IPv4 address.')
@@ -106,5 +108,5 @@ export function MultiClusterForm({open, close, workspaces, templates, services, 
 }
 
 function MemberPool({title, value, onChange, master = false, editableName = false}: {title: string; value: Pool; onChange: (value: Pool) => void; master?: boolean; editableName?: boolean}) {
-  return <div className="pool-card"><strong>{title}</strong><div className={`field-row ${editableName ? 'field-row-pool' : 'field-row-count'}`}>{editableName && <label>Name<input value={value.name} onChange={event => onChange({...value, name: event.target.value})} pattern="[a-z0-9][a-z0-9-]{0,31}" required /></label>}<label>Nodes{master ? <select value={value.count} onChange={event => onChange({...value, count: Number(event.target.value)})}><option value="1">1</option><option value="3">3</option></select> : <NumericInput value={value.count} min={1} max={12} onValueChange={count => onChange({...value, count})} required />}</label>{!master && <label>Labels<input value={value.labels} onChange={event => onChange({...value, labels: event.target.value})} /></label>}</div><div className="capacity-grid">{(['cores', 'memoryMiB', 'diskGiB'] as const).map(key => <label key={key}>{key === 'cores' ? 'CPU (cores)' : key === 'memoryMiB' ? 'Memory (MiB)' : 'Disk (GiB)'}<NumericInput value={value.capacity[key]} min={key === 'cores' ? 1 : key === 'memoryMiB' ? 512 : 8} max={key === 'cores' ? 32 : key === 'memoryMiB' ? 131072 : 2048} onValueChange={number => onChange({...value, capacity: {...value.capacity, [key]: number}})} required /></label>)}</div></div>
+  return <div className="pool-card"><strong>{title}</strong><div className={`field-row ${editableName ? 'field-row-pool' : 'field-row-count'}`}>{editableName && <label>Name<input value={value.name} onChange={event => onChange({...value, name: event.target.value})} pattern="[a-z0-9][a-z0-9-]{0,31}" required /></label>}<label>Nodes{master ? <select value={value.count} onChange={event => onChange({...value, count: Number(event.target.value)})}><option value="1">1</option><option value="3">3</option></select> : <NumericInput value={value.count} min={1} max={12} onValueChange={count => onChange({...value, count})} required />}</label>{!master && !editableName && <label>Labels<input value={typeof value.labels==='string'?value.labels:Object.entries(value.labels).map(([key,value])=>`${key}=${value}`).join(', ')} onChange={event => onChange({...value, labels: event.target.value})} /></label>}</div><div className="capacity-grid">{(['cores', 'memoryMiB', 'diskGiB'] as const).map(key => <label key={key}>{key === 'cores' ? 'CPU (cores)' : key === 'memoryMiB' ? 'Memory (MiB)' : 'Disk (GiB)'}<NumericInput value={value.capacity[key]} min={key === 'cores' ? 1 : key === 'memoryMiB' ? 512 : 8} max={key === 'cores' ? 32 : key === 'memoryMiB' ? 131072 : 2048} onValueChange={number => onChange({...value, capacity: {...value.capacity, [key]: number}})} required /></label>)}</div>{editableName && <PoolPlacementFields name={value.name} labels={labels(value.labels)} taints={value.taints} onChange={change => onChange({...value,...change,labels:change.labels??value.labels})} />}</div>
 }

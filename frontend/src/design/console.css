@@ -1374,3 +1374,21 @@
   .sidebar-version, .sidebar-collapsed .sidebar-version { margin-top: 8px; padding: 8px 0 0; text-align: left; font-size: 12px; }
   .navigation:not(.is-open) + .sidebar-version { display: none; }
 }
+
+/* Placement editors share a compact, responsive field layout. */
+.placement-fields { display: grid; gap: 1rem; min-width: 0; }
+.placement-fields > .button { justify-self: start; }
+.placement-pair, .placement-taint, .placement-toleration, .placement-service-heading { display: grid; gap: .75rem; align-items: end; min-width: 0; }
+.placement-pair { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; }
+.placement-taint { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(9rem, .8fr) auto; }
+.placement-toleration { grid-template-columns: repeat(4, minmax(0, 1fr)) auto; }
+.placement-toleration:has(input[type="number"]) { grid-template-columns: repeat(5, minmax(0, 1fr)) auto; }
+.placement-service { padding-block: 1.25rem; border-top: 1px solid var(--border); }
+.placement-service-heading { grid-template-columns: minmax(0, 1fr) auto; }
+.placement-override-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1.5rem; }
+.placement-override-grid:has(.placement-fields) { grid-template-columns: minmax(0, 1fr); }
+.placement-fields label, .placement-service label { min-width: 0; margin: 0; }
+@media (max-width: 800px) {
+  .placement-override-grid { grid-template-columns: minmax(0, 1fr); }
+  .placement-taint, .placement-toleration, .placement-toleration:has(input[type="number"]) { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}

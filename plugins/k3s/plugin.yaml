@@ -3,7 +3,7 @@ kind: Plugin
 metadata:
   id: io.kubephos.cluster.k3s.bootstrap
   name: Kubernetes cluster bootstrap
-  version: 0.3.2
+  version: 0.4.0
   description: Builds a managed K3s cluster from a verified machine topology.
 spec:
   protocol: v1alpha1
@@ -90,6 +90,10 @@ spec:
               items:
                 type: string
                 pattern: ^[a-z0-9][a-z0-9-]{0,31}$
+            taints:
+              type: array
+              items:
+                type: object
             labels:
               type: object
               additionalProperties: true
@@ -105,6 +109,9 @@ spec:
         format: kubephos-artifact-ref
         x-kubephos-artifact-type: RegistryCredential
         x-kubephos-artifact-version: v1alpha1
+      previousNodeSettings:
+        type: object
+        x-kubephos-hidden: true
       reconcile:
         type: boolean
       previousMachineSetRef:
