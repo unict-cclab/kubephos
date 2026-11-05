@@ -63,7 +63,7 @@
 .button.icon-button,
 .icon-button,
 .theme-toggle,
-.resource-action:not(.action-create) {
+.resource-action:not(.action-create, .action-add) {
   width: 36px;
   height: 36px;
   min-height: 36px;
@@ -76,7 +76,7 @@
   box-shadow: none;
   transition: background-color var(--duration-fast) var(--ease-out), color var(--duration-fast) var(--ease-out);
 }
-:is(.button.icon-button, .icon-button, .theme-toggle, .resource-action:not(.action-create)):hover:not(:disabled) { background: var(--muted); color: var(--foreground); }
+:is(.button.icon-button, .icon-button, .theme-toggle, .resource-action:not(.action-create, .action-add)):hover:not(:disabled) { background: var(--muted); color: var(--foreground); }
 .resource-action.action-delete:hover:not(:disabled) { background: var(--error-background); color: var(--error-foreground); }
 .resource-action:disabled:hover { background: transparent; color: var(--muted-foreground); }
 .icon-button.is-busy .action-icon { animation: icon-spin .8s linear infinite; }
@@ -232,6 +232,20 @@ input[type="file"]::file-selector-button:hover { background: var(--primary-hover
 
 .editor-back { color: var(--muted-foreground); transition: color var(--duration-fast) var(--ease-out); }
 .editor-back:hover { color: var(--foreground); }
+
+/* Load profile ------------------------------------------------------------ */
+
+/* Phases on the left, a sticky live chart on the right; stacked when narrow. */
+.load-profile-workspace { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: start; gap: 24px; }
+.load-profile-live { position: sticky; top: 16px; min-width: 0; }
+.load-profile-live .input-load-card { margin: 0; }
+/* The chart scales with its column instead of scrolling sideways. */
+.load-profile-live .chart-wrap { overflow: hidden; padding: 8px 12px 12px; }
+.load-profile-live .chart-wrap svg { width: 100%; min-width: 0; max-width: 100%; height: auto; }
+@container (max-width: 760px) {
+  .load-profile-workspace { grid-template-columns: minmax(0, 1fr); }
+  .load-profile-live { position: static; }
+}
 
 /* Command palette --------------------------------------------------------- */
 

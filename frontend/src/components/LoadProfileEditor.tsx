@@ -85,14 +85,15 @@ export function LoadProfileEditor({prefix, zones, values = {}, distribution = 'z
       {duration !== geographicDuration && <p className="timeline-error">Geographic phases must cover exactly {formatDuration(duration)} before this configuration can be saved.</p>}</div>
   const previewSteps = loadProfileSteps(serializedSteps)
   const preview = <LoadProfilePreview steps={previewSteps} />
+  // The chart sits beside the phases so every edit is visible as it is made.
+  const workspace = <div className="load-profile-workspace">{workload}<aside className="load-profile-live" aria-label="Live preview">{preview}</aside></div>
   return <div className={`load-profile-editor${tabbed ? ' load-profile-editor-tabbed' : ''}`}>
     <input type="hidden" data-review-title="Workload phases" data-review-table={JSON.stringify(workloadTable(previewSteps))} name={`${prefix}.steps`} value={JSON.stringify(serializedSteps)} readOnly />
     <input type="hidden" data-review-title={distribution === 'cluster' ? 'Traffic phases by cluster' : 'Traffic phases by zone'} data-review-table={zones.length ? JSON.stringify(trafficTable(serializedGeography, distribution === 'cluster')) : undefined} name={`${prefix}.geographicSteps`} value={JSON.stringify(serializedGeography)} readOnly />
     {tabbed ? <FormTabs label="Load profile settings" items={[
-      {id: 'workload', title: 'Workload', content: workload},
+      {id: 'workload', title: 'Workload', content: workspace},
       ...(zones.length ? [{id: 'distribution', title: 'Traffic distribution', content: geography}] : []),
-      ...(settings ? [{id: 'generator', title: 'Generator', content: settings}] : []),
-      {id: 'preview', title: 'Preview', content: preview}
+      ...(settings ? [{id: 'generator', title: 'Generator', content: settings}] : [])
     ]} /> : <>{workload}{preview}{zones.length > 0 && geography}</>}
   </div>
 }

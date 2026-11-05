@@ -1,6 +1,6 @@
 import {afterEach, expect, it, vi} from 'vitest'
 import {fireEvent, render, screen} from '@testing-library/react'
-import {AccountMenu, accountLinks} from './AccountMenu'
+import {AccountMenu} from './AccountMenu'
 
 afterEach(() => {
   document.documentElement.dataset.theme = 'light'
@@ -23,7 +23,13 @@ it('shows no role for other users', () => {
   expect(screen.queryByText('Admin')).not.toBeInTheDocument()
   fireEvent.click(screen.getByRole('button', {name: 'Account settings'}))
   expect(screen.queryByText(/Member|Administrator/)).not.toBeInTheDocument()
-  expect(screen.getByText('KubePhos 1.2.3')).toBeInTheDocument()
+})
+
+it('shows the version just above the account bar', () => {
+  renderMenu(false)
+  const version = screen.getByText('KubePhos 1.2.3')
+  expect(version).toHaveClass('app-version')
+  expect(version.nextElementSibling).toHaveClass('app-account')
 })
 
 it('opens account options from the gear and closes with Escape', () => {
@@ -32,8 +38,8 @@ it('opens account options from the gear and closes with Escape', () => {
   expect(gear).toHaveAttribute('aria-expanded', 'false')
 
   fireEvent.click(gear)
-  expect(screen.getByRole('link', {name: /Change password/})).toHaveAttribute('href', accountLinks.password)
-  expect(screen.getByRole('link', {name: /Account details/})).toHaveAttribute('target', '_blank')
+  expect(screen.getByRole('button', {name: 'Dark mode'})).toBeInTheDocument()
+  expect(screen.queryByRole('link')).not.toBeInTheDocument()
   expect(screen.queryByRole('button', {name: 'Backup and transfer'})).not.toBeInTheDocument()
 
   fireEvent.keyDown(screen.getByRole('button', {name: 'Sign out'}), {key: 'Escape'})

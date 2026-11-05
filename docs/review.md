@@ -6,11 +6,11 @@
   and cards, with color reserved for status. Stylesheets load through explicit
   cascade layers (`tokens`, `legacy`, `console`, `components`, `shell`) from
   `frontend/src/design/index.css`; the shared legacy stylesheet is unchanged.
-- Navigation has four sections. Platform and Experiments are single pages whose
-  related views appear as ordered steps (provision → create → deploy, configure →
-  run → compare). Existing view hashes still work. A command palette (Ctrl/⌘ K)
-  reaches every page; an account menu holds password and account links to the
-  Keycloak account console, theme, refresh, backup, sign-out and the version;
+- Navigation has four sections. Platform and Experiments are single pages: their
+  ordered steps (provision → create, configure → run) are numbered, while
+  deployments and comparisons appear beside them as tools used when needed. Existing view hashes still work. A command palette (Ctrl/⌘ K)
+  reaches every page; an account menu holds theme, refresh, backup and sign-out;
+  the version sits just above the account bar;
   administrators carry an "Admin" badge next to their name.
 - "New experiment" is the primary action on every page. `#results/new` opens the
   launcher; without a runnable configuration the action explains that one is needed.
@@ -28,7 +28,7 @@
   contrast checks; initial assets at 184.9 KiB gzip, below the 220 KiB budget.
 - `npm audit`: no vulnerabilities.
 - Development Keycloak recreated with the new theme; the sign-in page links
-  `kubephos-v3.css` and the account console pages used by the account menu respond.
+  `kubephos-v3.css`.
 - Authenticated browser walkthrough at desktop and phone widths in light and dark
   themes: Home, Platform (empty infrastructure and cluster lists), Library (cards
   and import form), Experiments (empty runs and configurations), Members, account

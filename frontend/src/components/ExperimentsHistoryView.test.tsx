@@ -3,6 +3,20 @@ import {beforeAll, beforeEach, describe, expect, it, vi} from 'vitest'
 import type {Experiment, ExperimentConfiguration} from '../types'
 import {request} from '../api'
 import {ExperimentsHistoryView} from './ExperimentsHistoryView'
+import {NotificationProvider} from './ToastRegion'
+
+it('explains that a configuration is needed instead of disabling New experiment', async () => {
+  window.location.hash = '#results'
+  // Let the hashchange queued by the line above settle before the test navigates again.
+  await new Promise(resolve => setTimeout(resolve, 0))
+  render(<NotificationProvider><ExperimentsHistoryView experiments={[]} configurations={[]} artifacts={[]} operations={[]} workspaces={[]} session={{authenticated: true, user: {id: 'alice', username: 'alice', role: 'user'}}} changed={async () => {}} openOperation={() => {}} /></NotificationProvider>)
+  const button = screen.getByRole('button', {name: 'New experiment'})
+  expect(button).toBeEnabled()
+  expect(button).toHaveAttribute('title', 'Create a configuration first')
+  fireEvent.click(button)
+  await waitFor(() => expect(window.location.hash).toBe('#experiments'))
+  expect(await screen.findByText('Experiments run from a validated configuration. Create one to get started.')).toBeInTheDocument()
+})
 
 vi.mock('../api', () => ({request: vi.fn()}))
 

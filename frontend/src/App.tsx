@@ -15,7 +15,6 @@ import {retriesOnlyClusterMesh} from './clusterRetry'
 import {hashView, newExperimentHash} from './detailRoute'
 import {currentSection, isNavigableView, navigationTargets, visibleNavigation} from './navigation'
 import {AccountMenu} from './components/AccountMenu'
-import {runnableConfigurations} from './components/ExperimentExecutionDialog'
 import {WorkflowSteps, workflowFor} from './components/WorkflowSteps'
 import {SectionContext} from './components/ResourceListHeading'
 import {CommandPalette, isPaletteShortcut, paletteShortcut} from './components/CommandPalette'
@@ -189,18 +188,11 @@ function PlatformApp() {
   const workflow = workflowFor(view, {isAdmin, infrastructure: data.connections.length + data.machineTemplates.length + data.infrastructureServices.length, clusters: data.kubernetesClusters.length, deployments: data.deployments.length, configurations: data.experimentConfigurations.length, runs: data.experiments.length})
   const sectionHeading = section && workflow ? {...section, subnav: <WorkflowSteps workflow={workflow} view={view} navigate={navigate} />} : section
   const navigationSections = visibleNavigation(isAdmin)
-  // The primary action of the product: launch a run, or learn what is missing first.
+  // The product's primary action; the experiments view opens the launcher or explains
+  // which configuration is missing.
   const startExperiment = () => {
     setMobileNavigationOpen(false)
-    if (runnableConfigurations(session, data.experimentConfigurations).length) {
-      window.location.hash = newExperimentHash
-      return
-    }
-    // Notifications clear on navigation, so the hint follows the hash change.
-    const hint = () => notify('Experiments run from a validated configuration. Create one to get started.')
-    if (window.location.hash === '#experiments') return hint()
-    window.addEventListener('hashchange', hint, {once: true})
-    navigate('experiments')
+    window.location.hash = newExperimentHash
   }
   return <>
     {confirmationDialog}

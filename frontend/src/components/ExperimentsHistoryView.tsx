@@ -1,9 +1,9 @@
-import {ErrorFeedback, useErrorState} from './ToastRegion'
+import {ErrorFeedback, useErrorState, useNotifications} from './ToastRegion'
 import {ResourceListHeading} from './ResourceListHeading'
 import {ResourceSharing, canManageResource} from './ResourceSharing'
 import {ResourceListTable} from './ResourceListTable'
 import {useDeleteConfirmation} from './ConfirmationDialog'
-import {useEffect, useState} from 'react'
+import {useCallback, useEffect, useRef, useState} from 'react'
 import {request} from '../api'
 import {experimentDeletionMessage, experimentDisplayStatus, isTerminalExperiment} from '../lib'
 import {isNewExperimentRoute, useDetailRoute} from '../detailRoute'
@@ -32,17 +32,29 @@ export function ExperimentsHistoryView(props: Props) {
   const detail = useDetailRoute('results')
   const [filter, setFilter] = useState<Filter>('all')
   const [deleting, setDeleting] = useState<string | null>(null)
-  const [creating, setCreating] = useState(() => isNewExperimentRoute(window.location.hash))
+  const notify = useNotifications()?.notify
+  const runnable = runnableConfigurations(props.session, props.configurations)
+  const runnableCount = useRef(runnable.length)
+  runnableCount.current = runnable.length
+  const [creating, setCreating] = useState(false)
+  // The launcher opens from this page, the sidebar or "#results/new". Without a runnable
+  // configuration it leads to the configure step and says why, instead of staying disabled.
+  const launch = useCallback(() => {
+    if (runnableCount.current) return setCreating(true)
+    // Notifications clear on navigation, so the hint follows the hash change.
+    window.addEventListener('hashchange', () => notify?.('Experiments run from a validated configuration. Create one to get started.'), {once: true})
+    window.location.hash = 'experiments'
+  }, [notify])
   useEffect(() => {
-    const openLauncher = () => {if (isNewExperimentRoute(window.location.hash)) setCreating(true)}
-    window.addEventListener('hashchange', openLauncher)
-    return () => window.removeEventListener('hashchange', openLauncher)
-  }, [])
+    const fromRoute = () => {if (isNewExperimentRoute(window.location.hash)) launch()}
+    fromRoute()
+    window.addEventListener('hashchange', fromRoute)
+    return () => window.removeEventListener('hashchange', fromRoute)
+  }, [launch])
   const closeLauncher = () => {
     setCreating(false)
     if (isNewExperimentRoute(window.location.hash)) window.location.hash = 'results'
   }
-  const runnable = runnableConfigurations(props.session, props.configurations)
   const [starting, setStarting] = useState<string | null>(null)
   const [error, setError] = useErrorState()
   const [owner, setOwner] = useState('')
@@ -79,7 +91,7 @@ export function ExperimentsHistoryView(props: Props) {
   const items = props.experiments.filter(item => (!owner || item.ownerUserId === owner) && (filter === 'all' || (filter === 'active' ? ['queued', 'running', 'initializing', 'initialized'].includes(item.status) : ['succeeded', 'failed', 'canceled'].includes(item.status))))
   return <>
     {confirmationDialog}
-    <ResourceListHeading title="Experiments" icon="experiments" action={<>{Boolean(props.session.user) && <ResourceAction action="create" label="New experiment" disabled={!runnable.length} onClick={() => setCreating(true)} />}</>} />
+    <ResourceListHeading title="Experiments" icon="experiments" action={<>{Boolean(props.session.user) && <ResourceAction action="create" label="New experiment" title={runnable.length ? 'New experiment' : 'Create a configuration first'} onClick={launch} />}</>} />
     {error && <ErrorFeedback message={error} />}
     <div className="history-filters" role="group" aria-label="Filter experiments">{(['all', 'active', 'completed'] as Filter[]).map(value => <button key={value} type="button" className={filter === value ? 'active' : ''} aria-pressed={filter === value} onClick={() => setFilter(value)}>{value === 'all' ? 'All' : value === 'active' ? 'In progress' : 'Completed'}</button>)}</div>
     <ResourceListTable filters={<OwnerFilter items={props.experiments} value={owner} onChange={setOwner} />} empty={<><strong>{filter === 'all' && !owner ? 'No experiments yet' : 'No matching experiments'}</strong><p>{filter === 'all' && !owner ? 'Run an experiment from a validated configuration to start collecting results.' : 'Choose another status or owner filter.'}</p></>} searchText={item => `${item.name} ${ownerLabel(item)} ${item.kind} ${experimentDisplayStatus(item)}`} items={items} label="Experiments" columns={[

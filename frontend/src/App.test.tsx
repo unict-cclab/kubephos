@@ -73,11 +73,11 @@ describe('application navigation', () => {
     expect(screen.queryByRole('combobox', {name: 'Jump to'})).not.toBeInTheDocument()
   })
 
-  it('sends the new experiment action to configurations until one can run', async () => {
+  it('opens the experiment launcher route from the sidebar action', async () => {
     render(<App />)
     fireEvent.click(await screen.findByRole('button', {name: 'New experiment'}))
-    await waitFor(() => expect(screen.getByText('Current view: experiments')).toBeInTheDocument())
-    expect(await screen.findByText('Experiments run from a validated configuration. Create one to get started.')).toBeInTheDocument()
+    await waitFor(() => expect(screen.getByText('Current view: results')).toBeInTheDocument())
+    expect(window.location.hash).toBe('#results/new')
   })
 
   it('opens team members on the first menu selection', async () => {
