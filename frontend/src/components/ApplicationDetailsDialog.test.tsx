@@ -33,6 +33,19 @@ describe('application details', () => {
     expect(screen.getByRole('button', {name: 'Download .py'}).parentElement).toHaveClass('chart-export-actions')
   })
 
+  it('leads with the description and key facts, then topology, services and files', () => {
+    const fixed: Application = {...application, name: 'Online Boutique', description: 'Microservices demo shop.', descriptor: {spec: {interface: {components: [{id: 'frontend', workload: {apiVersion: 'apps/v1', kind: 'Deployment', name: 'frontend'}, traits: ['scalable']}, {id: 'cart', workload: {apiVersion: 'apps/v1', kind: 'Deployment', name: 'cart'}, traits: []}], loadScenarios: []}}}}
+    render(<ApplicationDetailsPage application={fixed} close={() => {}} canDelete={false} remove={async () => false} />)
+
+    expect(screen.getByRole('heading', {level: 2, name: 'Online Boutique'})).toBeInTheDocument()
+    expect(screen.getByText('Microservices demo shop.')).toHaveClass('application-lead')
+    expect(screen.getByText('OB')).toHaveClass('application-monogram')
+    expect(screen.getByText('Services', {selector: 'dt'}).nextElementSibling).toHaveTextContent('2')
+    expect(screen.getAllByRole('region').map(region => region.getAttribute('aria-label'))).toEqual(['Topology', 'Services', 'Files'])
+    expect(screen.queryByText('Application topology')).not.toBeInTheDocument()
+    expect(screen.getByText('Deployment files')).toBeInTheDocument()
+  })
+
   it('keeps the application detail focused on topology and two file selectors', () => {
     render(<ApplicationDetailsPage application={application} close={() => {}} canDelete={false} remove={async () => false} />)
     expect(screen.queryByText('Configurable fields')).not.toBeInTheDocument()

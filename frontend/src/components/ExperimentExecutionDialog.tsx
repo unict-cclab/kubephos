@@ -4,6 +4,12 @@ import {request} from '../api'
 import type {Experiment, ExperimentConfiguration, Session} from '../types'
 import {Dialog} from './Dialog'
 import {ReadoutTable} from './ReadoutTable'
+import {canManageResource} from './ResourceSharing'
+
+// Configurations the current user may launch: valid and owned (or any, for administrators).
+export function runnableConfigurations(session: Session, configurations: ExperimentConfiguration[]): ExperimentConfiguration[] {
+  return configurations.filter(item => item.validation.valid && canManageResource(session, item.ownerUserId))
+}
 
 interface Props {
   open: boolean

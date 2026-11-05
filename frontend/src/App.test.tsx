@@ -40,28 +40,50 @@ describe('application navigation', () => {
     fireEvent.click(await screen.findByRole('button', {name: 'Open activity logs'}))
     expect(screen.getByText('Activity logs')).toBeInTheDocument()
 
-    fireEvent.click(screen.getByRole('button', {name: 'Catalog'}))
+    fireEvent.click(screen.getByRole('button', {name: 'Lab'}))
     expect(screen.queryByText('Activity logs')).not.toBeInTheDocument()
     expect(screen.getByRole('button', {name: 'Open activity logs'})).toBeInTheDocument()
   })
 
-  it('shows configurations and experiments without a separate suites menu', async () => {
+  it('keeps configurations inside experiments, without a separate suites menu', async () => {
     render(<App />)
-    await screen.findByRole('button', {name: 'Configurations'})
-    expect(screen.getByRole('button', {name: 'Experiments'})).toBeInTheDocument()
+    fireEvent.click(await screen.findByRole('button', {name: 'Lab'}))
+    expect(await screen.findByRole('button', {name: 'Experiments'})).toBeInTheDocument()
+    expect(screen.queryByRole('button', {name: 'Configurations'})).not.toBeInTheDocument()
     expect(screen.queryByRole('button', {name: 'Suites'})).not.toBeInTheDocument()
   })
 
   it('opens the administrator state transfer section', async () => {
     render(<App />)
-    fireEvent.click(await screen.findByRole('button', {name: 'Administration'}))
+    fireEvent.click(await screen.findByRole('button', {name: 'Account settings'}))
+    fireEvent.click(screen.getByRole('button', {name: 'Backup and transfer'}))
     await waitFor(() => expect(screen.getByText('Current view: administration')).toBeInTheDocument())
   })
 
-  it('opens users on the first menu selection', async () => {
+  it('jumps to a section from the keyboard palette', async () => {
+    render(<App />)
+    await screen.findByRole('button', {name: 'Lab'})
+
+    fireEvent.keyDown(window, {key: 'k', ctrlKey: true})
+    const input = screen.getByRole('combobox', {name: 'Jump to'})
+    fireEvent.change(input, {target: {value: 'accounts'}})
+    fireEvent.keyDown(input, {key: 'Enter'})
+
+    await waitFor(() => expect(screen.getByText('Current view: users')).toBeInTheDocument())
+    expect(screen.queryByRole('combobox', {name: 'Jump to'})).not.toBeInTheDocument()
+  })
+
+  it('sends the new experiment action to configurations until one can run', async () => {
+    render(<App />)
+    fireEvent.click(await screen.findByRole('button', {name: 'New experiment'}))
+    await waitFor(() => expect(screen.getByText('Current view: experiments')).toBeInTheDocument())
+    expect(await screen.findByText('Experiments run from a validated configuration. Create one to get started.')).toBeInTheDocument()
+  })
+
+  it('opens team members on the first menu selection', async () => {
     render(<App />)
 
-    fireEvent.click(await screen.findByRole('button', {name: 'Users'}))
+    fireEvent.click(await screen.findByRole('button', {name: 'Team'}))
 
     await waitFor(() => expect(screen.getByText('Current view: users')).toBeInTheDocument())
   })

@@ -96,6 +96,7 @@ describe('application topology graph', () => {
     const larger = Array.from({length: 31}, (_, index) => ({id: `service-${index}`, dependencies: [index * 2 + 1, index * 2 + 2].filter(child => child < 31).map(child => `service-${child}`)}))
     expect(buildApplicationTopology(larger)!.width).toBeGreaterThan(graph.width)
     render(<ApplicationTopologyGraph components={tree} />)
+    expect(screen.getByText('Application topology')).toBeInTheDocument()
     const svg = screen.getByRole('img', {name: 'Application component topology'}) as unknown as SVGSVGElement
     const pdf = new TextDecoder().decode(svgToPDF(svg))
     expect(pdf).toContain(`/MediaBox [0 0 ${graph.width * .75} ${graph.height * .75}]`)

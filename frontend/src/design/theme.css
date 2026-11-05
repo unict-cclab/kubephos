@@ -1,99 +1,169 @@
+/*
+ * Design tokens. Components consume these variables only; colors are never
+ * hard-coded in component rules. scripts/check-theme.mjs validates the WCAG
+ * contrast of the main text and control pairs in both themes: keep the light
+ * tokens first, followed by the single dark-theme override block.
+ *
+ * Direction: monochrome in layers. A tinted frame holds the sidebar, the
+ * page sits on a raised sheet, and cards step one tone further. Color is
+ * reserved for status; hierarchy comes from tone, type and space.
+ */
 :root {
   color-scheme: light;
+
+  /* Typography */
   --font-sans: "Geist Variable", Geist, ui-sans-serif, system-ui, sans-serif;
   --font-mono: "Geist Mono Variable", "Geist Mono", ui-monospace, monospace;
-  --radius: .5rem;
-  --font-weight-title: 550;
-  --font-weight-heading: 500;
-  --background: #f5f6f8;
-  --foreground: oklch(.145 0 0);
+  --font-weight-title: 600;
+  --font-weight-heading: 550;
+  --tracking-tight: -.04em;
+
+  /* Shape */
+  --radius: .75rem;
+  --radius-sm: .5rem;
+  --radius-md: var(--radius);
+  --radius-lg: 1rem;
+  --radius-full: 999px;
+
+  /* Layout */
+  --control-height: 40px;
+  --sidebar-width: 248px;
+  --content-width: 1240px;
+  --frame-gap: 8px;
+
+  /* Motion */
+  --ease-out: cubic-bezier(.2, .8, .2, 1);
+  --duration-fast: 120ms;
+  --duration-base: 200ms;
+
+  /* Tonal layers: frame < sheet < card */
+  --background: #f1f1f0;
+  --sheet: #fcfcfc;
+  --foreground: #0a0a0a;
   --card: #ffffff;
-  --card-foreground: oklch(.145 0 0);
+  --card-foreground: #0a0a0a;
   --popover: #ffffff;
-  --popover-foreground: oklch(.145 0 0);
-  --primary: #0066cc;
-  --primary-foreground: oklch(.985 0 0);
-  --secondary: #f0f0f0;
-  --secondary-foreground: oklch(.205 0 0);
-  --muted: #f0f0f0;
-  --muted-foreground: #666666;
-  --accent: #e5e5e5;
-  --accent-foreground: oklch(.205 0 0);
-  --destructive: oklch(.577 .245 27.325);
-  --border: #e1e4e8;
-  --input: #d1d5db;
-  --field-border: #8a8d90;
-  --ring: #0066cc;
-  --sidebar: #fafbfc;
-  --sidebar-foreground: oklch(.145 0 0);
-  --sidebar-primary: oklch(.205 0 0);
-  --sidebar-primary-foreground: oklch(.985 0 0);
-  --sidebar-accent: #eceef2;
-  --sidebar-accent-foreground: oklch(.205 0 0);
-  --sidebar-border: #e1e4e8;
-  --sidebar-ring: oklch(.708 0 0);
+  --popover-foreground: #0a0a0a;
+  --secondary: #ececeb;
+  --secondary-foreground: #0a0a0a;
+  --muted: #f2f2f1;
+  --muted-foreground: #5c5c5a;
+  --accent: #e8e8e6;
+  --accent-foreground: #0a0a0a;
+  --texture: rgb(0 0 0 / .07);
+
+  /* Brand: the accent is ink itself */
+  --primary: #0a0a0a;
+  --primary-foreground: #ffffff;
+  --primary-hover: #2e2e2e;
+  --primary-soft: #f2f2f1;
+
+  /* Lines and focus */
+  --border: #e6e6e4;
+  --input: #d4d4d2;
+  --field-border: #8a8a87;
+  --ring: #0a0a0a;
+  --focus-ring: color-mix(in srgb, var(--ring) 14%, transparent);
+
+  /* Navigation */
+  --sidebar: #f1f1f0;
+  --sidebar-foreground: #0a0a0a;
+  --sidebar-primary: #0a0a0a;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #e6e6e4;
+  --sidebar-accent-foreground: #0a0a0a;
+  --sidebar-border: #e2e2e0;
+  --sidebar-ring: #0a0a0a;
+
+  /* Elevation: the sheet floats a little, floating layers cast shadows */
+  --shadow-xs: none;
+  --shadow-sheet: 0 1px 2px rgb(0 0 0 / .04), 0 0 0 1px rgb(0 0 0 / .04);
+  --shadow-sm: 0 1px 2px rgb(0 0 0 / .06);
+  --shadow-md: 0 12px 32px -12px rgb(0 0 0 / .18);
+  --shadow: 0 24px 64px -16px rgb(0 0 0 / .28);
+  --backdrop: rgb(10 10 10 / .35);
+
+  /* Status */
+  --destructive: #d92d20;
+  --error-foreground: #b42318;
+  --error-background: #fef3f2;
+  --success-foreground: #067647;
+  --success-background: #ecfdf3;
+  --success-contrast: #ffffff;
+  --amber: #a15c07;
+  --amber-background: #fffaeb;
+  --red: var(--destructive);
+  --blue: #175cd3;
+  --blue-background: #eff8ff;
+
+  /* Legacy aliases used by the shared stylesheet */
   --ink: var(--foreground);
   --canvas: var(--background);
   --surface: var(--card);
   --surface-soft: var(--muted);
   --line: var(--border);
   --line-strong: var(--input);
-  --focus-ring: color-mix(in oklch, var(--ring) 50%, transparent);
-  --danger-ring: color-mix(in oklch, var(--destructive) 20%, transparent);
-  --radius-sm: calc(var(--radius) * .6);
-  --radius-md: var(--radius);
-  --radius-lg: calc(var(--radius) * 1.4);
-  --shadow: 0 10px 30px rgb(0 0 0 / .12);
-  --dark: #171717;
+  --danger-ring: color-mix(in srgb, var(--destructive) 20%, transparent);
+  --dark: #0a0a0a;
   --lime: #fafafa;
-  --error-foreground: #b42318;
-  --error-background: #fef3f2;
-  --success-foreground: #146c35;
-  --success-background: #e8f5ee;
-  --success-contrast: #ffffff;
-  --amber: #a16207;
-  --red: var(--destructive);
-  --blue: #2563eb;
 }
 
 :root[data-theme="dark"] {
-  --error-foreground: #fda29b;
-  --error-background: #3b1d1d;
   color-scheme: dark;
-  --background: oklch(.145 0 0);
-  --foreground: oklch(.985 0 0);
-  --card: oklch(.205 0 0);
-  --card-foreground: oklch(.985 0 0);
-  --popover: oklch(.205 0 0);
-  --popover-foreground: oklch(.985 0 0);
-  --primary: #92c5f9;
-  --primary-foreground: #06254a;
-  --secondary: oklch(.269 0 0);
-  --secondary-foreground: oklch(.985 0 0);
-  --muted: oklch(.269 0 0);
-  --muted-foreground: oklch(.708 0 0);
-  --accent: oklch(.269 0 0);
-  --accent-foreground: oklch(.985 0 0);
-  --destructive: oklch(.704 .191 22.216);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
-  --field-border: #777777;
-  --ring: #92c5f9;
-  --sidebar: oklch(.205 0 0);
-  --sidebar-foreground: oklch(.985 0 0);
-  --sidebar-primary: oklch(.488 .243 264.376);
-  --sidebar-primary-foreground: oklch(.985 0 0);
-  --sidebar-accent: oklch(.269 0 0);
-  --sidebar-accent-foreground: oklch(.985 0 0);
-  --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-ring: oklch(.556 0 0);
-  --shadow: 0 10px 30px rgb(0 0 0 / .3);
-  --code-background: #09090b;
-  --code-foreground: #e5e5e5;
-  --code-border: #52525b;
-  --success-foreground: #4ade80;
-  --success-background: #203428;
+
+  --background: #050505;
+  --sheet: #0d0d0d;
+  --foreground: #ededec;
+  --card: #141414;
+  --card-foreground: #ededec;
+  --popover: #181818;
+  --popover-foreground: #ededec;
+  --secondary: #1f1f1e;
+  --secondary-foreground: #ededec;
+  --muted: #1c1c1b;
+  --muted-foreground: #a3a3a0;
+  --accent: #262625;
+  --accent-foreground: #ededec;
+  --texture: rgb(255 255 255 / .06);
+
+  --primary: #ededec;
+  --primary-foreground: #0a0a0a;
+  --primary-hover: #ffffff;
+  --primary-soft: #1c1c1b;
+
+  --border: #222221;
+  --input: #30302f;
+  --field-border: #707070;
+  --ring: #ededec;
+
+  --sidebar: #050505;
+  --sidebar-foreground: #ededec;
+  --sidebar-primary: #ededec;
+  --sidebar-primary-foreground: #0a0a0a;
+  --sidebar-accent: #1c1c1b;
+  --sidebar-accent-foreground: #ededec;
+  --sidebar-border: #1a1a1a;
+  --sidebar-ring: #ededec;
+
+  --shadow-sheet: 0 0 0 1px #1c1c1b;
+  --shadow-sm: 0 1px 2px rgb(0 0 0 / .5);
+  --shadow-md: 0 12px 32px -12px rgb(0 0 0 / .8);
+  --shadow: 0 24px 64px -16px rgb(0 0 0 / .9);
+  --backdrop: rgb(0 0 0 / .7);
+
+  --code-background: #080808;
+  --code-foreground: #e5e5e4;
+  --code-border: #30302f;
+
+  --destructive: #f97066;
+  --error-foreground: #fda29b;
+  --error-background: #2a1211;
+  --success-foreground: #75e0a7;
+  --success-background: #0b2416;
   --success-contrast: #052e16;
-  --amber: #facc15;
-  --blue: #60a5fa;
+  --amber: #fdb022;
+  --amber-background: #2a1f08;
+  --blue: #84caff;
+  --blue-background: #0b1a2e;
+  --dark: #050505;
 }

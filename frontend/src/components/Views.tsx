@@ -8,7 +8,7 @@ import {resourceStatus} from '../connectivity'
 import {ResourceListAction, ResourceListHeading, ResourceListPage} from './ResourceListHeading'
 import {ActionIcon} from './ActionIcon'
 import {useEffect, useState} from 'react'
-import {formatDate} from '../lib'
+import {formatDate, formatRelativeTime} from '../lib'
 import {useDetailRoute} from '../detailRoute'
 import type {Application, Artifact, AuditEvent, CatalogStrategy, ClusterUserAssignment, Connection, Credential, Experiment, ExperimentConfiguration, InfrastructureResource, ManagedResource, Operation, Pipeline, PipelineRun, Plugin, PluginImportJob, PluginPackage, PluginRuntimeStatus, Session, SystemStatus, User, View, Workspace} from '../types'
 import {ExperimentConfigurationsView} from './ExperimentConfigurationsView'
@@ -19,7 +19,9 @@ import {ModelCatalogContent, useCatalogModels} from './ModelCatalog'
 import {ResourceListTable} from './ResourceListTable'
 import {ApplicationDetailsPage} from './ApplicationDetailsDialog'
 import {ConnectionDetailsPage} from './ConnectionDetailsPage'
-import {SectionIcon, type SectionIconKind} from './SectionIcon'
+import type {SectionIconKind} from './SectionIcon'
+import {SetupJourney, setupSteps} from './SetupJourney'
+import {ApplicationGrid} from './ApplicationGrid'
 import {ResourceAction} from './ResourceAction'
 import {UsersView} from './UsersView'
 import {AdministrationView} from './AdministrationView'
@@ -99,26 +101,44 @@ export function Views(props: ViewProps) {
   </>
 }
 
+const todayLabel = new Intl.DateTimeFormat('en', {weekday: 'long', day: 'numeric', month: 'long'})
+
 function Overview(props: ViewProps) {
   const clusters = props.kubernetesClusters.filter(item => resourceStatus(item) === 'ready').length
   const active = props.experiments.filter(item => ['queued', 'running', 'initializing', 'initialized'].includes(item.status)).length
   const completed = props.experiments.filter(item => item.status === 'succeeded').length
   const activity = buildRecentActivity({experiments: props.experiments, configurations: props.experimentConfigurations, connections: props.connections, resources: [...props.machineTemplates, ...props.infrastructureServices, ...props.kubernetesClusters], applications: props.applications})
-  return <>
-    <div className="section-heading overview-heading"><div><h2>Overview</h2></div></div>
-    <div className="stats-grid">
-      <Stat label="Ready clusters" value={clusters} />
-      <Stat label="Configurations" value={props.experimentConfigurations.length} />
-      <Stat label="In progress" value={active} />
-      <Stat label="Completed" value={completed} />
+  const username = props.session.user?.username
+  const steps = setupSteps({isAdmin: props.isAdmin, connections: props.connections.length, readyClusters: clusters, configurations: props.experimentConfigurations.length, completedExperiments: completed})
+  const setupComplete = steps.every(step => step.done)
+  return <div className="overview">
+    <div className="overview-main">
+      <header className="overview-greeting">
+        <p className="page-eyebrow">{todayLabel.format(new Date())}</p>
+        <h2>{username ? `Welcome back, ${username}` : 'Welcome to KubePhos'}</h2>
+        <p>{setupComplete ? 'Your workspace is ready. Here is where things stand.' : 'Follow the steps below to run your first experiment.'}</p>
+      </header>
+      <SetupJourney steps={steps} navigate={props.navigate} />
+      <div className="stats-grid">
+        <Stat label="Ready clusters" value={clusters} open={() => props.navigate('kubernetes')} />
+        <Stat label="Configurations" value={props.experimentConfigurations.length} open={() => props.navigate('experiments')} />
+        <Stat label="In progress" value={active} open={() => props.navigate('results')} />
+        <Stat label="Completed" value={completed} open={() => props.navigate('results')} />
+      </div>
     </div>
-    <div className="section-heading"><div><SectionIcon kind="activity" /><h2>Recent activity</h2></div></div>
-    <RecentActivity items={activity} />
-  </>
+    <aside className="overview-activity" aria-labelledby="overview-activity-title">
+      <h2 id="overview-activity-title">Activity</h2>
+      <RecentActivity items={activity} />
+    </aside>
+  </div>
 }
 
-function Stat({label, value}: {label: string; value?: number}) {
-  return <article className="stat-card"><span>{label}</span><strong>{value ?? '—'}</strong></article>
+function Stat({label, value, open}: {label: string; value?: number; open: () => void}) {
+  return <button type="button" className="stat-card" onClick={open}>
+    <span className="stat-label">{label}</span>
+    <span className="stat-arrow"><ActionIcon name="right" /></span>
+    <strong className="stat-value">{value ?? '—'}</strong>
+  </button>
 }
 
 function Heading({title, action, icon}: {title: string; action?: React.ReactNode; icon: SectionIconKind}) {
@@ -156,21 +176,19 @@ export function buildRecentActivity({experiments, configurations, connections, r
     }),
     ...configurations.map(item => ({id: `configuration-${item.id}`, title: 'Experiment configuration updated', detail: item.name, status: item.validation.valid ? 'validated' : 'invalid', createdAt: item.updatedAt || item.createdAt, href: `experiments/configuration/${encodeURIComponent(item.id)}`})),
     ...connections.map(item => ({id: `connection-${item.id}`, title: 'Proxmox connection added', detail: item.name, status: 'ready', createdAt: item.updatedAt || item.createdAt, href: `infrastructure/connection/${encodeURIComponent(item.id)}`})),
-    ...applications.filter(item => item.updatedAt || item.createdAt).map(item => ({id: `application-${item.reference}`, title: 'Application added to catalog', detail: item.name, status: 'ready', createdAt: item.updatedAt || item.createdAt || '', href: `catalog/application/${encodeURIComponent(item.reference)}`}))
+    ...applications.filter(item => item.updatedAt || item.createdAt).map(item => ({id: `application-${item.reference}`, title: 'Application added to library', detail: item.name, status: 'ready', createdAt: item.updatedAt || item.createdAt || '', href: `catalog/application/${encodeURIComponent(item.reference)}`}))
   ]
   return values.filter(item => item.createdAt).sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt)).slice(0, 6)
 }
 
 function RecentActivity({items}: {items: RecentActivityItem[]}) {
   if (!items.length) return <Empty title="No activity yet">Create a configuration or prepare a cluster to see your first activity here.</Empty>
-  return <div className="operation-list">{items.map(item => {
-    return <button className="operation-row" key={item.id} onClick={() => {window.location.hash = item.href}}>
-      <div><h3>{item.title}</h3><p>{item.detail}</p></div>
-      <Status value={item.status} />
-      <span className="date">{formatDate(item.createdAt)}</span>
-      <span className="operation-arrow"><ActionIcon name="right" /></span>
+  return <ol className="activity-feed">{items.map(item => <li key={item.id}>
+    <button type="button" className="activity-item" onClick={() => {window.location.hash = item.href}}>
+      <span className="activity-copy"><strong>{item.title}</strong><span>{item.detail}</span></span>
+      <span className="activity-meta"><Status value={item.status} /><time dateTime={item.createdAt} title={formatDate(item.createdAt)}>{formatRelativeTime(item.createdAt)}</time></span>
     </button>
-  })}</div>
+  </li>)}</ol>
 }
 
 function CatalogView(props: ViewProps) {
@@ -189,15 +207,7 @@ function CatalogView(props: ViewProps) {
   const strategies = <StrategyCatalog kind={selectedStrategy?.kind ?? (activeTab === 'application' || activeTab === 'model' ? 'scheduler' : activeTab)} items={props.strategies} workspaces={props.workspaces} session={props.session} isAdmin={props.isAdmin} changed={props.changed} openOperation={props.openOperation} />
   if (detail.route?.kind === 'strategy') return strategies
   if (detail.route?.kind === 'model') return <ModelCatalogContent catalog={modelCatalog} session={props.session} isAdmin={props.isAdmin} changed={props.changed} />
-  return <ResourceListPage title="Catalog" icon="catalog"><nav className="resource-tabs" aria-label="Catalog items">{([['application', 'Applications', visibleApplications.length], ['scheduler', 'Schedulers', props.strategies.filter(item => item.kind === 'scheduler').length], ['descheduler', 'Deschedulers', props.strategies.filter(item => item.kind === 'descheduler').length], ['autoscaler', 'Autoscalers', props.strategies.filter(item => item.kind === 'autoscaler').length], ['model', 'AI models', modelCatalog.loading ? '…' : modelCatalog.error ? '?' : modelCatalog.models.length]] as const).map(([tab, label, count]) => <button key={tab} className={activeTab === tab ? 'active' : ''} aria-current={activeTab === tab ? 'page' : undefined} onClick={() => setActiveTab(tab)}>{label}{count !== null && <span>{count}</span>}</button>)}</nav>{activeTab === 'application' && props.isAdmin && <ResourceListAction><ResourceAction action="create" label="Import application" onClick={props.importApplication} /></ResourceListAction>}{activeTab === 'application' ? <ApplicationTable items={visibleApplications} isAdmin={props.isAdmin} remove={props.deleteApplication} open={item => detail.open('application', item.reference)} /> : activeTab === 'model' ? <ModelCatalogContent catalog={modelCatalog} session={props.session} isAdmin={props.isAdmin} changed={props.changed} /> : strategies}</ResourceListPage>
-}
-
-function ApplicationTable({items, isAdmin, remove, open}: {items: Application[]; isAdmin: boolean; remove: (application: Application) => Promise<boolean>; open: (application: Application) => void}) {
-  return <ResourceListTable editable items={items.map(item => ({...item, createdAt: item.createdAt ?? '', updatedAt: item.updatedAt ?? ''}))} label="Applications" searchText={item => `${item.name} ${item.description}`} columns={[
-    {label: 'Name', render: item => <h3>{item.name}</h3>},
-    {label: 'Source', render: item => item.origin === 'built-in' ? 'Included' : 'Imported'},
-    {label: 'Services', render: item => item.descriptor.spec?.valuesSchema?.['x-kubephos-dynamic-topology'] ? 'Configurable' : item.descriptor.spec?.interface?.components?.length ?? 0}
-  ]} actions={item => <><ResourceAction action="view" label={`View ${item.name} details`} onClick={() => open(item)} />{isAdmin && <ResourceAction action="delete" label={`Delete ${item.name}`} onClick={() => void remove(item)} />}</>} />
+  return <ResourceListPage title="Library" icon="catalog"><nav className="resource-tabs" aria-label="Catalog items">{([['application', 'Applications', visibleApplications.length], ['scheduler', 'Schedulers', props.strategies.filter(item => item.kind === 'scheduler').length], ['descheduler', 'Deschedulers', props.strategies.filter(item => item.kind === 'descheduler').length], ['autoscaler', 'Autoscalers', props.strategies.filter(item => item.kind === 'autoscaler').length], ['model', 'AI models', modelCatalog.loading ? '…' : modelCatalog.error ? '?' : modelCatalog.models.length]] as const).map(([tab, label, count]) => <button key={tab} className={activeTab === tab ? 'active' : ''} aria-current={activeTab === tab ? 'page' : undefined} onClick={() => setActiveTab(tab)}>{label}{count !== null && <span>{count}</span>}</button>)}</nav>{activeTab === 'application' && props.isAdmin && <ResourceListAction><ResourceAction action="create" label="Import application" onClick={props.importApplication} /></ResourceListAction>}{activeTab === 'application' ? <ApplicationGrid items={visibleApplications} isAdmin={props.isAdmin} remove={props.deleteApplication} open={item => detail.open('application', item.reference)} /> : activeTab === 'model' ? <ModelCatalogContent catalog={modelCatalog} session={props.session} isAdmin={props.isAdmin} changed={props.changed} /> : strategies}</ResourceListPage>
 }
 
 function Infrastructure(props: ViewProps) {
@@ -215,7 +225,7 @@ function Infrastructure(props: ViewProps) {
   if (selectedConnection) return <ConnectionDetailsPage connection={selectedConnection} session={props.session} close={detail.close} />
   if (resource) return <ResourceDetailsPage resource={resource} close={detail.close} connections={props.connections} workspaces={props.workspaces} resources={managedResources} runs={props.pipelineRuns} pipelines={props.pipelines} session={props.session} openOperation={props.openOperation} openPipelineRun={props.openPipelineRun} />
   return <>
-    <Heading title="Infrastructure" icon="infrastructure" action={props.isAdmin && (activeTab === 'connections' ? <ResourceAction action="create" label="New Proxmox connection" onClick={props.addConnection} /> : activeTab === 'templates' ? <ResourceAction action="create" label="New VM template" disabled={!props.connections.length} onClick={props.addMachineTemplate} /> : <ResourceAction action="create" label={activeTab === 'harbor' ? 'New Harbor' : 'New NFS'} disabled={!props.machineTemplates.some(item => item.status === 'ready')} onClick={() => props.addInfrastructureService(activeTab)} />)} />
+    <Heading title="Platform" icon="infrastructure" action={props.isAdmin && (activeTab === 'connections' ? <ResourceAction action="create" label="New Proxmox connection" onClick={props.addConnection} /> : activeTab === 'templates' ? <ResourceAction action="create" label="New VM template" disabled={!props.connections.length} onClick={props.addMachineTemplate} /> : <ResourceAction action="create" label={activeTab === 'harbor' ? 'New Harbor' : 'New NFS'} disabled={!props.machineTemplates.some(item => item.status === 'ready')} onClick={() => props.addInfrastructureService(activeTab)} />)} />
     <nav className="resource-tabs" aria-label="Infrastructure resources">{([['connections', 'Proxmox connections', props.connections.length], ['templates', 'VM templates', props.machineTemplates.length], ['harbor', 'Harbor', props.infrastructureServices.filter(item => item.kind === 'harbor').length], ['nfs', 'NFS', props.infrastructureServices.filter(item => item.kind === 'nfs').length]] as const).map(([tab, label, count]) => <button key={tab} className={activeTab === tab ? 'active' : ''} onClick={() => setActiveTab(tab)} aria-current={activeTab === tab ? 'page' : undefined}>{label}<span>{count}</span></button>)}</nav>
     {activeTab === 'connections' && (props.connections.length ? <ResourceListTable editable items={props.connections} label="Proxmox connections" searchText={item => `${item.name} ${statusLabel(resourceStatus(item))}`} columns={[{label: 'Name', render: item => <h3>{item.name}</h3>}, {label: 'Status', render: item => <ResourceStatus resource={item} />}]} actions={item => <><ResourceAction action="view" label={`View ${item.name} details`} onClick={() => detail.open('connection', item.id)} />{props.isAdmin && <ResourceAction action="delete" label={`Delete ${item.name}`} onClick={() => void props.deleteConnection(item.id,item.name)} />}</>} /> : <Empty title="No Proxmox connections">Add a connection to provision machines.</Empty>)}
     {activeTab === 'templates' && (props.machineTemplates.length ? <ResourceListTable editable items={props.machineTemplates} label="VM templates" searchText={item => `${item.name} ${statusLabel(resourceStatus(item))}`} columns={[{label: 'Name', render: item => <h3>{item.name}</h3>}, {label: 'Proxmox connection', render: item => props.connections.find(connection => connection.id === item.connectionId)?.name ?? '—'}, {label: 'Status', render: item => <ResourceStatus resource={item} />}]} actions={item => <><ResourceAction action="view" label={`View ${item.name} details`} onClick={() => detail.open('resource',item.id)} />{props.isAdmin && <ResourceAction action="delete" label={`Delete ${item.name}`} disabled={item.status !== 'ready'} onClick={() => void props.deleteMachineTemplate(item.id,item.name)} />}</>} /> : <Empty title="No VM templates">Create a template to provision clusters.</Empty>)}
@@ -231,7 +241,7 @@ function Kubernetes(props: ViewProps) {
   const resource = detail.route?.kind === 'resource' ? props.kubernetesClusters.find(item => item.id === detail.route?.id) : undefined
   if (resource) return <ResourceDetailsPage resource={resource} close={detail.close} connections={props.connections} workspaces={props.workspaces} resources={[...props.machineTemplates, ...props.infrastructureServices, ...props.kubernetesClusters]} runs={props.pipelineRuns} pipelines={props.pipelines} session={props.session} openOperation={props.openOperation} openPipelineRun={props.openPipelineRun} recreate={() => props.recreateKubernetesCluster(resource.id, resource.name)} action={props.clusterActions[resource.id]} />
   return <>
-    <Heading title="Kubernetes clusters" icon="kubernetes" action={props.isAdmin && <ResourceAction action="create" label="New cluster" disabled={!canCreate} onClick={props.addKubernetesCluster} />} />
+    <Heading title="Platform" icon="kubernetes" action={props.isAdmin && <ResourceAction action="create" label="New cluster" disabled={!canCreate} onClick={props.addKubernetesCluster} />} />
     {props.kubernetesClusters.length ? <ResourceListTable editable items={props.kubernetesClusters} label="Kubernetes clusters" searchText={item => [item.name, statusLabel(props.clusterActions[item.id] ?? resourceStatus(item)), props.connections.find(connection => connection.id === item.connectionId)?.name].filter(Boolean).join(' ')} columns={[
       {label: 'Name', render: item => <h3>{item.name}</h3>},
       {label: 'Proxmox connection', render: item => props.connections.find(connection => connection.id === item.connectionId)?.name ?? '—'},

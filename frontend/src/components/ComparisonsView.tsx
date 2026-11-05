@@ -61,7 +61,7 @@ export function ComparisonsView(props: Props) {
       return <tr key={runKey(ref)}><td>{group.label}</td><td><a href={`#results/instance/${encodeURIComponent(ref.experimentId)}`}>{source?.name ?? 'Experiment'}</a></td><td>{trial?.position ?? '—'}</td></tr>
     }))}</tbody></ResponsiveTable></details>}} /> : <>
       {detail.route && <DetailBreadcrumb parent="Comparisons" current={selected?.name ?? 'Comparison'} back={detail.close} />}
-      <ResourceListHeading title={selected?.name ?? 'Comparisons'} icon="experiments" action={selected ? actions(selected) : <ResourceAction action="create" label="New comparison" disabled={loading || selectableComparisonRuns(props.experiments).length < 2} onClick={() => setEditing(null)} />} />
+      <ResourceListHeading title={selected?.name ?? 'Experiments'} icon="experiments" action={selected ? actions(selected) : <ResourceAction action="create" label="New comparison" disabled={loading || selectableComparisonRuns(props.experiments).length < 2} onClick={() => setEditing(null)} />} />
       <ErrorFeedback message={error} persistent />
       {loading ? <p role="status">Loading comparisons…</p> : !detail.route && <ResourceListTable items={items} editable label="Comparisons" searchText={item => item.name} columns={[{label: 'Name', render: item => <h3>{item.name}</h3>}, {label: 'Series', render: item => item.series.length}, {label: 'Runs', render: item => item.series.reduce((sum, series) => sum + series.runs.length, 0)}]} actions={item => <><ResourceAction action="view" label={`View ${item.name} details`} onClick={() => detail.open('comparison', item.id)} />{actions(item)}</>} empty={<><strong>No comparisons yet</strong><p>Compare results from completed experiments.</p></>} />}
     </>}

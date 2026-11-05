@@ -62,6 +62,6 @@ it('opens labeled model details from the table for a read-only user', async () =
   expect(screen.getByText(model.url)).toBeInTheDocument()
   expect(screen.getByText('SHA-256')).toBeInTheDocument()
   expect(screen.queryByRole('button', {name: `Edit ${model.id}`})).not.toBeInTheDocument()
-  fireEvent.click(screen.getByRole('button', {name: 'Back to Catalog'}))
+  fireEvent.click(screen.getByRole('button', {name: 'Back to Library'}))
   expect(screen.getByRole('table', {name: 'AI models'})).toBeInTheDocument()
 })

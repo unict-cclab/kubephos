@@ -1,0 +1,22 @@
+/*
+ * Stylesheet entry point.
+ *
+ * Cascade layers make precedence explicit: a later layer always wins over an
+ * earlier one, whatever the selector specificity. New styling therefore goes
+ * into `components` or `shell` with plain selectors instead of escalating
+ * specificity against the inherited stylesheets.
+ *
+ *   tokens      design variables for both themes (theme.css)
+ *   legacy      shared stylesheet also served by the Go web UI
+ *   console     screen-specific layouts of the React console
+ *   components  buttons, fields, cards, tables, tabs, status, dialogs
+ *   shell       application chrome and page compositions, which may adapt
+ *               components to their context (e.g. buttons on the hero)
+ */
+@layer tokens, legacy, console, components, shell;
+
+@import "./theme.css" layer(tokens);
+@import "../../../internal/webui/static/styles.css" layer(legacy);
+@import "./console.css" layer(console);
+@import "./components.css" layer(components);
+@import "./shell.css" layer(shell);

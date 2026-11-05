@@ -1,5 +1,11 @@
 import {describe, expect, it} from 'vitest'
-import {hashView, parseDetailRoute} from './detailRoute'
+import {hashView, isNewExperimentRoute, parseDetailRoute} from './detailRoute'
+
+it('recognizes the experiment launcher route', () => {
+  expect(hashView('#results/new')).toBe('results')
+  expect(isNewExperimentRoute('#results/new')).toBe(true)
+  expect(isNewExperimentRoute('#results/instance/new')).toBe(false)
+})
 
 describe('detail routes', () => {
   it('keeps the parent view active on direct detail links', () => {

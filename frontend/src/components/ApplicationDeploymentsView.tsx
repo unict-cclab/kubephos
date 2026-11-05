@@ -49,7 +49,7 @@ export function ApplicationDeploymentsView(props:Props) {
  const canRemove=(item:ManagedResource)=>['ready','failed','deletion-failed'].includes(item.status)
  const removeAction=(item:ManagedResource)=><ResourceAction action="delete" label={`Delete ${item.name}`} disabled={!canRemove(item)||deleting===item.id} onClick={()=>void remove(item)}/>
  return <>{confirmationDialog}<ErrorFeedback message={error}/>{resource?<DeploymentDetail {...props} resource={resource} cluster={cluster(resource)} close={detail.close} remove={removeAction(resource)}/>:<>
-  <ResourceListHeading title="Deployments" icon="application" action={<ResourceAction action="create" label="Deploy application" disabled={!props.kubernetesClusters.some(item=>item.status==='ready')||!props.applications.length} onClick={()=>setCreating(true)}/>}/>
+  <ResourceListHeading title="Platform" icon="application" action={<ResourceAction action="create" label="Deploy application" disabled={!props.kubernetesClusters.some(item=>item.status==='ready')||!props.applications.length} onClick={()=>setCreating(true)}/>}/>
   <ResourceListTable items={deployments} label="Application deployments" searchText={item=>`${item.name} ${item.spec.applicationRef} ${definition(item).namespace} ${cluster(item)?.name??''}`} columns={[
    {label:'Name',render:item=><h3>{item.name}</h3>},
    {label:'Application',render:item=>props.applications.find(app=>app.reference===item.spec.applicationRef)?.name??String(item.spec.applicationRef)},

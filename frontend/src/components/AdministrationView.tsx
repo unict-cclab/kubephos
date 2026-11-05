@@ -66,7 +66,7 @@ export function AdministrationView({session, changed}: {session: Session; change
   })
   if (session.user?.role !== 'admin') return null
   return <>
-    <ResourceListHeading title="Administration" />
+    <ResourceListHeading title="Backup and transfer" />
     <p className="state-transfer-scope">Move your infrastructure, catalog and configurations to another instance. Users and experiments are excluded.</p>
     <div className="state-transfer-tabs"><FormTabs label="State transfer" items={[
       {id: 'export', title: 'Export', content: <section className="state-transfer-panel" aria-label="Export state">

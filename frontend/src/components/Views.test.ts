@@ -91,7 +91,7 @@ it('opens a model detail URL and returns to its catalog table', async () => {
     render(createElement(Views, {...viewProps('catalog'), isAdmin: false}))
     expect(await screen.findByRole('heading', {name: 'test-model'})).toBeInTheDocument()
     expect(screen.getByText('Download URL')).toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', {name: 'Back to Catalog'}))
+    fireEvent.click(screen.getByRole('button', {name: 'Back to Library'}))
     expect(screen.getByRole('table', {name: 'AI models'})).toBeInTheDocument()
   } finally {vi.unstubAllGlobals()}
 })

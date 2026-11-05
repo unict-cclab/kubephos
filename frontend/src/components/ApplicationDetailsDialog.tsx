@@ -3,11 +3,13 @@ import {useErrorState} from './ToastRegion'
 import {ReadoutTable} from './ReadoutTable'
 import {ResourceAttribution} from './ResourceAttribution'
 import {ResourceAction} from './ResourceAction'
-import {useEffect, useState} from 'react'
+import {useEffect, useState, type ReactNode} from 'react'
 import {request} from '../api'
 import type {Application} from '../types'
 import {ApplicationTopologyGraph} from './ApplicationTopologyGraph'
 import {DetailBreadcrumb} from './DetailBreadcrumb'
+import {ActionIcon, type ActionIconName} from './ActionIcon'
+import {applicationMonogram} from './ApplicationGrid'
 
 interface Props {
   application: Application | null
@@ -30,6 +32,7 @@ interface ApplicationPreview {
   loadScenarios: MaterializedLoadScenario[]
 }
 
+// Reads top-down: what the application is, how it is built, then the files KubePhos generates.
 export function ApplicationDetailsPage({application, close, canDelete, remove}: Props) {
   const [manifest, setManifest] = useState('')
   const [manifestLoading, setManifestLoading] = useState(false)
@@ -94,29 +97,59 @@ export function ApplicationDetailsPage({application, close, canDelete, remove}: 
     const scenarioID = String(scenarios[0]?.id ?? '')
     if (open && scenarioID && !selectedScenario && !manifestLoading) void showScenario(scenarioID)
   }
-  return <div className="detail-page"><DetailBreadcrumb parent="Catalog" current={application.name} back={close} /><div className="detail-page-heading"><div><h2>{application.name}</h2></div><div className="detail-page-actions">{canDelete && <ResourceAction action="delete" label={`Delete ${application.name} from catalog`} onClick={() => remove(application)} />}</div></div><ResourceAttribution resource={application} editable /><article className="detail-page-card">
 
-    <div className="details-summary">
-      {application.description && <div><span>Description</span><strong>{application.description}</strong></div>}
-      <div><span>Source</span><strong>{application.origin === 'built-in' ? 'Included' : 'Imported'}</strong></div>
-      {!dynamicTopology && <div><span>Services</span><strong>{components.length}</strong></div>}
+  return <div className="detail-page application-detail">
+    <DetailBreadcrumb parent="Library" current={application.name} back={close} />
+    <header className="application-hero">
+      <span className="application-monogram" aria-hidden="true">{applicationMonogram(application.name)}</span>
+      <div className="application-hero-copy">
+        <div className="application-hero-title"><h2>{application.name}</h2><span className="application-origin">{application.origin === 'built-in' ? 'Included' : 'Imported'}</span></div>
+        {application.description && <p className="application-lead">{application.description}</p>}
+      </div>
+      {canDelete && <div className="detail-page-actions"><ResourceAction action="delete" label={`Delete ${application.name} from catalog`} onClick={() => remove(application)} /></div>}
+    </header>
 
+    <dl className="application-facts">
+      {!dynamicTopology && <div><dt>Services</dt><dd className="application-fact-figure">{components.length}</dd></div>}
+      <div><dt>Load scenarios</dt><dd className="application-fact-figure">{scenarios.length}</dd></div>
+      <div><dt>Topology</dt><dd>{dynamicTopology ? 'Generated for each experiment' : 'Fixed by the application'}</dd></div>
+    </dl>
+    <ResourceAttribution resource={application} editable />
 
-      <div><span>Load scenarios</span><strong>{scenarios.length}</strong></div>
-    </div>
-    {!dynamicTopology && <section className="details-section"><div className="details-heading"><strong>Topology</strong></div><ApplicationTopologyGraph components={components} /></section>}
-    {!dynamicTopology && <section className="details-section"><div className="details-heading"><strong>Services</strong></div><ReadoutTable label="Services" data={{headers: ['Name', 'Workload type', 'Workload name', 'Traits'], rows: orderedComponents.map(component => [component.id, component.workload?.kind ?? '—', component.workload?.name ?? '—', component.traits?.join(', ') || '—'])}} /></section>}
-    <div className="application-file-selectors">
-      <details className="technical-disclosure application-file-disclosure" onToggle={event => openDeploymentFiles(event.currentTarget.open)}>
-        <summary><strong>{dynamicTopology ? 'Example deployment files' : 'Deployment files'}</strong></summary>
-        <div className="application-file-content">{dynamicTopology && <p className="details-copy">Example deployment manifests generated using the application defaults. Experiment manifests are generated from the selected configuration.</p>}<div className="details-heading"><strong>Manifest YAML</strong><div className="chart-export-actions">{manifest && <button className="button secondary compact" type="button" onClick={downloadManifest}>Download .yml</button>}<button className="button secondary compact" type="button" disabled={manifestLoading} onClick={() => void loadPreview(undefined, Boolean(manifest))}>{manifestLoading ? 'Preparing…' : manifest ? 'Refresh' : 'Load'}</button></div></div>{manifestError && <p className="form-error">{manifestError}</p>}{manifest && <CodeBlock label="Deployment manifest YAML">{manifest}</CodeBlock>}</div>
-      </details>
-      <details className="technical-disclosure application-file-disclosure" onToggle={event => openLocustFile(event.currentTarget.open)}>
-        <summary><strong>{dynamicTopology ? 'Example Locust file' : 'Locust file'}</strong></summary>
-        <div className="application-file-content">{dynamicTopology && <p className="details-copy">Example Locust script generated using the application defaults. The experiment script is generated from the selected configuration.</p>}{scenarios.length ? <>{scenarios.length > 1 && <label>Scenario<select value={selectedScenarioID} onChange={event => void showScenario(event.target.value)}>{scenarios.map((scenario, index) => <option key={String(scenario.id ?? index)} value={String(scenario.id ?? index)}>{scenarioLabel(index, scenarios.length)}</option>)}</select></label>}{manifestError && <p className="form-error">{manifestError}</p>}{selectedScenario && <><div className="details-heading"><strong>{selectedScenarioLabel}.py</strong><div className="chart-export-actions"><button className="button secondary compact" type="button" onClick={downloadScenario}>Download .py</button></div></div><CodeBlock label={`Locust file for ${selectedScenarioLabel}`}>{selectedScenario.script}</CodeBlock></>}</> : <p className="details-copy">No Locust file available.</p>}</div>
-      </details>
-    </div>
-  </article></div>
+    {!dynamicTopology && <ApplicationPanel title="Topology" description="How requests travel between the services, from the entry point inward."><ApplicationTopologyGraph components={components} heading={null} /></ApplicationPanel>}
+    {!dynamicTopology && <ApplicationPanel title="Services" description="Workloads KubePhos can scale, schedule and observe during an experiment."><ReadoutTable label="Services" data={{headers: ['Name', 'Workload type', 'Workload name', 'Traits'], rows: orderedComponents.map(component => [component.id, component.workload?.kind ?? '—', component.workload?.name ?? '—', component.traits?.join(', ') || '—'])}} /></ApplicationPanel>}
+
+    <ApplicationPanel title="Files" description={dynamicTopology ? 'Examples generated with the application defaults. Each experiment generates its own files from the selected configuration.' : 'What KubePhos installs on the cluster and how it generates load.'}>
+      <div className="application-file-selectors">
+        <FileDisclosure icon="file" title={dynamicTopology ? 'Example deployment files' : 'Deployment files'} subtitle="Kubernetes manifests in YAML" onToggle={openDeploymentFiles}>
+          <div className="details-heading"><strong>Manifest YAML</strong><div className="chart-export-actions">{manifest && <button className="button secondary compact" type="button" onClick={downloadManifest}>Download .yml</button>}<button className="button secondary compact" type="button" disabled={manifestLoading} onClick={() => void loadPreview(undefined, Boolean(manifest))}>{manifestLoading ? 'Preparing…' : manifest ? 'Refresh' : 'Load'}</button></div></div>
+          {manifestError && <p className="form-error">{manifestError}</p>}
+          {manifest && <CodeBlock label="Deployment manifest YAML">{manifest}</CodeBlock>}
+        </FileDisclosure>
+        <FileDisclosure icon="pulse" title={dynamicTopology ? 'Example Locust file' : 'Locust file'} subtitle="Python script that generates the load" onToggle={openLocustFile}>
+          {scenarios.length ? <>
+            {scenarios.length > 1 && <label>Scenario<select value={selectedScenarioID} onChange={event => void showScenario(event.target.value)}>{scenarios.map((scenario, index) => <option key={String(scenario.id ?? index)} value={String(scenario.id ?? index)}>{scenarioLabel(index, scenarios.length)}</option>)}</select></label>}
+            {manifestError && <p className="form-error">{manifestError}</p>}
+            {selectedScenario && <><div className="details-heading"><strong>{selectedScenarioLabel}.py</strong><div className="chart-export-actions"><button className="button secondary compact" type="button" onClick={downloadScenario}>Download .py</button></div></div><CodeBlock label={`Locust file for ${selectedScenarioLabel}`}>{selectedScenario.script}</CodeBlock></>}
+          </> : <p className="details-copy">No Locust file available.</p>}
+        </FileDisclosure>
+      </div>
+    </ApplicationPanel>
+  </div>
+}
+
+function ApplicationPanel({title, description, children}: {title: string; description: string; children: ReactNode}) {
+  return <section className="application-panel" aria-label={title}>
+    <header className="application-panel-head"><h3>{title}</h3><p>{description}</p></header>
+    {children}
+  </section>
+}
+
+function FileDisclosure({icon, title, subtitle, onToggle, children}: {icon: ActionIconName; title: string; subtitle: string; onToggle: (open: boolean) => void; children: ReactNode}) {
+  return <details className="technical-disclosure application-file-disclosure" onToggle={event => onToggle(event.currentTarget.open)}>
+    <summary><span className="application-file-icon" aria-hidden="true"><ActionIcon name={icon} /></span><span className="application-file-title"><strong>{title}</strong><small>{subtitle}</small></span></summary>
+    <div className="application-file-content">{children}</div>
+  </details>
 }
 
 function scenarioLabel(index: number, total: number): string {

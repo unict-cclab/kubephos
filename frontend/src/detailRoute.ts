@@ -12,6 +12,13 @@ export function hashView(hash: string): View {
   return ['deployments', 'overview', 'results', 'catalog', 'infrastructure', 'kubernetes', 'experiments', 'users', 'administration', 'comparisons'].includes(view) ? view : 'overview'
 }
 
+// "#results/new" opens the experiment launcher from anywhere in the application.
+export const newExperimentHash = 'results/new'
+
+export function isNewExperimentRoute(hash: string): boolean {
+  return hash.replace(/^#/, '') === newExperimentHash
+}
+
 export function parseDetailRoute(hash: string, view: View): DetailRoute | null {
   const [section, kind, rawID, ...extra] = hash.replace(/^#/, '').split('/')
   if (section !== view || !kind || !rawID || extra.length) return null

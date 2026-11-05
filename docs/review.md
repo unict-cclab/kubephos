@@ -1,3 +1,48 @@
+# Interface review — 5 November 2026
+
+## Changes
+
+- The console uses a layered monochrome theme: a tinted frame, a raised page sheet
+  and cards, with color reserved for status. Stylesheets load through explicit
+  cascade layers (`tokens`, `legacy`, `console`, `components`, `shell`) from
+  `frontend/src/design/index.css`; the shared legacy stylesheet is unchanged.
+- Navigation has four sections. Platform and Experiments are single pages whose
+  related views appear as ordered steps (provision → create → deploy, configure →
+  run → compare). Existing view hashes still work. A command palette (Ctrl/⌘ K)
+  reaches every page; an account menu holds password and account links to the
+  Keycloak account console, theme, refresh, backup, sign-out and the version;
+  administrators carry an "Admin" badge next to their name.
+- "New experiment" is the primary action on every page. `#results/new` opens the
+  launcher; without a runnable configuration the action explains that one is needed.
+- Overview shows the setup steps that remain and a recent-activity timeline. The
+  application catalog is a searchable card grid. Shared resource lists keep their
+  columns, sorting and display options with relative dates, author avatars and
+  row actions revealed on hover or focus.
+- The Keycloak sign-in theme follows the same tokens; its stylesheet is now
+  `kubephos-v3.css` so browsers do not reuse the previous version.
+
+## Verification
+
+- 434 frontend tests, including accessibility, navigation, command palette,
+  account menu and workflow-step tests; type check; production build; both-theme
+  contrast checks; initial assets at 184.9 KiB gzip, below the 220 KiB budget.
+- `npm audit`: no vulnerabilities.
+- Development Keycloak recreated with the new theme; the sign-in page links
+  `kubephos-v3.css` and the account console pages used by the account menu respond.
+- Authenticated browser walkthrough at desktop and phone widths in light and dark
+  themes: Home, Platform (empty infrastructure and cluster lists), Library (cards
+  and import form), Experiments (empty runs and configurations), Members, account
+  menu, command palette and mobile navigation.
+
+## Limits
+
+The development instance had no clusters or experiments, so result statistics,
+plots, cluster and deployment details and creation wizards with real data were not
+reviewed visually in the new design; they use the shared components covered above.
+The sign-in page was verified by its served stylesheet rather than a visual
+session. No backend code changed, so Go tests were not rerun. No screen-reader
+session or representative-user study was performed.
+
 # Project review — 30 October 2026
 
 ## Changes

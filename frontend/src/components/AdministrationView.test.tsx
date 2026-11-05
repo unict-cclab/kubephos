@@ -28,7 +28,7 @@ describe('instance state transfer', () => {
   })
   it('is unavailable to regular users', () => {
     render(<AdministrationView session={{...session, user: {...session.user!, role: 'user'}}} changed={vi.fn()} />)
-    expect(screen.queryByRole('heading', {name: 'Administration'})).not.toBeInTheDocument()
+    expect(screen.queryByRole('heading', {name: 'Backup and transfer'})).not.toBeInTheDocument()
   })
   it('reviews an encrypted archive before importing and clears the review when credentials change', async () => {
     const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({version: 'test', createdAt: '2026-10-26T10:00:00Z', counts: {credentials: 2}})))
