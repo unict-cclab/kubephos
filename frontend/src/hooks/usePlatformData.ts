@@ -2,7 +2,7 @@ import {useCallback, useEffect, useRef, useState, type Dispatch, type SetStateAc
 import {ApiError, request} from '../api'
 import type {PlatformData, Session} from '../types'
 
-export const emptyData: PlatformData = {system: null, pluginRuntime: null, workspaces: [], pipelines: [], pipelineRuns: [], experiments: [], experimentConfigurations: [], operations: [], artifacts: [], plugins: [], pluginPackages: [], pluginImports: [], applications: [], strategies: [], credentials: [], connections: [], machineTemplates: [], infrastructureServices: [], kubernetesClusters: [], deployments: [], resources: [], audit: [], users: [], clusterAssignments: []}
+export const emptyData: PlatformData = {system: null, pluginRuntime: null, workspaces: [], pipelines: [], pipelineRuns: [], experiments: [], experimentConfigurations: [], operations: [], artifacts: [], plugins: [], pluginPackages: [], pluginImports: [], applications: [], strategies: [], credentials: [], connections: [], machineTemplates: [], infrastructureServices: [], kubernetesClusters: [], deployments: [], resources: [], audit: [], users: [], clusterAssignments: [], adminRequests: []}
 
 const endpoints: Array<{key: keyof PlatformData; path: string; admin: boolean; live: boolean; list: boolean}> = [
   {key: 'deployments', path: '/application-deployments', admin: false, live: true, list: true},
@@ -23,6 +23,7 @@ const endpoints: Array<{key: keyof PlatformData; path: string; admin: boolean; l
   {key: 'infrastructureServices', path: '/infrastructure-services', admin: true, live: true, list: true},
   {key: 'kubernetesClusters', path: '/kubernetes-clusters', admin: false, live: true, list: true},
   {key: 'users', path: '/users', admin: true, live: false, list: true},
+  {key: 'adminRequests', path: '/admin-requests', admin: false, live: true, list: true},
 ]
 
 export function usePlatformData(session: Session | null, setSession: Dispatch<SetStateAction<Session | null>>, notify: (message: string, error?: boolean) => void) {

@@ -6,7 +6,22 @@ export interface ResourceAttributionFields {
 }
 
 export type Role = 'admin' | 'user'
-export type View = 'deployments' | 'overview' | 'infrastructure' | 'kubernetes' | 'experiments' | 'results' | 'catalog' | 'users' | 'administration' | 'comparisons'
+export type View = 'deployments' | 'overview' | 'infrastructure' | 'kubernetes' | 'experiments' | 'results' | 'catalog' | 'users' | 'administration' | 'comparisons' | 'requests'
+
+// A message a user sends to the administrators.
+export interface AdminRequest {
+  id: string
+  requesterUserId: string
+  requester: string
+  message: string
+  status: 'open' | 'resolved'
+  /** The administrator's single answer, given when the request is resolved. */
+  reply?: string
+  resolvedBy?: string
+  resolvedAt?: string
+  createdAt: string
+  updatedAt: string
+}
 
 export interface User extends ResourceAttributionFields {
   id: string
@@ -666,4 +681,5 @@ export interface PlatformData {
   audit: AuditEvent[]
   users: User[]
   clusterAssignments: ClusterUserAssignment[]
+  adminRequests: AdminRequest[]
 }

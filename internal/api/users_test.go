@@ -158,3 +158,53 @@ func TestUserEmailPasswordAndDeletion(t *testing.T) {
 		t.Fatal("own account deletion accepted")
 	}
 }
+
+func TestUserRoleChange(t *testing.T) {
+	server, pool := transferServer(t, "")
+	ctx := context.Background()
+	if _, err := pool.Exec(ctx, `INSERT INTO users(id,username,role) VALUES('role-admin','root','admin'),('role-user','researcher','user')`); err != nil {
+		t.Fatal(err)
+	}
+	call := func(actor, id, body string) *httptest.ResponseRecorder {
+		t.Helper()
+		r := httptest.NewRequest(http.MethodPut, "/api/v1/users/"+id+"/role", strings.NewReader(body))
+		r.SetPathValue("id", id)
+		r = r.WithContext(context.WithValue(r.Context(), authenticatedUserKey{}, domain.User{ID: actor, Role: "admin"}))
+		w := httptest.NewRecorder()
+		server.setUserRole(w, r)
+		return w
+	}
+	role := func(id string) string {
+		t.Helper()
+		user, err := server.store.GetUserByID(ctx, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return user.Role
+	}
+	if w := call("role-admin", "role-user", `{"role":"owner"}`); w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("unknown role accepted: %d", w.Code)
+	}
+	if w := call("role-admin", "role-missing", `{"role":"admin"}`); w.Code != http.StatusNotFound {
+		t.Fatalf("missing user promoted: %d", w.Code)
+	}
+	if w := call("role-admin", "role-admin", `{"role":"user"}`); w.Code != http.StatusConflict || role("role-admin") != "admin" {
+		t.Fatalf("an administrator demoted themself: %d", w.Code)
+	}
+	if w := call("role-admin", "role-user", `{"role":" ADMIN "}`); w.Code != http.StatusOK || role("role-user") != "admin" {
+		t.Fatalf("promotion failed: %d %s", w.Code, w.Body.String())
+	}
+	if w := call("role-user", "role-admin", `{"role":"user"}`); w.Code != http.StatusOK || role("role-admin") != "user" {
+		t.Fatalf("the promoted administrator could not demote another: %d", w.Code)
+	}
+	if w := call("role-admin", "role-user", `{"role":"user"}`); w.Code != http.StatusForbidden || role("role-user") != "admin" {
+		t.Fatalf("a demoted administrator still changed roles: %d", w.Code)
+	}
+}
+
+func TestUserRoleChangeIsAudited(t *testing.T) {
+	action, targetType, targetID, ok := auditTarget(httptest.NewRequest(http.MethodPut, "/api/v1/users/usr_1/role", nil))
+	if !ok || action != "user.role.update" || targetType != "users" || targetID != "usr_1" {
+		t.Fatalf("role change audited as %q %q %q %v", action, targetType, targetID, ok)
+	}
+}

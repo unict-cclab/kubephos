@@ -13,6 +13,11 @@ describe('setupSteps', () => {
     expect(setupSteps({...empty, isAdmin: false}).map(step => step.id)).toEqual(['cluster', 'configuration', 'experiment'])
   })
 
+  it('sends other users to the administrators for a cluster', () => {
+    const cluster = setupSteps({...empty, isAdmin: false})[0]
+    expect(cluster).toMatchObject({title: 'Get a cluster', action: 'Ask an admin', view: 'requests'})
+  })
+
   it('marks steps done from the workspace counts', () => {
     const steps = setupSteps({...empty, connections: 1, readyClusters: 2})
     expect(steps.map(step => step.done)).toEqual([true, true, false, false])

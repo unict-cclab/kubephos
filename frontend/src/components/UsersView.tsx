@@ -25,8 +25,7 @@ export function UsersView({users, assignments, clusters, session, changed}: {use
       {label: 'Email', render: user => user.email || '—'},
       {label: 'Role', render: user => <span className={`user-role ${user.role}`}>{user.role === 'admin' ? 'Administrator' : 'User'}</span>},
       {label: 'Clusters', render: user => <span className="user-cluster-count">{user.role === 'admin' ? 'All' : assignments.filter(item => item.userId === user.id).length}</span>}
-    ]} actions={user => <><ResourceAction action="view" label={`View ${user.username}`} onClick={() => setSelectedID(user.id)} /><ResourceAction action="edit" label={`Edit email for ${user.username}`} onClick={() => setAccount({user, mode: 'email'})} /></>} />
-    {accountDialog}
+    ]} actions={user => <ResourceAction action="view" label={`View ${user.username}`} onClick={() => setSelectedID(user.id)} />} />
     {creating && <CreateUserDialog close={() => setCreating(false)} session={session} changed={changed} />}
   </>
 }
@@ -53,7 +52,7 @@ function CreateUserDialog({close, session, changed}: {close: () => void; session
 }
 
 function UserDetailsPage({user, close, assignments, clusters, session, changed, edit, reset}: {user: User; close: () => void; edit: () => void; reset: () => void; assignments: ClusterUserAssignment[]; clusters: ManagedResource[]; session: Session; changed: () => Promise<void>}) {
-  const {confirmDelete, confirmationDialog} = useDeleteConfirmation()
+  const {confirmDelete, confirmAction, confirmationDialog} = useDeleteConfirmation()
   const initial = useMemo(() => assignments.filter(item => item.userId === user.id).map(item => item.clusterResourceId), [assignments, user.id])
   const [selected, setSelected] = useState(initial)
   const [pending, setPending] = useState(false)
@@ -85,7 +84,26 @@ function UserDetailsPage({user, close, assignments, clusters, session, changed, 
       setPending(false)
     }
   }
-  return <div className="detail-page">{confirmationDialog}<DetailBreadcrumb parent="Users" current={user.username} back={close} /><div className="detail-page-heading"><h2>{user.username}</h2><div className="detail-page-actions"><button className="button secondary" onClick={edit} disabled={pending}>Edit email</button><button className="button secondary" onClick={reset} disabled={pending}>Reset password</button>{user.id !== session.user?.id && <ResourceAction action="delete" label={`Delete user ${user.username}`} disabled={pending} onClick={() => void remove()} />}{user.role === 'user' && <button className="button primary" disabled={pending} onClick={() => void save()}>{pending ? 'Saving…' : 'Save'}</button>}</div></div><ResourceAttribution resource={user} editable /><article className="detail-page-card simple-resource-detail"><dl className="simple-detail-grid"><div><dt>Username</dt><dd>{user.username}</dd></div><div><dt>Email</dt><dd>{user.email || '—'}</dd></div><div><dt>Role</dt><dd>{user.role}</dd></div><div><dt>Status</dt><dd>{user.enabled ? 'Enabled' : 'Disabled'}</dd></div></dl>{user.role === 'user' && <section className="details-section user-cluster-assignment"><div className="details-heading"><strong>Assigned clusters</strong><span>{selected.length} of {clusters.length}</span></div><div className="cluster-assignment-list">{clusters.length ? clusters.map(cluster => {
+  const promote = user.role !== 'admin'
+  const changeRole = async () => {
+    const confirmed = await confirmAction(promote
+      ? `${user.username} will manage users, resources and requests, and see every cluster.`
+      : `${user.username} will only see the clusters assigned to them.`,
+    {title: promote ? `Make ${user.username} an administrator?` : `Make ${user.username} a user?`, label: promote ? 'Make administrator' : 'Make user'})
+    if (!confirmed) return
+    setPending(true)
+    setError('')
+    try {
+      await request(`/users/${user.id}/role`, {method: 'PUT', body: JSON.stringify({role: promote ? 'admin' : 'user'})}, session.csrfToken)
+      await changed()
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Could not change the role.')
+    } finally {
+      setPending(false)
+    }
+  }
+  const self = user.id === session.user?.id
+  return <div className="detail-page">{confirmationDialog}<DetailBreadcrumb parent="Users" current={user.username} back={close} /><div className="detail-page-heading"><h2>{user.username}</h2><div className="detail-page-actions"><button className="button secondary" onClick={edit} disabled={pending}>Edit email</button><button className="button secondary" onClick={reset} disabled={pending}>Reset password</button>{!self && <button className="button secondary" onClick={() => void changeRole()} disabled={pending}>{promote ? 'Make administrator' : 'Make user'}</button>}{!self && <ResourceAction action="delete" label={`Delete user ${user.username}`} disabled={pending} onClick={() => void remove()} />}{user.role === 'user' && <button className="button primary" disabled={pending} onClick={() => void save()}>{pending ? 'Saving…' : 'Save'}</button>}</div></div><ResourceAttribution resource={user} editable /><article className="detail-page-card simple-resource-detail"><dl className="simple-detail-grid"><div><dt>Username</dt><dd>{user.username}</dd></div><div><dt>Email</dt><dd>{user.email || '—'}</dd></div><div><dt>Role</dt><dd>{user.role === 'admin' ? 'Administrator' : 'User'}</dd></div><div><dt>Status</dt><dd>{user.enabled ? 'Enabled' : 'Disabled'}</dd></div></dl>{user.role === 'user' && <section className="details-section user-cluster-assignment"><div className="details-heading"><strong>Assigned clusters</strong><span>{selected.length} of {clusters.length}</span></div><div className="cluster-assignment-list">{clusters.length ? clusters.map(cluster => {
     const checked = selected.includes(cluster.id)
     return <label className={`cluster-assignment-row${checked ? ' selected' : ''}`} key={cluster.id}><input type="checkbox" checked={checked} onChange={event => setSelected(items => event.target.checked ? [...items, cluster.id] : items.filter(id => id !== cluster.id))} /><span className="cluster-assignment-check" aria-hidden="true"><svg viewBox="0 0 16 16"><path d="m3.5 8.2 2.7 2.7 6.3-6.1" /></svg></span><span className="cluster-assignment-name">{cluster.name}</span><span className={`status ${cluster.status}`}>{cluster.status}</span></label>
   }) : <p className="cluster-assignment-empty">No Kubernetes clusters available.</p>}</div></section>}{error && <ErrorFeedback message={error} />}</article></div>

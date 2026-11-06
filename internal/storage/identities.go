@@ -296,3 +296,30 @@ func (s *Store) DeleteIdentityUserAndAccount(ctx context.Context, userID, actorI
 	}
 	return tx.Commit(ctx)
 }
+
+// SetIdentityUserRole changes another user's role. The administrator rows are
+// locked first, so the acting administrator is still one when the change commits
+// and concurrent changes cannot leave the instance without an administrator.
+// Like DeleteIdentityUserAndAccount, it returns ErrConflict when the actor is no
+// longer an administrator or targets their own account.
+func (s *Store) SetIdentityUserRole(ctx context.Context, userID, actorID, role string) (domain.User, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return domain.User{}, err
+	}
+	defer tx.Rollback(ctx)
+	var actorIsAdmin bool
+	if err = tx.QueryRow(ctx, `
+		SELECT EXISTS(SELECT 1 FROM (SELECT id FROM users WHERE role='admin' AND enabled=true ORDER BY id FOR UPDATE) admins WHERE id=$1)
+	`, actorID).Scan(&actorIsAdmin); err != nil {
+		return domain.User{}, err
+	}
+	if !actorIsAdmin || userID == actorID {
+		return domain.User{}, ErrConflict
+	}
+	user, err := scanIdentityUser(tx.QueryRow(ctx, `UPDATE users SET role=$2,updated_at=now() WHERE id=$1 RETURNING id,username,COALESCE(external_id,''),email,role,enabled,created_at,updated_at`, userID, role))
+	if err != nil {
+		return domain.User{}, err
+	}
+	return user, tx.Commit(ctx)
+}

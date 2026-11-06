@@ -77,14 +77,14 @@ describe('user account actions',()=>{
  it('edits email and resets passwords without retaining password fields',async()=>{
   const fetch=vi.fn().mockImplementation(async()=>new Response('{}',{status:200}));vi.stubGlobal('fetch',fetch)
   render(<UsersView users={[user]} assignments={[]} clusters={[]} session={session} changed={vi.fn().mockResolvedValue(undefined)}/>)
-  fireEvent.click(screen.getByRole('button',{name:'Edit email for researcher'}))
+  fireEvent.click(screen.getByRole('button',{name:'View researcher'}))
+  fireEvent.click(screen.getByRole('button',{name:'Edit email'}))
   let dialog=screen.getByRole('dialog')
   expect(within(dialog).getByLabelText('Email')).toHaveValue('old@example.test')
   fireEvent.change(within(dialog).getByLabelText('Email'),{target:{value:'new@example.test'}})
   fireEvent.click(within(dialog).getByRole('button',{name:'Save'}))
   await waitFor(()=>expect(fetch).toHaveBeenCalledWith('/api/v1/users/user-1',expect.objectContaining({method:'PATCH',body:JSON.stringify({email:'new@example.test'})})))
   await waitFor(()=>expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
-  fireEvent.click(screen.getByRole('button',{name:'View researcher'}))
   fireEvent.click(screen.getByRole('button',{name:'Reset password'}))
   dialog=screen.getByRole('dialog')
   fireEvent.change(within(dialog).getByLabelText('Temporary password'),{target:{value:'temporary-test-password'}})
@@ -109,4 +109,35 @@ describe('user account actions',()=>{
   fireEvent.click(within(screen.getByRole('dialog')).getByRole('button',{name:'Delete'}))
   await waitFor(()=>expect(fetch).toHaveBeenCalledWith('/api/v1/users/user-1',expect.objectContaining({method:'DELETE'})))
  })
+})
+
+describe('user roles', () => {
+  const session = {authenticated: true, csrfToken: 'csrf', user: {id: 'admin', username: 'admin', role: 'admin'}} as Session
+  const researcher = {id: 'user-1', username: 'researcher', role: 'user', enabled: true} as User
+
+  it.each([
+    [researcher, 'Make administrator', 'admin'],
+    [{...researcher, role: 'admin'} as User, 'Make user', 'user']
+  ])('changes the role after confirmation (%#)', async (user, label, role) => {
+    const fetch = vi.fn().mockResolvedValue(new Response('{}', {status: 200}))
+    vi.stubGlobal('fetch', fetch)
+    const changed = vi.fn().mockResolvedValue(undefined)
+    render(<UsersView users={[user]} assignments={[]} clusters={[]} session={session} changed={changed} />)
+    fireEvent.click(screen.getByRole('button', {name: 'View researcher'}))
+    fireEvent.click(screen.getByRole('button', {name: label}))
+    const dialog = screen.getByRole('dialog')
+    fireEvent.click(within(dialog).getByRole('button', {name: 'Cancel'}))
+    expect(fetch).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', {name: label}))
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', {name: label}))
+    await waitFor(() => expect(fetch).toHaveBeenCalledWith('/api/v1/users/user-1/role', expect.objectContaining({method: 'PUT', body: JSON.stringify({role})})))
+    expect(changed).toHaveBeenCalled()
+  })
+
+  it('does not offer a role change on your own account', () => {
+    const self = {id: 'admin', username: 'admin', role: 'admin', enabled: true} as User
+    render(<UsersView users={[self]} assignments={[]} clusters={[]} session={session} changed={vi.fn()} />)
+    fireEvent.click(screen.getByRole('button', {name: 'View admin'}))
+    expect(screen.queryByRole('button', {name: /Make (administrator|user)/})).not.toBeInTheDocument()
+  })
 })

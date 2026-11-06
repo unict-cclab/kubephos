@@ -9,7 +9,7 @@ export interface DetailRoute {
 export function hashView(hash: string): View {
   if (hash.replace(/^#/, '').split('/')[0] === 'suites') return 'results'
   const view = hash.replace(/^#/, '').split('/')[0] as View
-  return ['deployments', 'overview', 'results', 'catalog', 'infrastructure', 'kubernetes', 'experiments', 'users', 'administration', 'comparisons'].includes(view) ? view : 'overview'
+  return ['deployments', 'overview', 'results', 'catalog', 'infrastructure', 'kubernetes', 'experiments', 'users', 'administration', 'comparisons', 'requests'].includes(view) ? view : 'overview'
 }
 
 // "#results/new" opens the experiment launcher from anywhere in the application.
