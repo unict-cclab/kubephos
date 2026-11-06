@@ -44,6 +44,7 @@ type Invocation struct {
 }
 
 type Spec struct {
+	PlacementControlName            string                         `json:"placementControlName,omitempty"`
 	IstioProxyResources             map[string]any                 `json:"istioProxyResources,omitempty"`
 	ApplicationPlacement            *placement.ApplicationSettings `json:"applicationPlacement,omitempty"`
 	NamespacePolicy                 string                         `json:"namespacePolicy,omitempty"`
@@ -169,9 +170,9 @@ type commandRunner interface {
 
 func (Plugin) Manifest() plugins.Manifest {
 	return plugins.Manifest{
-		ID: pluginID, Name: "Kubernetes application deployer", Version: "0.12.0",
+		ID: pluginID, Name: "Kubernetes application deployer", Version: "0.13.0",
 		Description:     "Deploys any validated application package into an isolated Kubernetes namespace and prepares shared experiment control resources when requested.",
-		Schema:          json.RawMessage(`{"type":"object","additionalProperties":false,"required":["clusterConnectionRef","manifestSetRef","workloadTargetsRef","serviceEndpointsRef"],"properties":{"clusterConnectionRef":{"type":"string","title":"Kubernetes cluster","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ClusterConnection","x-kubephos-artifact-version":"v1alpha1"},"manifestSetRef":{"type":"string","title":"Application manifests","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ManifestSet","x-kubephos-artifact-version":"v1alpha1"},"workloadTargetsRef":{"type":"string","title":"Application workloads","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"WorkloadTargets","x-kubephos-artifact-version":"v1alpha1"},"serviceEndpointsRef":{"type":"string","title":"Application endpoints","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ServiceEndpoints","x-kubephos-artifact-version":"v1alpha1"},"mode":{"type":"string","enum":["prepare","deploy"]},"schedulerName":{"type":"string"},"schedulerInclude":{"type":"array","items":{"type":"string"}},"schedulerExclude":{"type":"array","items":{"type":"string"}},"podDisruptionBudgetMinAvailable":{"type":"integer","title":"Minimum available replicas","description":"PDB minAvailable generated for every deschedulable workload.","minimum":1,"maximum":20},"controlNamespace":{"type":"boolean","x-kubephos-hidden":true},"istioInjection":{"type":"boolean"},"istioInjectionOverrides":{"type":"object","additionalProperties":true},"applicationPlacement":{"type":"object"},"istioProxyResources":{"type":"object"},"namespacePolicy":{"type":"string","enum":["create"],"x-kubephos-hidden":true},"applicationNamespace":{"type":"string","maxLength":63}}}`),
+		Schema:          json.RawMessage(`{"type":"object","additionalProperties":false,"required":["clusterConnectionRef","manifestSetRef","workloadTargetsRef","serviceEndpointsRef"],"properties":{"clusterConnectionRef":{"type":"string","title":"Kubernetes cluster","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ClusterConnection","x-kubephos-artifact-version":"v1alpha1"},"manifestSetRef":{"type":"string","title":"Application manifests","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ManifestSet","x-kubephos-artifact-version":"v1alpha1"},"workloadTargetsRef":{"type":"string","title":"Application workloads","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"WorkloadTargets","x-kubephos-artifact-version":"v1alpha1"},"serviceEndpointsRef":{"type":"string","title":"Application endpoints","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ServiceEndpoints","x-kubephos-artifact-version":"v1alpha1"},"mode":{"type":"string","enum":["prepare","deploy"]},"schedulerName":{"type":"string"},"schedulerInclude":{"type":"array","items":{"type":"string"}},"schedulerExclude":{"type":"array","items":{"type":"string"}},"podDisruptionBudgetMinAvailable":{"type":"integer","title":"Minimum available replicas","description":"PDB minAvailable generated for every deschedulable workload.","minimum":1,"maximum":20},"controlNamespace":{"type":"boolean","x-kubephos-hidden":true},"istioInjection":{"type":"boolean"},"istioInjectionOverrides":{"type":"object","additionalProperties":true},"applicationPlacement":{"type":"object"},"istioProxyResources":{"type":"object"},"placementControlName":{"type":"string","maxLength":63,"x-kubephos-hidden":true},"namespacePolicy":{"type":"string","enum":["create"],"x-kubephos-hidden":true},"applicationNamespace":{"type":"string","maxLength":63}}}`),
 		ArtifactInputs:  []domain.ArtifactContract{{Type: "ClusterConnection", Version: "v1alpha1"}, {Type: "ManifestSet", Version: "v1alpha1"}, {Type: "WorkloadTargets", Version: "v1alpha1"}, {Type: "ServiceEndpoints", Version: "v1alpha1"}},
 		ArtifactOutputs: []domain.ArtifactContract{{Type: "ApplicationDeployment", Version: "v1alpha1"}},
 		Capabilities:    []string{"applications.kubernetes.deploy", "applications.kubernetes.preflight", "applications.kubernetes.cleanup", "lifecycle.cleanup", "lifecycle.cleanup.compatible"},
@@ -196,6 +197,9 @@ func (Plugin) Validate(ctx context.Context, invocation Invocation) domain.Valida
 	}
 	if err := validateProxyResourceFields(spec.IstioProxyResources); err != nil {
 		return invalid(report, "istioProxyResources", err.Error())
+	}
+	if spec.PlacementControlName != "" && ((spec.PlacementControlName != "execution" && !validPlacementControlName(spec.PlacementControlName)) || spec.NamespacePolicy != "create") {
+		return invalid(report, "placementControlName", "Application placement control is invalid.")
 	}
 	if err := placement.ValidateApplication(spec.ApplicationPlacement); err != nil {
 		return invalid(report, "applicationPlacement", err.Error())
@@ -239,6 +243,9 @@ func (Plugin) Plan(ctx context.Context, raw json.RawMessage) (domain.Plan, error
 		return domain.Plan{}, err
 	}
 	marker := domain.RuntimeExecutionIDToken
+	if spec.PlacementControlName == "execution" {
+		spec.PlacementControlName = "kubephos-placement-" + marker
+	}
 	controlNamespace := ""
 	if spec.ControlNamespace && (spec.Mode == "prepare" || spec.Mode == "deploy") {
 		controlNamespace = "kubephos-control-" + marker
@@ -389,6 +396,15 @@ func (plugin Plugin) Execute(ctx context.Context, step domain.PlanStep, log plug
 		}
 	}
 
+	if input.PlacementControlName != "" {
+		control, readErr := readPlacementControl(ctx, runner, cluster.Spec.Kubeconfig, input.PlacementControlName)
+		if readErr != nil {
+			return nil, readErr
+		}
+		if control != nil {
+			input.ApplicationPlacement = control.Settings
+		}
+	}
 	content, err := configureApplicationManifest(manifests.Spec.Content, workloads, input)
 	if err != nil {
 		return nil, err
@@ -411,6 +427,10 @@ func (plugin Plugin) Execute(ctx context.Context, step domain.PlanStep, log plug
 	}
 	if _, err := runner.Run(ctx, cluster.Spec.Kubeconfig, namespaceManifest, namespaceAction, "-f", "-"); err != nil {
 		return nil, fmt.Errorf("create isolated namespace: %w", err)
+	}
+	if input.PlacementControlName != "" {
+		stop := followPlacement(ctx, runner, cluster.Spec.Kubeconfig, input, manifests.Spec.Content, workloads, log)
+		defer stop()
 	}
 	var namespaceCreatedAt *time.Time
 	if input.ApplicationNamespace != "" {
@@ -548,13 +568,17 @@ func (plugin Plugin) Verify(ctx context.Context, step domain.PlanStep, raw json.
 	if input.Mode == "prepare" {
 		return domain.HealthReport{Status: domain.HealthHealthy, Summary: "The isolated application namespace is prepared", Checks: map[string]string{"namespace": input.Namespace, "ownership": "verified", "workloads": fmt.Sprint(len(effectiveWorkloads))}}, nil
 	}
+	if input.PlacementControlName != "" {
+		stop := followPlacement(ctx, runner, cluster.Spec.Kubeconfig, input, manifests.Spec.Content, workloads, log)
+		defer stop()
+	}
 	if err := log("info", fmt.Sprintf("Waiting for %d declared workloads in parallel", len(effectiveWorkloads))); err != nil {
 		return domain.HealthReport{}, err
 	}
 	if err := plugin.verifyStableWorkloads(ctx, runner, cluster.Spec.Kubeconfig, input.Namespace, effectiveWorkloads, log); err != nil {
 		return unhealthy(err.Error(), "workloads", "unhealthy"), nil
 	}
-	if err := verifyBootstrapJobs(ctx, runner, cluster.Spec.Kubeconfig, input.Namespace, runtimeManifest); err != nil {
+	if err := verifyBootstrapJobs(ctx, runner, cluster.Spec.Kubeconfig, input.Namespace, runtimeManifest, input.PlacementControlName != ""); err != nil {
 		return unhealthy(err.Error(), "bootstrap", "unhealthy"), nil
 	}
 	if input.SchedulerName != "" {
@@ -607,7 +631,11 @@ func (plugin Plugin) Cleanup(ctx context.Context, step domain.PlanStep, _ json.R
 	if err != nil {
 		return err
 	}
+	if input.PlacementControlName == "" && input.NamespacePolicy == "create" && validPlacementControlName("kubephos-placement-"+input.Marker) {
+		input.PlacementControlName = "kubephos-placement-" + input.Marker
+	}
 	runner := plugin.runner()
+
 	owned, err := namespaceOwnership(ctx, runner, cluster.Spec.Kubeconfig, input.Namespace, input.Marker)
 	if input.NamespacePolicy == "create" && errors.Is(err, errNamespaceNotOwned) {
 		return log("info", "Leaving the namespace unchanged because it is not owned by this deployment")
@@ -615,6 +643,16 @@ func (plugin Plugin) Cleanup(ctx context.Context, step domain.PlanStep, _ json.R
 	if err != nil {
 		return err
 	}
+	if input.PlacementControlName != "" {
+		if control, readErr := readPlacementControl(ctx, runner, cluster.Spec.Kubeconfig, input.PlacementControlName); readErr != nil {
+			return readErr
+		} else if control != nil {
+			if _, err := runner.Run(ctx, cluster.Spec.Kubeconfig, nil, "delete", "configmap", input.PlacementControlName, "-n", "default", "--ignore-not-found"); err != nil {
+				return err
+			}
+		}
+	}
+
 	if owned {
 		if err := log("warning", "Removing only the owned isolated application namespace"); err != nil {
 			return err
@@ -1044,7 +1082,7 @@ func nativeTCPEndpoints(endpoints []serviceEndpoint) bool {
 }
 
 // Explicit bootstrap Jobs gate readiness after pods are running and before any load begins.
-func verifyBootstrapJobs(ctx context.Context, runner commandRunner, kubeconfig, namespace, content string) error {
+func verifyBootstrapJobs(ctx context.Context, runner commandRunner, kubeconfig, namespace, content string, followChanges ...bool) error {
 	resources, err := decodeManifestResources(content)
 	if err != nil {
 		return err
@@ -1059,8 +1097,14 @@ func verifyBootstrapJobs(ctx context.Context, runner commandRunner, kubeconfig, 
 			continue
 		}
 		name, _ := metadata["name"].(string)
-		if _, err := runner.Run(ctx, kubeconfig, nil, "wait", "--for=condition=Complete", "job/"+name, "-n", namespace, "--timeout=10m"); err != nil {
-			return fmt.Errorf("bootstrap Job %s failed: %w", name, err)
+		var waitErr error
+		if len(followChanges) > 0 && followChanges[0] {
+			waitErr = waitBootstrapCompletion(ctx, runner, kubeconfig, namespace, name)
+		} else {
+			_, waitErr = runner.Run(ctx, kubeconfig, nil, "wait", "--for=condition=Complete", "job/"+name, "-n", namespace, "--timeout=10m")
+		}
+		if waitErr != nil {
+			return fmt.Errorf("bootstrap Job %s failed: %w", name, waitErr)
 		}
 	}
 	return nil

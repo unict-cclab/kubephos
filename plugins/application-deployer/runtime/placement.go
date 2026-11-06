@@ -21,7 +21,11 @@ func configureApplicationManifest(content string, workloads []workloadTarget, in
 	if err != nil {
 		return "", err
 	}
-	return configureApplicationPlacement(value, workloads, input.ApplicationPlacement)
+	value, err = configureApplicationPlacement(value, workloads, input.ApplicationPlacement)
+	if err == nil && input.PlacementControlName != "" {
+		return annotateAppliedPlacement(value, input.ApplicationPlacement)
+	}
+	return value, err
 }
 func configureApplicationPlacement(content string, workloads []workloadTarget, settings *placement.ApplicationSettings) (string, error) {
 	if settings == nil {

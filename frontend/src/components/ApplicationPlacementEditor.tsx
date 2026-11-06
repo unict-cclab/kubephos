@@ -1,3 +1,4 @@
+import type {WorkloadPlacementDefaults} from './PlacementDefaults'
 import {ApplicationDefaultFields} from './PlacementDefaults'
 import {useApplicationPlacementDefaults} from './useApplicationPlacementDefaults'
 import {useState} from 'react'
@@ -9,9 +10,10 @@ import {ReadoutTable} from './ReadoutTable'
 
 type Mode = 'inherit' | 'custom' | 'none'
 const modeNames:Record<Mode,string>={inherit:'Common',custom:'Override',none:'Defaults only'}
-export function ApplicationPlacementEditor({services, initial, application, session, values, enabled, networking}: {services: ApplicationComponent[]; initial?: ApplicationPlacement;application?:Application;session?:Session;values?:Record<string,unknown>;enabled?:boolean;networking?:string}) {
+export function ApplicationPlacementEditor({services, initial, application, session, values, enabled, networking,defaults}: {defaults?:WorkloadPlacementDefaults[];services: ApplicationComponent[]; initial?: ApplicationPlacement;application?:Application;session?:Session;values?:Record<string,unknown>;enabled?:boolean;networking?:string}) {
   const [selectedService,setSelectedService]=useState<string>()
-  const baseline=useApplicationPlacementDefaults({application,session,values,networking,enabled,services})
+  const loaded=useApplicationPlacementDefaults({application,session,values,networking,enabled:defaults===undefined&&enabled!==false,services})
+  const baseline={...loaded,...(defaults?{defaults:defaults.filter(value=>networking!=='cilium'||value.nodeBinding!=='application-node'),pending:false,error:''}:{})}
   const [settings,setSettings]=useState<ApplicationPlacement>(() => structuredClone(initial??{}))
   const drafts=Object.fromEntries(Object.entries(settings.serviceOverrides??{}).filter(([id]) => services.some(service => service.id===id)))
   const overrides=Object.fromEntries(Object.entries(drafts).map(([id,entry])=>[id,{nodeSelectorMode:entry.nodeSelectorMode,tolerationsMode:entry.tolerationsMode,...(entry.nodeSelectorMode==='custom'?{nodeSelector:entry.nodeSelector}:{}),...(entry.tolerationsMode==='custom'?{tolerations:entry.tolerations}:{})}]))
@@ -50,8 +52,8 @@ export function ApplicationPlacementEditor({services, initial, application, sess
   </section>
 }
 
-export function PlacementReadout({value={},application,session,values,networking}: {value?:ApplicationPlacement;application?:Application;session?:Session;values?:Record<string,unknown>;networking?:string}) {
-  const baseline=useApplicationPlacementDefaults({application,session,values,networking,services:application?.descriptor.spec?.interface?.components??[]})
+export function PlacementReadout({value={},application,session,values,networking,deploymentId}: {deploymentId?:string;value?:ApplicationPlacement;application?:Application;session?:Session;values?:Record<string,unknown>;networking?:string}) {
+  const baseline=useApplicationPlacementDefaults({application,session,values,networking,deploymentId,services:application?.descriptor.spec?.interface?.components??[]})
   const selectors=(selector?:Record<string,string>) => <div className="placement-defaults"><h4>Node selector</h4>{Object.keys(selector??{}).length?<ReadoutTable label="Node selector" data={{headers:['Key','Value'],rows:Object.entries(selector!)}}/>:<p className="details-copy">None</p>}</div>
   const tolerations=(items:ApplicationPlacement['tolerations']) => <div className="placement-defaults"><h4>Tolerations</h4>{items?.length?<ReadoutTable label="Tolerations" data={{headers:['Key','Operator','Value','Effect','Time (s)'],rows:items.map(t => [t.key||'All',t.operator||'Equal',t.value||'—',t.effect||'All',t.effect!=='NoExecute'?'—':t.tolerationSeconds===undefined?'Unlimited':String(t.tolerationSeconds)])}}/>:<p className="details-copy">None</p>}</div>
   return <section ref={baseline.ref}><FormTabs label="Placement settings" items={[

@@ -68,5 +68,6 @@ func attributionAction(base, id, method, path string) (string, bool, bool) {
 	modify := (method == "PUT" || method == "PATCH") && (len(parts) == 1 || base == "/api/v1/users" && len(parts) == 2 && parts[1] == "clusters") || base == "/api/v1/catalog/models" && method == "DELETE" && len(parts) == 1
 	modify = modify || (base == "/api/v1/experiment-configurations" || base == "/api/v1/experiments") && method == "PUT" && len(parts) == 2 && parts[1] == "sharing"
 	modify = modify || base == "/api/v1/kubernetes-clusters" && method == "POST" && len(parts) == 2 && (parts[1] == "recreate" || parts[1] == "reconfigure")
+	modify = modify || base == "/api/v1/application-deployments" && len(parts) == 2 && (method == "PUT" && parts[1] == "placement" || method == "POST" && parts[1] == "retry")
 	return id, create, modify
 }

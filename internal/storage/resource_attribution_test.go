@@ -13,6 +13,8 @@ func TestAttributionOnlyTracksCreationAndContentChanges(t *testing.T) {
 		{"/api/v1/experiment-configurations", "", "PUT", "/api/v1/experiment-configurations/cfg", false, true},
 		{"/api/v1/users", "", "PUT", "/api/v1/users/user/clusters", false, true},
 		{"/api/v1/kubernetes-clusters", "cluster", "POST", "/api/v1/kubernetes-clusters/cluster/recreate", false, true},
+		{"/api/v1/application-deployments", "deployment", "PUT", "/api/v1/application-deployments/deployment/placement", false, true},
+		{"/api/v1/application-deployments", "deployment", "POST", "/api/v1/application-deployments/deployment/retry", false, true},
 		{"/api/v1/catalog/models", "", "DELETE", "/api/v1/catalog/models/model", false, true},
 		{"/api/v1/catalog/models", "model", "GET", "/api/v1/catalog/models/model", false, false},
 	} {

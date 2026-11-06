@@ -187,3 +187,14 @@ html { scrollbar-gutter:stable; }
 /* Each pool tab shows its defaults before the editable settings. */
 .pool-placement-layout { display:grid; grid-template-columns:minmax(0,1fr); gap:16px; min-width:0; }
 .pool-placement-layout .placement-field-actions { justify-content:flex-start; }
+
+.resource-quantity {display:grid;grid-template-columns:minmax(70px,1fr) minmax(105px,.8fr);gap:8px;align-items:start}
+.resource-quantity > .field-validation-error {grid-column:1/-1}
+.resource-quantity > input,.resource-quantity > select {min-width:0;width:100%}
+
+.resource-quantity-value {min-width:0}
+.resource-quantity-value > input {width:100%;min-width:0}
+
+.deployment-placement-fields {min-width:0;margin:0;padding:0;border:0;background:transparent}
+.service-resources .service-resource-grid {align-items:start}
+.service-resource-grid > strong {align-self:center}

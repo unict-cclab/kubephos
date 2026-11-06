@@ -115,4 +115,11 @@ func TestStandaloneDeploymentInputAndOwnership(t *testing.T) {
 	if w.Code != 404 {
 		t.Fatal("viewer could delete deployment", w.Code)
 	}
+	for _, endpoint := range []func(http.ResponseWriter, *http.Request){server.updateApplicationDeploymentPlacement, server.retryApplicationDeployment, server.getDeploymentPlacementDefaults} {
+		response := httptest.NewRecorder()
+		endpoint(response, req)
+		if response.Code != 404 {
+			t.Fatalf("another user accessed deployment settings: %d", response.Code)
+		}
+	}
 }

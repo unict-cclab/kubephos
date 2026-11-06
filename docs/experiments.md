@@ -80,12 +80,12 @@ Configuration details follow the same sections and tabs as the editor, with read
 Service overrides can inherit these values, replace them with custom values, or
 select **Defaults only** to omit the shared custom settings for that service. Existing
 KubePhos placement constraints remain in force; conflicting selectors are rejected.
-These settings also apply to standalone application deployments.
+These settings also apply to standalone application deployments. CPU and memory fields separate the numeric value from its unit; empty fields initially select Millicores and Mebibytes, without assigning a resource value. Existing quantities retain their units.
 
 **Istio → Proxy resources** configures optional CPU and memory requests and limits
 for Envoy independently from the application's containers. Service overrides use
 the same resource editor as application resources. Empty fields do not produce
-resource annotations. The injector's own defaults remain applicable. See
+resource annotations. **Defaults** reads the installed cluster injector's CPU and memory requests and limits. The injector's own defaults remain applicable. See
 [Istio's proxy resource annotations](https://istio.io/latest/docs/reference/config/annotations/).
 
 Application pools support **Labels** and **Taints** in single and multi cluster
@@ -196,3 +196,10 @@ initialized run or a run undergoing cleanup, cannot be used for an independent
 deployment. Conversely, experiments cannot use a namespace reserved by an
 independent deployment until its cleanup succeeds. Owners and administrators
 can view and remove deployments; users can target only their assigned clusters.
+
+In a deployment's list or detail, **Edit placement** updates node selectors and
+tolerations while provisioning or after it finishes. Managed defaults remain
+protected. Edits saved during provisioning are followed by the active deployment,
+including changes submitted before its namespace exists. A failed deployment
+retains its settings and namespace reservation; **Retry** performs ownership-checked
+cleanup before deploying again, on every member of a multi cluster group.

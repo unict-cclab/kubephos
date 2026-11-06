@@ -1,3 +1,4 @@
+import {DeploymentPlacementEditor} from './DeploymentPlacementEditor'
 import {useState} from 'react'
 import {request} from '../api'
 import {useDetailRoute} from '../detailRoute'
@@ -33,6 +34,8 @@ export function ApplicationDeploymentsView(props:Props) {
  const [creating,setCreating]=useState(false)
  const [deleting,setDeleting]=useState<string|null>(null)
  const [error,setError]=useErrorState()
+ const [editing,setEditing]=useState<ManagedResource|null>(null)
+ const [retrying,setRetrying]=useState<string|null>(null)
  const detail=useDetailRoute('deployments')
  const {confirmDelete,confirmationDialog}=useDeleteConfirmation()
  const deployments=props.deployments??[]
@@ -45,10 +48,13 @@ export function ApplicationDeploymentsView(props:Props) {
   catch(cause){setError(cause instanceof Error?cause.message:'Could not remove the deployment.')}
   finally {setDeleting(null)}
  }
+ const retry=async(item:ManagedResource)=>{setRetrying(item.id);try{await request(`/application-deployments/${item.id}/retry`,{method:'POST'},props.session.csrfToken);await props.changed('Deployment retry queued.')}catch(cause){setError(cause instanceof Error?cause.message:'Could not retry deployment.')}finally{setRetrying(null)}}
+ if(editing)return <DeploymentPlacementEditor resource={editing} application={props.applications.find(app=>app.reference===editing.spec.applicationRef)} session={props.session} networking={cluster(editing)?.spec.mode==='multi'?'cilium':String(cluster(editing)?.spec.networking??'')} onClose={()=>setEditing(null)} onSaved={warning=>props.changed(warning?undefined:'Placement updated.')}/>
+ const actions=(item:ManagedResource)=><>{['ready','provisioning','failed'].includes(item.status)&&<ResourceAction action="edit" label={`Edit placement for ${item.name}`} onClick={()=>setEditing(item)}/>} {item.status==='failed'&&<button type="button" className="button secondary compact" disabled={retrying===item.id} onClick={()=>void retry(item)}>Retry</button>}</>
  if(creating)return <ExperimentConfigurationDialog deploymentMode open items={[]} experiments={[]} clusters={props.kubernetesClusters} workspaces={props.workspaces} applications={props.applications} plugins={props.plugins} strategies={props.strategies} session={props.session} isAdmin={props.isAdmin} changed={()=>props.changed('Application deployment queued.')} openOperation={props.openOperation} close={()=>setCreating(false)}/>
  const canRemove=(item:ManagedResource)=>['ready','failed','deletion-failed'].includes(item.status)
  const removeAction=(item:ManagedResource)=><ResourceAction action="delete" label={`Delete ${item.name}`} disabled={!canRemove(item)||deleting===item.id} onClick={()=>void remove(item)}/>
- return <>{confirmationDialog}<ErrorFeedback message={error}/>{resource?<DeploymentDetail {...props} resource={resource} cluster={cluster(resource)} close={detail.close} remove={removeAction(resource)}/>:<>
+ return <>{confirmationDialog}<ErrorFeedback message={error}/>{resource?<DeploymentDetail {...props} resource={resource} cluster={cluster(resource)} close={detail.close} remove={<>{actions(resource)}{removeAction(resource)}</>}/>:<>
   <ResourceListHeading title="Deployments" icon="application" action={<ResourceAction action="create" label="Deploy application" disabled={!props.kubernetesClusters.some(item=>item.status==='ready')||!props.applications.length} onClick={()=>setCreating(true)}/>}/>
   <ResourceListTable items={deployments} label="Application deployments" searchText={item=>`${item.name} ${item.spec.applicationRef} ${definition(item).namespace} ${cluster(item)?.name??''}`} columns={[
    {label:'Name',render:item=><h3>{item.name}</h3>},
@@ -56,7 +62,7 @@ export function ApplicationDeploymentsView(props:Props) {
    {label:'Cluster',render:item=>cluster(item)?.name??'—'},
    {label:'Namespace',render:item=>definition(item).namespace??'—'},
    {label:'Status',render:item=><span className={`status ${item.status}`}>{item.status}</span>}
-  ]} actions={item=><><ResourceAction action="view" label={`View ${item.name} details`} onClick={()=>detail.open('resource',item.id)}/>{removeAction(item)}</>} empty={<><strong>No application deployments</strong><p>Deploy a catalog application on a ready cluster.</p></>}/>
+  ]} actions={item=><><ResourceAction action="view" label={`View ${item.name} details`} onClick={()=>detail.open('resource',item.id)}/>{actions(item)}{removeAction(item)}</>} empty={<><strong>No application deployments</strong><p>Deploy a catalog application on a ready cluster.</p></>}/>
  </>}</>
 }
 function definition(resource:ManagedResource):ExperimentConfiguration['definition'] {return resource.spec.definition as ExperimentConfiguration['definition']}

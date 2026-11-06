@@ -39,7 +39,7 @@ export function ConfigurationReadout({session,item,clusters,applications,plugins
  {id:'target',title:'Target',content:<InputData value={{targetUrl:item.definition.externalDestination?.targetUrl,runtimeImage:item.definition.externalDestination?.runtimeImage}}/>},
  {id:'script',title:'Locustfile',content:<InputData value={{script:item.definition.externalDestination?.script}}/>},
  {id:'variables',title:'Variables',content:<InputData value={{parameters:item.definition.externalDestination?.parameters}}/>}
- ]}/>:<ApplicationSettingsReadout application={application} item={item} session={session} networking={multi?'cilium':String(cluster?.spec.networking??'')} topology={applicationTopology}/>},
+ ]}/>:<ApplicationSettingsReadout deploymentId={deploymentMode?item.id:undefined} application={application} item={item} session={session} networking={multi?'cilium':String(cluster?.spec.networking??'')} topology={applicationTopology}/>},
  ...(!deploymentMode?[{id:'load',title:'Load profile',content:<div className="form-stack">{load.map(component=>{
   const steps=loadProfileSteps(component.configuration.steps)
   const {steps:_steps,geographicSteps,action:_action,interactive:_interactive,scenarioId,...settings}=component.configuration

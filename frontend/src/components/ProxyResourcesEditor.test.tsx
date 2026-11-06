@@ -15,7 +15,7 @@ it('leaves unspecified proxy resources absent and keeps them separate from appli
 it('edits saved per-service proxy overrides directly and retains inherited values',()=>{
  render(<ProxyResourcesEditor services={services} initial={{cpuRequest:'100m',resourceOverrides:{api:{memoryLimit:'256Mi'}}}}/>)
  fireEvent.click(screen.getByRole('tab',{name:'Service overrides'}))
- expect(screen.getByRole('textbox',{name:'Memory limit for proxy on api'})).toHaveValue('256Mi')
+ expect(screen.getByRole('textbox',{name:'Memory limit for proxy on api'})).toHaveValue('256')
  expect(screen.getByRole('textbox',{name:'CPU request for proxy on api'})).toHaveAttribute('placeholder','Inherited: 100m')
  fireEvent.change(screen.getByRole('textbox',{name:'Memory limit for proxy on api'}),{target:{value:'512Mi'}})
  expect(settings()).toMatchObject({cpuRequest:'100m',resourceOverrides:{api:{memoryLimit:'512Mi'}}})

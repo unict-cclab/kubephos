@@ -32,4 +32,25 @@ it('confirms namespace removal before queuing ownership-checked cleanup',async()
 it('prevents removal while provisioning',()=>{
  render(<ApplicationDeploymentsView {...props} deployments={[{...deployment,status:'provisioning'}]}/>)
  expect(screen.getByRole('button',{name:'Delete Independent'})).toBeDisabled()
+ expect(screen.getByRole('button',{name:'Edit placement for Independent'})).toBeEnabled()
+ expect(screen.queryByRole('button',{name:'Retry'})).not.toBeInTheDocument()
+})
+it('retries a failed deployment without creating another resource or namespace',async()=>{
+ vi.mocked(request).mockResolvedValue({} as never)
+ render(<ApplicationDeploymentsView {...props} deployments={[{...deployment,status:'failed'}]}/>)
+ fireEvent.click(screen.getByRole('button',{name:'Retry'}))
+ await waitFor(()=>expect(request).toHaveBeenCalledWith('/application-deployments/deployment/retry',{method:'POST'},'csrf'))
+ expect(screen.getByRole('cell',{name:'my-app'})).toBeInTheDocument()
+})
+it('edits placement during provisioning using the deployed package defaults',async()=>{
+ const timestamp='2026-11-06T15:00:00Z'
+ const item={...deployment,status:'provisioning',updatedAt:timestamp,spec:{...deployment.spec,definition:{namespace:'my-app',applicationPlacement:{nodeSelector:{'kubephos.dev/pool':'wrong'}}}}} as ManagedResource
+ vi.mocked(request).mockImplementation(async path=>path.endsWith('/placement-defaults')?{workloadTargets:[{id:'api'}],placementDefaults:[{id:'api',nodeSelector:{'kubephos.dev/role':'application'}}]}:item)
+ render(<ApplicationDeploymentsView {...props} deployments={[item]}/>)
+ fireEvent.click(screen.getByRole('button',{name:'Edit placement for Independent'}))
+ await waitFor(()=>expect(screen.getByRole('textbox',{name:'Node selector value 1'})).toHaveValue('wrong'))
+ expect(screen.getByRole('textbox',{name:'Node selector key 1'})).toHaveAttribute('placeholder','kubephos.dev/pool')
+ fireEvent.change(screen.getByRole('textbox',{name:'Node selector value 1'}),{target:{value:'edge'}})
+ fireEvent.click(screen.getByRole('button',{name:'Save'}))
+ await waitFor(()=>expect(request).toHaveBeenCalledWith('/application-deployments/deployment/placement',{method:'PUT',body:JSON.stringify({updatedAt:timestamp,applicationPlacement:{nodeSelector:{'kubephos.dev/pool':'edge'},serviceOverrides:{}}})},'csrf'))
 })

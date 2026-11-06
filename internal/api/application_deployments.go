@@ -16,13 +16,14 @@ import (
 )
 
 type applicationDeploymentInput struct {
-	Description       string                                 `json:"description,omitempty"`
-	WorkspaceID       string                                 `json:"workspaceId"`
-	ClusterResourceID string                                 `json:"clusterResourceId"`
-	Name              string                                 `json:"name"`
-	ApplicationRef    string                                 `json:"applicationRef"`
-	Definition        experimentConfigurationDefinitionInput `json:"definition"`
-	OwnerUserID       string                                 `json:"ownerUserId,omitempty"`
+	PlacementControlName string                                 `json:"placementControlName,omitempty"`
+	Description          string                                 `json:"description,omitempty"`
+	WorkspaceID          string                                 `json:"workspaceId"`
+	ClusterResourceID    string                                 `json:"clusterResourceId"`
+	Name                 string                                 `json:"name"`
+	ApplicationRef       string                                 `json:"applicationRef"`
+	Definition           experimentConfigurationDefinitionInput `json:"definition"`
+	OwnerUserID          string                                 `json:"ownerUserId,omitempty"`
 }
 
 func (s *Server) listApplicationDeployments(w http.ResponseWriter, r *http.Request) {
@@ -94,6 +95,8 @@ func (s *Server) createApplicationDeployment(w http.ResponseWriter, r *http.Requ
 		writeError(w, 409, "namespace_in_use", "This namespace is in use by an active experiment or application deployment on this cluster.")
 		return
 	}
+	resourceID := id.New("deployment")
+	input.PlacementControlName = "execution"
 	definition, failure := s.applicationDeploymentPipeline(r.Context(), input, cluster)
 	if failure != nil {
 		failure.write(w)
@@ -104,7 +107,6 @@ func (s *Server) createApplicationDeployment(w http.ResponseWriter, r *http.Requ
 		failure.write(w)
 		return
 	}
-	resourceID := id.New("deployment")
 	pipeline := domain.Pipeline{ID: id.New("pipe"), WorkspaceID: cluster.WorkspaceID, Name: "Deploy " + input.Name + " · " + resourceID, Definition: validated.Definition, Resolution: validated.Resolution, Validation: validated.Validation, Hash: validated.Hash}
 	run := pipelineRunForManagedPipeline(pipeline, "Deploy "+input.Name)
 	run.ClusterResourceID = cluster.ID
@@ -173,6 +175,9 @@ func (s *Server) applicationDeploymentPipeline(ctx context.Context, input applic
 		sources := map[string]experimentArtifactSource{artifactContractKey("ClusterConnection", "v1alpha1"): {ExternalID: connection.ID}}
 		registerExperimentOutputs(sources, "application", materializer.Manifest())
 		spec := map[string]any{"applicationNamespace": input.Definition.Namespace, "namespacePolicy": "create"}
+		if input.PlacementControlName != "" {
+			spec["placementControlName"] = input.PlacementControlName
+		}
 		if len(input.Definition.IstioProxyResources) > 0 {
 			spec["istioProxyResources"] = input.Definition.IstioProxyResources
 		}
