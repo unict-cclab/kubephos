@@ -88,10 +88,10 @@ describe('comparative configuration details', () => {
     const close = vi.fn()
     render(<ComparativeConfigurationDialog {...props} configurations={[...configurations, {...configurations[0], id: 'unused', name: 'Not selected'}]} item={item} close={close} />)
     expect(screen.getByRole('heading', {name: 'Scheduler comparison'})).toBeInTheDocument()
-    expect(screen.getAllByRole('heading', {level: 4}).map(node => node.textContent)).toEqual(['Custom', 'Baseline'])
+    expect(within(screen.getByRole('table',{name:'Configurations'})).getAllByRole('row').slice(1).map(row=>row.children[1].textContent)).toEqual(['Custom','Baseline'])
     expect(screen.queryByText('Not selected')).not.toBeInTheDocument()
-    expect(screen.getByText('Total runs').nextElementSibling).toHaveTextContent('6')
-    expect(screen.getByRole('img', {name: 'Plot color for Custom: #123456'})).toHaveStyle({backgroundColor: '#123456'})
+    expect(screen.getByText('Total executions').nextElementSibling).toHaveTextContent('6')
+    expect(screen.getByRole('img', {name: 'Plot color for Custom'})).toHaveStyle({backgroundColor: '#123456'})
     expect(screen.queryByRole('textbox')).not.toBeInTheDocument()
     expect(screen.queryByRole('checkbox')).not.toBeInTheDocument()
     expect(screen.queryByRole('button', {name: /Move configuration|Validate and save/})).not.toBeInTheDocument()
@@ -101,7 +101,7 @@ describe('comparative configuration details', () => {
 
   it('preserves unavailable and invalid members in the comparison instead of hiding them', () => {
     render(<ComparativeConfigurationDialog {...props} configurations={[{...configurations[0], validation: {valid: false, issues: []}}]} item={item} close={() => {}} />)
-    expect(screen.getAllByRole('heading', {level: 4}).map(node => node.textContent)).toEqual(['Custom', 'Baseline'])
+    expect(within(screen.getByRole('table',{name:'Configurations'})).getAllByRole('row').slice(1).map(row=>row.children[1].textContent)).toEqual(['Custom','Baseline'])
     expect(screen.getByText('This configuration is no longer available.')).toBeInTheDocument()
     expect(screen.getByText('This configuration needs validation.')).toBeInTheDocument()
   })
@@ -109,7 +109,7 @@ describe('comparative configuration details', () => {
   it('shows external targets and closes when the view is no longer open', () => {
     const external = {...configurations[1], definition: {...configurations[1].definition, destinationMode: 'external' as const, externalDestination: {targetUrl: 'https://inference.example/v1', runtimeImage: '', script: '', parameters: {}}}}
     const view = render(<ComparativeConfigurationDialog {...props} configurations={[external, configurations[0]]} item={item} close={() => {}} />)
-    expect(screen.getByText('External destination').nextElementSibling).toHaveTextContent('https://inference.example/v1')
+    expect(screen.getByRole('table',{name:'Configurations'})).toHaveTextContent('https://inference.example/v1')
     view.rerender(<ComparativeConfigurationDialog {...props} open={false} item={item} close={() => {}} />)
     expect(screen.queryByRole('heading', {name: item.name})).not.toBeInTheDocument()
   })

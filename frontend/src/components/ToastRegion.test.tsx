@@ -184,3 +184,25 @@ it('moves a success toast out of an unmounted modal before opening its native po
     Reflect.deleteProperty(HTMLElement.prototype, 'hidePopover')
   }
 })
+
+it('sends declarative errors to a temporary toast without restoring it on rerender',()=>{
+ vi.useFakeTimers()
+ const view=render(<NotificationProvider><ErrorFeedback message="Preview unavailable"/></NotificationProvider>)
+ expect(screen.getAllByText('Preview unavailable')).toHaveLength(1)
+ expect(screen.getByRole('alert').closest('.toast')).toBeInTheDocument()
+ act(()=>vi.advanceTimersByTime(4000))
+ expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+ view.rerender(<NotificationProvider><ErrorFeedback message="Preview unavailable"/></NotificationProvider>)
+ expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+ view.rerender(<NotificationProvider><ErrorFeedback message="Another failure"/></NotificationProvider>)
+ expect(screen.getByRole('alert')).toHaveTextContent('Another failure')
+})
+
+it('distinguishes informational messages without treating them as errors',()=>{
+ function Info(){const {notify}=useNotifications()!;return <button onClick={()=>notify('Preparing preview.','info')}>Info</button>}
+ render(<NotificationProvider><Info/></NotificationProvider>)
+ fireEvent.click(screen.getByRole('button',{name:'Info'}))
+ expect(screen.getByRole('status')).toHaveTextContent('Preparing preview.')
+ expect(screen.getByRole('status').closest('.toast')).toHaveClass('info')
+ expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+})

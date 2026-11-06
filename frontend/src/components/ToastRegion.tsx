@@ -2,13 +2,16 @@ import {createContext, useCallback, useContext, useEffect, useLayoutEffect, useM
 import {createPortal} from 'react-dom'
 import {ActionIcon} from './ActionIcon'
 
+export type ToastKind = 'info' | 'success' | 'error'
+
 export interface ToastMessage {
   id: number
   message: string
   error: boolean
+  kind?: ToastKind
 }
 
-const NotificationContext = createContext<{notify: (message: string, error?: boolean, renew?: boolean) => void; clearErrors: () => void} | null>(null)
+const NotificationContext = createContext<{notify: (message: string, error?: boolean | ToastKind, renew?: boolean) => void; clearErrors: () => void} | null>(null)
 
 export function useNotifications() { return useContext(NotificationContext) }
 
@@ -32,13 +35,14 @@ export function useErrorState({repeat = true}: {repeat?: boolean} = {}) {
 export function NotificationProvider({children}: PropsWithChildren) {
   const [items, setItems] = useState<ToastMessage[]>([])
   const nextId = useRef(0)
-  const notify = useCallback((message: string, error = false, renew = false) => {
+  const notify = useCallback((message: string, error: boolean | ToastKind = false, renew = false) => {
+    const kind = typeof error === 'string' ? error : error ? 'error' : 'success'
     if (!message.trim()) return
     const id = ++nextId.current
     setItems(current => {
-      const matches = (item: ToastMessage) => item.message === message && item.error === error
+      const matches = (item: ToastMessage) => item.message === message && (item.kind ?? (item.error?'error':'success')) === kind
       if (!renew && current.some(matches)) return current
-      return [...current.filter(item => !matches(item)).slice(-2), {id, message, error}]
+      return [...current.filter(item => !matches(item)).slice(-2), {id, message, error:kind==='error',kind}]
     })
   }, [])
   const dismiss = useCallback((id: number) => setItems(current => current.filter(item => item.id !== id)), [])
@@ -66,9 +70,10 @@ export function NotificationProvider({children}: PropsWithChildren) {
   return <NotificationContext.Provider value={context}>{children}<ToastRegion items={items} dismiss={dismiss} /></NotificationContext.Provider>
 }
 
-export function ErrorFeedback({message, persistent = false}: {message?: string; persistent?: boolean}) {
-  const notifications = useNotifications()
-  return (!notifications || persistent) && message ? <p className="form-error" role={notifications ? undefined : 'alert'}>{message}</p> : null
+export function ErrorFeedback({message}: {message?:string}) {
+  const notify=useNotifications()?.notify
+  useEffect(()=>{if(message)notify?.(message,true)},[message,notify])
+  return !notify&&message?<span role="alert">{message}</span>:null
 }
 
 export function ToastRegion({items, dismiss}: {items: ToastMessage[]; dismiss: (id: number) => void}) {
@@ -123,7 +128,7 @@ function Toast({item, dismiss, timing}: {item: ToastMessage; dismiss: (id: numbe
       window.clearTimeout(timer)
     }
   }, [dismiss, item.id, hovered, focused, timing])
-  return <div className={`toast ${item.error ? 'error' : 'success'}`} onMouseEnter={() => setHovered(true)} onMouseLeave={() => setHovered(false)} onFocus={() => setFocused(true)} onBlur={event => {if (!event.currentTarget.contains(event.relatedTarget)) setFocused(false)}}>
+  return <div className={`toast ${item.kind ?? (item.error ? 'error' : 'success')}`} onMouseEnter={() => setHovered(true)} onMouseLeave={() => setHovered(false)} onFocus={() => setFocused(true)} onBlur={event => {if (!event.currentTarget.contains(event.relatedTarget)) setFocused(false)}}>
     <span className="toast-message" role={item.error ? 'alert' : 'status'}>{item.message}</span>
     <button type="button" className="icon-button" aria-label="Dismiss notification" onClick={() => dismiss(item.id)}><ActionIcon name="close" /></button>
   </div>

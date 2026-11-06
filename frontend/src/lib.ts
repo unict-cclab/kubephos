@@ -7,6 +7,18 @@ export function formatDate(value: string): string {
   return Number.isFinite(date.getTime()) ? dateFormatter.format(date) : '—'
 }
 
+const relativeFormatter = new Intl.RelativeTimeFormat('en', {numeric: 'auto'})
+const relativeUnits: Array<[Intl.RelativeTimeFormatUnit, number]> = [['year', 31536000], ['month', 2592000], ['week', 604800], ['day', 86400], ['hour', 3600], ['minute', 60]]
+
+// "5 minutes ago", "yesterday"; anything under a minute reads "just now".
+export function formatRelativeTime(value: string, now = Date.now()): string {
+  const time = new Date(value).getTime()
+  if (!Number.isFinite(time)) return '—'
+  const seconds = Math.round((time - now) / 1000)
+  const unit = relativeUnits.find(([, size]) => Math.abs(seconds) >= size)
+  return unit ? relativeFormatter.format(Math.round(seconds / unit[1]), unit[0]) : 'just now'
+}
+
 export function formatBytes(value: number): string {
   if (value < 1024) return `${value} B`
   return `${(value / 1024).toFixed(1)} KB`

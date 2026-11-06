@@ -1,0 +1,295 @@
+/*
+ * Shared components. Loaded in the `components` cascade layer, so plain
+ * selectors take precedence over the legacy and console layers; contextual
+ * adaptations belong to the later `shell` layer.
+ *
+ * Monochrome rules: one solid ink button per view, quiet gray secondary
+ * actions, frameless icon actions, and color only where it carries state.
+ */
+
+/* Focus ------------------------------------------------------------------- */
+
+:is(button, summary, a, [tabindex]):focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+
+/* Buttons ----------------------------------------------------------------- */
+
+.button {
+  min-height: var(--control-height);
+  gap: 8px;
+  padding: 8px 16px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  font-size: 14px;
+  font-weight: 550;
+  letter-spacing: -.01em;
+  line-height: 20px;
+  white-space: nowrap;
+  box-shadow: none;
+  transition: background-color var(--duration-fast) var(--ease-out), color var(--duration-fast) var(--ease-out), transform var(--duration-fast) var(--ease-out);
+}
+
+.button:disabled { opacity: .4; }
+
+.button.primary, .resource-action.action-create { background: var(--primary); color: var(--primary-foreground); }
+.button.primary:hover:not(:disabled), .resource-action.action-create:hover:not(:disabled) { background: var(--primary-hover); color: var(--primary-foreground); }
+
+.button.secondary { background: var(--secondary); color: var(--secondary-foreground); }
+.button.secondary:hover:not(:disabled) { background: var(--accent); color: var(--foreground); }
+
+.button.ghost { background: transparent; color: var(--muted-foreground); }
+.button.ghost:hover:not(:disabled) { background: var(--muted); color: var(--foreground); }
+
+.button.danger { background: var(--error-background); color: var(--error-foreground); }
+.button.danger:hover:not(:disabled) { background: var(--destructive); color: var(--success-contrast); }
+
+.button.compact { min-height: 34px; padding: 6px 12px; font-size: 13px; }
+
+/* Primary creation action shown as a labelled button in list headings. */
+.resource-action.action-create {
+  width: auto;
+  height: auto;
+  min-height: var(--control-height);
+  flex: 0 0 auto;
+  gap: 8px;
+  padding: 8px 16px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  font-size: 14px;
+  font-weight: 550;
+}
+
+/* Icon actions: frameless, revealed on hover. Declared after the button
+   variants so they win over `.button.secondary` at equal specificity. */
+.button.icon-button,
+.icon-button,
+.theme-toggle,
+.resource-action:not(.action-create, .action-add) {
+  width: 36px;
+  height: 36px;
+  min-height: 36px;
+  flex: 0 0 36px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted-foreground);
+  box-shadow: none;
+  transition: background-color var(--duration-fast) var(--ease-out), color var(--duration-fast) var(--ease-out);
+}
+:is(.button.icon-button, .icon-button, .theme-toggle, .resource-action:not(.action-create, .action-add)):hover:not(:disabled) { background: var(--muted); color: var(--foreground); }
+.resource-action.action-delete:hover:not(:disabled) { background: var(--error-background); color: var(--error-foreground); }
+.resource-action:disabled:hover { background: transparent; color: var(--muted-foreground); }
+.icon-button.is-busy .action-icon { animation: icon-spin .8s linear infinite; }
+@keyframes icon-spin { to { transform: rotate(360deg); } }
+.theme-toggle svg { width: 17px; height: 17px; }
+
+.text-button { color: var(--foreground); font-weight: 550; text-decoration: underline; text-underline-offset: 3px; text-decoration-color: var(--input); }
+.text-button:hover { background: transparent; text-decoration-color: var(--foreground); }
+
+/* Fields ------------------------------------------------------------------ */
+
+label { font-weight: 550; }
+
+input:not([type="checkbox"]):not([type="radio"]):not([type="color"]):not([type="file"]),
+select,
+textarea {
+  border-color: var(--field-border);
+  border-radius: var(--radius-sm);
+  background-color: var(--card);
+  color: var(--foreground);
+  box-shadow: none;
+  transition: border-color var(--duration-fast) var(--ease-out), box-shadow var(--duration-fast) var(--ease-out);
+}
+input:not([type="checkbox"]):not([type="radio"]):not([type="color"]):not([type="file"]),
+select { min-height: var(--control-height); }
+:is(input, select, textarea):hover:not(:disabled):not(:focus) { border-color: var(--foreground); }
+:is(input, select, textarea):focus { border-color: var(--ring); box-shadow: 0 0 0 3px var(--focus-ring); outline: none; }
+input[type="checkbox"], input[type="radio"] { accent-color: var(--primary); }
+select { cursor: pointer; }
+
+input[type="file"] { padding: 6px; border: 1px dashed var(--field-border); border-radius: var(--radius-md); background: var(--card); }
+input[type="file"]::file-selector-button {
+  margin-right: 12px;
+  padding: 6px 14px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: var(--primary);
+  color: var(--primary-foreground);
+  font: 550 13px/20px var(--font-sans);
+  cursor: pointer;
+}
+input[type="file"]::file-selector-button:hover { background: var(--primary-hover); }
+
+.field-hint { color: var(--muted-foreground); }
+
+/* Surfaces ---------------------------------------------------------------- */
+
+:is(.detail-page-card, .metric-card, .editor-page-body, .experiment-detail, .experiment-progress-card, .run-detail, .results-download-panel, .comparative-view-list > li, .resource-list-table-wrap) {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--card);
+  box-shadow: none;
+}
+
+/* Lists and tables -------------------------------------------------------- */
+
+/* Resource lists: quiet headers, hairline rows, people and dates as light
+   metadata, row actions revealed on hover or keyboard focus. */
+@container resource-list (min-width: 1041px) {
+  .resource-list-table { border-collapse: separate; border-spacing: 0; }
+  .resource-list-table th { height: 40px; padding: 0 16px; border-bottom: 1px solid var(--border); background: transparent; color: var(--muted-foreground); font-size: 12px; font-weight: 500; letter-spacing: 0; text-transform: none; white-space: nowrap; }
+  .resource-list-table th button { color: inherit; font: inherit; }
+  .resource-list-table th:is([aria-sort="ascending"], [aria-sort="descending"]) { color: var(--foreground); }
+  .resource-list-table td { height: 60px; padding: 10px 16px; border-bottom: 1px solid var(--border); color: var(--muted-foreground); font-size: 13px; vertical-align: middle; }
+  .resource-list-table td:first-child { color: var(--foreground); }
+  .resource-list-table tbody tr:last-child td { border-bottom: 0; }
+  .resource-list-actions .history-row-actions { justify-content: flex-end; }
+}
+.resource-list-table tbody tr { transition: background-color var(--duration-fast) var(--ease-out); }
+.resource-list-table tbody tr:hover { background: color-mix(in srgb, var(--muted) 70%, transparent); }
+.resource-list-table td h3 { margin: 0; color: var(--foreground); font-size: 14px; font-weight: 550; letter-spacing: -.01em; }
+.resource-list-date time { font-family: var(--font-mono); font-size: 12px; white-space: nowrap; }
+
+.list-person { display: inline-flex; align-items: center; gap: 8px; max-width: 100%; overflow: hidden; color: var(--foreground); text-overflow: ellipsis; white-space: nowrap; }
+.list-person-avatar { display: grid; width: 22px; height: 22px; flex: 0 0 22px; place-items: center; border-radius: 50%; background: var(--secondary); color: var(--muted-foreground); font-size: 11px; font-weight: 600; text-transform: uppercase; }
+
+/* Row actions stay visible in muted ink and brighten with their row. */
+.resource-list-table tbody tr:is(:hover, :focus-within) .resource-list-actions .resource-action:not(:disabled) { color: var(--foreground); }
+
+/* Narrow lists render rows as cards (console layer); keep their labels quiet. */
+@container resource-list (max-width: 1040px) {
+  .resource-list-table td[data-label]::before { color: var(--muted-foreground); font-size: 11.5px; font-weight: 500; }
+  .resource-list-table tbody td h3 { margin: 0; font-size: 15px; font-weight: 600; }
+}
+
+.list-toolbar > input[type="search"] { max-width: 420px; }
+
+.table-empty, .empty-state { padding-block: 48px; }
+.table-empty-copy > strong, .empty-state strong { color: var(--foreground); font-size: 15px; font-weight: 600; }
+
+/* Tabs: underlined, so the page has a single filled element per row ------- */
+
+.resource-tabs {
+  gap: 24px;
+  padding: 0;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  border-radius: 0;
+  background: transparent;
+  scrollbar-width: none;
+}
+.resource-tabs button {
+  min-height: 44px;
+  padding: 0 2px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--muted-foreground);
+  font-weight: 500;
+  box-shadow: none;
+  transition: color var(--duration-fast) var(--ease-out), box-shadow var(--duration-fast) var(--ease-out);
+}
+.resource-tabs button:hover { color: var(--foreground); }
+.resource-tabs button.active { background: transparent; color: var(--foreground); box-shadow: inset 0 -2px 0 var(--foreground); }
+.resource-tabs button span { min-width: 0; margin-left: 4px; padding: 0; background: transparent; color: var(--muted-foreground); font-size: 13px; font-variant-numeric: tabular-nums; }
+
+.form-mode-tabs { gap: 2px; padding: 3px; border: 0; border-radius: var(--radius-sm); background: var(--muted); }
+.form-mode-tabs button { min-height: 32px; padding: 5px 12px; border: 0; border-radius: 6px; color: var(--muted-foreground); font-weight: 500; }
+.form-mode-tabs button.active { background: var(--card); color: var(--foreground); box-shadow: var(--shadow-sm); }
+
+.results-tabs button.active, .form-tab-list [aria-selected="true"] { border-bottom-color: var(--foreground); color: var(--foreground); }
+
+/* Status ------------------------------------------------------------------ */
+
+.status, .status-pill {
+  --status-color: var(--muted-foreground);
+  gap: 6px;
+  padding: 1px 10px 1px 8px;
+  border: 0;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--status-color) 10%, transparent);
+  color: var(--status-color);
+  font-size: 12px;
+  font-weight: 550;
+  line-height: 22px;
+}
+.status::before { width: 6px; height: 6px; }
+
+:is(.status, .status-pill):is(.ready, .succeeded, .available, .validated, .reachable, .built-in, .imported) { --status-color: var(--success-foreground); }
+:is(.status, .status-pill):is(.failed, .canceled, .cancelled, .invalid, .unreachable, .access-denied, .deletion-failed, .recreation-failed, .maintenance-failed) { --status-color: var(--error-foreground); }
+:is(.status, .status-pill):is(.stopping, .maintaining, .waiting, .unavailable) { --status-color: var(--amber); }
+:is(.status, .status-pill):is(.queued, .pending, .running, .initializing, .initialized, .prechecking, .verifying, .validating, .checking, .provisioning, .deleting, .recreating, .inspecting, .activating) { --status-color: var(--blue); }
+.status:is(.running, .provisioning, .prechecking, .verifying, .validating, .initializing, .deleting, .recreating)::before { animation: status-pulse 1.8s ease-in-out infinite; }
+@keyframes status-pulse { 50% { opacity: .3; } }
+
+/* Dialogs ----------------------------------------------------------------- */
+
+.modal { border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--card); box-shadow: var(--shadow); }
+
+.modal::backdrop { background: var(--backdrop); }
+.modal-header h2 { font-weight: var(--font-weight-title); letter-spacing: -.03em; }
+
+
+.editor-back { color: var(--muted-foreground); transition: color var(--duration-fast) var(--ease-out); }
+.editor-back:hover { color: var(--foreground); }
+
+/* Load profile ------------------------------------------------------------ */
+
+/* Phases on the left, a sticky live chart on the right; stacked when narrow. */
+.load-profile-workspace { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: start; gap: 24px; }
+.load-profile-live { position: sticky; top: 16px; min-width: 0; }
+.load-profile-live .input-load-card { margin: 0; }
+/* The chart scales with its column instead of scrolling sideways. */
+.load-profile-live .chart-wrap { overflow: hidden; padding: 8px 12px 12px; }
+.load-profile-live .chart-wrap svg { width: 100%; min-width: 0; max-width: 100%; height: auto; }
+@container (max-width: 760px) {
+  .load-profile-workspace { grid-template-columns: minmax(0, 1fr); }
+  .load-profile-live { position: static; }
+}
+
+/* Command palette --------------------------------------------------------- */
+
+kbd { padding: 1px 6px; border: 1px solid var(--input); border-radius: 5px; background: var(--card); color: var(--muted-foreground); font: 500 11px/18px var(--font-mono); }
+
+.command-palette { width: min(560px, calc(100vw - 32px)); max-height: min(480px, calc(100vh - 32px)); margin: 14vh auto auto; padding: 0; overflow: hidden; }
+.command-palette-search { display: flex; align-items: center; gap: 10px; padding: 0 16px; border-bottom: 1px solid var(--border); color: var(--muted-foreground); }
+.command-palette-search input,
+.command-palette-search input:hover:not(:disabled):not(:focus),
+.command-palette-search input:focus { flex: 1; min-height: 56px; padding: 0; border: 0; background: transparent; box-shadow: none; color: var(--foreground); font-size: 16px; }
+.command-palette ul { display: grid; gap: 2px; max-height: 380px; margin: 0; padding: 6px; overflow-y: auto; list-style: none; }
+.command-palette li { display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 12px; padding: 10px 12px; border-radius: var(--radius-sm); cursor: pointer; }
+.command-palette li strong { font-size: 14px; font-weight: 550; }
+.command-palette li span { grid-column: 1; color: var(--muted-foreground); font-size: 13px; }
+.command-palette li .action-icon { grid-column: 2; grid-row: 1 / 3; align-self: center; opacity: 0; transition: opacity var(--duration-fast) var(--ease-out); }
+.command-palette li[aria-selected="true"] { background: var(--muted); }
+.command-palette li[aria-selected="true"] .action-icon { opacity: 1; }
+.command-palette-empty { margin: 0; padding: 32px 16px; color: var(--muted-foreground); font-size: 14px; text-align: center; }
+
+/* Notifications carry severity through their full background. */
+.toast { border-radius:var(--radius-sm); box-shadow:var(--shadow-md); }
+.toast.success { background:var(--success-background); color:var(--success-foreground); border:1px solid color-mix(in srgb,var(--success-foreground) 30%,transparent); }
+.toast.error { background:var(--error-background); color:var(--error-foreground); border:1px solid color-mix(in srgb,var(--error-foreground) 30%,transparent); }
+.toast.info { background:var(--blue-background); color:var(--blue); border:1px solid color-mix(in srgb,var(--blue) 30%,transparent); }
+.toast-message::before { content:none; }
+.toast .icon-button { color:inherit; }
+.toast .icon-button:hover:not(:disabled) { background:color-mix(in srgb,currentColor 10%,transparent); color:inherit; }
+
+/* Wizard ------------------------------------------------------------------ */
+
+.wizard-progress { background: var(--card); border-radius: var(--radius-lg) var(--radius-lg) 0 0; }
+.wizard-progress button { border-radius: var(--radius-sm); }
+.wizard-progress button[aria-current] { background: var(--muted); color: var(--foreground); }
+.wizard-progress [aria-current] .wizard-step-number { border-color: var(--primary); background: var(--primary); color: var(--primary-foreground); }
+
+/* Feedback ---------------------------------------------------------------- */
+
+.loading-indicator { border-color: var(--border); border-top-color: var(--foreground); }
+.connection-notice { border-radius: var(--radius-lg); background: var(--amber-background); }
+
+/* Code previews own their scroll area, independent of their surrounding page. */
+.code-block { position:relative; width:100%; min-width:0; max-width:100%; margin:0; overflow:hidden; border:1px solid var(--code-border,var(--border)); border-radius:var(--radius-sm); background:var(--code-background,var(--muted)); color:var(--code-foreground,var(--foreground)); }
+.code-block-actions { position:absolute; z-index:1; inset:8px 24px auto auto; display:flex; justify-content:flex-end; margin:0; }
+.code-block pre { box-sizing:border-box; width:100%; min-width:0; max-width:100%; max-height:min(56vh,560px); margin:0; padding:50px 16px 16px; overflow:auto; overscroll-behavior:contain; border:0; border-radius:0; background:transparent; color:inherit; font:12px/1.6 var(--font-mono); white-space:pre; tab-size:2; }
+.code-block pre code { font:inherit; white-space:inherit; }
+.code-preview-panel { min-width:0; gap:12px; }
+.code-preview-panel > :is(.details-heading,.details-copy) { margin:0; }

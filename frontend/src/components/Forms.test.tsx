@@ -1,4 +1,4 @@
-import {fireEvent, render, screen, waitFor} from '@testing-library/react'
+import {fireEvent, render, screen, within, waitFor} from '@testing-library/react'
 import {afterEach, beforeAll, describe, expect, it, vi} from 'vitest'
 import type {Connection, ManagedResource, Plugin, Workspace} from '../types'
 import {ApplicationDialog, ConnectionDialog, InfrastructureServiceDialog, KubernetesClusterDialog, MachineTemplateDialog} from './Forms'
@@ -87,7 +87,7 @@ describe('KubernetesClusterDialog', () => {
     await waitFor(() => expect(screen.getByRole('spinbutton', {name: 'First VM ID'})).toHaveValue(300))
     fireEvent.click(screen.getByRole('button', {name: 'Continue'}))
     fireEvent.click(screen.getByRole('tab', {name: 'Pools'}))
-    fireEvent.click(screen.getAllByText('Labels and taints')[0])
+    fireEvent.click(within(screen.getByRole('tabpanel',{name:'Pools'})).getByText('Labels and taints'))
     fireEvent.click(screen.getByRole('button', {name: 'Add label'}))
     fireEvent.change(screen.getByLabelText('Label key 1'), {target: {value: '=invalid'}})
     expect((screen.getByLabelText('Label key 1') as HTMLInputElement).checkValidity()).toBe(false)

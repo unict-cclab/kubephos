@@ -1,3 +1,5 @@
+import {ValidationMessage} from './ValidationMessage'
+import {ErrorFeedback} from './ToastRegion'
 import {useErrorState} from './ToastRegion'
 import {workloadTable, trafficTable, sinusoidalRange} from './PhaseReadout'
 import {FormTabs} from './FormTabs'
@@ -38,6 +40,8 @@ type GeographicStep = {
 export function LoadProfileEditor({prefix, zones, values = {}, distribution = 'zone', tabbed = true, settings, onDurationChange}: {onDurationChange?: (duration: number) => void; settings?: ReactNode; prefix: string; zones: string[]; values?: Record<string, unknown>; distribution?: 'zone' | 'cluster'; tabbed?: boolean}) {
   const initialSteps = loadProfileSteps(values.steps)
   const initialGeography = geographicProfileSteps(values.geographicSteps, zones)
+  const [activeLoad,setActiveLoad]=useState<string>()
+  const [activeGeography,setActiveGeography]=useState<string>()
   const [sequence, setSequence] = useState(Math.max(3, initialSteps.length + initialGeography.length + 1))
   const [steps, setSteps] = useState<LoadStep[]>(initialSteps.length ? initialSteps.map((step, index) => ({...step, id: index + 1})) : [newLoadStep(1)])
   const initialDuration = (initialSteps.length ? initialSteps : [newLoadStep(1)]).reduce((total, step) => total + step.durationSeconds, 0)
@@ -50,10 +54,12 @@ export function LoadProfileEditor({prefix, zones, values = {}, distribution = 'z
   }, [duration, zones.join('|')])
   const addLoadStep = () => {
     setSteps(current => [...current, newLoadStep(sequence)])
+    setActiveLoad(String(sequence))
     setSequence(value => value + 1)
   }
   const addGeographicStep = () => {
     setGeographicSteps(current => [...current, newGeographicStep(sequence, zones, Math.max(60, duration - geographicDuration))])
+    setActiveGeography(String(sequence))
     setSequence(value => value + 1)
   }
   const serializedSteps = steps.map(({id: _, ...step}) => {
@@ -66,33 +72,34 @@ export function LoadProfileEditor({prefix, zones, values = {}, distribution = 'z
   })
   const serializedGeography = zones.length ? geographicSteps.map(({id: _, ...step}) => step.type === 'constant' ? {type: step.type, durationSeconds: step.durationSeconds, weights: step.weights} : {type: step.type, durationSeconds: step.durationSeconds, startWeights: step.startWeights, endWeights: step.endWeights}) : []
   const workload = <div className="form-stack" data-review-skip="true"><div className="timeline-heading"><strong>Total duration</strong><span className="timeline-duration">{formatDuration(duration)}</span></div>
-    <div className="timeline-list">{steps.map((step, index) => <article className="timeline-card" key={step.id}>
-      <div className="timeline-card-head"><h4>Phase {index + 1}</h4><TimelineActions index={index} count={steps.length} clone={() => {setSteps(current => [...current.slice(0,index+1), {...structuredClone(step),id:sequence}, ...current.slice(index+1)]);setSequence(value=>value+1)}} move={direction => setSteps(items => move(items, index, direction))} remove={() => setSteps(items => items.filter(item => item.id !== step.id))} /></div>
+    <FormTabs label="Workload phases" selectedId={activeLoad} onSelect={setActiveLoad} items={steps.map((step,index)=>({id:String(step.id),title:`Phase ${index+1}`,content:<article className="timeline-card">
+      <div className="timeline-card-head"><h4>Phase {index + 1}</h4><TimelineActions index={index} count={steps.length} clone={() => {setSteps(current => [...current.slice(0,index+1), {...structuredClone(step),id:sequence}, ...current.slice(index+1)]);setActiveLoad(String(sequence));setSequence(value=>value+1)}} move={direction => setSteps(items => move(items, index, direction))} remove={() => setSteps(items => items.filter(item => item.id !== step.id))} /></div>
       <div className="timeline-fields"><label>Type<select aria-label={`Workload phase ${index + 1} type`} value={step.type} onChange={event => updateLoadStep(setSteps, step.id, {type: event.target.value as LoadStep['type']})}><option value="constant">Constant</option><option value="sinusoidal">Sinusoidal</option><option value="exponential">Exponential</option></select></label><Minutes label="Duration" value={step.durationSeconds} set={value => updateLoadStep(setSteps, step.id, {durationSeconds: value})} />
         {step.type === 'constant' && <NumberField label="Requests / second" value={step.rps} min={0} set={value => updateLoadStep(setSteps, step.id, {rps: value})} />}
-        {step.type === 'sinusoidal' && <><NumberField label="Minimum (req/s)" value={sinusoidalRange(step).min} min={0} step="any" set={value => updateLoadStep(setSteps, step.id, {minRps: value, maxRps: sinusoidalRange(step).max})} /><NumberField label="Maximum (req/s)" value={sinusoidalRange(step).max} min={0} max={200000} step="any" validationMessage={sinusoidalRange(step).max > sinusoidalRange(step).min ? '' : 'Maximum must be greater than minimum.'} set={value => updateLoadStep(setSteps, step.id, {minRps: sinusoidalRange(step).min, maxRps: value})} /><Minutes label="Period" value={step.periodSeconds} set={value => updateLoadStep(setSteps, step.id, {periodSeconds: value})} /><Minutes label="Phase offset" value={step.phaseSeconds} allowZero set={value => updateLoadStep(setSteps, step.id, {phaseSeconds: value})} /></>}
+        {step.type === 'sinusoidal' && <><NumberField label="Minimum (req/s)" value={sinusoidalRange(step).min} min={0} step="any" set={value => updateLoadStep(setSteps, step.id, {minRps: value, maxRps: sinusoidalRange(step).max})} /><NumberField label="Maximum (req/s)" value={sinusoidalRange(step).max} min={0} max={200000} step="any" validationMessage={sinusoidalRange(step).max > sinusoidalRange(step).min ? '' : 'Maximum must exceed minimum.'} set={value => updateLoadStep(setSteps, step.id, {minRps: sinusoidalRange(step).min, maxRps: value})} /><Minutes label="Period" value={step.periodSeconds} set={value => updateLoadStep(setSteps, step.id, {periodSeconds: value})} /><Minutes label="Phase offset" value={step.phaseSeconds} allowZero set={value => updateLoadStep(setSteps, step.id, {phaseSeconds: value})} /></>}
         {step.type === 'exponential' && <><NumberField label="Start RPS" value={step.startRps} min={0} set={value => updateLoadStep(setSteps, step.id, {startRps: value})} /><NumberField label="End RPS" value={step.endRps} min={0} set={value => updateLoadStep(setSteps, step.id, {endRps: value})} /><NumberField label="Curve" value={step.curve} min={-20} max={20} step={0.1} set={value => updateLoadStep(setSteps, step.id, {curve: value})} /></>}
       </div>
-    </article>)}</div>
+    </article>}))}/>
     <ResourceAction action="add" label="Add workload phase" onClick={addLoadStep} /></div>
   const geography = <div className="form-stack" data-review-skip="true"><div className="timeline-duration-summary"><div><strong>Traffic duration</strong><span>{formatDuration(geographicDuration)}</span></div><div><strong>Workload duration</strong><span>{formatDuration(duration)}</span></div></div>
-      <div className="timeline-list">{geographicSteps.map((step, index) => <article className="timeline-card geographic-card" key={step.id}>
-        <div className="timeline-card-head"><h4>Phase {index + 1}</h4><TimelineActions index={index} count={geographicSteps.length} clone={() => {setGeographicSteps(current => [...current.slice(0,index+1), {...structuredClone(step),id:sequence}, ...current.slice(index+1)]);setSequence(value=>value+1)}} move={direction => setGeographicSteps(items => move(items, index, direction))} remove={() => setGeographicSteps(items => items.filter(item => item.id !== step.id))} /></div>
+      <FormTabs label="Traffic phases" selectedId={activeGeography} onSelect={setActiveGeography} items={geographicSteps.map((step,index)=>({id:String(step.id),title:`Phase ${index+1}`,content:<article className="timeline-card geographic-card">
+        <div className="timeline-card-head"><h4>Phase {index + 1}</h4><TimelineActions index={index} count={geographicSteps.length} clone={() => {setGeographicSteps(current => [...current.slice(0,index+1), {...structuredClone(step),id:sequence}, ...current.slice(index+1)]);setActiveGeography(String(sequence));setSequence(value=>value+1)}} move={direction => setGeographicSteps(items => move(items, index, direction))} remove={() => setGeographicSteps(items => items.filter(item => item.id !== step.id))} /></div>
         <div className="timeline-fields"><label>Type<select aria-label={`Geographic phase ${index + 1} type`} value={step.type} onChange={event => updateGeographicStep(setGeographicSteps, step.id, {type: event.target.value as GeographicStep['type']})}><option value="constant">Fixed distribution</option><option value="linear">Linear transition</option></select></label><Minutes label="Duration" value={step.durationSeconds} set={value => updateGeographicStep(setGeographicSteps, step.id, {durationSeconds: value})} /></div>
         {step.type === 'constant' ? <WeightGrid title="Traffic weight" zones={zones} values={step.weights} set={(zone, value) => updateGeographicStep(setGeographicSteps, step.id, {weights: {...step.weights, [zone]: value}})} /> : <div className="weight-transition"><WeightGrid title="Start weights" zones={zones} values={step.startWeights} set={(zone, value) => updateGeographicStep(setGeographicSteps, step.id, {startWeights: {...step.startWeights, [zone]: value}})} /><WeightGrid title="End weights" zones={zones} values={step.endWeights} set={(zone, value) => updateGeographicStep(setGeographicSteps, step.id, {endWeights: {...step.endWeights, [zone]: value}})} /></div>}
-      </article>)}</div>
+      </article>}))}/>
       <ResourceAction action="add" label="Add geographic phase" onClick={addGeographicStep} />
-      {duration !== geographicDuration && <p className="timeline-error">Geographic phases must cover exactly {formatDuration(duration)} before this configuration can be saved.</p>}</div>
+      {duration !== geographicDuration && <ValidationMessage message={`Traffic distribution phases must total ${formatDuration(duration)}.`}/>}</div>
   const previewSteps = loadProfileSteps(serializedSteps)
   const preview = <LoadProfilePreview steps={previewSteps} />
+  // The chart sits beside the phases so every edit is visible as it is made.
+  const workspace = <div className="load-profile-workspace">{workload}<aside className="load-profile-live" aria-label="Live preview">{preview}</aside></div>
   return <div className={`load-profile-editor${tabbed ? ' load-profile-editor-tabbed' : ''}`}>
     <input type="hidden" data-review-title="Workload phases" data-review-table={JSON.stringify(workloadTable(previewSteps))} name={`${prefix}.steps`} value={JSON.stringify(serializedSteps)} readOnly />
     <input type="hidden" data-review-title={distribution === 'cluster' ? 'Traffic phases by cluster' : 'Traffic phases by zone'} data-review-table={zones.length ? JSON.stringify(trafficTable(serializedGeography, distribution === 'cluster')) : undefined} name={`${prefix}.geographicSteps`} value={JSON.stringify(serializedGeography)} readOnly />
     {tabbed ? <FormTabs label="Load profile settings" items={[
-      {id: 'workload', title: 'Workload', content: workload},
+      {id: 'workload', title: 'Workload', content: workspace},
       ...(zones.length ? [{id: 'distribution', title: 'Traffic distribution', content: geography}] : []),
-      ...(settings ? [{id: 'generator', title: 'Generator', content: settings}] : []),
-      {id: 'preview', title: 'Preview', content: preview}
+      ...(settings ? [{id: 'generator', title: 'Generator', content: settings}] : [])
     ]} /> : <>{workload}{preview}{zones.length > 0 && geography}</>}
   </div>
 }
@@ -116,7 +123,7 @@ export function LoadProfilePreview({steps, progressSeconds, progressLabel}: {ste
   const output = (format: 'pdf' | 'png') => exportChart(svgID, 'input-load-profile', format).then(() => setExportError('')).catch(cause => setExportError(cause instanceof Error ? cause.message : 'Could not export input load profile.'))
   return <figure className="metric-card input-load-card" aria-label="Input load preview">
     <div className="metric-card-header"><div><h3>Input load profile</h3><span>{formatDuration(duration)}</span></div><div className="chart-export-actions"><button className="button secondary compact" type="button" onClick={() => void output('pdf')}>PDF</button><button className="button secondary compact" type="button" onClick={() => void output('png')}>PNG</button></div></div>
-    {exportError && <p className="form-error">{exportError}</p>}
+    {exportError && <ErrorFeedback message={exportError}/>}
     <div className="chart-wrap"><svg id={svgID} viewBox={`0 0 ${width} ${height}`} xmlns="http://www.w3.org/2000/svg" role="img" aria-label={`Load profile lasting ${formatDuration(duration)} with a peak of ${formatRps(maximum)} requests per second`}>
       <rect x={plot.left} y={plot.top} width={width - plot.left - plot.right} height={height - plot.top - plot.bottom} className="axis" fill="none" stroke="#111" strokeWidth="2" />
       {xAxis.ticks.map(tick => <g key={`x-${tick}`}><line x1={x(tick * 60)} y1={height - plot.bottom} x2={x(tick * 60)} y2={height - plot.bottom + 7} className="tick-line" stroke="#111" strokeWidth="1.5" /><text x={x(tick * 60)} y={height - plot.bottom + 28} textAnchor="middle" className="tick" fontSize="17" fill="#111" fontFamily="Arial, Helvetica, DejaVu Sans, sans-serif">{tick.toLocaleString('en-US', {maximumFractionDigits: 2})}</text></g>)}
@@ -216,7 +223,7 @@ function formatRps(value: number): string {
 }
 
 function TimelineActions({index, count, move: moveItem, remove, clone}: {clone: () => void; index: number; count: number; move: (direction: -1 | 1) => void; remove: () => void}) {
-  return <div className="timeline-actions"><button type="button" className="button secondary compact" aria-label={`Clone ${index+1}`} disabled={count>=100} onClick={clone}>Clone</button>{count>1&&<><button type="button" className="icon-button" aria-label="Move up" title="Move up" disabled={index === 0} onClick={() => moveItem(-1)}><ActionIcon name="up" /></button><button type="button" className="icon-button" aria-label="Move down" title="Move down" disabled={index === count - 1} onClick={() => moveItem(1)}><ActionIcon name="down" /></button><button type="button" className="icon-button" aria-label="Remove" title="Remove" disabled={count === 1} onClick={remove}><ActionIcon name="close" /></button></>}</div>
+  return <div className="timeline-actions"><button type="button" className="button secondary compact" aria-label={`Clone ${index+1}`} disabled={count>=100} onClick={clone}>Clone</button>{count>1&&<><button type="button" className="icon-button" aria-label="Move up" title="Move up" disabled={index === 0} onClick={() => moveItem(-1)}><ActionIcon name="up" /></button><button type="button" className="icon-button" aria-label="Move down" title="Move down" disabled={index === count - 1} onClick={() => moveItem(1)}><ActionIcon name="down" /></button><button type="button" className="icon-button" aria-label="Remove" title="Remove" disabled={count === 1} onClick={remove}><ActionIcon name="delete" /></button></>}</div>
 }
 
 function NumberField({label, value, set, min, max = 100000, step = 1, validationMessage}: {validationMessage?: string; label: string; value: number; set: (value: number) => void; min: number; max?: number; step?: number | 'any'}) {
@@ -261,7 +268,7 @@ function move<T>(items: T[], index: number, direction: -1 | 1): T[] {
   return next
 }
 
-function formatDuration(seconds: number): string {
+export function formatDuration(seconds: number): string {
   const hours = Math.floor(seconds / 3600)
   const minutes = Math.floor((seconds % 3600) / 60)
   const rest = seconds % 60

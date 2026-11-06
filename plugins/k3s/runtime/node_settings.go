@@ -95,12 +95,13 @@ func taintMap(t placement.Taint) map[string]any {
 	return v
 }
 
-func reconcileNodeSettings(ctx context.Context, runner commandRunner, primary machine, machines []machine, access machineAccess, spec Spec) error {
+func reconcileNodeSettings(ctx context.Context, runner commandRunner, primary machine, machines []machine, access machineAccess, spec Spec, force ...bool) error {
 	type node struct {
 		Metadata struct {
 			Name            string            `json:"name"`
 			ResourceVersion string            `json:"resourceVersion"`
 			Labels          map[string]string `json:"labels"`
+			Annotations     map[string]string `json:"annotations"`
 		} `json:"metadata"`
 		Spec struct {
 			Taints []map[string]any `json:"taints"`
@@ -121,7 +122,7 @@ func reconcileNodeSettings(ctx context.Context, runner commandRunner, primary ma
 			changed = true
 		}
 	}
-	if !changed {
+	if !changed && (len(force) == 0 || !force[0]) {
 		return nil
 	}
 	raw, err := runner.Run(ctx, primary, access, "sudo k3s kubectl get nodes -o json")
@@ -143,31 +144,55 @@ func reconcileNodeSettings(ctx context.Context, runner commandRunner, primary ma
 		if !ok {
 			continue
 		}
-		before := spec.PreviousNodeSettings[m.Name]
+		storedBefore := spec.PreviousNodeSettings[m.Name]
+		before := storedBefore
 		n, ok := byName[m.Name]
 		if !ok {
 			return fmt.Errorf("Application node %s is unavailable.", m.Name)
 		}
-		// Persist registration flags before patching live metadata. No kubelet restart
-		// is needed: the flags are used only if the node subsequently registers again.
-		if spec.Reconcile && !reflect.DeepEqual(before, after) {
-			if _, err = runner.Run(ctx, m, access, nodeRegistrationCommand(machineLabels(spec, index), after.Taints, before)); err != nil {
-				return fmt.Errorf("Could not save scheduling settings on %s: %w", m.Name, err)
+		if raw := n.Metadata.Annotations["kubephos.dev/pool-settings"]; raw != "" {
+			var owned placement.PoolSettings
+			if json.Unmarshal([]byte(raw), &owned) == nil && placement.ValidatePool(owned) == nil {
+				before = owned
 			}
 		}
+		needsRegistration := !reflect.DeepEqual(storedBefore, after) || !reflect.DeepEqual(before, after)
 		patch := nodeSettingsPatch(n.Metadata.Labels, n.Spec.Taints, before, after)
-		if len(patch) == 0 {
-			continue
+		if needsRegistration {
+			metadata, _ := patch["metadata"].(map[string]any)
+			if metadata == nil {
+				metadata = map[string]any{}
+				patch["metadata"] = metadata
+			}
+			owned, _ := json.Marshal(after)
+			metadata["annotations"] = map[string]string{"kubephos.dev/pool-settings": string(owned)}
 		}
-		metadata, _ := patch["metadata"].(map[string]any)
-		if metadata == nil {
-			metadata = map[string]any{}
-			patch["metadata"] = metadata
+		if len(patch) > 0 {
+			metadata, _ := patch["metadata"].(map[string]any)
+			if metadata == nil {
+				metadata = map[string]any{}
+				patch["metadata"] = metadata
+			}
+			metadata["resourceVersion"] = n.Metadata.ResourceVersion
+			value, _ := json.Marshal(patch)
+			if _, err = runner.Run(ctx, primary, access, "sudo k3s kubectl patch node "+shellQuote(m.Name)+" --type=merge -p "+shellQuote(string(value))); err != nil {
+				return fmt.Errorf("Could not update labels and taints on %s: %w", m.Name, err)
+			}
 		}
-		metadata["resourceVersion"] = n.Metadata.ResourceVersion
-		value, _ := json.Marshal(patch)
-		if _, err = runner.Run(ctx, primary, access, "sudo k3s kubectl patch node "+shellQuote(m.Name)+" --type=merge -p "+shellQuote(string(value))); err != nil {
-			return fmt.Errorf("Could not apply scheduling settings to %s: %w", m.Name, err)
+		if spec.Reconcile && needsRegistration {
+			// The annotation records each node's last applied settings, including
+			// partial multi-node updates. A retry can safely finish the operation.
+			previous := placement.PoolSettings{Labels: map[string]string{}, Taints: append([]placement.Taint{}, storedBefore.Taints...)}
+			for key, value := range storedBefore.Labels {
+				previous.Labels[key] = value
+			}
+			for key, value := range before.Labels {
+				previous.Labels[key] = value
+			}
+			previous.Taints = append(previous.Taints, before.Taints...)
+			if _, err = runner.Run(ctx, m, access, nodeRegistrationCommand(machineLabels(spec, index), after.Taints, previous)); err != nil {
+				return fmt.Errorf("Could not save labels and taints on %s: %w", m.Name, err)
+			}
 		}
 	}
 	return nil

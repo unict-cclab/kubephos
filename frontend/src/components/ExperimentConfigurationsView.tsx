@@ -1,10 +1,14 @@
+import {DisabledActionHint} from './DisabledActionHint'
+import {comparativeSources} from './comparativeSources'
+import {applicationSettingsSchema} from './applicationSettings'
+import {ProxyResourcesEditor} from './ProxyResourcesEditor'
+import {resolveApplicationPreview} from '../applicationPreview'
 import {ApplicationPlacementEditor} from './ApplicationPlacementEditor'
 import {IstioInjectionEditor} from './IstioInjectionEditor'
 import {CloneDialog} from './CloneDialog'
 import {ErrorFeedback, useErrorState} from './ToastRegion'
 import {ResourceListHeading} from './ResourceListHeading'
 import {ConfigurationReadout} from './ConfigurationReadout'
-import {FormDisclosure} from './FormDisclosure'
 import {FormTabs} from './FormTabs'
 import {WizardForm, WizardStep, WizardReview} from './WizardForm'
 import {ResourceSharing, canManageResource} from './ResourceSharing'
@@ -87,6 +91,7 @@ export function ExperimentConfigurationsView(props: Props) {
 		return counts
 	}, [props.experiments])
 	const ready = props.clusters.some(item => item.status === 'ready')
+  const comparisonSources=comparativeSources(props.items.filter(item=>props.isAdmin||canManageResource(props.session,item.ownerUserId)))
   const cloneDialog = cloning && <CloneDialog key={cloning.id} sourceName={cloning.name} close={() => setCloning(null)} clone={async name => {
     await request(`/experiment-configurations/${cloning.id}/clone`, {method: 'POST', body: JSON.stringify({name})}, props.session.csrfToken)
     setError('')
@@ -120,9 +125,9 @@ export function ExperimentConfigurationsView(props: Props) {
       {label: 'Type', render: item => item.kind === 'suite' ? 'Comparative' : 'Single'},
       {label: 'Experiments', render: item => experimentCounts.get(item.id) ?? 0}
     ]} actions={item => <><ResourceSharing kind="experiment-configurations" id={item.id} name={item.name} ownerUserId={item.ownerUserId} session={props.session} changed={props.changed} /><ResourceAction action="view" label={`View ${item.name} details`} onClick={() => detail.open('configuration', item.id)} />{(props.isAdmin || canManageResource(props.session, item.ownerUserId)) && <ResourceAction action="delete" label={`Delete ${item.name}`} onClick={() => void remove(item)} />}</>} />
-    <Dialog open={creating === 'choose'} onClose={() => setCreating(null)} title="New configuration"><div className="configuration-kind-options"><button className="configuration-kind" type="button" onClick={() => setCreating('single')}><SectionIcon kind="experiments" /><span>Single experiment</span><ActionIcon name="right" /></button><button className="configuration-kind" type="button" onClick={() => setCreating('suite')}><SectionIcon kind="experiments" /><span>Comparison</span><ActionIcon name="right" /></button></div></Dialog>
+    <Dialog open={creating === 'choose'} onClose={() => setCreating(null)} title="New configuration"><div className="configuration-kind-options"><button className="configuration-kind" type="button" onClick={() => setCreating('single')}><SectionIcon kind="experiments" /><span>Single experiment</span><ActionIcon name="right" /></button><DisabledActionHint disabled={comparisonSources.length<2} reason="Requires two valid single configurations."><button className="configuration-kind" type="button" disabled={comparisonSources.length<2} title={comparisonSources.length<2?'Requires two valid single configurations.':undefined} onClick={() => {if(comparisonSources.length>=2)setCreating('suite')}}><SectionIcon kind="experiments" /><span>Comparison</span><ActionIcon name="right" /></button></DisabledActionHint></div></Dialog>
     <ExperimentConfigurationDialog {...props} open={creating === 'single'} close={() => setCreating(null)} />
-    <ComparativeConfigurationDialog {...props} configurations={props.items.filter(item => props.isAdmin || canManageResource(props.session,item.ownerUserId))} open={creating === 'suite'} close={() => setCreating(null)} />
+    <ComparativeConfigurationDialog {...props} configurations={comparisonSources} open={creating === 'suite'} close={() => setCreating(null)} />
     <ExperimentExecutionDialog open={Boolean(running)} configurations={running ? [running] : []} initialConfigurationId={running?.id} lockConfiguration close={() => setRunning(null)} session={props.session} changed={props.changed} onCreated={props.openExperiment ?? (() => {})} />
   </>
 }
@@ -132,20 +137,20 @@ function ExperimentConfigurationDetailsPage({item, clusters, applications, plugi
     <DetailBreadcrumb parent="Configurations" current={item.name} back={close} />
     <div className="detail-page-heading"><h2>{item.name}</h2><div className="detail-page-actions"><ResourceSharing kind="experiment-configurations" id={item.id} name={item.name} ownerUserId={item.ownerUserId} session={session} changed={changed} />{canRun && <button className="button primary" disabled={!item.validation.valid} onClick={run}>Run experiment</button>}<button className="button secondary" onClick={view}>View configuration</button>{canRun && <button className="button secondary" onClick={edit}>Edit configuration</button>}{canClone && <button className="button secondary" onClick={clone}>Clone configuration</button>}</div></div>
     <ResourceAttribution resource={item} editable /><article className="detail-page-card comparative-details">
-      <div className="details-summary"><div><span>Runs per configuration</span><strong>{item.definition.runs ?? 3}</strong></div><div><span>Total runs</span><strong>{(item.definition.variants?.length ?? 0) * (item.definition.runs ?? 3)}</strong></div></div>
+      <div className="details-summary"><div><span>Executions per configuration</span><strong>{item.definition.runs ?? 3}</strong></div><div><span>Total executions</span><strong>{(item.definition.variants?.length ?? 0) * (item.definition.runs ?? 3)}</strong></div></div>
       <div className="comparative-members-heading"><h3>Execution order</h3><span>Plot color</span></div>
       <ol className="comparative-member-list">{item.definition.variants?.map((member, index) => <li className="comparative-member" key={`${member.configurationId}-${index}`}>
         <span className="comparative-member-position" aria-hidden="true">{String(index + 1).padStart(2, '0')}</span>
         <div className="comparative-member-copy"><strong>{member.alias}</strong>{configurations.find(configuration => configuration.id === member.configurationId)?.name !== member.alias && <span>{configurations.find(configuration => configuration.id === member.configurationId)?.name ?? 'Unavailable single configuration'}</span>}</div>
         <span className="configuration-color-swatch" style={{backgroundColor: member.color}} role="img" aria-label={`Plot color for ${member.alias}: ${member.color}`} title={member.color} />
       </li>)}</ol>
-      {!item.validation.valid && <p className="form-error">Replace unavailable source configurations before running this suite.</p>}
+      {!item.validation.valid && <ErrorFeedback message="Replace unavailable configurations."/>}
     </article>
   </div>
   const application = applications.find(value => value.reference === item.applicationRef)
   const applicationSettings = {...(application?.descriptor.spec?.defaults ?? {}), ...(item.definition.applicationValues ?? {})}
   return <div className="detail-page"><DetailBreadcrumb parent="Configurations" current={item.name} back={close} /><div className="detail-page-heading"><h2>{item.name}</h2><div className="detail-page-actions"><ResourceSharing kind="experiment-configurations" id={item.id} name={item.name} ownerUserId={item.ownerUserId} session={session} changed={changed} />{canRun && <button className="button primary" disabled={!item.validation.valid} onClick={run}>Run experiment</button>}{canRun && <button className="button secondary" onClick={edit}>Edit configuration</button>}{canClone && <button className="button secondary" onClick={clone}>Clone configuration</button>}</div></div><ResourceAttribution resource={item} editable /><article className="detail-page-card configuration-detail-card">
-    <ConfigurationReadout item={item} clusters={clusters} applications={applications} plugins={plugins} strategies={strategies} showHeading={false} applicationTopology={item.definition.destinationMode !== 'external' && <ConfigurationApplicationTopology application={application} values={applicationSettings} session={session} />} />
+    <ConfigurationReadout session={session} item={item} clusters={clusters} applications={applications} plugins={plugins} strategies={strategies} showHeading={false} applicationTopology={item.definition.destinationMode !== 'external' && <ConfigurationApplicationTopology application={application} values={applicationSettings} session={session} />} />
   </article></div>
 }
 
@@ -172,7 +177,7 @@ function ConfigurationApplicationTopology({application, values, session}: {appli
 		setComponents([])
 		setPending(true)
 		setError('')
-		request<ApplicationTopologyPreview>(`/catalog/applications/${encodeURIComponent(application.id)}/resolve`, {method: 'POST', body: valuesKey}, session.csrfToken).then(preview => {
+		resolveApplicationPreview<ApplicationTopologyPreview>(application,JSON.parse(valuesKey),session.csrfToken).then(preview => {
 			if (current) setComponents(previewComponents(preview))
 		}).catch(cause => {
 			if (current) setError(message(cause))
@@ -183,7 +188,7 @@ function ConfigurationApplicationTopology({application, values, session}: {appli
 	}, [application?.reference, dynamic, session.csrfToken, valuesKey])
 	if (!application) return null
 	if (pending) return <section className="details-section application-topology-state" role="status"><div className="details-heading"><strong>Application topology</strong></div><span>Preparing topology…</span></section>
-	if (error) return <section className="details-section application-topology-state invalid" role="status"><div className="details-heading"><strong>Application topology</strong></div><span>{error}</span></section>
+	if (error) return <ErrorFeedback message={error}/>
 	return <ApplicationTopologyGraph components={components} />
 }
 
@@ -193,6 +198,7 @@ function record(value: unknown): Record<string, unknown> {
 
 export function ExperimentConfigurationDialog({open, close, clusters, workspaces, applications, plugins, strategies, session, changed, item, readOnly = false, deploymentMode = false}: Props & {deploymentMode?: boolean; open: boolean; close: () => void; item?: ExperimentConfiguration; readOnly?: boolean}) {
 	const formRef = useRef<HTMLFormElement>(null)
+ const [placementVisible,setPlacementVisible]=useState(false)
 	const topologyTimer = useRef<number | undefined>(undefined)
 	const topologyRequest = useRef(0)
 	const availableApplications = applications.filter((application, index, items) => application.reference === item?.applicationRef || application.origin !== 'generated' && items.findIndex(candidate => candidate.id === application.id && candidate.origin !== 'generated') === index)
@@ -257,7 +263,7 @@ export function ExperimentConfigurationDialog({open, close, clusters, workspaces
 		topologyTimer.current = window.setTimeout(async () => {
 			try {
 				const values = pruneServiceOverrides(readSchemaValues(form, application.descriptor.spec?.valuesSchema ?? emptySchema, 'applicationValues', availableApplications), application)
-				const preview = await request<ApplicationTopologyPreview>(`/catalog/applications/${encodeURIComponent(application.id)}/resolve`, {method: 'POST', body: JSON.stringify(values)}, session.csrfToken)
+				const preview = await resolveApplicationPreview<ApplicationTopologyPreview>(application,values,session.csrfToken)
 				if (requestID !== topologyRequest.current) return
 				setResolvedComponents(previewComponents(preview))
 			} catch (cause) {
@@ -419,12 +425,13 @@ export function ExperimentConfigurationDialog({open, close, clusters, workspaces
 		  externalDestination: destinationMode === 'external' ? {targetUrl: externalTargetUrl, runtimeImage: externalRuntimeImage, script: externalScript, parameters: externalParameterValues} : undefined,
 		  applicationValues: destinationMode === 'application' ? readSchemaValues(form, application?.descriptor.spec?.valuesSchema ?? emptySchema, 'applicationValues', availableApplications) : {},
           applicationPlacement: destinationMode === 'application' ? JSON.parse(String(values.get('applicationPlacement') ?? 'null')) ?? undefined : undefined,
+          istioProxyResources: destinationMode==='application'?JSON.parse(String(values.get('istioProxyResources')??'null'))??undefined:undefined,
           istioInjection: destinationMode === 'application' ? values.get('istioInjection') === 'true' : undefined,
           istioInjectionOverrides: destinationMode === 'application' ? JSON.parse(String(values.get('istioInjectionOverrides') ?? '{}')) : undefined,
           podDisruptionBudgetMinAvailable: destinationMode === 'application' ? Number(values.get('podDisruptionBudgetMinAvailable')) : 0,
           components: (deploymentMode ? [] : submittedComponents).map((component, index) => {
             const plugin = compatiblePlugins.find(item => item.id === component.pluginId)
-            if (!plugin) throw new Error(`Component ${component.pluginId} is no longer available. Remove or replace it before saving.`)
+            if (!plugin) throw new Error(`Component ${component.pluginId} unavailable. Remove or replace it.`)
             const configuration = readSchemaValues(form, configurableSchema(plugin.schema), `component-${component.key}`, applications)
 			if (component.capability.startsWith('load.')) configuration.action = 'start'
 			if (component.capability.startsWith('load.')) configuration.interactive = false
@@ -444,7 +451,7 @@ export function ExperimentConfigurationDialog({open, close, clusters, workspaces
     }
   }
   const namespaceField = <label>Namespace<input aria-label="Namespace" name="namespace" required={deploymentMode} defaultValue={item?.definition.namespace??''} maxLength={63} pattern={'[a-z0-9]([a-z0-9\\-]*[a-z0-9])?'}/></label>
-  const form = readOnly && item ? <ConfigurationReadout item={item} clusters={clusters} applications={applications} plugins={plugins} strategies={strategies} /> : <WizardForm ref={formRef} onSubmit={submit} onCancel={close} pending={pending} error={error} submitLabel={deploymentMode ? 'Deploy' : item ? 'Save changes' : 'Create configuration'} submitDisabled={topologyPending || Boolean(topologyError) || !workspaceId || !clusterResourceId || destinationMode === 'application' && !application || destinationMode === 'external' && (!externalTargetUrl || !externalRuntimeImage || !externalScript)} onChange={event => {
+  const form = readOnly && item ? <ConfigurationReadout session={session} item={item} clusters={clusters} applications={applications} plugins={plugins} strategies={strategies} /> : <WizardForm ref={formRef} onSubmit={submit} onCancel={close} pending={pending} error={error} submitLabel={deploymentMode ? 'Deploy' : item ? 'Save changes' : 'Create configuration'} submitDisabled={topologyPending || Boolean(topologyError) || !workspaceId || !clusterResourceId || destinationMode === 'application' && !application || destinationMode === 'external' && (!externalTargetUrl || !externalRuntimeImage || !externalScript)} onChange={event => {
         const target = event.nativeEvent.target as HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement
         if (target.name.startsWith('applicationValues.')) resolveApplicationTopology(event.currentTarget)
       }}>
@@ -457,7 +464,7 @@ export function ExperimentConfigurationDialog({open, close, clusters, workspaces
       </WizardStep><WizardStep key="application" status={topologyStatus} title={destinationMode === 'external' ? 'External destination' : 'Application'} blocked={topologyPending || Boolean(topologyError)}>
       {destinationMode === 'application' ? <>
         {!hasParameters && application && <div hidden><SchemaFields schema={parametersSchema} prefix="applicationValues" values={applicationValues} applications={availableApplications} artifacts={[]} connections={[]} credentials={[]} /></div>}
-        <FormTabs label="Application settings" items={[
+        <FormTabs label="Application settings" onSelect={id=>setPlacementVisible(id==='placement')} items={[
           ...(hasParameters ? [{id: 'settings', title: 'Parameters', content: <>
             {application && <SchemaFields schema={parametersSchema} prefix="applicationValues" values={applicationValues} serviceTargets={effectiveApplicationComponents} applications={availableApplications} artifacts={[]} connections={[]} credentials={[]} onValuesChange={() => {if (formRef.current) resolveApplicationTopology(formRef.current)}} />}
             {application && !configurableReplicas && replicaAvailability}
@@ -469,8 +476,8 @@ export function ExperimentConfigurationDialog({open, close, clusters, workspaces
           {id: 'topology', title: 'Topology', content: <>
         {application && !topologyError && <ApplicationTopologyGraph components={effectiveApplicationComponents} />}
           </>},
-          {id: 'placement', title: 'Placement', content: <ApplicationPlacementEditor key={`placement-${item?.id ?? 'new'}-${applicationRef}`} services={effectiveApplicationComponents} initial={item?.definition.applicationPlacement} />},
-          {id: 'istio', title: 'Istio', content: <IstioInjectionEditor key={`istio-${item?.id ?? 'new'}-${applicationRef}-${clusterResourceId}`} services={effectiveApplicationComponents} enabled={typeof item?.definition.istioInjection === 'boolean' ? item.definition.istioInjection : !nativeTCP} overrides={item?.definition.istioInjectionOverrides as Record<string, boolean> | undefined} disabled={selectedCluster?.spec.mode === 'multi'} />}
+          {id: 'placement', title: 'Placement', content: <ApplicationPlacementEditor networking={selectedCluster?.spec.mode==='multi'?'cilium':String(selectedCluster?.spec.networking??'')} enabled={placementVisible} application={application} session={session} values={applicationValues} key={`placement-${item?.id ?? 'new'}-${applicationRef}`} services={effectiveApplicationComponents} initial={item?.definition.applicationPlacement} />},
+          {id: 'istio', title: 'Istio', content: <FormTabs label="Istio settings" items={[{id:'injection',title:'Injection',content:<IstioInjectionEditor key={`istio-${item?.id ?? 'new'}-${applicationRef}-${clusterResourceId}`} services={effectiveApplicationComponents} enabled={typeof item?.definition.istioInjection === 'boolean' ? item.definition.istioInjection : !nativeTCP} overrides={item?.definition.istioInjectionOverrides as Record<string, boolean> | undefined} disabled={selectedCluster?.spec.mode === 'multi'} />},{id:'proxy-resources',title:'Proxy resources',content:<ProxyResourcesEditor key={`proxy-${item?.id??'new'}-${applicationRef}`} services={effectiveApplicationComponents} initial={item?.definition.istioProxyResources} disabled={selectedCluster?.spec.mode==='multi'}/>}]}/>}
         ]} />
       </> : <FormTabs label="External destination settings" items={[
         {id: 'target', title: 'Target', content: <div className="form-stack"><label>External endpoint<input type="url" value={externalTargetUrl} onChange={event => setExternalTargetUrl(event.target.value)} placeholder="https://api.example.com" maxLength={2048} required /></label><label>Locust runtime image<input value={externalRuntimeImage} onChange={event => setExternalRuntimeImage(event.target.value)} maxLength={512} required /></label></div>},
@@ -481,12 +488,15 @@ export function ExperimentConfigurationDialog({open, close, clusters, workspaces
       {destinationMode === 'application' && (application?.descriptor.spec?.interface?.loadScenarios?.length ?? 0) > 1 && <label>Load scenario<select value={loadScenarioId} onChange={event => setLoadScenarioId(event.target.value)} required>{application?.descriptor.spec?.interface?.loadScenarios?.map(item => <option key={item.id} value={item.id}>{item.id} · {item.engine ?? 'load'}</option>)}</select></label>}
       {loadComponent && (() => {const plugin = compatiblePlugins.find(item => item.id === loadComponent.pluginId)!; return <section className="experiment-component"><LoadProfileEditor onDurationChange={setExperimentDuration} settings={<SchemaFields schema={experimentSchema(plugin.schema, loadComponent.capability)} prefix={`component-${loadComponent.key}`} values={loadComponent.configuration ?? {}} applications={applications} artifacts={[]} connections={[]} credentials={[]} />} key={`${item?.id ?? 'new'}-${loadComponent.key}`} prefix={`component-${loadComponent.key}`} zones={nativeTCP && selectedCluster?.spec.mode !== 'multi' ? [] : zones} distribution={selectedCluster?.spec.mode === 'multi' ? 'cluster' : 'zone'} values={loadComponent.configuration} /></section>})()}
       </WizardStep><WizardStep key="monitoring" title="Monitoring" blocked={Boolean(networkComponent)&&!networkTimelineValid}>
-      {metricsComponent && (() => {const plugin = compatiblePlugins.find(item => item.id === metricsComponent.pluginId)!; return <section className="experiment-component"><SchemaFields schema={experimentSchema(plugin.schema, metricsComponent.capability)} prefix={`component-${metricsComponent.key}`} values={metricsComponent.configuration ?? {}} applications={applications} artifacts={[]} connections={[]} credentials={[]} /></section>})()}
-      {destinationMode === 'application' && (Boolean(networkComponent) || Boolean(networkPlugin) && managedNetworkAvailable && zones.length > 1) && <FormDisclosure className="network-injection-settings" title={selectedCluster?.spec.mode === 'multi' ? 'Network between clusters' : 'Network between zones'} defaultOpen={Boolean(networkComponent)}><label className="checkbox-field"><input type="checkbox" checked={Boolean(networkComponent)} disabled={!networkPlugin || !managedNetworkAvailable || zones.length < 2} onChange={event => setNetworkEnabled(event.target.checked)} /><span>Enable injection</span></label>
-      {networkComponent && networkPlugin && <section className="experiment-component"><NetworkInjectionEditor durationSeconds={experimentDuration} onValidityChange={setNetworkTimelineValid} key={`${item?.id ?? 'new'}-${networkComponent.key}`} prefix={`component-${networkComponent.key}`} zones={zones} distribution={selectedCluster?.spec.mode === 'multi' ? 'cluster' : 'zone'} values={selectedCluster?.spec.mode === 'multi' ? {...networkComponent.configuration, nodeGroupLabel: 'kubephos.dev/cluster', networkInterface: 'cilium_vxlan', hostNetwork: false} : networkComponent.configuration} /></section>}</FormDisclosure>}
-      {destinationMode === 'application' && <><label className="checkbox-field"><input type="checkbox" checked={Boolean(monAgentComponent)} disabled={!monAgentPlugin || !managedNetworkAvailable} onChange={event => setMonAgentEnabled(event.target.checked)} /><span>Customize mon-agent for this experiment</span></label>
+<FormTabs label="Monitoring settings" items={[
+ {id:'metrics',title:'Metrics',content:<>      {metricsComponent && (() => {const plugin = compatiblePlugins.find(item => item.id === metricsComponent.pluginId)!; return <section className="experiment-component"><SchemaFields schema={experimentSchema(plugin.schema, metricsComponent.capability)} prefix={`component-${metricsComponent.key}`} values={metricsComponent.configuration ?? {}} applications={applications} artifacts={[]} connections={[]} credentials={[]} /></section>})()}
+</>},
+ ...(destinationMode==='application'?[{id:'network',title:'Network',content:<>      {destinationMode === 'application' && (Boolean(networkComponent) || Boolean(networkPlugin) && managedNetworkAvailable && zones.length > 1) && <section className="network-injection-settings form-stack"><div className="network-section-heading"><h4>{selectedCluster?.spec.mode==='multi'?'Network between clusters':'Network between zones'}</h4><label className="checkbox-field"><input type="checkbox" checked={Boolean(networkComponent)} disabled={!networkPlugin || !managedNetworkAvailable || zones.length < 2} onChange={event => setNetworkEnabled(event.target.checked)} /><span>Enable injection</span></label></div>
+      {networkComponent && networkPlugin && <section className="experiment-component"><NetworkInjectionEditor durationSeconds={experimentDuration} onValidityChange={setNetworkTimelineValid} key={`${item?.id ?? 'new'}-${networkComponent.key}`} prefix={`component-${networkComponent.key}`} zones={zones} distribution={selectedCluster?.spec.mode === 'multi' ? 'cluster' : 'zone'} values={selectedCluster?.spec.mode === 'multi' ? {...networkComponent.configuration, nodeGroupLabel: 'kubephos.dev/cluster', networkInterface: 'cilium_vxlan', hostNetwork: false} : networkComponent.configuration} /></section>}</section>}
+</>},{id:'agent',title:'Agent',content:<>      {destinationMode === 'application' && <><label className="checkbox-field"><input type="checkbox" checked={Boolean(monAgentComponent)} disabled={!monAgentPlugin || !managedNetworkAvailable} onChange={event => setMonAgentEnabled(event.target.checked)} /><span>Customize mon-agent for this experiment</span></label>
       {monAgentComponent && monAgentPlugin && <section className="experiment-component"><SchemaFields schema={experimentSchema(monAgentPlugin.schema, monAgentComponent.capability)} prefix={`component-${monAgentComponent.key}`} values={monAgentComponent.configuration ?? {}} applications={applications} artifacts={[]} connections={[]} credentials={[]} /></section>}</>}
-      </WizardStep>{destinationMode === 'application' && <WizardStep key="scheduling" title="Scheduling and scaling">
+      </>}]:[])
+ ]}/></WizardStep>{destinationMode === 'application' && <WizardStep key="scheduling" title="Scheduling and scaling">
       <FormTabs label="Scheduling and scaling settings" items={schedulingGroups.map(kind => ({id: kind, title: kind === 'other' ? 'Other' : componentTitle(`${kind}.`), content: <><div className="component-add-options">{advancedPlugins.filter(plugin => schedulingGroup(primaryCapabilities(plugin)[0] ?? '') === kind && !components.some(component => component.pluginId === plugin.id)).map(plugin => <button className="button secondary compact" type="button" key={plugin.id} disabled={components.length >= 15} onClick={() => addAdvancedComponent(plugin.id)}><ActionIcon name="create" />Add {componentTitle(primaryCapabilities(plugin)[0] ?? '', selectedCluster?.spec.mode === 'multi').toLowerCase()}</button>)}</div>
       <div className="experiment-component-list">{advancedComponents.filter(component => schedulingGroup(component.capability) === kind).map(component => {
         const plugin = compatiblePlugins.find(item => item.id === component.pluginId)
@@ -497,7 +507,7 @@ export function ExperimentConfigurationDialog({open, close, clusters, workspaces
         return <section className="experiment-component" key={component.key}>
 		  <div className="experiment-component-head"><strong>{componentTitle(component.capability, selectedCluster?.spec.mode === 'multi')}</strong><button type="button" className="icon-button" aria-label="Remove component" title="Remove component" onClick={() => setComponents(items => items.filter(item => item.key !== component.key))}><ActionIcon name="close" /></button></div>
           {strategyKind && <label>Image<select value={component.strategyId ?? ''} required onChange={event => setComponents(items => items.map(item => item.key === component.key ? {...item, strategyId: event.target.value} : item))}><option value="">Select a ready {strategyKind}</option>{missingStrategy && <option value={missingStrategy} disabled>{missingStrategy} · unavailable</option>}{readyStrategies.map(item => <option key={item.id} value={item.id} disabled={item.status !== 'succeeded'}>{item.name}{item.status === 'succeeded' ? '' : ` · ${item.status}`}</option>)}</select></label>}
-          {!plugin && <p className="form-error">This component is no longer available. Remove or replace it before saving.</p>}
+          {!plugin && <ErrorFeedback message="Component unavailable. Remove or replace it."/>}
           {plugin && <SchemaFields key={`${plugin.id}-${component.strategyId ?? ''}`} schema={experimentSchema(plugin.schema, component.capability)} prefix={`component-${component.key}`} values={{...(selectedStrategy?.defaultConfiguration ?? {}), ...(component.configuration ?? {})}} applications={applications} artifacts={[]} connections={[]} credentials={[]} />}
 	          {strategyKind === 'autoscaler' && <AutoscalerTargetEditor prefix={`component-${component.key}`} components={effectiveApplicationComponents} defaults={selectedStrategy?.defaultConfiguration ?? {}} resetKey={`${item?.id ?? 'new'}-${applicationRef}-${component.strategyId ?? ''}-${effectiveApplicationComponents.map(item => item.id).join(':')}`} excluded={component.targets?.exclude ?? []} targetOverrides={record(component.configuration?.targetOverrides)} />}
           {(strategyKind === 'scheduler' || strategyKind === 'descheduler') && <StrategyTargetEditor componentKey={component.key} components={effectiveApplicationComponents} trait={strategyKind !== 'scheduler' ? 'deschedulable' : 'schedulable'} resetKey={`${item?.id ?? 'new'}-${applicationRef}-${component.strategyId ?? ''}-${effectiveApplicationComponents.map(item => item.id).join(':')}`} included={component.targets?.include ?? []} excluded={component.targets?.exclude ?? []} />}
@@ -516,12 +526,6 @@ export function configurableSchema(schema: JsonSchema): JsonSchema {
   return {type: 'object', properties, required: (schema.required ?? []).filter(name => name in properties)}
 }
 
-function applicationSettingsSchema(schema: JsonSchema, resources: boolean): JsonSchema {
-  const hidden = new Set(['initialReplicas', 'replicaOverrides'])
-  const resourceFields = new Set(['cpuRequest', 'cpuLimit', 'memoryRequest', 'memoryLimit', 'resourceOverrides'])
-  const properties = Object.fromEntries(Object.entries(schema.properties ?? {}).filter(([name]) => !hidden.has(name) && resourceFields.has(name) === resources).map(([name, property]) => [name, resources ? {...property, 'x-kubephos-advanced': false} : property]))
-  return {...schema, properties, required: (schema.required ?? []).filter(name => name in properties)}
-}
 
 function experimentSchema(schema: JsonSchema, capability: string): JsonSchema {
   const result = configurableSchema(schema)

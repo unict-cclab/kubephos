@@ -131,12 +131,13 @@ describe('experiment configuration helpers', () => {
     render(createElement(ExperimentConfigurationDialog, {open: true, close: () => {}, items: [], experiments: [], clusters: [cluster], workspaces: [workspace], applications: [localaiApplication], plugins: [loadPlugin, metricsPlugin], strategies: [], session: {authenticated: true, csrfToken: 'csrf'}, isAdmin: true, changed: async () => {}, openOperation: () => {}}))
     await goToStep('Application')
     fireEvent.click(screen.getByRole('tab', {name: 'Resources'}))
-    expect(screen.getByRole('checkbox', {name: 'Override resources for m2'})).toBeChecked()
+    fireEvent.click(screen.getByRole('tab',{name:'Service overrides'}))
+    expect(screen.getByRole('tab', {name: 'm2'})).toHaveAttribute('aria-selected','true')
     fireEvent.click(screen.getByRole('tab', {name: 'Parameters'}))
     fireEvent.click(screen.getByRole('button', {name: 'Remove m2'}))
     await waitFor(() => expect(fetch).toHaveBeenCalledOnce())
     expect(JSON.parse(fetch.mock.calls[0][1].body)).toMatchObject({models: ['Qwen-small'], resourceOverrides: {}})
-    await waitFor(() => expect(screen.queryByRole('checkbox', {name: 'Override resources for m2'})).not.toBeInTheDocument())
+    await waitFor(() => expect(screen.queryByRole('button', {name: 'Remove resource override for m2'})).not.toBeInTheDocument())
   })
 
   it('merges catalog defaults with partial values saved by older configurations', async () => {
@@ -152,8 +153,8 @@ describe('experiment configuration helpers', () => {
     const item: ExperimentConfiguration = {id: 'cfg_details', workspaceId: workspace.id, clusterResourceId: cluster.id, name: 'Saved configuration', description: '', applicationRef: application.reference, applicationDigest: application.digest, definition: {applicationValues: {workloadProfile: 'light'}, components: []}, validation: {valid: true, issues: []}, createdAt: '2026-09-12T00:00:00Z', updatedAt: '2026-09-12T00:00:00Z'}
     window.location.hash = `experiments/configuration/${item.id}`
     render(createElement(ExperimentConfigurationsView, {items: [item], experiments: [], clusters: [cluster], workspaces: [workspace], applications: [application], plugins: [loadPlugin, metricsPlugin], strategies: [], session: {authenticated: true}, isAdmin: true, changed: async () => {}, openOperation: () => {}}))
-    fireEvent.click(screen.getByRole('tab', {name: 'Application'}))
-    const section = screen.getByRole('tabpanel', {name: 'Application'})
+    fireEvent.click(screen.getByRole('button', {name: 'Application'}))
+    const section = screen.getByRole('region', {name: 'Application'})
     expect(within(section).getByText('Initial replicas')).toBeInTheDocument()
     expect(within(section).getByText('Threads per worker')).toBeInTheDocument()
     expect(within(section).getByText('light')).toBeInTheDocument()
@@ -191,7 +192,7 @@ describe('experiment configuration helpers', () => {
     const item: ExperimentConfiguration = {id: 'cfg_dynamic', workspaceId: workspace.id, clusterResourceId: cluster.id, name: 'Dynamic application', description: '', applicationRef: mubenchApplication.reference, applicationDigest: mubenchApplication.digest, definition: {applicationValues: {serviceCount: 2, topology: 'chain', workers: 3}, components: []}, validation: {valid: true, issues: []}, createdAt: '2026-09-12T00:00:00Z', updatedAt: '2026-09-12T00:00:00Z'}
     window.location.hash = `experiments/configuration/${item.id}`
     render(createElement(ExperimentConfigurationsView, {items: [item], experiments: [], clusters: [cluster], workspaces: [workspace], applications: [mubenchApplication], plugins: [loadPlugin, metricsPlugin], strategies: [], session: {authenticated: true, csrfToken: 'csrf'}, isAdmin: true, changed: async () => {}, openOperation: () => {}}))
-    fireEvent.click(screen.getByRole('tab', {name: 'Application'}))
+    fireEvent.click(screen.getByRole('button', {name: 'Application'}))
     fireEvent.click(screen.getByText('Topology', {exact: true}))
     const graph = await screen.findByRole('img', {name: 'Application component topology'})
     expect(graph.querySelectorAll('.application-topology-node')).toHaveLength(3)
@@ -235,7 +236,8 @@ it('keeps network injection available for native Redis while omitting HTTP geogr
   expect(screen.queryByText('Geographic timeline')).not.toBeInTheDocument()
   expect(screen.getByText('Total duration')).toBeInTheDocument()
   await goToStep('Monitoring')
-  fireEvent.click(screen.getByText('Network between zones', {selector: 'strong'}))
+  fireEvent.click(screen.getByRole('tab',{name:'Network'}))
+  expect(screen.getByRole('heading',{name:'Network between zones'})).toBeInTheDocument()
   await waitFor(() => expect(screen.getByRole('checkbox', {name: 'Enable injection'})).toBeEnabled())
 })
 
@@ -295,10 +297,10 @@ it('shows a removable unavailable component without rendering another plugin sch
   render(createElement(ExperimentConfigurationDialog, {open: true, item, close: () => {}, items: [item], experiments: [], clusters: [cluster], workspaces: [workspace], applications: [application], plugins: [loadPlugin, metricsPlugin], strategies: [], session: {authenticated: true}, isAdmin: true, changed: async () => {}, openOperation: () => {}}))
   await goToStep('Scheduling and scaling')
   fireEvent.click(screen.getByRole('tab', {name: 'Other'}))
-  expect(screen.getByText('This component is no longer available. Remove or replace it before saving.')).toBeInTheDocument()
+  expect(screen.getByText('Component unavailable. Remove or replace it.')).toBeInTheDocument()
   expect(screen.queryByRole('combobox', {name: 'policy'})).not.toBeInTheDocument()
   fireEvent.click(screen.getByRole('button', {name: 'Remove component'}))
-  expect(screen.queryByText('This component is no longer available. Remove or replace it before saving.')).not.toBeInTheDocument()
+  expect(screen.queryByText('Component unavailable. Remove or replace it.')).not.toBeInTheDocument()
 })
 
 

@@ -17,6 +17,10 @@ func configureApplicationManifest(content string, workloads []workloadTarget, in
 	if err != nil {
 		return "", err
 	}
+	value, err = configureProxyResources(value, workloads, input.IstioProxyResources)
+	if err != nil {
+		return "", err
+	}
 	return configureApplicationPlacement(value, workloads, input.ApplicationPlacement)
 }
 func configureApplicationPlacement(content string, workloads []workloadTarget, settings *placement.ApplicationSettings) (string, error) {

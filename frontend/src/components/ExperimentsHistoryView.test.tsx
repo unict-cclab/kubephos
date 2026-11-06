@@ -3,6 +3,20 @@ import {beforeAll, beforeEach, describe, expect, it, vi} from 'vitest'
 import type {Experiment, ExperimentConfiguration} from '../types'
 import {request} from '../api'
 import {ExperimentsHistoryView} from './ExperimentsHistoryView'
+import {NotificationProvider} from './ToastRegion'
+
+it('disables New run with a reason and never redirects without a configuration', async () => {
+  window.location.hash = '#results'
+  // Let the hashchange queued by the line above settle before the test navigates again.
+  await new Promise(resolve => setTimeout(resolve, 0))
+  render(<NotificationProvider><ExperimentsHistoryView experiments={[]} configurations={[]} artifacts={[]} operations={[]} workspaces={[]} session={{authenticated: true, user: {id: 'alice', username: 'alice', role: 'user'}}} changed={async () => {}} openOperation={() => {}} /></NotificationProvider>)
+  const button = screen.getByRole('button', {name: 'New run'})
+  expect(button).toBeDisabled()
+  expect(button.parentElement).toHaveAttribute('title', 'Requires a valid configuration.')
+  fireEvent.click(button)
+  expect(window.location.hash).toBe('#results')
+  expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+})
 
 vi.mock('../api', () => ({request: vi.fn()}))
 
@@ -34,13 +48,13 @@ describe('experiments history creation', () => {
     const changed = vi.fn().mockResolvedValue(undefined)
     render(<ExperimentsHistoryView experiments={[]} configurations={[configuration('cfg_1', 'Baseline'), configuration('cfg_2', 'Scheduler plugin'), configuration('cfg_bad', 'Invalid', false)]} artifacts={[]} operations={[]} workspaces={[]} session={{authenticated: true, csrfToken: 'token', user: {id: 'admin', username: 'admin', role: 'admin'}}} changed={changed} openOperation={() => {}} />)
 
-    fireEvent.click(screen.getByRole('button', {name: 'New experiment'}))
+    fireEvent.click(screen.getByRole('button', {name: 'New run'}))
     const select = screen.getByRole('combobox', {name: 'Configuration'})
     expect(select).toHaveValue('cfg_1')
     expect(screen.queryByRole('option', {name: 'Invalid'})).not.toBeInTheDocument()
     fireEvent.change(select, {target: {value: 'cfg_2'}})
     expect(screen.getByRole('textbox', {name: 'Name'})).toHaveValue('Scheduler plugin run')
-    fireEvent.change(screen.getByRole('spinbutton', {name: 'Number of runs'}), {target: {value: '2'}})
+    fireEvent.change(screen.getByRole('spinbutton', {name: 'Number of executions'}), {target: {value: '2'}})
     fireEvent.click(screen.getByRole('button', {name: 'Validate and run'}))
 
     await waitFor(() => expect(request).toHaveBeenCalledWith('/experiments/start', expect.objectContaining({method: 'POST'}), 'token'))

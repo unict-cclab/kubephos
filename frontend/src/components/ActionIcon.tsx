@@ -1,9 +1,18 @@
-export type ActionIconName = 'start' | 'create' | 'view' | 'delete' | 'edit' | 'archive' | 'close' | 'up' | 'down' | 'back' | 'sort' | 'left' | 'right' | 'check' | 'download' | 'forward' | 'turn' | 'share' | 'layout' | 'menu'
+export type ActionIconName = 'start' | 'create' | 'view' | 'delete' | 'edit' | 'archive' | 'close' | 'up' | 'down' | 'back' | 'sort' | 'left' | 'right' | 'check' | 'download' | 'forward' | 'turn' | 'share' | 'layout' | 'menu' | 'refresh' | 'search' | 'logout' | 'settings' | 'moon' | 'file' | 'pulse' | 'stack' | 'chart'
 
 export function ActionIcon({name}: {name: ActionIconName}) {
   const paths = {
     start: <path d="m8 4 12 8-12 8Z" />,
     menu: <path d="M4 6h16M4 12h16M4 18h16" />,
+    refresh: <path d="M20 11a8 8 0 1 0-2.3 5.7M20 5v6h-6" />,
+    search: <><circle cx="11" cy="11" r="7" /><path d="m20 20-3.5-3.5" /></>,
+    logout: <path d="M10 4H5v16h5M15 8l4 4-4 4M19 12H9" />,
+    settings: <><circle cx="12" cy="12" r="5.6" /><circle cx="12" cy="12" r="2.2" /><path strokeWidth="2.6" strokeLinecap="butt" d="M12 2.6v3M12 18.4v3M2.6 12h3M18.4 12h3M5.35 5.35l2.1 2.1M16.55 16.55l2.1 2.1M18.65 5.35l-2.1 2.1M7.45 16.55l-2.1 2.1" /></>,
+    moon: <path d="M20.5 14.2A8.4 8.4 0 0 1 9.8 3.5 8.5 8.5 0 1 0 20.5 14.2Z" />,
+    file: <><path d="M7 3h7l5 5v13H7z" /><path d="M14 3v5h5M10 13h6m-6 4h6" /></>,
+    pulse: <path d="M3 12h4l3-7 4 14 3-7h4" />,
+    stack: <><path d="m12 3 9 5-9 5-9-5 9-5Z" /><path d="m3 13 9 5 9-5" /></>,
+    chart: <path d="M5 20V11m7 9V4m7 16v-6M3 20h18" />,
     layout: <><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M3 9h18M9 9v11M15 9v11" /></>,
     share: <><circle cx="18" cy="5" r="3" /><circle cx="6" cy="12" r="3" /><circle cx="18" cy="19" r="3" /><path d="m8.6 10.5 6.8-4M8.6 13.5l6.8 4" /></>,
     create: <path d="M12 5v14M5 12h14" />,

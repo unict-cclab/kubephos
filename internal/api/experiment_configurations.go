@@ -22,6 +22,7 @@ import (
 	"kubephos.dev/kubephos/internal/domain"
 	"kubephos.dev/kubephos/internal/id"
 	"kubephos.dev/kubephos/internal/placement"
+	"kubephos.dev/kubephos/internal/workloadresources"
 
 	"kubephos.dev/kubephos/internal/plugins"
 
@@ -43,6 +44,7 @@ type experimentConfigurationInput struct {
 }
 
 type experimentConfigurationDefinitionInput struct {
+	IstioProxyResources             map[string]any                          `json:"istioProxyResources,omitempty"`
 	ApplicationPlacement            *placement.ApplicationSettings          `json:"applicationPlacement,omitempty"`
 	Namespace                       string                                  `json:"namespace,omitempty"`
 	TwoPhaseStart                   bool                                    `json:"twoPhaseStart,omitempty"`
@@ -498,6 +500,15 @@ func (s *Server) validatedExperimentConfiguration(ctx context.Context, input exp
 	}
 	if err := validateExperimentNetworkTimeline(input.Definition); err != nil {
 		return domain.ExperimentConfiguration{}, &managedOperationFailure{status: http.StatusUnprocessableEntity, code: "invalid_network_timeline", message: err.Error()}
+	}
+	if len(input.Definition.IstioProxyResources) > 0 {
+		ids := []string{}
+		for id := range applicationComponents {
+			ids = append(ids, id)
+		}
+		if err := workloadresources.ValidateSettings(input.Definition.IstioProxyResources, ids); err != nil {
+			return domain.ExperimentConfiguration{}, &managedOperationFailure{status: 422, code: "invalid_proxy_resources", message: err.Error()}
+		}
 	}
 	if err := placement.ValidateApplication(input.Definition.ApplicationPlacement); err != nil {
 		return domain.ExperimentConfiguration{}, &managedOperationFailure{status: 422, code: "invalid_placement", message: err.Error()}

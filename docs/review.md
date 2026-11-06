@@ -1,3 +1,47 @@
+# Frontend review — 6 November 2026
+
+- Integrated the visual foundation from `feature/frontend-refresh` at `92423b6`,
+  retaining tabular catalog lists, explicit dates and visible row actions.
+- Cluster editing and read-only configuration share section navigation and pool
+  components. Properties, labels and taints belong to the selected pool; system
+  pool properties remain protected. Application pools use named tabs.
+- Infrastructure, experiment configuration, deployment and suite details follow
+  their corresponding editor sections. Small read-only tables remain compact in
+  adjacent columns; field labels and values have consistent typography.
+- Load preview stays beside the phase editor. Common controls align actions with
+  tabs and retain values while changing sections.
+- Catalog application details separate General, Topology, Services, deployment
+  manifests and Locust scripts into tabs. Files stay lazy-loaded and cached while
+  switching sections. Placement overrides use named service tabs like resources.
+- Resource activity separates progress and process logs without interrupting log
+  polling. Log filters survive navigation and live follow resumes on opening.
+  Shared tabs have consistent spacing; nested sections avoid duplicate
+  dividers. Unused catalog-card styles from the reference branch were removed.
+- Errors use temporary notifications with retry controls retained. Creating a
+  comparison requires two valid single configurations. Dark surfaces, controls,
+  borders and topology edges have stronger contrast; decorative motion was removed.
+- Results statistics separate Overall and By service while retaining filters;
+  print includes both sections. Statistic headers and values align consistently.
+  Suite plots, comparison statistics and individual runs were also checked with
+  synthetic data in an isolated local preview.
+- Grouped the existing sidebar destinations under Infrastructure, Experiments
+  and Administration, retaining direct links for Overview, Deployments and
+  Catalog. The account footer separates username and role and shows a
+  readable version row using the version reported by the running backend.
+- Validation: frontend tests passed, including suite results, navigation,
+  placement drafts, notifications, activity polling and hidden-tab log behavior.
+  Production build, asset budget, both-theme contrast checks and npm audit passed.
+  Authenticated server checks covered catalog details, creation navigation,
+  placement overrides, network phases, infrastructure, user lists and activity.
+  Results and comparison plots were inspected with synthetic data in an isolated
+  local preview; no experiments or infrastructure were created for verification.
+- Inline field validation preserves focus and alignment. Comparison actions
+  remain disabled until their prerequisites are met and explain why on hover
+  or keyboard focus. Defaults remain read-only beside editable placement settings.
+- Final verification: 473 frontend tests, full Go and component tests, isolated
+  PostgreSQL storage/API/engine tests, production build, theme contrast, asset
+  budget and frontend dependency audit passed.
+
 # Project review — 30 October 2026
 
 ## Changes

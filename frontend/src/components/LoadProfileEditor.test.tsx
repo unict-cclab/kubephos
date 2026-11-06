@@ -1,4 +1,4 @@
-import {fireEvent, render, screen} from '@testing-library/react'
+import {fireEvent, render, screen, within} from '@testing-library/react'
 import {describe, expect, it} from 'vitest'
 import {AutoscalerTargetEditor} from './AutoscalerTargetEditor'
 import {LoadProfileEditor, LoadProfilePreview, loadProfileSteps} from './LoadProfileEditor'
@@ -72,13 +72,13 @@ describe('autoscaler targets', () => {
   })
 })
 
-it('keeps workload, traffic distribution and preview in separate tabs without losing edits', () => {
+it('shows the live preview beside the workload and keeps edits across tabs', () => {
   const {container} = render(<form><LoadProfileEditor prefix="load" zones={['zone-a', 'zone-b']} /></form>)
+  expect(screen.queryByRole('tab', {name: 'Preview'})).not.toBeInTheDocument()
+  expect(within(screen.getByRole('complementary', {name: 'Live preview'})).getByRole('img', {name: /Load profile lasting/})).toBeVisible()
   fireEvent.change(screen.getByRole('spinbutton', {name: 'Requests / second'}), {target: {value: '42'}})
   fireEvent.click(screen.getByRole('tab', {name: 'Traffic distribution'}))
   fireEvent.change(screen.getByRole('spinbutton', {name: 'zone-a'}), {target: {value: '3'}})
-  fireEvent.click(screen.getByRole('tab', {name: 'Preview'}))
-  expect(screen.getByRole('img', {name: /Load profile lasting/})).toBeVisible()
   fireEvent.click(screen.getByRole('tab', {name: 'Workload'}))
   expect(screen.getByRole('spinbutton', {name: 'Requests / second'})).toHaveValue(42)
   expect(JSON.parse((container.querySelector('input[name="load.steps"]') as HTMLInputElement).value)[0].rps).toBe(42)
@@ -105,6 +105,7 @@ it('clones workload and distribution phases without sharing editable weights',()
  const geography=JSON.parse((container.querySelector('[name="load.geographicSteps"]') as HTMLInputElement).value)
  expect(geography).toHaveLength(2)
  expect(geography[0]).toEqual(geography[1])
+ fireEvent.click(screen.getByRole('tab',{name:'Phase 1'}))
  fireEvent.change(screen.getAllByRole('spinbutton',{name:'a'})[0],{target:{value:'7'}})
  fireEvent.blur(screen.getAllByRole('spinbutton',{name:'a'})[0])
  const edited=JSON.parse((container.querySelector('[name="load.geographicSteps"]') as HTMLInputElement).value)
@@ -133,7 +134,6 @@ it('edits sinusoidal minimum and maximum, validates bounds and serializes the ra
  expect(max).toBeInvalid()
  fireEvent.change(min,{target:{value:'10'}})
  expect(container.querySelector('form')!.checkValidity()).toBe(true)
- fireEvent.click(screen.getByRole('tab',{name:'Preview'}))
  expect(screen.getByRole('img',{name:/Load profile lasting/})).toBeVisible()
 })
 

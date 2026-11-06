@@ -18,7 +18,7 @@ export function InitialReplicaEditor({prefix, components, values, resetKey, chil
   return <section className="initial-replica-editor">
     <div className="field-row field-row-compact"><label>Initial replicas<NumericInput name={`${prefix}.initialReplicas`} value={initialReplicas} min={1} max={20} required onValueChange={setInitialReplicas} /></label>{children}</div>
     <input type="hidden" name={`${prefix}.replicaOverrides`} value={JSON.stringify(configured)} readOnly />
-    <FormDisclosure key={resetKey} title="Initial replicas by service" className="service-overrides replica-service-overrides" defaultOpen={Object.keys(record(values.replicaOverrides)).length > 0} count={Object.keys(configured).length}>
+    <FormDisclosure key={resetKey} title="Initial replicas by service" className="service-overrides replica-service-overrides" defaultOpen={Object.keys(record(values.replicaOverrides)).length > 0}>
     <div className="target-editor-list">{targets.map(target => <article data-review-group={target.id} className={enabled[target.id] ? 'enabled' : ''} key={target.id}>
       <div className="target-editor-row"><label className="checkbox-field"><input type="checkbox" checked={Boolean(enabled[target.id])} onChange={event => setEnabled(current => ({...current, [target.id]: event.target.checked}))} /><span>{target.id}</span></label>{enabled[target.id] && <label className="replica-override-value">Initial replicas<NumericInput aria-label={`Initial replicas for ${target.id}`} value={overrides[target.id] ?? initialReplicas} min={1} max={20} required onValueChange={value => setOverrides(current => ({...current, [target.id]: value}))} /></label>}</div>
     </article>)}</div></FormDisclosure>

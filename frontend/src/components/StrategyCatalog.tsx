@@ -46,7 +46,7 @@ export function StrategyCatalog(props: Props) {
   if (selected) return <>{editor}{error && <ErrorFeedback message={error} />}<div className="detail-page"><DetailBreadcrumb parent="Catalog" current={selected.name} back={detail.close} /><div className="detail-page-heading"><div><h2>{selected.name}</h2></div></div><ResourceAttribution resource={selected} editable /><article className="detail-page-card">
     <div className="details-summary"><div><span>Status</span><strong>{strategyStatus(selected.status)}</strong></div><div><span>Type</span><strong>{selected.kind}</strong></div><div><span>Image</span><strong>{selected.sourceImage}</strong></div></div>
     {hasInputData(selected.defaultConfiguration) && <section className="details-section"><div className="details-heading"><strong>Default settings</strong></div><StrategyDefaults value={selected.defaultConfiguration} /></section>}
-    {selected.error && <p className="managed-error">{selected.error}</p>}
+    {selected.error && <ErrorFeedback message={selected.error}/>}
     <div className="managed-actions">{props.isAdmin && <button className="button secondary compact" disabled={!['succeeded', 'failed', 'canceled'].includes(selected.status)} onClick={() => edit(selected)}>Edit settings</button>}{selected.operationId && <button className="button secondary compact" onClick={() => props.openOperation(selected.operationId!)}>Activity</button>}</div>
   </article></div></>
   return <>

@@ -27,7 +27,9 @@ export function Dialog({open, title, eyebrow, onClose, footer, className = '', d
     if (!open) return
     const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null
     if (!dialog.open) dialog.showModal()
-    dialog.querySelector<HTMLElement>('.modal-body input:not([type="hidden"]):not([disabled]):not([readonly]), .modal-body select:not([disabled]), .modal-body textarea:not([disabled]):not([readonly])')?.focus({preventScroll: true})
+    const firstField=[...dialog.querySelectorAll<HTMLElement>('.modal-body input:not([type="hidden"]):not([disabled]):not([readonly]), .modal-body select:not([disabled]), .modal-body textarea:not([disabled]):not([readonly])')].find(field=>!field.closest('[hidden],details:not([open])'))
+    const firstStep=dialog.querySelector<HTMLElement>('.modal-body [aria-current="step"]')
+    ;(firstField??firstStep)?.focus({preventScroll:true})
     return () => {
       if (dialog.open) dialog.close()
       clearErrors?.()

@@ -28,7 +28,7 @@ describe('instance state transfer', () => {
   })
   it('is unavailable to regular users', () => {
     render(<AdministrationView session={{...session, user: {...session.user!, role: 'user'}}} changed={vi.fn()} />)
-    expect(screen.queryByRole('heading', {name: 'Administration'})).not.toBeInTheDocument()
+    expect(screen.queryByRole('heading', {name: 'Import and export'})).not.toBeInTheDocument()
   })
   it('reviews an encrypted archive before importing and clears the review when credentials change', async () => {
     const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({version: 'test', createdAt: '2026-10-26T10:00:00Z', counts: {credentials: 2}})))
@@ -64,7 +64,8 @@ describe('instance state transfer', () => {
     fireEvent.change(screen.getAllByLabelText('Archive password')[0], {target: {value: 'archive-password'}})
     fireEvent.change(screen.getByLabelText('Confirm password'), {target: {value: 'other-password'}})
     fireEvent.click(screen.getByRole('button', {name: 'Export state'}))
-    expect(screen.getByRole('alert')).toHaveTextContent('Archive passwords do not match.')
+    expect(screen.getByText('Passwords do not match.')).toBeVisible()
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
     expect(fetch).not.toHaveBeenCalled()
   })
   it('imports only after explicit review and refreshes resources', async () => {

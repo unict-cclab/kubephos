@@ -75,8 +75,9 @@ it('uses consistent Infrastructure names and attribution columns across all reso
   props.infrastructureServices = ['harbor', 'nfs'].map(kind => ({id: kind, name: kind, kind, connectionId: 'pve', status: 'ready', spec: {}, createdAt: '', updatedAt: ''})) as ManagedResource[]
   render(createElement(Views, props))
   expect(screen.getByRole('button', {name: 'New Proxmox connection'})).toBeInTheDocument()
-  for (const [tab, tableLabel] of [['Proxmox connections1', 'Proxmox connections'], ['VM templates1', 'VM templates'], ['Harbor1', 'Harbor registries'], ['NFS1', 'NFS servers']]) {
-    fireEvent.click(screen.getByRole('button', {name: tab}))
+  for (const [tab, tableLabel] of [['connections', 'Proxmox connections'], ['templates', 'VM templates'], ['harbor', 'Harbor registries'], ['nfs', 'NFS servers']]) {
+    window.location.hash=`#infrastructure/${tab}`
+    fireEvent(window,new HashChangeEvent('hashchange'))
     const table = within(screen.getByRole('table', {name: tableLabel}))
     expect(table.getByRole('columnheader', {name: 'Name'})).toBeInTheDocument()
     expect(table.getByRole('columnheader', {name: 'Last updated by'})).toBeInTheDocument()

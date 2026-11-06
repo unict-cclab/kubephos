@@ -1,5 +1,7 @@
+import {ErrorFeedback} from './ToastRegion'
 import {CodeBlock} from './CodeBlock'
 import {useErrorState} from './ToastRegion'
+import {FormTabs} from './FormTabs'
 import {ReadoutTable} from './ReadoutTable'
 import {ResourceAttribution} from './ResourceAttribution'
 import {ResourceAction} from './ResourceAction'
@@ -87,35 +89,25 @@ export function ApplicationDetailsPage({application, close, canDelete, remove}: 
     link.click()
     URL.revokeObjectURL(url)
   }
-  const openDeploymentFiles = (open: boolean) => {
-    if (open && !manifest && !manifestLoading) void loadPreview()
-  }
-  const openLocustFile = (open: boolean) => {
-    const scenarioID = String(scenarios[0]?.id ?? '')
-    if (open && scenarioID && !selectedScenario && !manifestLoading) void showScenario(scenarioID)
-  }
   return <div className="detail-page"><DetailBreadcrumb parent="Catalog" current={application.name} back={close} /><div className="detail-page-heading"><div><h2>{application.name}</h2></div><div className="detail-page-actions">{canDelete && <ResourceAction action="delete" label={`Delete ${application.name} from catalog`} onClick={() => remove(application)} />}</div></div><ResourceAttribution resource={application} editable /><article className="detail-page-card">
+    <ErrorFeedback message={manifestError}/>
+    <FormTabs key={application.reference} label="Application details" onSelect={id=>{
+      if(id==='deployment'&&!manifest&&!manifestLoading)void loadPreview()
+      if(id==='locust'&&!selectedScenario&&!manifestLoading&&scenarios[0]?.id)void showScenario(String(scenarios[0].id))
+    }} items={[
+      {id:'general',title:'General',content:<ReadoutTable label="Application information" data={{headers:['Field','Value'],rows:[
+        ...(application.description?[['Description',application.description]]:[]),
+        ['Source',application.origin==='built-in'?'Included':'Imported'],
+        ['Services',dynamicTopology?'Configurable':String(components.length)],['Load scenarios',String(scenarios.length)]
+      ]}}/>},
+      ...(!dynamicTopology?[
+        {id:'topology',title:'Topology',content:<ApplicationTopologyGraph components={components}/>},
+        {id:'services',title:'Services',content:<ReadoutTable label="Services" data={{headers:['Name','Workload type','Workload name','Traits'],rows:orderedComponents.map(component=>[component.id,component.workload?.kind??'—',component.workload?.name??'—',component.traits?.join(', ')||'—'])}}/>}
+      ]:[]),
+      {id:'deployment',title:dynamicTopology?'Example deployment files':'Deployment files',content:<CodeBlock label="Deployment manifest YAML" actions={<><button className="button secondary compact" type="button" disabled={!manifest} onClick={downloadManifest}>Download</button><button className="button secondary compact" type="button" disabled={manifestLoading} onClick={()=>void loadPreview(undefined,Boolean(manifest))}>{manifestLoading?'Preparing…':'Refresh'}</button></>}>{manifest}</CodeBlock>},
+      {id:'locust',title:dynamicTopology?'Example Locust file':'Locust file',content:scenarios.length?<CodeBlock label={`Locust file for ${selectedScenarioLabel}`} actions={<>{scenarios.length>1&&<select aria-label="Scenario" value={selectedScenarioID||String(scenarios[0]?.id??'')} onChange={event=>void showScenario(event.target.value)}>{scenarios.map((scenario,index)=><option key={String(scenario.id??index)} value={String(scenario.id??index)}>{scenarioLabel(index,scenarios.length)}</option>)}</select>}<button className="button secondary compact" type="button" disabled={!selectedScenario} onClick={downloadScenario}>Download</button><button className="button secondary compact" type="button" disabled={manifestLoading} onClick={()=>void loadPreview(selectedScenarioID||String(scenarios[0]?.id??''),Boolean(manifest))}>{manifestLoading?'Preparing…':'Refresh'}</button></>}>{selectedScenario?.script??''}</CodeBlock>:<p className="details-copy">No Locust file available.</p>}
 
-    <div className="details-summary">
-      {application.description && <div><span>Description</span><strong>{application.description}</strong></div>}
-      <div><span>Source</span><strong>{application.origin === 'built-in' ? 'Included' : 'Imported'}</strong></div>
-      {!dynamicTopology && <div><span>Services</span><strong>{components.length}</strong></div>}
-
-
-      <div><span>Load scenarios</span><strong>{scenarios.length}</strong></div>
-    </div>
-    {!dynamicTopology && <section className="details-section"><div className="details-heading"><strong>Topology</strong></div><ApplicationTopologyGraph components={components} /></section>}
-    {!dynamicTopology && <section className="details-section"><div className="details-heading"><strong>Services</strong></div><ReadoutTable label="Services" data={{headers: ['Name', 'Workload type', 'Workload name', 'Traits'], rows: orderedComponents.map(component => [component.id, component.workload?.kind ?? '—', component.workload?.name ?? '—', component.traits?.join(', ') || '—'])}} /></section>}
-    <div className="application-file-selectors">
-      <details className="technical-disclosure application-file-disclosure" onToggle={event => openDeploymentFiles(event.currentTarget.open)}>
-        <summary><strong>{dynamicTopology ? 'Example deployment files' : 'Deployment files'}</strong></summary>
-        <div className="application-file-content">{dynamicTopology && <p className="details-copy">Example deployment manifests generated using the application defaults. Experiment manifests are generated from the selected configuration.</p>}<div className="details-heading"><strong>Manifest YAML</strong><div className="chart-export-actions">{manifest && <button className="button secondary compact" type="button" onClick={downloadManifest}>Download .yml</button>}<button className="button secondary compact" type="button" disabled={manifestLoading} onClick={() => void loadPreview(undefined, Boolean(manifest))}>{manifestLoading ? 'Preparing…' : manifest ? 'Refresh' : 'Load'}</button></div></div>{manifestError && <p className="form-error">{manifestError}</p>}{manifest && <CodeBlock label="Deployment manifest YAML">{manifest}</CodeBlock>}</div>
-      </details>
-      <details className="technical-disclosure application-file-disclosure" onToggle={event => openLocustFile(event.currentTarget.open)}>
-        <summary><strong>{dynamicTopology ? 'Example Locust file' : 'Locust file'}</strong></summary>
-        <div className="application-file-content">{dynamicTopology && <p className="details-copy">Example Locust script generated using the application defaults. The experiment script is generated from the selected configuration.</p>}{scenarios.length ? <>{scenarios.length > 1 && <label>Scenario<select value={selectedScenarioID} onChange={event => void showScenario(event.target.value)}>{scenarios.map((scenario, index) => <option key={String(scenario.id ?? index)} value={String(scenario.id ?? index)}>{scenarioLabel(index, scenarios.length)}</option>)}</select></label>}{manifestError && <p className="form-error">{manifestError}</p>}{selectedScenario && <><div className="details-heading"><strong>{selectedScenarioLabel}.py</strong><div className="chart-export-actions"><button className="button secondary compact" type="button" onClick={downloadScenario}>Download .py</button></div></div><CodeBlock label={`Locust file for ${selectedScenarioLabel}`}>{selectedScenario.script}</CodeBlock></>}</> : <p className="details-copy">No Locust file available.</p>}</div>
-      </details>
-    </div>
+    ]}/>
   </article></div>
 }
 

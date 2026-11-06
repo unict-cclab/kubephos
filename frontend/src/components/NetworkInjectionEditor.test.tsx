@@ -65,10 +65,10 @@ it('uses integer steps for integer backend fields and allows fractional packet l
 it('places the host-network toggle in the shared disclosure and preserves its saved value', () => {
   render(<NetworkInjectionEditor prefix="network" zones={['a', 'b']} values={{hostNetwork: true}} />)
   fireEvent.click(screen.getByText('Network target'))
-  const toggle = screen.getByRole('checkbox', {name: 'Shape host-network traffic instead of Pod CIDRs'})
+  const toggle = screen.getByRole('checkbox', {name: 'Shape host-network traffic'})
   expect(toggle).toBeChecked()
   expect(toggle.closest('.form-disclosure-body')).toBeInTheDocument()
-  expect(toggle.closest('label')).toHaveClass('wide')
+  expect(toggle.closest('label')).toHaveClass('checkbox-field')
 })
 
 it.each(['zone', 'cluster'] as const)('reviews directed %s links without inactive shared defaults or duplicate fields', async distribution => {
@@ -113,4 +113,27 @@ it('retains saved directed links and blocks an overlapping bidirectional selecti
  expect(screen.getByRole('checkbox',{name:'Bidirectional a to b'})).toBeEnabled()
  fireEvent.click(screen.getByRole('checkbox',{name:'Bidirectional a to b'}))
  expect(screen.getByRole('button',{name:'Add zone link'})).toBeDisabled()
+})
+
+it('hides and omits directed links for a uniform profile while keeping their draft',()=>{
+ const {container}=render(<form><NetworkInjectionEditor prefix="network" zones={['a','b']}/></form>)
+ fireEvent.change(screen.getByRole('spinbutton',{name:'One-way latency (ms)'}),{target:{value:'75'}})
+ fireEvent.click(screen.getByRole('checkbox',{name:'Use one profile for every inter-zone link'}))
+ expect(screen.queryByRole('table',{name:'Zone links'})).not.toBeInTheDocument()
+ expect(new FormData(container.querySelector('form')!).get('network.linkOverrides')).toBe('[]')
+ fireEvent.click(screen.getByRole('checkbox',{name:'Use one profile for every inter-zone link'}))
+ expect(screen.getByRole('spinbutton',{name:'One-way latency (ms)'})).toHaveValue(75)
+ expect(JSON.parse(String(new FormData(container.querySelector('form')!).get('network.linkOverrides')))[0].latencyMilliseconds).toBe(75)
+})
+it('preserves saved shared profiles with explicit link exceptions',()=>{
+ const link={sourceZone:'a',targetZone:'b',bidirectional:true,latencyMilliseconds:75}
+ const {container}=render(<form><NetworkInjectionEditor prefix="network" zones={['a','b']} values={{enableLatency:true,latencyMilliseconds:100,linkOverrides:[link]}}/></form>)
+ expect(screen.getByRole('checkbox',{name:'Link overrides'})).toBeChecked()
+ expect(screen.getByRole('table',{name:'Zone links'})).toBeVisible()
+ expect(JSON.parse(String(new FormData(container.querySelector('form')!).get('network.linkOverrides')))).toEqual([link])
+ fireEvent.click(screen.getByRole('checkbox',{name:'Link overrides'}))
+ expect(screen.queryByRole('table',{name:'Zone links'})).not.toBeInTheDocument()
+ expect(new FormData(container.querySelector('form')!).get('network.linkOverrides')).toBe('[]')
+ fireEvent.click(screen.getByRole('checkbox',{name:'Link overrides'}))
+ expect(JSON.parse(String(new FormData(container.querySelector('form')!).get('network.linkOverrides')))).toEqual([link])
 })

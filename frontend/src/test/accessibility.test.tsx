@@ -82,8 +82,8 @@ describe('shared console accessibility', () => {
     await audit()
     await user.click(screen.getByText('Advanced settings', {selector: 'summary'}))
     await audit()
-    await user.click(screen.getByText('Resource overrides by service'))
-    await user.click(screen.getByRole('checkbox', {name: 'Override resources for api'}))
+    await user.click(screen.getByRole('tab',{name:'Service overrides'}))
+    await user.click(screen.getByRole('button', {name: 'Add service override'}))
     await audit()
   })
 

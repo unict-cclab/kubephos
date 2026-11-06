@@ -1,3 +1,5 @@
+import {FormTabs} from './FormTabs'
+import {ErrorFeedback} from './ToastRegion'
 import {useErrorState} from './ToastRegion'
 import {useEffect, useState} from 'react'
 import {request} from '../api'
@@ -12,6 +14,7 @@ export function ResourceActivity({resource, initialRun, openOperation, openPipel
  const runID = resource.deletionOperationId ? undefined : resource.deletionPipelineRunId ?? resource.recreationPipelineRunId ?? resource.pipelineRunId
  const operationID = resource.deletionOperationId ?? resource.operationId
  const source = runID ? `/pipeline-runs/${runID}` : operationID ? `/operations/${operationID}` : ''
+ const [tab,setTab]=useState('progress')
  const [run,setRun] = useState<PipelineRun | undefined>(initialRun?.id === runID ? initialRun : undefined)
  const [operation,setOperation] = useState<Operation>()
  const [logs,setLogs] = useState<PipelineRunLogEntry[]>([])
@@ -48,9 +51,13 @@ export function ResourceActivity({resource, initialRun, openOperation, openPipel
  const status = runID ? run?.status : operation?.status
  const showLogs = runID && openPipelineRun ? ()=>openPipelineRun(runID) : operationID ? ()=>openOperation(operationID) : undefined
  return <>
-  {resource.error&&<p className="managed-error">{resource.error}</p>}
+  {resource.error&&<ErrorFeedback message={resource.error}/>}
+  <ErrorFeedback message={error}/>
   <section className="details-section activity-status"><div><span>Status</span><strong className={`status-pill ${resource.status}`}>{resource.status}</strong></div>{nodes.length>0&&<div><span>Progress</span><strong>{nodes.filter(node=>node.status==='succeeded').length}/{nodes.length}</strong></div>}</section>
-  {nodes.length>0&&<section className="details-section"><ExecutionProgressGraph nodes={nodes} label={`${resource.name} lifecycle progress`} openOperation={runID&&openPipelineRun?undefined:openOperation} showLogs={showLogs}/></section>}
-  {source?<section className="details-section"><div className="details-heading"><strong>Process logs</strong></div>{error&&<p className="managed-error" role="alert">{error} <button className="text-button" onClick={()=>setRetry(value=>value+1)}>Retry</button></p>}<LogViewer entries={logs} label="Process logs" context={runID?entry=>`${entry.stagePosition}. ${entry.stageTitle}${entry.phase==='cleanup'?' · cleanup':''}`:undefined} filename={`${resource.name}-provisioning-logs.txt`} emptyMessage={error?'Logs could not be loaded.':!loaded?'Loading process logs…':finished(status??'')?'No process log entries.':'Waiting for the first process log entry…'}/></section>:<p className="details-copy">No provisioning activity available.</p>}
+  <FormTabs label="Activity sections" selectedId={tab} onSelect={setTab} items={[
+   {id:'progress',title:'Progress',content:source?<section className="details-section"><ExecutionProgressGraph nodes={nodes} label={`${resource.name} lifecycle progress`} openOperation={runID&&openPipelineRun?undefined:openOperation} showLogs={showLogs}/></section>:<p className="details-copy">No provisioning activity available.</p>},
+   {id:'logs',title:'Process logs',content:source?<section className="details-section"><div className="details-heading"><strong>Process logs</strong></div>{error&&<><button type="button" className="button secondary compact" onClick={()=>setRetry(value=>value+1)}>Retry</button></>}<LogViewer active={tab==='logs'} entries={logs} label="Process logs" context={runID?entry=>`${entry.stagePosition}. ${entry.stageTitle}${entry.phase==='cleanup'?' · cleanup':''}`:undefined} filename={`${resource.name}-provisioning-logs.txt`} emptyMessage={error?'Logs could not be loaded.':!loaded?'Loading process logs…':finished(status??'')?'No process log entries.':'Waiting for the first process log entry…'}/></section>:<p className="details-copy">No provisioning activity available.</p>}
+  ]}/>
+
  </>
 }

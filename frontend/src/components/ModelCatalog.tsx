@@ -73,7 +73,7 @@ function ModelDialog({editing, close, session, saved}: {editing?: CatalogModel; 
     catch (cause) {setError(cause instanceof Error ? cause.message : 'Could not save model.')}
     finally {setPending(false)}
   }
-  return <Dialog open title={editing ? 'Edit model' : 'Add model'} onClose={close}>
+  return <Dialog open presentation={editing?'page':'dialog'} title={editing ? 'Edit model' : 'Add model'} onClose={close}>
     <form className="form-stack" onSubmit={submit}>
       {editing ? <><label>Name<input readOnly value={editing.id} /></label><label>GGUF download URL<input name="url" type="url" required defaultValue={editing.url} /></label><label className="checkbox-field"><input name="enabled" type="checkbox" defaultChecked={editing.enabled} />Enabled</label></> : <label>GGUF download URL<input name="url" type="url" required placeholder="https://…/model.gguf" autoFocus /></label>}
       {error && <ErrorFeedback message={error} />}

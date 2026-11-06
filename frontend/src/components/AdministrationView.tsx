@@ -1,3 +1,4 @@
+import {ValidatedInput} from './ValidatedInput'
 import {ErrorFeedback, useErrorState} from './ToastRegion'
 import {useEffect, useRef, useState, type FormEvent} from 'react'
 import {requestResponse} from '../api'
@@ -45,8 +46,8 @@ export function AdministrationView({session, changed}: {session: Session; change
     })
   }
   const archiveBody = () => {
-    if (!file) throw new Error('Choose a state archive.')
-    if (file.size > 128 * 1024 * 1024) throw new Error('State archive exceeds 128 MiB.')
+    if (!file) throw new Error('Choose an archive.')
+    if (file.size > 128 * 1024 * 1024) throw new Error('Maximum archive size: 128 MiB.')
     const body = new FormData(); body.set('file', file); body.set('password', importPassword); return body
   }
   const inspect = (event: FormEvent) => {
@@ -66,7 +67,7 @@ export function AdministrationView({session, changed}: {session: Session; change
   })
   if (session.user?.role !== 'admin') return null
   return <>
-    <ResourceListHeading title="Administration" />
+    <ResourceListHeading title="Import and export" />
     <p className="state-transfer-scope">Move your infrastructure, catalog and configurations to another instance. Users and experiments are excluded.</p>
     <div className="state-transfer-tabs"><FormTabs label="State transfer" items={[
       {id: 'export', title: 'Export', content: <section className="state-transfer-panel" aria-label="Export state">
@@ -74,8 +75,8 @@ export function AdministrationView({session, changed}: {session: Session; change
         {feedbackTab === 'export' && success && <p className="state-transfer-success" role="status">{success}</p>}
         <form onSubmit={exportState}>
           <fieldset disabled={pending !== null}>
-            <label>Archive password<input type="password" autoComplete="new-password" minLength={12} maxLength={1024} required value={exportPassword} onChange={event => setExportPassword(event.target.value)} /></label>
-            <label>Confirm password<input type="password" autoComplete="new-password" minLength={12} maxLength={1024} required value={confirmation} onChange={event => setConfirmation(event.target.value)} /></label>
+            <label>Archive password<ValidatedInput aria-label="Archive password" type="password" autoComplete="new-password" minLength={12} maxLength={1024} required value={exportPassword} onChange={event => setExportPassword(event.target.value)} /></label>
+            <label>Confirm password<ValidatedInput aria-label="Confirm password" error={confirmation&&confirmation!==exportPassword?'Passwords do not match.':''} type="password" autoComplete="new-password" minLength={12} maxLength={1024} required value={confirmation} onChange={event => setConfirmation(event.target.value)} /></label>
             <p className="state-transfer-hint">At least 12 characters. Keep this password for import.</p>
             <button className="button primary" type="submit">{pending === 'export' ? 'Exporting…' : 'Export state'}</button>
           </fieldset>
@@ -88,7 +89,7 @@ export function AdministrationView({session, changed}: {session: Session; change
         <form onSubmit={inspect}>
           <fieldset disabled={pending !== null}>
             <label>State archive<input key={fileKey} type="file" accept=".kps,application/octet-stream" required onChange={event => {setFile(event.target.files?.[0] ?? null); setSummary(null); setError('')}} /></label>
-            <label>Archive password<input type="password" autoComplete="off" required minLength={12} maxLength={1024} value={importPassword} onChange={event => {setImportPassword(event.target.value); setSummary(null)}} /></label>
+            <label>Archive password<ValidatedInput aria-label="Archive password" type="password" autoComplete="off" required minLength={12} maxLength={1024} value={importPassword} onChange={event => {setImportPassword(event.target.value); setSummary(null)}} /></label>
             <button className="button secondary" type="submit">{pending === 'inspect' ? 'Checking…' : 'Review archive'}</button>
           </fieldset>
         </form>

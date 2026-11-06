@@ -1,5 +1,5 @@
 import {useState} from 'react'
-import {fireEvent, render, screen, waitFor} from '@testing-library/react'
+import {fireEvent, render, screen, waitFor, within} from '@testing-library/react'
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest'
 
 vi.mock('./api', () => ({
@@ -45,23 +45,46 @@ describe('application navigation', () => {
     expect(screen.getByRole('button', {name: 'Open activity logs'})).toBeInTheDocument()
   })
 
-  it('shows configurations and experiments without a separate suites menu', async () => {
+  it('shows configurations and experiments directly, without a separate suites menu', async () => {
     render(<App />)
-    await screen.findByRole('button', {name: 'Configurations'})
-    expect(screen.getByRole('button', {name: 'Experiments'})).toBeInTheDocument()
+    fireEvent.click(await screen.findByRole('button', {name: 'Catalog'}))
+    fireEvent.click(screen.getByRole('button', {name: 'Experiments'}))
+    expect(await screen.findByRole('button', {name: 'Runs'})).toBeInTheDocument()
+    expect(screen.getByRole('button', {name: 'Configurations'})).toBeInTheDocument()
     expect(screen.queryByRole('button', {name: 'Suites'})).not.toBeInTheDocument()
   })
 
   it('opens the administrator state transfer section', async () => {
     render(<App />)
-    fireEvent.click(await screen.findByRole('button', {name: 'Administration'}))
+    fireEvent.click(await screen.findByRole('button', {name: 'Account settings'}))
+    fireEvent.click(within(screen.getByRole('group',{name:'Account'})).getByRole('button', {name: 'Import and export'}))
     await waitFor(() => expect(screen.getByText('Current view: administration')).toBeInTheDocument())
   })
 
-  it('opens users on the first menu selection', async () => {
+  it('jumps to a section from the keyboard palette', async () => {
+    render(<App />)
+    await screen.findByRole('button', {name: 'Catalog'})
+
+    fireEvent.keyDown(window, {key: 'k', ctrlKey: true})
+    const input = screen.getByRole('combobox', {name: 'Jump to'})
+    fireEvent.change(input, {target: {value: 'accounts'}})
+    fireEvent.keyDown(input, {key: 'Enter'})
+
+    await waitFor(() => expect(screen.getByText('Current view: users')).toBeInTheDocument())
+    expect(screen.queryByRole('combobox', {name: 'Jump to'})).not.toBeInTheDocument()
+  })
+
+  it('keeps run creation in the Runs section instead of the sidebar', async () => {
+    render(<App />)
+    await screen.findByRole('button', {name: 'Catalog'})
+    expect(screen.queryByRole('button', {name: 'New experiment'})).not.toBeInTheDocument()
+  })
+
+  it('opens team members on the first menu selection', async () => {
     render(<App />)
 
-    fireEvent.click(await screen.findByRole('button', {name: 'Users'}))
+    fireEvent.click(await screen.findByRole('button', {name: 'Administration'}))
+    fireEvent.click(screen.getByRole('button', {name: 'Users'}))
 
     await waitFor(() => expect(screen.getByText('Current view: users')).toBeInTheDocument())
   })

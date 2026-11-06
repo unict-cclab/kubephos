@@ -1,4 +1,4 @@
-import {fireEvent, render, screen} from '@testing-library/react'
+import {fireEvent, render, screen, within} from '@testing-library/react'
 import {beforeAll, beforeEach, describe, expect, it} from 'vitest'
 import type {ExperimentConfiguration} from '../types'
 import {ExperimentConfigurationsView} from './ExperimentConfigurationsView'
@@ -28,7 +28,7 @@ describe('experiment configuration actions', () => {
     expect(screen.queryByText('Exact saved configuration')).not.toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', {name: 'Run experiment'}))
     expect(view.container.querySelector('dialog[open]')).toBeInTheDocument()
-    expect(screen.getByRole('spinbutton', {name: 'Number of runs'})).toBeInTheDocument()
+    expect(screen.getByRole('spinbutton', {name: 'Number of executions'})).toBeInTheDocument()
   })
 
   it('opens configuration editing as a page with the saved values', () => {
@@ -47,7 +47,7 @@ describe('experiment configuration actions', () => {
     const view = render(<ExperimentConfigurationsView {...props} />)
     fireEvent.click(screen.getByRole('button', {name: 'View Simple load details'}))
 
-    expect(screen.getByRole('tablist', {name: 'Configuration sections'})).toBeInTheDocument()
+    expect(screen.getByRole('navigation', {name: 'Configuration sections'})).toBeInTheDocument()
     expect(screen.queryByRole('button', {name: 'View configuration'})).not.toBeInTheDocument()
     expect(screen.getByRole('heading', {name: 'Simple load'})).toBeInTheDocument()
     expect(screen.queryByRole('textbox', {name: 'Name'})).not.toBeInTheDocument()
@@ -55,4 +55,20 @@ describe('experiment configuration actions', () => {
     expect(view.container.querySelector('dialog[open]')).not.toBeInTheDocument()
     expect(screen.queryByText('Complete saved configuration in read-only mode.')).not.toBeInTheDocument()
   })
+})
+
+it.each([0,1])('blocks creation of a comparison with only %i single configurations',count=>{
+ window.location.hash='#experiments'
+ render(<ExperimentConfigurationsView {...props} clusters={[{id:"ready",status:"ready"} as never]} items={Array.from({length:count},(_,i)=>({...item,id:`cfg_${i}`}))}/>)
+ fireEvent.click(screen.getByRole('button',{name:'New configuration'}))
+ expect(screen.getByRole('button',{name:'Comparison'})).toBeDisabled()
+})
+it('enables comparisons with two valid singles and excludes suites or invalid sources',()=>{
+ window.location.hash='#experiments'
+ const items=[item,{...item,id:'cfg_2'}, {...item,id:'suite',kind:'suite' as const}, {...item,id:'invalid',validation:{valid:false,issues:[]}}]
+ render(<ExperimentConfigurationsView {...props} clusters={[{id:"ready",status:"ready"} as never]} items={items}/>)
+ fireEvent.click(screen.getByRole('button',{name:'New configuration'}))
+ expect(screen.getByRole('button',{name:'Comparison'})).toBeEnabled()
+ fireEvent.click(screen.getByRole('button',{name:'Comparison'}))
+ expect(within(screen.getByRole('region',{name:'Configurations'})).getAllByRole('checkbox')).toHaveLength(2)
 })

@@ -1,3 +1,4 @@
+import {ErrorFeedback} from './ToastRegion'
 import {useErrorState} from './ToastRegion'
 import type {ApplicationComponent} from '../types'
 import {exportChart} from '../charts'
@@ -167,15 +168,16 @@ function edgePath({source, target}: TopologyEdge, position: number, width: numbe
   return `M ${source.x} ${startY} L ${source.x} ${source.y + 66} L ${gutter} ${source.y + 66} L ${gutter} ${target.y - 36} L ${target.x} ${target.y - 36} L ${target.x} ${endY}`
 }
 
-export function ApplicationTopologyGraph({components}: {components: ApplicationComponent[]}) {
+// `heading` is omitted (null) when a surrounding panel already titles the graph.
+export function ApplicationTopologyGraph({components, heading = 'Application topology'}: {components: ApplicationComponent[]; heading?: string | null}) {
   const topology = buildApplicationTopology(components)
   const [exportError, setExportError] = useErrorState()
   if (!topology) return null
   const chartID = 'application-topology-graph'
   const output = (format: 'pdf' | 'png') => exportChart(chartID, 'application-topology', format).then(() => setExportError('')).catch(cause => setExportError(cause instanceof Error ? cause.message : 'Could not export application topology.'))
   return <section className="details-section application-topology-section">
-    <div className="details-heading"><strong>Application topology</strong><div className="chart-export-actions"><button className="button secondary compact" type="button" onClick={() => void output('pdf')}>PDF</button><button className="button secondary compact" type="button" onClick={() => void output('png')}>PNG</button></div></div>
-    {exportError && <p className="form-error">{exportError}</p>}
+    <div className="details-heading">{heading && <strong>{heading}</strong>}<div className="chart-export-actions"><button className="button secondary compact" type="button" onClick={() => void output('pdf')}>PDF</button><button className="button secondary compact" type="button" onClick={() => void output('png')}>PNG</button></div></div>
+    {exportError && <ErrorFeedback message={exportError}/>}
     <div className="application-topology-scroll">
       <svg id={chartID} className="application-topology-graph" data-export-size="content" width={topology.width} height={topology.height} viewBox={`0 0 ${topology.width} ${topology.height}`} role="img" aria-label="Application component topology">
         <title>Application service graph</title>

@@ -186,3 +186,12 @@ func Effective(settings *ApplicationSettings, service string) (map[string]string
 	}
 	return selector, tolerations
 }
+
+// WorkloadDefaults describes the manifest's existing pod placement before user
+// overrides and before Kubernetes admission adds its own defaults.
+type WorkloadDefaults struct {
+	ID           string            `json:"id"`
+	NodeSelector map[string]string `json:"nodeSelector,omitempty"`
+	Tolerations  []Toleration      `json:"tolerations,omitempty"`
+	NodeBinding  string            `json:"nodeBinding,omitempty"`
+}

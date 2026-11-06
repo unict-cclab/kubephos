@@ -68,18 +68,33 @@ these settings from application containers, init containers and auxiliary jobs.
 Service overrides inherit the shared values. Kubernetes admission policies may
 supply namespace defaults; a limit without a request becomes the request.
 
+**Application → Placement** shows the generated manifest's default node selector
+and tolerations, alongside the shared custom settings. Defaults remain read-only
+and are never copied into the saved overrides. Application pool forms and cluster
+details also show the managed labels and taints: `kubephos.dev/pool` identifies the
+pool, `kubephos.dev/role` its role, and placement uses a zone or cluster label.
+
+Configuration details follow the same sections and tabs as the editor, with read-only tables for saved values.
+
 **Application → Placement** defines a shared node selector and tolerations.
 Service overrides can inherit these values, replace them with custom values, or
-select **None** to omit the shared custom settings for that service. Existing
+select **Defaults only** to omit the shared custom settings for that service. Existing
 KubePhos placement constraints remain in force; conflicting selectors are rejected.
 These settings also apply to standalone application deployments.
 
+**Istio → Proxy resources** configures optional CPU and memory requests and limits
+for Envoy independently from the application's containers. Service overrides use
+the same resource editor as application resources. Empty fields do not produce
+resource annotations. The injector's own defaults remain applicable. See
+[Istio's proxy resource annotations](https://istio.io/latest/docs/reference/config/annotations/).
+
 Application pools support **Labels** and **Taints** in single and multi cluster
-creation. Master and Management retain their managed settings. For single clusters,
-**Manage nodes** can update application pool settings when no experiments are active.
+creation. Master and Management retain their managed settings.
+**Edit** can update application pool labels and taints while experiments or
+independent deployments are active. Topology maintenance still requires no queued
+or running experiments.
 A toleration permits placement on a tainted node; use a matching node selector when
-placement on that pool is required. `NoExecute` taints can evict existing pods that
-do not tolerate them.
+placement on that pool is required.
 
 Catalog deployment manifests and Locust scripts are examples. Experiment manifests
 and load scripts are generated from the saved configuration.

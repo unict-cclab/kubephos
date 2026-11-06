@@ -1,4 +1,5 @@
-import {useEffect, useRef, useState, type FocusEvent, type InputHTMLAttributes} from 'react'
+import {ValidatedInput} from './ValidatedInput'
+import {useEffect, useState, type FocusEvent, type InputHTMLAttributes} from 'react'
 
 type Props = Omit<InputHTMLAttributes<HTMLInputElement>, 'type' | 'value' | 'defaultValue' | 'onChange'> & {
   value: number
@@ -7,8 +8,6 @@ type Props = Omit<InputHTMLAttributes<HTMLInputElement>, 'type' | 'value' | 'def
 }
 
 export function NumericInput({value, onValueChange, onBlur, validationMessage, ...props}: Props) {
-  const input = useRef<HTMLInputElement>(null)
-  useEffect(() => {input.current?.setCustomValidity(validationMessage ?? '')}, [validationMessage])
   const [draft, setDraft] = useState(String(value))
 
   useEffect(() => setDraft(String(value)), [value])
@@ -18,7 +17,7 @@ export function NumericInput({value, onValueChange, onBlur, validationMessage, .
     onBlur?.(event)
   }
 
-  return <input {...props} ref={input} type="number" value={draft} onChange={event => {
+  return <ValidatedInput {...props} error={validationMessage} type="number" value={draft} onChange={event => {
     const next = event.currentTarget.value
     setDraft(next)
     if (next !== '' && Number.isFinite(event.currentTarget.valueAsNumber)) onValueChange(event.currentTarget.valueAsNumber)

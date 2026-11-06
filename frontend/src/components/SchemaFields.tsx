@@ -1,3 +1,4 @@
+import {ValidatedInput} from './ValidatedInput'
 import {standardFieldLabel} from '../fieldLabels'
 import {ResourceAction} from './ResourceAction'
 import {useEffect, useRef, useState} from 'react'
@@ -134,7 +135,7 @@ function SchemaField({name, prefix, property, value, required, onValue, formValu
   if (choices) {
     const selected = String(value ?? property.default ?? choices[0]?.value ?? '')
     const options = selected && !choices.some(choice => choice.value === selected) ? [{value: selected, label: `${selected} · saved value`}, ...choices] : choices
-    return <label className={wide}>{title}<select name={fieldName} required={required} disabled={!options.length} defaultValue={selected} onChange={event => onValue(schemaValue(event.target.value, property))}>
+    return <label className={wide}>{title}<select name={fieldName} required={required} disabled={!required&&!options.length} defaultValue={selected} onChange={event => onValue(schemaValue(event.target.value, property))}>
       {options.length ? options.map(choice => <option key={choice.value} value={choice.value}>{choice.label}</option>) : <option value="">No compatible value available</option>}
     </select></label>
   }
@@ -159,26 +160,18 @@ function SchemaField({name, prefix, property, value, required, onValue, formValu
     </div>
   }
   if (property.type === 'object' || property.type === 'array') {
-    const serialized = value === undefined && property.default === undefined ? '' : JSON.stringify(value ?? property.default, null, 2)
-    return <label className="wide">{title}<textarea className={strategyConfig ? 'strategy-config-editor' : 'code-editor'} name={fieldName} rows={strategyConfig ? 20 : 4} required={required} defaultValue={serialized} onChange={event => {
-      const field = event.currentTarget
-      field.setCustomValidity('')
-      if (field.value.trim()) {
-        try {
-          const parsed: unknown = JSON.parse(field.value)
-          if (property.type === 'array' ? !Array.isArray(parsed) : !parsed || typeof parsed !== 'object' || Array.isArray(parsed)) field.setCustomValidity(`Enter a JSON ${property.type === 'array' ? 'array' : 'object'}.`)
-        } catch {field.setCustomValidity(`Enter a valid JSON ${property.type === 'array' ? 'array' : 'object'}.`)}
-      }
-      onValue(field.value)
-    }} /></label>
+    const serialized = typeof value==='string'?value:value===undefined&&property.default===undefined?'':JSON.stringify(value??property.default,null,2)
+    const error=jsonFieldError(serialized,property)
+    return <label className="wide">{title}<textarea aria-label={title} className={strategyConfig ? 'strategy-config-editor' : 'code-editor'} name={fieldName} rows={strategyConfig ? 20 : 4} required={required} defaultValue={serialized} ref={field=>field?.setCustomValidity(error)} aria-invalid={error?true:undefined} aria-describedby={error?`${fieldName}-error`:undefined} onChange={event=>onValue(event.target.value)} />{error&&<small className="field-validation-error" id={`${fieldName}-error`} aria-live="polite">{error}</small>}</label>
   }
   if (property.type === 'string' && property['x-kubephos-multiline']) {
     return <label className="wide">{title}<textarea className={strategyConfig ? 'strategy-config-editor' : undefined} name={fieldName} rows={strategyConfig ? 20 : 5} required={required} defaultValue={value === undefined && property.default === undefined ? '' : String(value ?? property.default)} minLength={property.minLength} maxLength={property.maxLength} onChange={event => onValue(event.target.value)} /></label>
   }
   const numeric = property.type === 'integer' || property.type === 'number'
   const descriptionID = property.description ? `${fieldName}-description`.replaceAll('.', '-') : undefined
-  return <label className={wide}>{title}<input
+  return <label className={wide}>{title}<ValidatedInput
     name={fieldName}
+    error={schemaStringError(value,property,required)}
     aria-label={title}
     aria-describedby={descriptionID}
     type={numeric ? 'number' : property.writeOnly ? 'password' : 'text'}
@@ -224,4 +217,26 @@ export function hasConfigurableFields(schema: JsonSchema, values: Record<string,
     if (property.type === 'object' && property.properties) return hasConfigurableFields(property, effective[name] && typeof effective[name] === 'object' ? effective[name] as Record<string, unknown> : {})
     return true
   })
+}
+
+function schemaStringError(value:unknown,property:SchemaProperty,required:boolean):string {
+ if(property.type!=='string'||typeof value!=='string')return ''
+ if(required&&value.length>0&&!property.writeOnly&&!value.trim())return 'Required.'
+ if(value&&property.pattern) {
+  try {if(!new RegExp(property.pattern).test(value))return 'Invalid format.'} catch { /* Invalid schema patterns remain subject to server validation. */ }
+ }
+ return ''
+}
+
+function jsonFieldError(value:string,property:SchemaProperty):string {
+ if(!value.trim())return ''
+ let parsed:unknown
+ try {parsed=JSON.parse(value)} catch {return `Invalid JSON.`}
+ if(property.type==='object'&&(!parsed||typeof parsed!=='object'||Array.isArray(parsed)))return 'Use a JSON object.'
+ if(property.type==='array') {
+  if(!Array.isArray(parsed))return 'Use a JSON array.'
+  if(property.minItems!==undefined&&parsed.length<property.minItems)return `At least ${property.minItems} items.`
+  if(property.maxItems!==undefined&&parsed.length>property.maxItems)return `Up to ${property.maxItems} items.`
+ }
+ return ''
 }

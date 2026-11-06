@@ -1,5 +1,5 @@
 import {ErrorFeedback, useErrorState} from './ToastRegion'
-import {ResourceStatus, ResourceConnectivity} from './ResourceConnectivity'
+import {ResourceStatus} from './ResourceConnectivity'
 import {ResourceAttribution} from './ResourceAttribution'
 import {useEffect, useState} from 'react'
 import {request} from '../api'
@@ -56,8 +56,8 @@ export function ConnectionDetailsPage({connection, session, close}: {connection:
       <div className="simple-secret-field"><dt>Token secret</dt><dd><input aria-label="Token secret" type={visible ? 'text' : 'password'} value={visible ? secret : details.configuration.tokenSecret ?? '••••••••'} readOnly />{session.user?.role === 'admin' && <button className="text-button" type="button" disabled={pending} onClick={() => void reveal()}>{pending ? 'Loading…' : visible ? 'Hide' : 'Show'}</button>}</dd></div>
 
 
-    </dl> : error ? <ErrorFeedback message={error} persistent /> : <p className="details-copy">Loading…</p>}
-    <ResourceConnectivity value={connection.connectivity} />
-    {details && error && <ErrorFeedback message={error} persistent />}
+    </dl> : error ? <ErrorFeedback message={error} /> : <p className="details-copy">Loading…</p>}
+
+    {details && error && <ErrorFeedback message={error} />}
   </article></div>
 }

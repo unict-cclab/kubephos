@@ -1,3 +1,5 @@
+import {ErrorFeedback} from './ToastRegion'
+import {PoolPlacementReadout} from './PoolPlacementReadout'
 import {PoolPlacementFields} from './PlacementFields'
 import type {NodeTaint} from '../types'
 import {useErrorState} from './ToastRegion'
@@ -20,14 +22,15 @@ const member = (id: number): Member => ({key: id, name: `cluster-${id}`, cluster
 const count = (value: Member) => value.master.count + value.management.count + value.applications.reduce((total, item) => total + item.count, 0)
 const labels = (value: string | Record<string,string>): Record<string,string> => typeof value === 'string' ? Object.fromEntries(value.split(',').map(part => part.trim()).filter(Boolean).map(part => {
   const split = part.indexOf('=')
-  if (split < 1) throw new Error('Pool labels must use key=value, separated by commas.')
+  if (split < 1) throw new Error('Use key=value, separated by commas.')
   return [part.slice(0, split).trim(), part.slice(split + 1).trim()]
 })) : value
+const labelPreview=(value: Pool['labels'])=>{try{return labels(value)}catch{return {}}}
 export function addIPv4(value: string, offset: number): string {
   const parts = value.split('.').map(Number)
-  if (parts.length !== 4 || parts.some(part => !Number.isInteger(part) || part < 0 || part > 255)) throw new Error('Use a valid first node IPv4 address.')
+  if (parts.length !== 4 || parts.some(part => !Number.isInteger(part) || part < 0 || part > 255)) throw new Error('Enter a valid IPv4 address.')
   const number = parts.reduce((result, part) => result * 256 + part, 0) + offset
-  if (number > 4294967295) throw new Error('The node IP range is invalid.')
+  if (number > 4294967295) throw new Error('Invalid node IP range.')
   return [24, 16, 8, 0].map(shift => Math.floor(number / 2 ** shift) % 256).join('.')
 }
 export function MultiClusterForm({open, close, workspaces, templates, services, common, onSingle}: {open: boolean; close: () => void; workspaces: Workspace[]; templates: ManagedResource[]; services: ManagedResource[]; common: CommonProps; onSingle: () => void}) {
@@ -84,14 +87,14 @@ export function MultiClusterForm({open, close, workspaces, templates, services, 
         <label>Name<input value={item.name} onChange={event => update(item.key, {name: event.target.value})} pattern="[a-z0-9]([a-z0-9-]{0,13}[a-z0-9])?" maxLength={15} required /></label>
         <FormTabs label={`${fullName(item)} settings`} items={[
           {id: 'master', title: 'Master', content: <>
-      <MemberPool title="Master" value={item.master} master onChange={master => update(item.key, {master})} />
+      <MemberPool clusterName={name?fullName(item):''} title="Master" value={item.master} master onChange={master => update(item.key, {master})} />
           </>},
           {id: 'management', title: 'Management', content: <>
-      <MemberPool title="Management" value={item.management} onChange={management => update(item.key, {management})} />
+      <MemberPool clusterName={name?fullName(item):''} title="Management" value={item.management} onChange={management => update(item.key, {management})} />
           </>},
           {id: 'applications', title: 'Pools', content: <>
       <div className="pool-section pool-toolbar"><ResourceAction action="add" label={`Add pool to ${item.name}`} disabled={item.applications.length >= 8} onClick={() => update(item.key, {applications: [...item.applications, pool(`applications-${item.applications.length + 1}`, 1, 4, 8192)]})} /></div>
-      {item.applications.map((application, index) => <div key={index}><MemberPool title={application.name} value={application} editableName onChange={value => update(item.key, {applications: item.applications.map((pool, position) => position === index ? value : pool)})} />{item.applications.length > 1 && <ResourceAction action="delete" label={`Remove ${application.name} from ${item.name}`} onClick={() => update(item.key, {applications: item.applications.filter((_, position) => position !== index)})} />}</div>)}
+      <FormTabs selectNewItems label={`${fullName(item)} application pools`} items={item.applications.map((application,index)=>({id:String(index),title:application.name||'New pool',content:<div><MemberPool clusterName={name?fullName(item):''} title={application.name} value={application} editableName onChange={value => update(item.key, {applications: item.applications.map((pool, position) => position === index ? value : pool)})} />{item.applications.length > 1 && <ResourceAction action="delete" label={`Remove ${application.name} from ${item.name}`} onClick={() => update(item.key, {applications: item.applications.filter((_, position) => position !== index)})} />}</div>}))}/>
           </>},
           {id: 'placement', title: 'VM placement', content: <>
 <div className="vm-placement-grid">{[item.master, item.management, ...item.applications].map(pool => <fieldset className="vm-placement-pool" key={pool.name}><legend>{pool === item.master ? 'Master' : pool === item.management ? 'Management' : pool.name}</legend><div className="vm-placement-columns" aria-hidden="true"><span>Node</span><span>Proxmox server</span></div>{Array.from({length: Math.min(12, pool.count)}, (_, index) => {const node = `${fullName(item)}-${pool.name}-${index + 1}`;return <label className="vm-placement-row" key={node}><span>{name ? node : '—'}</span><input aria-label={`${node} · Proxmox server`} value={item.machineNodes[node] ?? String(selectedTemplate?.spec.node ?? '')} onChange={event => update(item.key, {machineNodes: {...item.machineNodes, [node]: event.target.value}})} pattern="[A-Za-z0-9._-]{1,64}" required /></label>})}</fieldset>)}</div>
@@ -100,13 +103,13 @@ export function MultiClusterForm({open, close, workspaces, templates, services, 
       <details className="schema-advanced"><summary>Cluster network</summary><div className="field-row field-row-cilium"><label>Cilium cluster ID<NumericInput value={item.clusterId} min={1} max={255} onValueChange={clusterId => update(item.key, {clusterId})} required /></label><label>Pod CIDR<input value={item.podCIDR} onChange={event => update(item.key, {podCIDR: event.target.value})} required /></label><label>Service CIDR<input value={item.serviceCIDR} onChange={event => update(item.key, {serviceCIDR: event.target.value})} required /></label></div></details>
           </>}
         ]} />
-        {count(item) > 12 && <p className="form-error">Each cluster can contain at most 12 nodes.</p>}
+        {count(item) > 12 && <ErrorFeedback message="Maximum: 12 nodes per cluster."/>}
       </WizardStep>)}
       <WizardStep title="Review"><WizardReview /></WizardStep>
     </WizardForm>
   </Dialog>
 }
 
-function MemberPool({title, value, onChange, master = false, editableName = false}: {title: string; value: Pool; onChange: (value: Pool) => void; master?: boolean; editableName?: boolean}) {
-  return <div className="pool-card"><strong>{title}</strong><div className={`field-row ${editableName ? 'field-row-pool' : 'field-row-count'}`}>{editableName && <label>Name<input value={value.name} onChange={event => onChange({...value, name: event.target.value})} pattern="[a-z0-9][a-z0-9-]{0,31}" required /></label>}<label>Nodes{master ? <select value={value.count} onChange={event => onChange({...value, count: Number(event.target.value)})}><option value="1">1</option><option value="3">3</option></select> : <NumericInput value={value.count} min={1} max={12} onValueChange={count => onChange({...value, count})} required />}</label>{!master && !editableName && <label>Labels<input value={typeof value.labels==='string'?value.labels:Object.entries(value.labels).map(([key,value])=>`${key}=${value}`).join(', ')} onChange={event => onChange({...value, labels: event.target.value})} /></label>}</div><div className="capacity-grid">{(['cores', 'memoryMiB', 'diskGiB'] as const).map(key => <label key={key}>{key === 'cores' ? 'CPU (cores)' : key === 'memoryMiB' ? 'Memory (MiB)' : 'Disk (GiB)'}<NumericInput value={value.capacity[key]} min={key === 'cores' ? 1 : key === 'memoryMiB' ? 512 : 8} max={key === 'cores' ? 32 : key === 'memoryMiB' ? 131072 : 2048} onValueChange={number => onChange({...value, capacity: {...value.capacity, [key]: number}})} required /></label>)}</div>{editableName && <PoolPlacementFields name={value.name} labels={labels(value.labels)} taints={value.taints} onChange={change => onChange({...value,...change,labels:change.labels??value.labels})} />}</div>
+function MemberPool({clusterName, title, value, onChange, master = false, editableName = false}: {clusterName: string; title: string; value: Pool; onChange: (value: Pool) => void; master?: boolean; editableName?: boolean}) {
+  return <div className="pool-card"><strong>{title}</strong><div className={`field-row ${editableName ? 'field-row-pool' : 'field-row-count'}`}>{editableName && <label>Name<input value={value.name} onChange={event => onChange({...value, name: event.target.value})} pattern="[a-z0-9][a-z0-9-]{0,31}" required /></label>}<label>Nodes{master ? <select value={value.count} onChange={event => onChange({...value, count: Number(event.target.value)})}><option value="1">1</option><option value="3">3</option></select> : <NumericInput value={value.count} min={1} max={12} onValueChange={count => onChange({...value, count})} required />}</label>{!master && !editableName && <label>Labels<input value={typeof value.labels==='string'?value.labels:Object.entries(value.labels).map(([key,value])=>`${key}=${value}`).join(', ')} onChange={event => onChange({...value, labels: event.target.value})} /></label>}</div><div className="capacity-grid">{(['cores', 'memoryMiB', 'diskGiB'] as const).map(key => <label key={key}>{key === 'cores' ? 'CPU (cores)' : key === 'memoryMiB' ? 'Memory (MiB)' : 'Disk (GiB)'}<NumericInput value={value.capacity[key]} min={key === 'cores' ? 1 : key === 'memoryMiB' ? 512 : 8} max={key === 'cores' ? 32 : key === 'memoryMiB' ? 131072 : 2048} onValueChange={number => onChange({...value, capacity: {...value.capacity, [key]: number}})} required /></label>)}</div>{editableName && <PoolPlacementFields key={value.name} defaults={{clusterName,name:value.name,role:'application',count:value.count,networking:'cilium'}} name={value.name} labels={labels(value.labels)} taints={value.taints} onChange={change => onChange({...value,...change,labels:change.labels??value.labels})} />}{!editableName&&<PoolPlacementReadout pool={{clusterName,name:value.name,role:master?'control-plane':'management',count:value.count,networking:'cilium'}} labels={labelPreview(value.labels)} />}</div>
 }

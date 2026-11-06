@@ -25,3 +25,20 @@ describe('log viewer', () => {
     expect(screen.getByRole('button', {name: 'Download logs'})).toBeDisabled()
   })
 })
+
+it('follows the last entries when a hidden log tab becomes active without losing filters',()=>{
+ const props={entries,label:'Process logs',filename:'logs.txt'}
+ const view=render(<LogViewer {...props} active={false}/>)
+ const region=screen.getByRole('region',{name:'Process logs'})
+ Object.defineProperty(region,'scrollHeight',{configurable:true,value:1200})
+ fireEvent.change(screen.getByRole('searchbox'),{target:{value:'Entry 12'}})
+ expect(region.scrollTop).toBe(0)
+ view.rerender(<LogViewer {...props} active/>)
+ expect(region.scrollTop).toBe(1200)
+ expect(screen.getByRole('searchbox')).toHaveValue('Entry 12')
+ fireEvent.click(screen.getByRole('button',{name:'Following live'}))
+ region.scrollTop=10
+ view.rerender(<LogViewer {...props} active={false}/>)
+ view.rerender(<LogViewer {...props} active/>)
+ expect(region.scrollTop).toBe(10)
+})

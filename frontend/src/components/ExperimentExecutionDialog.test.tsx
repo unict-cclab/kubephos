@@ -16,7 +16,7 @@ describe('unified experiment execution', () => {
   const onCreated = vi.fn()
   render(<ExperimentExecutionDialog open configurations={[single, suite]} initialConfigurationId="suite" close={() => {}} session={{authenticated: true, csrfToken: 'csrf'}} changed={async () => {}} onCreated={onCreated} />)
   expect(screen.queryByText(/runs per configuration ×/)).not.toBeInTheDocument()
-  expect(screen.queryByLabelText('Number of runs')).not.toBeInTheDocument()
+  expect(screen.queryByLabelText('Number of executions')).not.toBeInTheDocument()
   fireEvent.click(screen.getByRole('button', {name: 'Validate and run'}))
   await waitFor(() => expect(onCreated).toHaveBeenCalledWith('experiment'))
   const call = vi.mocked(request).mock.calls.at(-1)!
@@ -26,7 +26,7 @@ describe('unified experiment execution', () => {
  it('keeps single repetition controls when switching from comparative to single', () => {
   render(<ExperimentExecutionDialog open configurations={[single, suite]} initialConfigurationId="suite" close={() => {}} session={{authenticated: true}} changed={async () => {}} onCreated={() => {}} />)
   fireEvent.change(screen.getByLabelText('Configuration'), {target: {value: 'single'}})
-  expect(screen.getByLabelText('Number of runs')).toHaveValue(3)
+  expect(screen.getByLabelText('Number of executions')).toHaveValue(3)
   expect(screen.queryByText('4 runs per configuration × 2 configurations')).not.toBeInTheDocument()
  })
 })

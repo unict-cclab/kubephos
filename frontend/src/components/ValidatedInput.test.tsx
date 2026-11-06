@@ -1,0 +1,38 @@
+import {fireEvent,render,screen} from '@testing-library/react'
+import {expect,it} from 'vitest'
+import {ValidatedInput} from './ValidatedInput'
+it('leaves untouched required fields quiet and reports blanks when validation is requested',()=>{
+ render(<label>Name<ValidatedInput aria-label="Name" required/></label>)
+ const input=screen.getByLabelText('Name')
+ fireEvent.blur(input)
+ expect(screen.queryByText('Required.')).not.toBeInTheDocument()
+ fireEvent.invalid(input)
+ expect(screen.getByText('Required.')).toBeVisible()
+ expect(input).toHaveAttribute('aria-invalid','true')
+ fireEvent.change(input,{target:{value:'   '}})
+ expect(input).toBeInvalid()
+ fireEvent.change(input,{target:{value:'valid-name'}})
+ expect(input).toBeValid()
+ expect(screen.queryByText('Required.')).not.toBeInTheDocument()
+})
+it('keeps descriptions connected to the input and corrects format errors without submission',()=>{
+ render(<label>Name<ValidatedInput aria-label="Name" required pattern="[a-z0-9-]+" aria-describedby="hint"/><small id="hint">Lowercase name</small></label>)
+ const input=screen.getByLabelText('Name')
+ fireEvent.change(input,{target:{value:'Invalid Name'}})
+ expect(input).toBeInvalid()
+ expect(input).toHaveAccessibleName('Name')
+ expect(input).toHaveAccessibleDescription(/Lowercase name.*Invalid format/)
+ fireEvent.change(input,{target:{value:'valid-name'}})
+ expect(input).toBeValid()
+ expect(input).toHaveAttribute('aria-describedby','hint')
+})
+it('reports numeric bounds inline while preserving the entered value',()=>{
+ render(<label>Nodes<ValidatedInput aria-label="Nodes" type="number" min={1} max={12} step={1}/></label>)
+ const input=screen.getByLabelText('Nodes')
+ fireEvent.change(input,{target:{value:'13'}})
+ expect(input).toHaveValue(13)
+ expect(screen.getByText('Maximum: 12.')).toBeVisible()
+ fireEvent.change(input,{target:{value:'3'}})
+ expect(input).toBeValid()
+ expect(screen.queryByText('Maximum: 12.')).not.toBeInTheDocument()
+})

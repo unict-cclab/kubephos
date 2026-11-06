@@ -1,3 +1,4 @@
+import {ValidatedInput} from './ValidatedInput'
 import {ErrorFeedback, useErrorState} from './ToastRegion'
 import {ResourceListHeading} from './ResourceListHeading'
 import {ResourceListTable} from './ResourceListTable'
@@ -48,7 +49,7 @@ function CreateUserDialog({close, session, changed}: {close: () => void; session
       setPending(false)
     }
   }
-  return <Dialog open onClose={close} title="Create user"><form className="form-stack" onSubmit={submit}><div className="field-row"><label>Username<input name="username" minLength={3} maxLength={40} required autoFocus /></label><label>Email<input name="email" type="email" /></label></div><div className="field-row"><label>Temporary password<input name="password" autoComplete="new-password" type="password" minLength={12} maxLength={128} required /></label><label>Role<select name="role" defaultValue="user"><option value="user">User</option><option value="admin">Administrator</option></select></label></div><ErrorFeedback message={error} /><div className="dialog-actions"><button className="button secondary" type="button" onClick={close}>Cancel</button><button className="button primary" disabled={pending}>{pending ? 'Creating…' : 'Create'}</button></div></form></Dialog>
+  return <Dialog open onClose={close} title="Create user"><form className="form-stack" onSubmit={submit}><div className="field-row"><label>Username<ValidatedInput aria-label="Username" name="username" minLength={3} maxLength={40} required autoFocus /></label><label>Email<ValidatedInput aria-label="Email" name="email" type="email" /></label></div><div className="field-row"><label>Temporary password<ValidatedInput aria-label="Temporary password" name="password" autoComplete="new-password" type="password" minLength={12} maxLength={128} required /></label><label>Role<select name="role" defaultValue="user"><option value="user">User</option><option value="admin">Administrator</option></select></label></div><ErrorFeedback message={error} /><div className="dialog-actions"><button className="button secondary" type="button" onClick={close}>Cancel</button><button className="button primary" disabled={pending}>{pending ? 'Creating…' : 'Create'}</button></div></form></Dialog>
 }
 
 function UserDetailsPage({user, close, assignments, clusters, session, changed, edit, reset}: {user: User; close: () => void; edit: () => void; reset: () => void; assignments: ClusterUserAssignment[]; clusters: ManagedResource[]; session: Session; changed: () => Promise<void>}) {
@@ -91,6 +92,8 @@ function UserDetailsPage({user, close, assignments, clusters, session, changed, 
 }
 
 function UserAccountDialog({user,mode,close,session,changed}: {user:User;mode:'email'|'password';close:()=>void;session:Session;changed:()=>Promise<void>}) {
+ const [password,setPassword]=useState('')
+ const [confirmation,setConfirmation]=useState('')
  const [pending,setPending]=useState(false)
  const [error,setError]=useErrorState()
  const submit=async(event:FormEvent<HTMLFormElement>)=>{
@@ -105,7 +108,7 @@ function UserAccountDialog({user,mode,close,session,changed}: {user:User;mode:'e
   finally{setPending(false)}
  }
  return <Dialog open onClose={()=>{if(!pending)close()}} title={`${mode==='email'?'Edit email':'Reset password'} · ${user.username}`}><form className="form-stack" onSubmit={submit}>
- {mode==='email'?<label>Email<input name="email" type="email" defaultValue={user.email||''} autoFocus /></label>:<><label>Temporary password<input name="password" type="password" autoComplete="new-password" minLength={12} maxLength={128} required autoFocus /></label><label>Confirm password<input name="confirmation" type="password" autoComplete="new-password" minLength={12} maxLength={128} required /></label><p className="details-copy">A password change is required at the next sign-in.</p></>}
+ {mode==='email'?<label>Email<ValidatedInput aria-label="Email" name="email" type="email" defaultValue={user.email||''} autoFocus /></label>:<><label>Temporary password<ValidatedInput aria-label="Temporary password" name="password" type="password" autoComplete="new-password" minLength={12} maxLength={128} required autoFocus value={password} onChange={event=>setPassword(event.target.value)}/></label><label>Confirm password<ValidatedInput aria-label="Confirm password" name="confirmation" type="password" autoComplete="new-password" minLength={12} maxLength={128} required value={confirmation} onChange={event=>setConfirmation(event.target.value)} error={confirmation&&confirmation!==password?'Passwords do not match.':''}/></label><p className="details-copy">A password change is required at the next sign-in.</p></>}
  {error&&<ErrorFeedback message={error} />}
  <div className="dialog-actions"><button className="button secondary" type="button" onClick={close} disabled={pending}>Cancel</button><button className="button primary" disabled={pending}>{pending?'Saving…':mode==='email'?'Save':'Reset password'}</button></div>
  </form></Dialog>

@@ -1,7 +1,8 @@
 import {useEffect, useMemo, useRef, useState} from 'react'
 import type {LogEntry} from '../types'
 
-export function LogViewer<T extends Pick<LogEntry, 'sequence' | 'level' | 'message' | 'createdAt'>>({entries, label, context, filename, emptyMessage = 'No log entries yet.'}: {
+export function LogViewer<T extends Pick<LogEntry, 'sequence' | 'level' | 'message' | 'createdAt'>>({entries, label, context, filename, emptyMessage = 'No log entries yet.', active = true}: {
+  active?: boolean
   entries: T[]
   label: string
   context?: (entry: T) => string
@@ -17,8 +18,8 @@ export function LogViewer<T extends Pick<LogEntry, 'sequence' | 'level' | 'messa
   const visible = filtered.slice(-visibleCount)
   const lastSequence = entries.at(-1)?.sequence
   useEffect(() => {
-    if (follow && consoleRef.current) consoleRef.current.scrollTop = consoleRef.current.scrollHeight
-  }, [follow, lastSequence, query, level])
+    if (active && follow && consoleRef.current) consoleRef.current.scrollTop = consoleRef.current.scrollHeight
+  }, [active, follow, lastSequence, query, level])
   const download = () => {
     const text = filtered.map(entry => `${entry.createdAt} [${entry.level}] ${context?.(entry) ?? ''}${entry.message}`).join('\n')
     const url = URL.createObjectURL(new Blob([text + '\n'], {type: 'text/plain;charset=utf-8'}))

@@ -31,7 +31,7 @@ describe('SchemaFields', () => {
     expect(advanced).not.toHaveAttribute('open')
     expect(screen.getByLabelText('Primary shards').closest('details')).toBeNull()
     expect(advanced).toContainElement(screen.getByLabelText('Timeout'))
-    expect(advanced).toContainElement(screen.getByText('Service resources'))
+    expect(advanced).toContainElement(screen.getByRole('tablist',{name:'Service resource settings',hidden:true}))
     const form = container.querySelector('form')!
     expect(readSchemaValues(form, schema)).toEqual(values)
     fireEvent.click(screen.getByText('Advanced settings'))
@@ -235,7 +235,7 @@ it('validates JSON objects and arrays before the wizard can submit', () => {
   const parameters = screen.getByLabelText('Parameters') as HTMLTextAreaElement
   fireEvent.change(parameters, {target: {value: '{invalid'}})
   expect(parameters).toBeInvalid()
-  expect(parameters.validationMessage).toBe('Enter a valid JSON object.')
+  expect(parameters.validationMessage).toBe('Invalid JSON.')
   fireEvent.change(parameters, {target: {value: '[]'}})
   expect(parameters).toBeInvalid()
   fireEvent.change(parameters, {target: {value: '{"replicas": 2}'}})
@@ -245,4 +245,26 @@ it('validates JSON objects and arrays before the wizard can submit', () => {
   expect(entries).toBeInvalid()
   fireEvent.change(entries, {target: {value: '["first"]'}})
   expect(entries).toBeValid()
+})
+
+it('blocks schema pattern violations and required references with no available choices',()=>{
+ const schema:JsonSchema={type:'object',required:['name','connection'],properties:{name:{type:'string',title:'Name',pattern:'^[a-z][a-z0-9-]+$'},connection:{type:'string',title:'Connection',format:'kubephos-connection-ref'}}}
+ const {container}=render(<form><SchemaFields schema={schema} applications={[]} artifacts={[]} connections={[]} credentials={[]}/></form>)
+ fireEvent.change(screen.getByLabelText('Name'),{target:{value:'Invalid name'}})
+ expect(screen.getByLabelText('Name')).toBeInvalid()
+ expect(screen.getByText('Invalid format.')).toBeVisible()
+ fireEvent.change(screen.getByLabelText('Name'),{target:{value:'valid-name'}})
+ expect(screen.getByLabelText('Name')).toBeValid()
+ expect(screen.getByLabelText('Connection')).not.toBeDisabled()
+ expect(container.querySelector('form')!.checkValidity()).toBe(false)
+})
+it('validates saved JSON before edits and checks array size constraints inline',()=>{
+ render(<SchemaFields schema={{type:'object',properties:{items:{type:'array',title:'Items',minItems:1,maxItems:2},settings:{type:'object',title:'Settings'}}}} values={{settings:'invalid',items:[]}} applications={[]} artifacts={[]} connections={[]} credentials={[]}/>)
+ expect(screen.getByLabelText('Settings')).toBeInvalid()
+ expect(screen.getByText('Invalid JSON.')).toBeVisible()
+ expect(screen.getByLabelText('Items')).toBeInvalid()
+ fireEvent.change(screen.getByLabelText('Items'),{target:{value:'[1,2]'}})
+ expect(screen.getByLabelText('Items')).toBeValid()
+ fireEvent.change(screen.getByLabelText('Items'),{target:{value:'[1,2,3]'}})
+ expect(screen.getByText('Up to 2 items.')).toBeVisible()
 })

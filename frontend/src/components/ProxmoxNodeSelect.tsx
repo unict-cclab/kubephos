@@ -1,3 +1,4 @@
+import {ErrorFeedback} from './ToastRegion'
 import {useEffect, useState} from 'react'
 import {request} from '../api'
 
@@ -25,5 +26,5 @@ export function ProxmoxNodeSelect({connectionID, defaultNode}: {connectionID: st
     : <select name="node" value={loading ? '' : value} onChange={event => setValue(event.target.value)} required>
       {(loading || !value) && <option value="">{loading ? 'Loading…' : 'No available server'}</option>}
       {nodes.map(node => <option key={node.name} value={node.name} disabled={!node.online}>{node.name}{node.online ? '' : ' · Offline'}</option>)}
-    </select>}</label>{error && <p className="form-error">Could not load Proxmox servers. <button type="button" className="text-button" onClick={() => setRetry(count => count + 1)}>Retry</button></p>}</div>
+    </select>}</label>{error && <><ErrorFeedback message="Could not load Proxmox servers."/><button type="button" className="button secondary compact" onClick={() => {setError(false);setRetry(count => count + 1)}}>Retry</button></>}</div>
 }

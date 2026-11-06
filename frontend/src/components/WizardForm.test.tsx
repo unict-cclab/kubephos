@@ -107,7 +107,8 @@ it('reveals every enclosing tab and disclosure when validating a deeply nested f
 
 it('keeps asynchronous blocking errors visible outside inactive tabs', () => {
   render(<WizardForm onCancel={() => {}} submitLabel="Create"><WizardStep title="Application" blocked status={{message: 'Topology could not be resolved.', error: true}}><FormTabs label="Application" items={[{id: 'parameters', title: 'Parameters', content: <p>Parameters</p>}, {id: 'topology', title: 'Topology', content: <p>Graph</p>}]} /></WizardStep><WizardStep title="Review"><WizardReview /></WizardStep></WizardForm>)
-  expect(screen.getByRole('alert')).toHaveTextContent('Topology could not be resolved.')
+  expect(screen.getByRole('status')).toHaveTextContent('Topology could not be resolved.')
+  expect(screen.queryByRole('alert')).not.toBeInTheDocument()
   expect(screen.getByRole('button', {name: 'Continue'})).toBeDisabled()
 })
 

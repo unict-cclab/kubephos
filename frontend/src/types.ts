@@ -47,6 +47,7 @@ export interface SchemaProperty {
   minimum?: number
   maximum?: number
   multipleOf?: number
+  pattern?: string
   minLength?: number
   maxLength?: number
   writeOnly?: boolean
@@ -384,6 +385,7 @@ export interface ExperimentConfiguration extends ResourceAttributionFields {
     variants?: Array<{configurationId: string; alias: string; color: string}>
     runs?: number
 	applicationValues: Record<string, unknown>
+    istioProxyResources?: Record<string, unknown>
     applicationPlacement?: ApplicationPlacement
     istioInjection?: boolean
     istioInjectionOverrides?: Record<string, boolean>

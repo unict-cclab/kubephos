@@ -902,3 +902,26 @@ func TestManagedClusterMachinePlacement(t *testing.T) {
 		t.Fatal("accepted empty explicit server")
 	}
 }
+
+func TestCachedPreviewAddsPlacementDefaultsWithoutChangingStoredContent(t *testing.T) {
+	preview := applicationPreview{Content: "kind: Deployment\nmetadata: {name: backend}\nspec: {template: {spec: {containers: []}}}", WorkloadTargets: []applicationWorkloadPreview{{ID: "api", Kind: "Deployment", Name: "backend"}}}
+	response := httptest.NewRecorder()
+	writeApplicationPreview(response, preview)
+	var data applicationPreview
+	if err := json.Unmarshal(response.Body.Bytes(), &data); err != nil {
+		t.Fatal(err)
+	}
+	if len(data.PlacementDefaults) != 1 || data.PlacementDefaults[0].NodeSelector["kubephos.dev/role"] != "application" || data.Content != preview.Content {
+		t.Fatal(response.Body.String())
+	}
+	if preview.PlacementDefaults != nil {
+		t.Fatal("mutated the cached preview")
+	}
+	// An invalid optional preview must not hide the original manifest.
+	preview.Content = "kind: Deployment\nmetadata: {name: backend}"
+	response = httptest.NewRecorder()
+	writeApplicationPreview(response, preview)
+	if response.Code != 200 || !strings.Contains(response.Body.String(), "placementDefaultsError") {
+		t.Fatal(response.Body.String())
+	}
+}

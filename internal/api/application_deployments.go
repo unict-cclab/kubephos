@@ -173,6 +173,9 @@ func (s *Server) applicationDeploymentPipeline(ctx context.Context, input applic
 		sources := map[string]experimentArtifactSource{artifactContractKey("ClusterConnection", "v1alpha1"): {ExternalID: connection.ID}}
 		registerExperimentOutputs(sources, "application", materializer.Manifest())
 		spec := map[string]any{"applicationNamespace": input.Definition.Namespace, "namespacePolicy": "create"}
+		if len(input.Definition.IstioProxyResources) > 0 {
+			spec["istioProxyResources"] = input.Definition.IstioProxyResources
+		}
 		if input.Definition.ApplicationPlacement != nil {
 			spec["applicationPlacement"] = input.Definition.ApplicationPlacement
 		}

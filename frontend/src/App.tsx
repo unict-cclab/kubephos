@@ -8,50 +8,15 @@ import {ApplicationDialog, AdministratorSetupDialog, ConnectionDialog, Infrastru
 import {OperationDetailsPage, PipelineRunLogsPage} from './components/OperationDrawer'
 import {NotificationProvider, useNotifications} from './components/ToastRegion'
 import {ThemeToggle} from './components/ThemeToggle'
+import {SidebarNavigation} from './components/SidebarNavigation'
 import {Views} from './components/Views'
 import type {Application, Session, View} from './types'
 import {retriesOnlyClusterMesh} from './clusterRetry'
 import {hashView} from './detailRoute'
-
-const viewMetadata: Record<View, string> = {
-  deployments: 'Deployments',
-  overview: 'Overview',
-  results: 'Experiments',
-  comparisons: 'Comparisons',
-  catalog: 'Catalog',
-  infrastructure: 'Infrastructure',
-  kubernetes: 'Kubernetes',
-  experiments: 'Configurations',
-  users: 'Users',
-  administration: 'Administration'
-}
-const navigation: Array<[View, string]> = [
-  ['overview', 'Overview'],
-  ['infrastructure', 'Infrastructure'],
-  ['kubernetes', 'Kubernetes'],
-  ['deployments', 'Deployments'],
-  ['catalog', 'Catalog'],
-  ['experiments', 'Configurations'],
-  ['results', 'Experiments'],
-  ['comparisons', 'Comparisons']
-]
-
-function NavigationIcon({view}: {view: View}) {
-  const common = {fill: 'none', stroke: 'currentColor', strokeWidth: 1.8, strokeLinecap: 'round' as const, strokeLinejoin: 'round' as const}
-  const shape = {
-    overview: <><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></>,
-    deployments: <><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M7 13h5m-5 3h9"/></>,
-    infrastructure: <><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 8h10M7 12h10M7 16h4"/></>,
-    kubernetes: <><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3"/><path d="M12 3v6m0 6v6M3 12h6m6 0h6"/></>,
-    catalog: <><path d="M4 5h16v14H4zM4 12h16M9 5v7m6 0v7"/></>,
-    experiments: <><path d="M6 4h12v16H6zM9 8h6M9 12h6M9 16h4"/></>,
-    comparisons: <><path d="M4 18V9m8 9V4m8 14v-7M2 21h20"/></>,
-    results: <><circle cx="12" cy="12" r="9"/><path d="m10 8 6 4-6 4z"/></>,
-    administration: <><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M8 8h8M8 12h8M8 16h5"/></>,
-    users: <><circle cx="9" cy="8" r="3"/><path d="M3.5 19c.5-4 2.3-6 5.5-6s5 2 5.5 6M16 7h5M18.5 4.5v5"/></>
-  } as Partial<Record<View, React.ReactNode>>
-  return <svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true" {...common}>{shape[view]}</svg>
-}
+import {currentSection, isNavigableView, navigationTargets, visibleNavigation} from './navigation'
+import {AccountMenu} from './components/AccountMenu'
+import {SectionContext} from './components/ResourceListHeading'
+import {CommandPalette, isPaletteShortcut, paletteShortcut} from './components/CommandPalette'
 
 type Modal = 'connection' | 'machineTemplate' | 'infrastructureService' | 'kubernetesCluster' | 'application' | null
 
@@ -69,8 +34,8 @@ function PlatformApp() {
   const [pipelineRunID, setPipelineRunID] = useState<string | null>(null)
   const {notify} = useNotifications()!
   const [clusterActions, setClusterActions] = useState<Record<string, ClusterAction>>({})
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [mobileNavigationOpen, setMobileNavigationOpen] = useState(false)
+  const [paletteOpen, setPaletteOpen] = useState(false)
   const mobileNavigationButton = useRef<HTMLButtonElement>(null)
   const [serviceKind, setServiceKind] = useState<'harbor' | 'nfs'>('harbor')
 
@@ -90,6 +55,16 @@ function PlatformApp() {
   }, [session?.authenticated, session?.setupRequired])
 
   useEffect(() => {
+    const openPalette = (event: KeyboardEvent) => {
+      if (!isPaletteShortcut(event)) return
+      event.preventDefault()
+      setPaletteOpen(true)
+    }
+    window.addEventListener('keydown', openPalette)
+    return () => window.removeEventListener('keydown', openPalette)
+  }, [])
+
+  useEffect(() => {
     const update = () => {
       setModal(null)
       setView(initialView())
@@ -100,13 +75,13 @@ function PlatformApp() {
     return () => window.removeEventListener('hashchange', update)
   }, [])
 
-  const navigate = (next: View) => {
+  const navigate = (next: View, hash = next as string) => {
     if (mobileNavigationOpen) mobileNavigationButton.current?.focus()
     setMobileNavigationOpen(false)
     setModal(null)
     setOperationID(null)
     setPipelineRunID(null)
-    window.location.hash = next
+    window.location.hash = hash
     setView(next)
   }
   const afterMutation = useCallback(async (message: string) => {
@@ -202,27 +177,35 @@ function PlatformApp() {
   }
 
   if (checkingSession) return <div className="startup-screen"><span className="brand-mark">K</span><strong>Loading…</strong></div>
-  if (!session) return <div className="startup-screen"><strong>Could not check session.</strong><button className="button" onClick={() => window.location.reload()}>Retry</button></div>
+  if (!session) return <div className="startup-screen"><strong>Could not check session.</strong><button className="button primary" onClick={() => window.location.reload()}>Retry</button></div>
   if (!session.authenticated && !session.setupRequired) return <div className="startup-screen"><span className="brand-mark">K</span><strong>Redirecting to sign in…</strong></div>
   if (!session.authenticated) return <><div className="auth-theme-toggle"><ThemeToggle /></div><AdministratorSetupDialog onAuthenticated={result => {setSession(result); notify(session?.setupRequired ? 'Administrator created.' : 'Signed in.')}} /></>
 
-  const title = pipelineRunID ? 'Run logs' : operationID ? 'Activity' : viewMetadata[view]
+  const closeMobileNavigation = () => {setMobileNavigationOpen(false); mobileNavigationButton.current?.focus()}
+  const isAdmin = session.user?.role === 'admin'
+  const section = currentSection(view)
+  const sectionHeading = section
+  const navigationSections = visibleNavigation(isAdmin)
   return <>
     {confirmationDialog}
-    <div className={`app-shell ${sidebarCollapsed ? 'sidebar-collapsed' : ''}`}>
-      <aside className="sidebar">
-        <button className="brand" onClick={() => navigate('overview')} aria-label="KubePhos home"><span className="brand-mark">K</span><strong>KubePhos</strong></button>
-        <button className="sidebar-toggle" type="button" aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'} onClick={() => setSidebarCollapsed(value => !value)}><ActionIcon name={sidebarCollapsed ? 'right' : 'left'} /></button>
-		<button ref={mobileNavigationButton} className="mobile-navigation-toggle icon-button" type="button" aria-label={mobileNavigationOpen ? 'Close navigation' : 'Open navigation'} aria-controls="main-navigation" aria-expanded={mobileNavigationOpen} onClick={() => setMobileNavigationOpen(value => !value)}><ActionIcon name={mobileNavigationOpen ? 'close' : 'menu'} /></button>
-		<nav id="main-navigation" className={`navigation${mobileNavigationOpen ? ' is-open' : ''}`} aria-label="Main navigation" onKeyDown={event => {if (event.key === 'Escape' && mobileNavigationOpen) {setMobileNavigationOpen(false); mobileNavigationButton.current?.focus()}}}>{visibleNavigation(session.user?.role === 'admin').map((group, index) => <div className="navigation-group" key={index}>{group.map(([target, label]) => <button className={`nav-item ${view === target ? 'active' : ''}`} title={sidebarCollapsed ? label : undefined} aria-label={label} key={target} onClick={() => navigate(target)} aria-current={view === target ? 'page' : undefined}><NavigationIcon view={target} /><span className="nav-label">{label}</span></button>)}</div>)}</nav>
-        {data.system?.version && <div className="sidebar-version" title={`KubePhos ${data.system.version}`}>{data.system.version}</div>}
+    {paletteOpen && <CommandPalette items={navigationTargets(isAdmin)} close={() => setPaletteOpen(false)} select={navigate} />}
+    <div className="app-shell">
+      <aside className="app-sidebar">
+        <div className="app-sidebar-head">
+          <button className="app-brand" type="button" onClick={() => navigate('overview')} aria-label="KubePhos home"><span className="brand-mark">K</span><strong>KubePhos</strong></button>
+          <button ref={mobileNavigationButton} className="app-nav-toggle icon-button" type="button" aria-label={mobileNavigationOpen ? 'Close navigation' : 'Open navigation'} aria-controls="main-navigation" aria-expanded={mobileNavigationOpen} onClick={() => setMobileNavigationOpen(value => !value)}><ActionIcon name={mobileNavigationOpen ? 'close' : 'menu'} /></button>
+        </div>
+        <div id="main-navigation" className={`app-sidebar-body${mobileNavigationOpen ? ' is-open' : ''}`} onKeyDown={event => {if (event.key === 'Escape' && mobileNavigationOpen) closeMobileNavigation()}}>
+          <button type="button" className="app-jump" onClick={() => setPaletteOpen(true)}><ActionIcon name="search" /><span>Jump to…</span><kbd>{paletteShortcut()}</kbd></button>
+          <SidebarNavigation sections={navigationSections} view={view} navigate={navigate} />
+          <AccountMenu username={session.user?.username ?? 'Account'} isAdmin={isAdmin} version={data.system?.version} refreshing={refreshing} refresh={() => void load(false)} openBackup={() => navigate('administration')} signOut={() => void logout()} />
+        </div>
       </aside>
-      <main className="main">
-		<header className="topbar"><nav className="app-breadcrumbs" aria-label="Breadcrumb"><button onClick={() => navigate('overview')}>KubePhos</button><ActionIcon name="right" /><strong aria-current="page">{title}</strong></nav><div className="topbar-actions"><span className="signed-user">{session.user?.username}</span><ThemeToggle /><button className="button secondary compact" disabled={refreshing} onClick={() => load(false)}>{refreshing ? 'Refreshing…' : 'Refresh'}</button><button className="button secondary compact" onClick={logout}>Sign out</button></div></header>
+      <main className="app-main">
         <div className="page-content">
           {ready && !connected && <div className="connection-notice" role="status"><div><strong>Some information could not be refreshed</strong><span>Showing the latest available data. We’ll retry automatically.</span></div><button className="button secondary compact" disabled={refreshing} onClick={() => void load(false)}>Try again</button></div>}
           {ready && (pipelineRunID ? <PipelineRunLogsPage runID={pipelineRunID} close={() => setPipelineRunID(null)} notify={notify} /> : operationID ? <OperationDetailsPage operationID={operationID} session={session} plugins={data.plugins} close={() => setOperationID(null)} open={setOperationID} changed={refreshAfterChange} notify={notify} /> : null)}
-          {!ready ? <div className="page-loading" role="status"><span className="loading-indicator" aria-hidden="true" /><strong>Loading KubePhos…</strong></div> : <div hidden={Boolean(pipelineRunID || operationID)}><Views
+          {!ready ? <div className="page-loading" role="status"><span className="loading-indicator" aria-hidden="true" /><strong>Loading KubePhos…</strong></div> : <div hidden={Boolean(pipelineRunID || operationID)}><SectionContext.Provider value={sectionHeading}><Views
           view={view}
           {...data}
           session={session}
@@ -243,7 +226,7 @@ function PlatformApp() {
 		  deleteKubernetesCluster={deleteKubernetesCluster}
 		  recreateKubernetesCluster={recreateKubernetesCluster}
 		  clusterActions={clusterActions}
-        /></div>}</div>
+        /></SectionContext.Provider></div>}</div>
       </main>
     </div>
 	{modal === 'connection' && <ConnectionDialog {...common} open close={() => setModal(null)} plugins={data.plugins} />}
@@ -257,10 +240,5 @@ function PlatformApp() {
 
 function initialView(): View {
   const next = hashView(window.location.hash)
-  return next === 'users' || next === 'administration' || navigation.some(([view]) => view === next) ? next : 'overview'
-}
-
-function visibleNavigation(admin: boolean): Array<Array<[View, string]>> {
-	const items = admin ? [...navigation, ['users', 'Users'] as [View, string], ['administration', 'Administration'] as [View, string]] : navigation.filter(([view]) => !['infrastructure'].includes(view))
-	return [items.slice(0, admin ? 4 : 3), items.slice(admin ? 4 : 3)]
+  return isNavigableView(next) ? next : 'overview'
 }

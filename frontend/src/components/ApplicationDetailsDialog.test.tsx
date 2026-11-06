@@ -1,4 +1,4 @@
-import {fireEvent, render, screen} from '@testing-library/react'
+import {fireEvent, render, screen, within} from '@testing-library/react'
 import {describe, expect, it, vi} from 'vitest'
 import {request} from '../api'
 import type {Application} from '../types'
@@ -18,7 +18,7 @@ describe('application details', () => {
     fireEvent.click(screen.getByText('Example deployment files'))
     expect(await screen.findByLabelText('Deployment manifest YAML')).toHaveTextContent('kind: Deployment')
     expect(request).toHaveBeenCalledWith('/catalog/applications/dev.example.app/manifest')
-    expect(screen.getByRole('button', {name: 'Download .yml'})).toBeInTheDocument()
+    expect(screen.getByRole('button', {name: 'Download'})).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', {name: 'Refresh'}))
     expect(request).toHaveBeenLastCalledWith('/catalog/applications/dev.example.app/manifest?refresh=true')
   })
@@ -30,16 +30,36 @@ describe('application details', () => {
     expect(await screen.findByLabelText('Locust file for default')).toHaveTextContent('from locust import HttpUser')
     expect(screen.queryByText('Target: http')).not.toBeInTheDocument()
     expect(screen.queryByText('File: load/locustfile.py')).not.toBeInTheDocument()
-    expect(screen.getByRole('button', {name: 'Download .py'}).parentElement).toHaveClass('chart-export-actions')
+    expect(screen.getByRole('button', {name: 'Download'}).parentElement).toHaveClass('code-block-actions')
   })
 
-  it('keeps the application detail focused on topology and two file selectors', () => {
+  it('keeps dynamic application sections in tabs without loading previews eagerly', () => {
+    vi.mocked(request).mockClear()
     render(<ApplicationDetailsPage application={application} close={() => {}} canDelete={false} remove={async () => false} />)
     expect(screen.queryByText('Configurable fields')).not.toBeInTheDocument()
     expect(screen.queryByRole('button', {name: 'Files'})).not.toBeInTheDocument()
-    expect(screen.getByText('Example deployment files')).toBeInTheDocument()
+    expect(screen.getByRole('tab', {name:'General'})).toHaveAttribute('aria-selected','true')
+    expect(screen.getByRole('tab', {name:'Example deployment files'})).toBeInTheDocument()
+    expect(request).not.toHaveBeenCalled()
     expect(screen.getByText('Example Locust file')).toBeInTheDocument()
-    expect(screen.queryByText('Configurable')).not.toBeInTheDocument()
+    expect(screen.getByText('Configurable')).toBeInTheDocument()
     expect(screen.queryByRole('img', {name: 'Application component topology'})).not.toBeInTheDocument()
   })
 })
+
+ it('separates fixed topology, services and files, preserving the selected file on navigation',async()=>{
+   vi.mocked(request).mockClear()
+   vi.mocked(request).mockResolvedValue({content:'kind: Deployment',loadScenarios:[]})
+   const fixed={...application,descriptor:{...application.descriptor,spec:{...application.descriptor.spec,valuesSchema:{type:'object'}}}}
+   render(<ApplicationDetailsPage application={fixed} close={()=>{}} canDelete={false} remove={async()=>false}/>)
+   expect(screen.getAllByRole('tab').map(tab=>tab.textContent)).toEqual(['General','Topology','Services','Deployment files','Locust file'])
+   expect(screen.queryByRole('table',{name:'Services'})).not.toBeInTheDocument()
+   fireEvent.click(screen.getByRole('tab',{name:'Services'}))
+   expect(within(screen.getByRole('table',{name:'Services'})).getAllByText('api')).toHaveLength(2)
+   expect(screen.queryByRole('table',{name:'Application information'})).not.toBeInTheDocument()
+   fireEvent.click(screen.getByRole('tab',{name:'Deployment files'}))
+   expect(await screen.findByLabelText('Deployment manifest YAML')).toHaveTextContent('kind: Deployment')
+   fireEvent.click(screen.getByRole('tab',{name:'General'}))
+   fireEvent.click(screen.getByRole('tab',{name:'Deployment files'}))
+   expect(request).toHaveBeenCalledTimes(1)
+ })

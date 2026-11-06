@@ -544,6 +544,9 @@ func (s *Server) experimentPipelineForCluster(ctx context.Context, configuration
 		}
 	}
 	deploySpec := map[string]any{"mode": "deploy"}
+	if len(definition.IstioProxyResources) > 0 {
+		deploySpec["istioProxyResources"] = definition.IstioProxyResources
+	}
 	if definition.ApplicationPlacement != nil {
 		deploySpec["applicationPlacement"] = definition.ApplicationPlacement
 	}

@@ -1,3 +1,4 @@
+import {ErrorFeedback} from './ToastRegion'
 import {useErrorState} from './ToastRegion'
 import {useCallback, useEffect, useRef, useState} from 'react'
 import {request} from '../api'
@@ -125,7 +126,7 @@ export function OperationDetailsPage({operationID, session, plugins, close, open
     <DetailBreadcrumb parent="Back" current="Activity" back={close} />
     <div className="detail-page-heading"><h2>{operation?.title ?? 'Loading…'}</h2>{operation && <div className="detail-page-actions operation-heading-actions"><Status value={operation.status} />{canQueue && <button className="button primary" disabled={pending} onClick={queue}>Confirm plan and start</button>}{canCleanup && <button className="button danger" disabled={pending} onClick={prepareCleanup}>Prepare cleanup</button>}{canCancel && <button className="button danger" disabled={pending} onClick={cancel}>Cancel</button>}</div>}</div>
     {operation && <>
-      {operation.error && <div className="validation-item error">{operation.error}</div>}
+      {operation.error && <ErrorFeedback message={operation.error}/>}
       <div className="operation-live-layout">
         <section className="operation-page-section"><div className="operation-section-heading"><h3>Progress</h3></div><ExecutionProgressGraph nodes={progressNodes} label={`${operation.title} execution progress`} showLogs={() => logsRef.current?.scrollIntoView({behavior: 'smooth', block: 'start'})} /></section>
         <section className="operation-page-section operation-log-panel" ref={logsRef}><div className="operation-section-heading"><h3>Logs</h3></div><LogViewer entries={logs} label="Operation logs" filename={`${operationID}-logs.txt`} emptyMessage={terminal(operation.status) ? 'This operation has no log entries.' : 'Waiting for the first log entry…'} /></section>
@@ -195,14 +196,14 @@ export function PipelineRunLogsPage({runID, close, notify}: {runID: string; clos
 
   const progressNodes = run?.stages.map(stage => ({id: stage.stageId, title: stage.title, status: stage.status, detail: stage.error || undefined})) ?? []
   return <div className="detail-page operation-detail-page pipeline-log-page">
-    <DetailBreadcrumb parent="Experiment" current="Run logs" back={close} />
+    <DetailBreadcrumb parent="Experiment" current="Execution logs" back={close} />
     <div className="detail-page-heading"><div><h2>{run?.name ?? 'Loading…'}</h2></div>{run && <Status value={run.phase ?? run.status} />}</div>
     {run && <div className="operation-live-layout">
       <section className="operation-page-section"><div className="operation-section-heading"><h3>Progress</h3></div><ExecutionProgressGraph nodes={progressNodes} label={`${run.name} execution progress`} /></section>
       <div className="operation-log-stack">
         <section className="operation-page-section operation-log-panel"><div className="operation-section-heading"><h3>Process logs</h3><span>{logs.length} entries</span></div><LogViewer entries={logs} label="Process logs" context={processLogContext} filename={`${runID}-logs.txt`} emptyMessage={terminal(run.status) ? 'This run has no process log entries.' : 'Waiting for the first process log entry…'} /></section>
         {runtimeLoading && <div className="runtime-log-loading" role="status"><span className="loading-indicator" aria-hidden="true" />Loading strategy logs…</div>}
-        {runtimeError && <p className="form-error" role="alert">{runtimeError}</p>}
+        {runtimeError && <ErrorFeedback message={runtimeError}/>}
         {strategyLogs.map(runtime => <section className="operation-page-section runtime-log-panel" key={runtime.kind}><div className="operation-section-heading"><div><h3>{runtime.title} logs</h3>{runtime.namespace && <small>{runtime.namespace}{runtime.resource ? ` · ${runtime.resource}` : ''}</small>}</div><span>{runtime.state}</span></div><div className="log-console">{runtime.lines.length ? runtime.lines.map((line, index) => <div className="runtime-log-line" key={`${runtime.kind}-${index}`}>{line}</div>) : <div className="log-empty">{runtime.message ?? 'Waiting for runtime logs…'}</div>}</div></section>)}
       </div>
     </div>}

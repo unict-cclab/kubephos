@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"time"
 
 	"kubephos.dev/kubephos/internal/domain"
 	"kubephos.dev/kubephos/internal/id"
@@ -17,6 +18,8 @@ import (
 )
 
 type clusterMaintenanceInput struct {
+	PoolSettings     *[]poolSettingsUpdate  `json:"poolSettings,omitempty"`
+	UpdatedAt        *time.Time             `json:"updatedAt,omitempty"`
 	ApplicationPools []managedNodePoolInput `json:"applicationPools"`
 	MachineNodes     map[string]string      `json:"machineNodes"`
 	NewVMIDStart     int                    `json:"newVMIDStart"`
@@ -131,6 +134,10 @@ func (s *Server) reconfigureKubernetesCluster(w http.ResponseWriter, r *http.Req
 	var saved managedKubernetesClusterInput
 	if json.Unmarshal(resource.Spec, &saved) != nil {
 		writeError(w, 409, "configuration_invalid", "Saved cluster configuration is invalid.")
+		return
+	}
+	if input.PoolSettings != nil {
+		s.updateClusterPoolSettings(w, r, resource, input)
 		return
 	}
 	if saved.Mode == "multi" {

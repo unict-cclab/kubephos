@@ -1,48 +1,65 @@
-import {PlacementReadout} from './ApplicationPlacementEditor'
 import type {ReactNode} from 'react'
-import {WorkloadReadout, TrafficDistributionReadout} from './PhaseReadout'
-import type {Application, CatalogStrategy, ExperimentConfiguration, ExperimentConfigurationComponent, ManagedResource, Plugin} from '../types'
-import {ReadoutTable} from './ReadoutTable'
+import {workloadTable,trafficTable} from './PhaseReadout'
+import type {Application,CatalogStrategy,ExperimentConfiguration,ExperimentConfigurationComponent,ManagedResource,Plugin,Session} from '../types'
+import {ReadoutTable,type ReadoutTableData} from './ReadoutTable'
 import {FormTabs} from './FormTabs'
 import {FormDisclosure} from './FormDisclosure'
 import {InputData} from './InputData'
-import {LoadProfilePreview, loadProfileSteps} from './LoadProfileEditor'
+import {LoadProfilePreview,loadProfileSteps} from './LoadProfileEditor'
+import {WizardReadout} from './WizardReadout'
+import {ApplicationSettingsReadout} from './ApplicationSettingsReadout'
 
-export function ConfigurationReadout({item, clusters, applications, plugins, strategies, showHeading = true, applicationTopology, deploymentMode = false}: {deploymentMode?: boolean; showHeading?: boolean; applicationTopology?: ReactNode; item: ExperimentConfiguration; clusters: ManagedResource[]; applications: Application[]; plugins: Plugin[]; strategies: CatalogStrategy[]}) {
-  const application = applications.find(value => value.reference === item.applicationRef)
-  const cluster = clusters.find(value => value.id === item.clusterResourceId)
-  const endpoints = application?.descriptor.spec?.interface?.endpoints ?? []
-  const defaultIstio = endpoints.length === 0 || !endpoints.every(endpoint => endpoint.protocol === 'tcp')
-  const external = item.definition.destinationMode === 'external'
-  const components = item.definition.components ?? []
-  const network = components.filter(value => value.capability.startsWith('chaos.'))
-  const monitoring = components.filter(value => /^(metrics\.|monitoring\.)/.test(value.capability))
-  const load = components.filter(value => value.capability.startsWith('load.'))
-  const scheduling = components.filter(value => !/^(chaos\.|metrics\.|monitoring\.|load\.)/.test(value.capability))
-  const references = Object.fromEntries([...clusters.map(value => [value.id, value.name]), ...applications.map(value => [value.reference, value.name]), ...strategies.map(value => [value.id, value.name])])
-  const componentReadout = (component: ExperimentConfigurationComponent) => {
-    const plugin = plugins.find(value => value.id === component.pluginId)
-    const strategy = strategies.find(value => value.id === component.strategyId)
-    const {configFile, parameters, ...settings} = component.configuration
-    const configuration = configFile ?? parameters
-    return <section className="readout-section" key={component.id}><h3>{strategy?.name ?? plugin?.name ?? component.capability}</h3><InputData value={settings} schema={plugin?.schema} references={references} />{typeof configuration === 'string' && configuration.trim() && <FormDisclosure title={'Configuration'}><InputData value={configuration} /></FormDisclosure>}{(component.targets?.include?.length > 0 || component.targets?.exclude?.length > 0) && <InputData value={{includedServices: component.targets.include, excludedServices: component.targets.exclude}} />}</section>
-  }
-  return <div className="configuration-readout">{showHeading && <div className="readout-heading"><h3>{item.name}</h3></div>}<FormTabs label="Configuration sections" items={[
-    {id: 'general', title: 'General', content: <InputData value={{clusterResourceId: item.clusterResourceId, namespace:external?undefined:item.definition.namespace||'Automatic',...(!deploymentMode?{startMode:item.definition.twoPhaseStart?'Manual':'Automatic'}:{}), ...(external ? {targetUrl: item.definition.externalDestination?.targetUrl} : {applicationRef: item.applicationRef}), podDisruptionBudgetMinAvailable: item.definition.podDisruptionBudgetMinAvailable}} references={references} />},
-    {id: 'application', title: external ? 'External destination' : 'Application', content: external ? <InputData value={item.definition.externalDestination} /> : <div className="form-stack"><InputData value={{istioInjection: (cluster?.spec.mode !== 'multi' && (item.definition.istioInjection ?? defaultIstio)) ? 'Enabled' : 'Disabled', ...(Object.keys(item.definition.istioInjectionOverrides ?? {}).length ? {istioInjectionOverrides:item.definition.istioInjectionOverrides} : {})}} /><InputData value={{...(application?.descriptor.spec?.defaults ?? {}), ...item.definition.applicationValues}} schema={application?.descriptor.spec?.valuesSchema} /><PlacementReadout value={item.definition.applicationPlacement} />{applicationTopology && <FormDisclosure title="Topology">{applicationTopology}</FormDisclosure>}</div>},
-    ...(load.length ? [{id: 'load', title: 'Load profile', content: <div className="form-stack">{load.map(component => {
-      const steps = loadProfileSteps(component.configuration.steps)
-      const {steps: _steps, geographicSteps, action: _action, interactive: _interactive, scenarioId, ...settings} = component.configuration
-      if ((application?.descriptor.spec?.interface?.loadScenarios?.length ?? 0) > 1) settings.scenarioId = scenarioId
-      return <section className="readout-section" key={component.id}><InputData value={settings} schema={plugins.find(value => value.id === component.pluginId)?.schema} /><FormDisclosure title="Workload phases" defaultOpen><WorkloadReadout phases={steps} /></FormDisclosure>{Array.isArray(geographicSteps) && geographicSteps.length > 0 && <FormDisclosure title={cluster?.spec.mode === 'multi' ? 'Traffic by cluster' : 'Traffic by zone'}><TrafficDistributionReadout phases={geographicSteps as Record<string, unknown>[]} clusterMode={cluster?.spec.mode === 'multi'} /></FormDisclosure>}<FormDisclosure title="Preview"><LoadProfilePreview steps={steps} /></FormDisclosure></section>
-    })}</div>}] : []),
-    ...(monitoring.length ? [{id: 'monitoring', title: 'Monitoring', content: <div className="form-stack">{monitoring.map(componentReadout)}</div>}] : []),
-    ...(network.length ? [{id: 'network', title: 'Network', content: <div className="form-stack">{network.map(component => <NetworkReadout key={component.id} component={component} clusterMode={cluster?.spec.mode === 'multi'} />)}</div>}] : []),
-    ...([['scheduler.', 'Scheduling'], ['descheduler.', 'Descheduling'], ['autoscaler.', 'Scaling'], ['', 'Other']] as const).flatMap(([prefix, title]) => {
-      const group = scheduling.filter(component => prefix ? component.capability.startsWith(prefix) : !/^(scheduler\.|descheduler\.|autoscaler\.)/.test(component.capability))
-      return group.length ? [{id: prefix || 'other', title, content: <div className="form-stack">{group.map(componentReadout)}</div>}] : []
-    })
-  ]} /></div>
+function PhaseTables({table,label}:{table:ReadoutTableData;label:string}) {
+ return <FormTabs label={label} items={table.rows.map((row,index)=>({id:String(index),title:`Phase ${index+1}`,content:<ReadoutTable label={`${label} · Phase ${index+1}`} data={{headers:table.headers,rows:[row]}}/>}))}/>
+}
+export function ConfigurationReadout({session,item,clusters,applications,plugins,strategies,showHeading=true,applicationTopology,deploymentMode=false}:{session?:Session;deploymentMode?:boolean;showHeading?:boolean;applicationTopology?:ReactNode;item:ExperimentConfiguration;clusters:ManagedResource[];applications:Application[];plugins:Plugin[];strategies:CatalogStrategy[]}) {
+ const application=applications.find(value=>value.reference===item.applicationRef)
+ const cluster=clusters.find(value=>value.id===item.clusterResourceId)
+ const external=item.definition.destinationMode==='external'
+ const components=item.definition.components??[]
+ const network=components.filter(value=>value.capability.startsWith('chaos.'))
+ const metrics=components.filter(value=>value.capability.startsWith('metrics.'))
+ const agents=components.filter(value=>value.capability.startsWith('monitoring.'))
+ const load=components.filter(value=>value.capability.startsWith('load.'))
+ const scheduling=components.filter(value=>!/^(chaos\.|metrics\.|monitoring\.|load\.)/.test(value.capability))
+ const multi=cluster?.spec.mode==='multi'
+ const references=Object.fromEntries([...clusters.map(value=>[value.id,value.name]),...applications.map(value=>[value.reference,value.name]),...strategies.map(value=>[value.id,value.name])])
+ const componentReadout=(component:ExperimentConfigurationComponent)=>{
+  const plugin=plugins.find(value=>value.id===component.pluginId)
+  const strategy=strategies.find(value=>value.id===component.strategyId)
+  const {configFile,parameters,...settings}=component.configuration
+  const configuration=configFile??parameters
+  return <section className="readout-section" key={component.id}><h4>{strategy?.name??plugin?.name??component.capability}</h4><InputData value={settings} schema={plugin?.schema} references={references}/>{typeof configuration==='string'&&configuration.trim()&&<FormDisclosure title="Configuration"><InputData value={configuration}/></FormDisclosure>}{(component.targets?.include?.length>0||component.targets?.exclude?.length>0)&&<InputData value={{includedServices:component.targets.include,excludedServices:component.targets.exclude}}/>}</section>
+ }
+ const duration=load.reduce((total,component)=>Math.max(total,loadProfileSteps(component.configuration.steps).reduce((sum,step)=>sum+step.durationSeconds,0)),0)
+ const general=<InputData value={{clusterResourceId:item.clusterResourceId,...(!deploymentMode?{destinationType:external?'External destination':'Catalog application'}:{}),...(external?{}:{applicationRef:item.applicationRef,namespace:item.definition.namespace||'—'}),...(!deploymentMode?{startMode:item.definition.twoPhaseStart?'Manual':'Automatic'}:{})}} references={references}/>
+ return <div className="configuration-readout">{showHeading&&<div className="readout-heading"><h3>{item.name}</h3></div>}<WizardReadout sections={[
+ {id:'general',title:'General',content:general},
+ {id:'application',title:external?'External destination':'Application',content:external?<FormTabs label="External destination settings" items={[
+ {id:'target',title:'Target',content:<InputData value={{targetUrl:item.definition.externalDestination?.targetUrl,runtimeImage:item.definition.externalDestination?.runtimeImage}}/>},
+ {id:'script',title:'Locustfile',content:<InputData value={{script:item.definition.externalDestination?.script}}/>},
+ {id:'variables',title:'Variables',content:<InputData value={{parameters:item.definition.externalDestination?.parameters}}/>}
+ ]}/>:<ApplicationSettingsReadout application={application} item={item} session={session} networking={multi?'cilium':String(cluster?.spec.networking??'')} topology={applicationTopology}/>},
+ ...(!deploymentMode?[{id:'load',title:'Load profile',content:<div className="form-stack">{load.map(component=>{
+  const steps=loadProfileSteps(component.configuration.steps)
+  const {steps:_steps,geographicSteps,action:_action,interactive:_interactive,scenarioId,...settings}=component.configuration
+  if((application?.descriptor.spec?.interface?.loadScenarios?.length??0)>1)settings.scenarioId=scenarioId
+  return <FormTabs key={component.id} label="Load profile settings" items={[
+   {id:'workload',title:'Workload',content:<div className="load-profile-workspace"><PhaseTables label="Workload phases" table={workloadTable(steps)}/><aside className="load-profile-live" aria-label="Live preview"><LoadProfilePreview steps={steps}/></aside></div>},
+   ...(Array.isArray(geographicSteps)&&geographicSteps.length?[{id:'distribution',title:'Traffic distribution',content:<PhaseTables label={multi?'Traffic phases by cluster':'Traffic phases by zone'} table={trafficTable(geographicSteps as Record<string,unknown>[],multi)}/>}]:[]),
+   {id:'generator',title:'Generator',content:<InputData value={settings} schema={plugins.find(value=>value.id===component.pluginId)?.schema}/>}
+  ]}/>
+ })}</div>},
+ {id:'monitoring',title:'Monitoring',content:<FormTabs label="Monitoring settings" items={[
+ {id:'metrics',title:'Metrics',content:<div className="form-stack">{metrics.map(componentReadout)}</div>},
+ ...(!external?[{id:'network',title:'Network',content:<div className="form-stack"><h4>{multi?'Network between clusters':'Network between zones'}</h4><ReadoutTable label="Network injection" data={{headers:['Field','Value'],rows:[['Enable injection',network.length?'Enabled':'Disabled']]}}/>{network.map(component=>{
+  const value=component.configuration
+  const phases=Array.isArray(value.phases)&&value.phases.length?value.phases as Record<string,unknown>[]:[{...value,durationSeconds:duration}]
+  return <section key={component.id} className="form-stack"><FormTabs label="Network phases" items={phases.map((phase,index)=>({id:String(index),title:`Phase ${index+1}`,content:<div className="form-stack"><ReadoutTable label={`Phase ${index+1} duration`} data={{headers:['Field','Value'],rows:[['Duration (min)',String(Number(phase.durationSeconds)/60)]]}}/><NetworkReadout component={{...component,configuration:phase}} clusterMode={multi} showTarget={false}/></div>}))}/><FormDisclosure title="Network target"><InputData value={{nodeGroupLabel:value.nodeGroupLabel,nodeSelector:value.nodeSelector,networkInterface:value.networkInterface,hostNetwork:value.hostNetwork}}/></FormDisclosure></section>
+ })}</div>},{id:'agent',title:'Agent',content:<div className="form-stack"><ReadoutTable label="Agent" data={{headers:['Field','Value'],rows:[['Customize mon-agent for this experiment',agents.length?'Enabled':'Disabled']]}}/>{agents.map(componentReadout)}</div>}]:[])
+ ]}/>},
+ ...(!external?[{id:'scheduling',title:'Scheduling and scaling',content:<FormTabs label="Scheduling and scaling settings" items={([['scheduler.','Scheduler'],['descheduler.','Descheduler'],['autoscaler.','Autoscaler'],['','Other']] as const).map(([prefix,title])=>({id:prefix||'other',title,content:<div className="form-stack">{scheduling.filter(component=>prefix?component.capability.startsWith(prefix):!/^(scheduler\.|descheduler\.|autoscaler\.)/.test(component.capability)).map(componentReadout)}</div>}))}/>}]:[])] : [])
+ ]}/></div>
 }
 
 function NetworkReadout({component, clusterMode, showTarget=true}: {component: ExperimentConfigurationComponent; clusterMode: boolean; showTarget?: boolean}) {

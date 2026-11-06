@@ -1,4 +1,4 @@
-import {useEffect, useRef, useState} from 'react'
+import {useEffect, useRef, useState, type ReactNode} from 'react'
 import {copyText} from '../clipboard'
 import {ErrorFeedback, useErrorState} from './ToastRegion'
 
@@ -30,6 +30,6 @@ export function CopyButton({value, label = 'Copy code'}: {value: string; label?:
   return <><button type="button" className="button secondary compact" aria-label={label} disabled={pending || !value} onClick={() => void copy()}>{copied ? 'Copied' : 'Copy'}</button><span className="code-copy-status" role="status">{copied ? 'Code copied' : ''}</span><ErrorFeedback message={error} /></>
 }
 
-export function CodeBlock({children, label = 'Code snippet', className}: {children: string; label?: string; className?: string}) {
-  return <div className="code-block"><div className="code-block-actions"><CopyButton value={children} label={`Copy ${label}`} /></div><pre className={className} aria-label={label}><code>{children}</code></pre></div>
+export function CodeBlock({children, label = 'Code snippet', className, actions}: {children: string; label?: string; className?: string; actions?:ReactNode}) {
+  return <div className="code-block"><div className="code-block-actions">{actions}<CopyButton value={children} label={`Copy ${label}`} /></div><pre className={className} aria-label={label} tabIndex={0}><code>{children}</code></pre></div>
 }

@@ -1,3 +1,5 @@
+import {ValidatedInput} from './ValidatedInput'
+import {PoolPlacementReadout} from './PoolPlacementReadout'
 import {PoolPlacementFields} from './PlacementFields'
 import type {NodeTaint} from '../types'
 import {ErrorFeedback, useErrorState} from './ToastRegion'
@@ -48,7 +50,7 @@ export function AdministratorSetupDialog({onAuthenticated}: {onAuthenticated: (s
   return <Dialog open title="Create administrator" className="auth-modal">
     <form onSubmit={submit}>
       <div className="auth-brand"><span className="brand-mark">K</span><strong>KubePhos</strong></div><p className="section-copy">Create the first administrator account to configure KubePhos.</p>
-      <><label>Username<input name="username" minLength={3} maxLength={40} autoComplete="username" required autoFocus /></label><label>Email<input name="email" type="email" autoComplete="email" /></label><label>Password<input name="password" type="password" minLength={12} maxLength={128} autoComplete="new-password" required /></label></>
+      <><label>Username<ValidatedInput aria-label="Username" name="username" minLength={3} maxLength={40} autoComplete="username" required autoFocus /></label><label>Email<ValidatedInput aria-label="Email" name="email" type="email" autoComplete="email" /></label><label>Password<ValidatedInput aria-label="Password" name="password" type="password" minLength={12} maxLength={128} autoComplete="new-password" required /></label></>
       <ErrorFeedback message={error} />
       <button className="button primary auth-submit" disabled={pending}>{pending ? 'Creating account…' : 'Create administrator'}</button>
     </form>
@@ -105,11 +107,11 @@ export function ConnectionDialog({open, close, plugins, ...common}: CommonProps 
   }
   return <Dialog open={open} onClose={close} title="New Proxmox connection">
     <form className="form-stack" onSubmit={submit} key={selected?.id ?? ''}>
-      <label>Name<input name="name" maxLength={80} placeholder="Development Proxmox" required /></label>
-      <label>Endpoint<input name="endpoint" type="url" placeholder="https://proxmox.example:8006" required /></label>
+      <label>Name<ValidatedInput aria-label="Name" name="name" maxLength={80} placeholder="Development Proxmox" required /></label>
+      <label>Endpoint<ValidatedInput aria-label="Endpoint" name="endpoint" type="url" placeholder="https://proxmox.example:8006" required /></label>
       <label className="checkbox-field"><input name="verifyTLS" type="checkbox" defaultChecked /><span>Verify TLS</span></label>
-      <label>Token ID<input name="tokenId" maxLength={240} required /></label>
-      <label>Token secret<input name="tokenSecret" type="password" minLength={8} maxLength={512} required /></label>
+      <label>Token ID<ValidatedInput aria-label="Token ID" name="tokenId" maxLength={240} required /></label>
+      <label>Token secret<ValidatedInput aria-label="Token secret" name="tokenSecret" type="password" minLength={8} maxLength={512} required /></label>
       <ErrorFeedback message={error} />
       <Actions close={close} pending={pending} label="Validate and save" />
     </form>
@@ -155,7 +157,7 @@ export function MachineTemplateDialog({open, close, plugins, workspaces, ...comm
     {!plugin ? <div className="empty-state"><div><strong>Template capability unavailable</strong></div></div> : <WizardForm onSubmit={submit} key={plugin.id} onCancel={close} pending={pending} error={error} submitDisabled={!connections.length || !workspaces.length} submitLabel="Create template">
       <WizardStep title="General">
       <div className="field-row"><label>Proxmox connection<select name="connectionId" value={selectedConnectionID} onChange={event => setConnectionID(event.target.value)} required>{connections.length ? connections.map(item => <option key={item.id} value={item.id}>{item.name}</option>) : <option value="">Create a Proxmox connection first</option>}</select></label>
-      <label>Name<input name="name" pattern="[a-z0-9][a-z0-9-]{0,31}" maxLength={32} placeholder="ubuntu-k3s" required /></label></div>
+      <label>Name<ValidatedInput aria-label="Name" name="name" pattern="[a-z0-9][a-z0-9-]{0,31}" maxLength={32} placeholder="ubuntu-k3s" required /></label></div>
         <SchemaFields key={selectedConnectionID} suggestions={allocation.values} schema={schemaSubset(schema, ['vmid','storage','imageStorage','diskGiB','bridge','address','prefixLength','gateway','dnsServer'], true)} prefix="template" applications={common.applications} artifacts={common.artifacts} connections={common.connections} credentials={common.credentials} />
       </WizardStep>
       <WizardStep title="Storage">
@@ -221,18 +223,18 @@ export function InfrastructureServiceDialog({open, close, workspaces, templates,
   return <Dialog open={open} onClose={close} title={`New ${kind === 'harbor' ? 'Harbor registry' : 'NFS server'}`} className="template-modal" presentation="page">
     <WizardForm onSubmit={submit} key={`${kind}-${workspaceID}-${connectionID}`} onCancel={close} pending={pending} error={error} submitDisabled={!availableTemplates.length || !workspaceID || !connectionID} submitLabel={`Create ${kind === 'harbor' ? 'Harbor' : 'NFS'}`}>
       <WizardStep title="General">
-<div className="field-row"><label>Name<input name="name" pattern="[a-z0-9][a-z0-9-]{0,31}" maxLength={32} placeholder={kind === 'harbor' ? 'main-registry' : 'shared-data'} required autoFocus /></label>
+<div className="field-row"><label>Name<ValidatedInput aria-label="Name" name="name" pattern="[a-z0-9][a-z0-9-]{0,31}" maxLength={32} placeholder={kind === 'harbor' ? 'main-registry' : 'shared-data'} required autoFocus /></label>
       <label>Proxmox connection<select value={connectionID} onChange={event => setConnectionID(event.target.value)} required>{common.connections.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label></div>
       <div className="field-row"><label>VM template<select name="templateId" value={selectedTemplateID} onChange={event => setTemplateID(event.target.value)} required>{availableTemplates.length ? availableTemplates.map(item => <option key={item.id} value={item.id}>{item.name}</option>) : <option value="">No ready VM template</option>}</select></label>
       <ProxmoxNodeSelect connectionID={connectionID} defaultNode={String(availableTemplates.find(item => item.id === selectedTemplateID)?.spec.node ?? '')} /></div>
       </WizardStep>
       <WizardStep title="Resources">
-      <div className="capacity-grid"><label>CPU (cores)<input name="cores" type="number" min={1} max={32} defaultValue={defaults.cores} /></label><label>Memory (MiB)<input name="memoryMiB" type="number" min={512} max={131072} defaultValue={defaults.memory} /></label><label>Disk (GiB)<input name="diskGiB" type="number" min={8} max={2048} defaultValue={defaults.disk} /></label></div>
+      <div className="capacity-grid"><label>CPU (cores)<ValidatedInput aria-label="CPU (cores)" name="cores" type="number" min={1} max={32} defaultValue={defaults.cores} /></label><label>Memory (MiB)<ValidatedInput aria-label="Memory (MiB)" name="memoryMiB" type="number" min={512} max={131072} defaultValue={defaults.memory} /></label><label>Disk (GiB)<ValidatedInput aria-label="Disk (GiB)" name="diskGiB" type="number" min={8} max={2048} defaultValue={defaults.disk} /></label></div>
       </WizardStep>
       <WizardStep title="Network">
-<label className="field-short">Proxmox VM ID<input name="vmid" {...allocation.field('vmid')} type="number" min={100} max={999999999} required /></label>
-      <div className="field-row field-row-address"><label>IP address<input name="address" {...allocation.field('address')} placeholder="192.168.1.120" required /></label><label>Prefix length<input name="prefixLength" {...allocation.field('prefixLength', 24)} type="number" min={8} max={30} required /></label></div>
-      <div className="field-row field-row-network"><label>Gateway<input name="gateway" {...allocation.field('gateway')} placeholder="192.168.1.1" required /></label><label>DNS server<input name="dnsServer" {...allocation.field('dnsServer', '1.1.1.1')} required /></label></div>
+<label className="field-short">Proxmox VM ID<ValidatedInput aria-label="Proxmox VM ID" name="vmid" {...allocation.field('vmid')} type="number" min={100} max={999999999} required /></label>
+      <div className="field-row field-row-address"><label>IP address<ValidatedInput aria-label="IP address" name="address" {...allocation.field('address')} placeholder="192.168.1.120" required /></label><label>Prefix length<ValidatedInput aria-label="Prefix length" name="prefixLength" {...allocation.field('prefixLength', 24)} type="number" min={8} max={30} required /></label></div>
+      <div className="field-row field-row-network"><label>Gateway<ValidatedInput aria-label="Gateway" name="gateway" {...allocation.field('gateway')} placeholder="192.168.1.1" required /></label><label>DNS server<ValidatedInput aria-label="DNS server" name="dnsServer" {...allocation.field('dnsServer', '1.1.1.1')} required /></label></div>
       </WizardStep>
       <WizardStep title="Review"><WizardReview /></WizardStep>
     </WizardForm>
@@ -253,6 +255,8 @@ export function KubernetesClusterDialog({open, close, workspaces, templates, ser
   const [templateID, setTemplateID] = useState('')
   const [controlPlanes, setControlPlanes] = useState(1)
   const [managementCount, setManagementCount] = useState(1)
+  const [controlPlaneZones,setControlPlaneZones]=useState('zone-a')
+  const [managementZones,setManagementZones]=useState('zone-a')
   const [machineNodes, setMachineNodes] = useState<Record<string, string>>({})
   const [applicationPools, setApplicationPools] = useState<ClusterPoolDraft[]>([applicationPoolDefaults()])
   const [error, setError] = useErrorState()
@@ -265,6 +269,8 @@ export function KubernetesClusterDialog({open, close, workspaces, templates, ser
     setTemplateID('')
     setControlPlanes(1)
     setManagementCount(1)
+    setControlPlaneZones('zone-a')
+    setManagementZones('zone-a')
     setMachineNodes({})
     setError('')
   }, [open, defaultWorkspaceID, defaultConnectionID])
@@ -318,35 +324,35 @@ export function KubernetesClusterDialog({open, close, workspaces, templates, ser
   return <Dialog open={open} onClose={close} title="Create Kubernetes cluster" className="template-modal cluster-modal" presentation="page">
     <WizardForm onSubmit={submit} onCancel={close} pending={pending} error={error} submitDisabled={!ready || !workspaceID || !connectionID} submitLabel="Create cluster">
       <WizardStep title="Cluster">
-        <div className="field-row field-row-deployment"><label>Deployment<select aria-label="Deployment" value={mode} onChange={event => setMode(event.target.value as 'single' | 'multi')}><option value="single">Single cluster</option><option value="multi">Multi cluster</option></select></label><label>Name<input name="name" value={clusterName} onChange={event => setClusterName(event.target.value)} pattern="[a-z0-9][a-z0-9-]{0,31}" maxLength={32} placeholder="development" required /></label></div>
+        <div className="field-row field-row-deployment"><label>Deployment<select aria-label="Deployment" value={mode} onChange={event => setMode(event.target.value as 'single' | 'multi')}><option value="single">Single cluster</option><option value="multi">Multi cluster</option></select></label><label>Name<ValidatedInput aria-label="Name" name="name" value={clusterName} onChange={event => setClusterName(event.target.value)} pattern="[a-z0-9][a-z0-9-]{0,31}" maxLength={32} placeholder="development" required /></label></div>
         <div className="field-row"><label>Proxmox connection<select value={connectionID} onChange={event => setConnectionID(event.target.value)} required>{common.connections.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label><label>VM template<select name="templateId" value={selectedTemplate?.id ?? ''} onChange={event => setTemplateID(event.target.value)} required>{availableTemplates.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label></div>
         <div className="field-row"><label>Harbor registry<select name="harborId" required>{harbor.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label><label>NFS storage<select name="nfsId" required>{nfs.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label></div>
-        {!ready && <p className="form-error" role="status">Create a VM template, Harbor and NFS on this connection first.</p>}
+        {!ready && <ErrorFeedback message="Create a VM template, Harbor and NFS on this connection first."/>}
       </WizardStep>
       <WizardStep title="Node pools"><FormTabs label="Node pools" items={[
         {id: 'master', title: 'Master', content: <>
-      <div className="field-row field-row-count"><label>Nodes<select name="controlPlanes" value={controlPlanes} onChange={event => setControlPlanes(Number(event.target.value))}><option value="1">1 · development</option><option value="3">3 · high availability</option></select></label><label>Zones<input name="controlPlaneZones" defaultValue="zone-a" pattern="[a-z0-9,-]+" required /></label></div>
-      <MachineCapacityFields prefix="controlPlane" defaults={{cores: 2, memoryMiB: 4096, diskGiB: 80}} />
+      <div className="field-row field-row-count"><label>Nodes<select name="controlPlanes" value={controlPlanes} onChange={event => setControlPlanes(Number(event.target.value))}><option value="1">1 · development</option><option value="3">3 · high availability</option></select></label><label>Zones<ValidatedInput aria-label="Zones" name="controlPlaneZones" value={controlPlaneZones} onChange={event=>setControlPlaneZones(event.target.value)} pattern="[a-z0-9,-]+" required /></label></div>
+      <MachineCapacityFields prefix="controlPlane" defaults={{cores: 2, memoryMiB: 4096, diskGiB: 80}} /><PoolPlacementReadout pool={{clusterName,name:'control-plane',role:'control-plane',count:controlPlanes,zones:controlPlaneZones.split(',').map(value=>value.trim())}} />
         </>},
         {id: 'management', title: 'Management', content: <>
-      <div className="field-row field-row-count"><label>Nodes<NumericInput name="managementCount" value={managementCount} min={1} max={12} onValueChange={setManagementCount} required /></label><label>Zones<input name="managementZones" defaultValue="zone-a" pattern="[a-z0-9,-]+" required /></label></div>
-      <MachineCapacityFields prefix="management" defaults={{cores: 4, memoryMiB: 8192, diskGiB: 80}} />
+      <div className="field-row field-row-count"><label>Nodes<NumericInput name="managementCount" value={managementCount} min={1} max={12} onValueChange={setManagementCount} required /></label><label>Zones<ValidatedInput aria-label="Zones" name="managementZones" value={managementZones} onChange={event=>setManagementZones(event.target.value)} pattern="[a-z0-9,-]+" required /></label></div>
+      <MachineCapacityFields prefix="management" defaults={{cores: 4, memoryMiB: 8192, diskGiB: 80}} /><PoolPlacementReadout pool={{clusterName,name:'management',role:'management',count:managementCount,zones:managementZones.split(',').map(value=>value.trim())}} />
         </>},
         {id: 'applications', title: 'Pools', content: <>
       <div className="pool-section pool-toolbar"><ResourceAction action="add" label="Add pool" disabled={applicationPools.length >= 8} onClick={() => setApplicationPools(items => [...items, {...applicationPoolDefaults(), name: `applications-${items.length + 1}`, count: 1}])} /></div>
-      <div className="pool-editor">{applicationPools.map((pool, index) => <div className="pool-card" key={index}><div className="pool-row"><label>Name<input value={pool.name} pattern="[a-z0-9][a-z0-9-]{0,31}" onChange={event => updateApplicationPool(setApplicationPools, index, {name: event.target.value})} required /></label><label>Nodes<NumericInput value={pool.count} min={1} max={12} onValueChange={count => updateApplicationPool(setApplicationPools, index, {count})} required /></label><label>Zones<input value={pool.zones} pattern="[a-z0-9,-]+" onChange={event => updateApplicationPool(setApplicationPools, index, {zones: event.target.value})} required /></label>{applicationPools.length > 1 && <button type="button" className="icon-button pool-remove" aria-label={`Remove ${pool.name}`} title={`Remove ${pool.name}`} onClick={() => setApplicationPools(items => items.filter((_, position) => position !== index))}><ActionIcon name="close" /></button>}</div><div className="capacity-grid"><label>CPU (cores)<NumericInput value={pool.capacity.cores} min={1} max={32} onValueChange={cores => updateApplicationPoolCapacity(setApplicationPools, index, {cores})} required /></label><label>Memory (MiB)<NumericInput value={pool.capacity.memoryMiB} min={1024} max={131072} onValueChange={memoryMiB => updateApplicationPoolCapacity(setApplicationPools, index, {memoryMiB})} required /></label><label>Disk (GiB)<NumericInput value={pool.capacity.diskGiB} min={8} max={2048} onValueChange={diskGiB => updateApplicationPoolCapacity(setApplicationPools, index, {diskGiB})} required /></label></div><PoolPlacementFields name={pool.name} labels={pool.labels} taints={pool.taints} onChange={change => updateApplicationPool(setApplicationPools,index,change)} /></div>)}</div>
+      <FormTabs selectNewItems label="Application pools" items={applicationPools.map((pool,index)=>({id:String(index),title:pool.name||'New pool',content:<div className="pool-card" key={index}><div className="pool-row"><label>Name<ValidatedInput aria-label="Name" value={pool.name} pattern="[a-z0-9][a-z0-9-]{0,31}" onChange={event => updateApplicationPool(setApplicationPools, index, {name: event.target.value})} required /></label><label>Nodes<NumericInput value={pool.count} min={1} max={12} onValueChange={count => updateApplicationPool(setApplicationPools, index, {count})} required /></label><label>Zones<ValidatedInput aria-label="Zones" value={pool.zones} pattern="[a-z0-9,-]+" onChange={event => updateApplicationPool(setApplicationPools, index, {zones: event.target.value})} required /></label>{applicationPools.length > 1 && <button type="button" className="icon-button pool-remove" aria-label={`Remove ${pool.name}`} title={`Remove ${pool.name}`} onClick={() => setApplicationPools(items => items.filter((_, position) => position !== index))}><ActionIcon name="close" /></button>}</div><div className="capacity-grid"><label>CPU (cores)<NumericInput value={pool.capacity.cores} min={1} max={32} onValueChange={cores => updateApplicationPoolCapacity(setApplicationPools, index, {cores})} required /></label><label>Memory (MiB)<NumericInput value={pool.capacity.memoryMiB} min={1024} max={131072} onValueChange={memoryMiB => updateApplicationPoolCapacity(setApplicationPools, index, {memoryMiB})} required /></label><label>Disk (GiB)<NumericInput value={pool.capacity.diskGiB} min={8} max={2048} onValueChange={diskGiB => updateApplicationPoolCapacity(setApplicationPools, index, {diskGiB})} required /></label></div><PoolPlacementFields key={pool.name} defaults={{clusterName,name:pool.name,role:'application',count:pool.count,zones:pool.zones.split(',').map(value=>value.trim())}} name={pool.name} labels={pool.labels} taints={pool.taints} onChange={change => updateApplicationPool(setApplicationPools,index,change)} /></div>}))}/>
         </>}
       ]} /></WizardStep>
       <WizardStep title="Network">
-<label className="field-short">First VM ID<input name="baseVMID" {...allocation.field('vmid')} type="number" min={100} max={999999988} required /></label>
-      <div className="field-row field-row-address"><label>First node IP<input name="addressStart" {...allocation.field('address')} placeholder="192.168.1.130" required /></label><label>Prefix length<input name="prefixLength" {...allocation.field('prefixLength', 24)} type="number" min={8} max={30} required /></label></div>
-      <div className="field-row field-row-network"><label>Gateway<input name="gateway" {...allocation.field('gateway')} placeholder="192.168.1.1" required /></label><label>DNS server<input name="dnsServer" {...allocation.field('dnsServer', '1.1.1.1')} required /></label></div>
+<label className="field-short">First VM ID<ValidatedInput aria-label="First VM ID" name="baseVMID" {...allocation.field('vmid')} type="number" min={100} max={999999988} required /></label>
+      <div className="field-row field-row-address"><label>First node IP<ValidatedInput aria-label="First node IP" name="addressStart" {...allocation.field('address')} placeholder="192.168.1.130" required /></label><label>Prefix length<ValidatedInput aria-label="Prefix length" name="prefixLength" {...allocation.field('prefixLength', 24)} type="number" min={8} max={30} required /></label></div>
+      <div className="field-row field-row-network"><label>Gateway<ValidatedInput aria-label="Gateway" name="gateway" {...allocation.field('gateway')} placeholder="192.168.1.1" required /></label><label>DNS server<ValidatedInput aria-label="DNS server" name="dnsServer" {...allocation.field('dnsServer', '1.1.1.1')} required /></label></div>
       <details className="schema-advanced"><summary>Monitoring</summary>
       <div className="field-row"><label>Scraping period<select name="scrapeInterval" defaultValue="15s">{['5s', '10s', '15s', '30s'].map(value => <option key={value} value={value}>{value}</option>)}</select></label><label>Metrics retention<select name="retention" defaultValue="7d">{['1d', '7d', '15d'].map(value => <option key={value} value={value}>{value}</option>)}</select></label></div>
       </details>
       </WizardStep>
       <WizardStep title="VM placement">
-      <div className="vm-placement-grid">{placementPools.map(pool => <fieldset className="vm-placement-pool" key={pool.name}><legend>{pool.label}</legend><div className="vm-placement-columns" aria-hidden="true"><span>Node</span><span>Proxmox server</span></div>{pool.machines.map((name, index) => <label className="vm-placement-row" key={name}><span>{clusterName ? name : '—'}</span><input aria-label={clusterName ? `${name} · Proxmox server` : `${pool.label} · Node ${index + 1} · Proxmox server`} value={machineNodes[name] ?? templateNode} onChange={event => setMachineNodes(nodes => ({...nodes, [name]: event.target.value}))} pattern="[A-Za-z0-9._-]{1,64}" maxLength={64} placeholder="pve" required /></label>)}</fieldset>)}</div>
+      <div className="vm-placement-grid">{placementPools.map(pool => <fieldset className="vm-placement-pool" key={pool.name}><legend>{pool.label}</legend><div className="vm-placement-columns" aria-hidden="true"><span>Node</span><span>Proxmox server</span></div>{pool.machines.map((name, index) => <label className="vm-placement-row" key={name}><span>{clusterName ? name : '—'}</span><ValidatedInput aria-label={clusterName ? `${name} · Proxmox server` : `${pool.label} · Node ${index + 1} · Proxmox server`} value={machineNodes[name] ?? templateNode} onChange={event => setMachineNodes(nodes => ({...nodes, [name]: event.target.value}))} pattern="[A-Za-z0-9._-]{1,64}" maxLength={64} placeholder="pve" required /></label>)}</fieldset>)}</div>
       </WizardStep>
       <WizardStep title="Review"><WizardReview /></WizardStep>
     </WizardForm>
@@ -354,7 +360,7 @@ export function KubernetesClusterDialog({open, close, workspaces, templates, ser
 }
 
 function MachineCapacityFields({prefix, defaults}: {prefix: string; defaults: MachineCapacityDraft}) {
-  return <div className="capacity-grid"><label>CPU (cores)<input name={`${prefix}Cores`} type="number" min={1} max={32} defaultValue={defaults.cores} required /></label><label>Memory (MiB)<input name={`${prefix}MemoryMiB`} type="number" min={1024} max={131072} defaultValue={defaults.memoryMiB} required /></label><label>Disk (GiB)<input name={`${prefix}DiskGiB`} type="number" min={8} max={2048} defaultValue={defaults.diskGiB} required /></label></div>
+  return <div className="capacity-grid"><label>CPU (cores)<ValidatedInput aria-label="CPU (cores)" name={`${prefix}Cores`} type="number" min={1} max={32} defaultValue={defaults.cores} required /></label><label>Memory (MiB)<ValidatedInput aria-label="Memory (MiB)" name={`${prefix}MemoryMiB`} type="number" min={1024} max={131072} defaultValue={defaults.memoryMiB} required /></label><label>Disk (GiB)<ValidatedInput aria-label="Disk (GiB)" name={`${prefix}DiskGiB`} type="number" min={8} max={2048} defaultValue={defaults.diskGiB} required /></label></div>
 }
 
 function readCapacity(values: FormData, prefix: string): MachineCapacityDraft {
@@ -387,7 +393,7 @@ export function ApplicationDialog({open, close, ...common}: CommonProps & {open:
     event.preventDefault()
     if (!file) return
     if (file.size > 512 * 1024) {
-      setError('The descriptor cannot exceed 512 KB.')
+      setError('Maximum file size: 512 KB.')
       return
     }
     setPending(true)

@@ -1,3 +1,4 @@
+import {FormTabs} from './FormTabs'
 import {ErrorFeedback, useErrorState} from './ToastRegion'
 import {ResponsiveTable} from './ResponsiveTable'
 import {ResourceSharing, canManageResource} from './ResourceSharing'
@@ -138,7 +139,7 @@ export function ResultsView({artifacts, experiments, operations, workspaces, ses
       return values
     }
     loadSelected().then(values => {if (!controller.signal.aborted) setLoaded(values)}).catch(cause => {
-      if (!controller.signal.aborted) setError(cause instanceof Error ? cause.message : 'Could not load the selected runs.')
+      if (!controller.signal.aborted) setError(cause instanceof Error ? cause.message : 'Could not load the selected executions.')
     }).finally(() => {
       if (!controller.signal.aborted) setLoading(false)
     })
@@ -154,7 +155,7 @@ export function ResultsView({artifacts, experiments, operations, workspaces, ses
   const experiment = focusedExperiment ?? experiments.find(item => item.id === activeExperiment)
   const experimentPresentation = useMemo(() => {
     const presentation = new Map<string, {label: string; color?: string}>()
-    for (const variant of experiment?.variants ?? []) for (const trial of variant.trials) if (trial.resultArtifactId) presentation.set(trial.resultArtifactId, {label: `${variant.alias || variant.name} · Run ${trial.position}`, color: variant.color})
+    for (const variant of experiment?.variants ?? []) for (const trial of variant.trials) if (trial.resultArtifactId) presentation.set(trial.resultArtifactId, {label: `${variant.alias || variant.name} · Execution ${trial.position}`, color: variant.color})
     return presentation
   }, [experiment])
   const displayed = useMemo(() => loaded.map(item => ({...item, label: experimentPresentation.get(item.artifact.id)?.label ?? datasetLabel(item.artifact, operations), color: experimentPresentation.get(item.artifact.id)?.color})), [loaded, experimentPresentation, operations])
@@ -195,7 +196,7 @@ export function ResultsView({artifacts, experiments, operations, workspaces, ses
   const stopExperiment = async () => {
     if (!focusedExperiment || !['queued', 'running', 'initializing', 'initialized'].includes(focusedExperiment.status)) return
     const label = focusedExperiment.kind === 'suite' ? 'suite' : 'experiment'
-    if (!await confirmAction(`Stop ${label} ${focusedExperiment.name}? The current run will stop and the remaining runs will be canceled.`, {title: 'Stop experiment', label: 'Stop'})) return
+    if (!await confirmAction(`Stop ${label} ${focusedExperiment.name}? The current execution will stop and the remaining executions will be canceled.`, {title: 'Stop experiment', label: 'Stop'})) return
     setStopping(true)
     setActionError('')
     try {
@@ -225,12 +226,12 @@ export function ResultsView({artifacts, experiments, operations, workspaces, ses
     {focusedExperiment && <ResourceAttribution resource={focusedExperiment} editable={Boolean(comparison)} />}
     {comparison?.sources}
     <ErrorFeedback message={actionError} />
-    {!focusedExperiment && experiments.length > 0 && <div className="experiment-history"><div className="experiment-history-title"><span><b>1</b><strong>Choose an experiment</strong></span><span>{experiments.length} saved</span></div><div className="experiment-cards">{experiments.map(item => <button key={item.id} className={activeExperiment === item.id ? 'active' : ''} onClick={() => openExperiment(item)}><span className={`status-dot ${experimentDisplayStatus(item)}`} /><span><strong>{item.name}</strong><small>{item.status === 'queued' && item.scheduledFor && new Date(item.scheduledFor).getTime() > Date.now() ? `Scheduled ${formatDate(item.scheduledFor)}` : `${experimentDisplayStatus(item)} · ${item.variants.length} strategies · ${item.variants.reduce((total, variant) => total + variant.trials.length, 0)} runs`}</small></span><ActionIcon name="right" /></button>)}</div></div>}
-    {focusedExperiment && <nav className="experiment-run-tabs" aria-label="Experiment runs"><button className="run-tab summary" aria-current={runTab === 'summary' ? 'page' : undefined} data-active={runTab === 'summary'} onClick={() => {setRunTab('summary'); setActiveTab('statistics')}}><span className="run-tab-label">All runs</span></button>{focusedRuns.map(({variant, trial}) => <button key={trial.id} className={`run-tab ${trial.status}`} aria-current={runTab === trial.id ? 'page' : undefined} data-active={runTab === trial.id} onClick={() => {setRunTab(trial.id); setActiveTab('statistics')}}><span className={`status-dot ${trial.status}`} /><span className="run-tab-label">{variant.name} · Run {trial.position}</span></button>)}</nav>}
-    {experiment && (!activeRun ? <>{experiment.status !== 'succeeded' && <ExperimentProgress experiment={experiment} />}{liveRun && <RunLoadProgress name={`${liveRun.variant.name} · Run ${liveRun.trial.position}`} trial={liveRun.trial} configuration={liveRun.variant.configuration} operation={operations.find(item => item.id === liveRun.trial.operationId)} />}</> : <><RunDiagnostics status={activeRun.trial.status} error={activeRun.trial.error} pipelineRunId={activeRun.trial.pipelineRunId} operationId={activeRun.trial.operationId} openPipelineRun={openPipelineRun} openOperation={openOperation} /><RunLoadProgress trial={activeRun.trial} configuration={activeRun.variant.configuration} operation={operations.find(item => item.id === activeRun.trial.operationId)} /></>)}
+    {!focusedExperiment && experiments.length > 0 && <div className="experiment-history"><div className="experiment-history-title"><span><b>1</b><strong>Choose an experiment</strong></span><span>{experiments.length} saved</span></div><div className="experiment-cards">{experiments.map(item => <button key={item.id} className={activeExperiment === item.id ? 'active' : ''} onClick={() => openExperiment(item)}><span className={`status-dot ${experimentDisplayStatus(item)}`} /><span><strong>{item.name}</strong><small>{item.status === 'queued' && item.scheduledFor && new Date(item.scheduledFor).getTime() > Date.now() ? `Scheduled ${formatDate(item.scheduledFor)}` : `${experimentDisplayStatus(item)} · ${item.variants.length} strategies · ${item.variants.reduce((total, variant) => total + variant.trials.length, 0)} executions`}</small></span><ActionIcon name="right" /></button>)}</div></div>}
+    {focusedExperiment && <nav className="experiment-run-tabs" aria-label="Run executions"><button className="run-tab summary" aria-current={runTab === 'summary' ? 'page' : undefined} data-active={runTab === 'summary'} onClick={() => {setRunTab('summary'); setActiveTab('statistics')}}><span className="run-tab-label">All executions</span></button>{focusedRuns.map(({variant, trial}) => <button key={trial.id} className={`run-tab ${trial.status}`} aria-current={runTab === trial.id ? 'page' : undefined} data-active={runTab === trial.id} onClick={() => {setRunTab(trial.id); setActiveTab('statistics')}}><span className={`status-dot ${trial.status}`} /><span className="run-tab-label">{variant.name} · Execution {trial.position}</span></button>)}</nav>}
+    {experiment && (!activeRun ? <>{experiment.status !== 'succeeded' && <ExperimentProgress experiment={experiment} />}{liveRun && <RunLoadProgress name={`${liveRun.variant.name} · Execution ${liveRun.trial.position}`} trial={liveRun.trial} configuration={liveRun.variant.configuration} operation={operations.find(item => item.id === liveRun.trial.operationId)} />}</> : <><RunDiagnostics status={activeRun.trial.status} error={activeRun.trial.error} pipelineRunId={activeRun.trial.pipelineRunId} operationId={activeRun.trial.operationId} openPipelineRun={openPipelineRun} openOperation={openOperation} /><RunLoadProgress trial={activeRun.trial} configuration={activeRun.variant.configuration} operation={operations.find(item => item.id === activeRun.trial.operationId)} /></>)}
     {!selectable.length || activeRun && !viewSelected.length ? <EmptyResults experiment={experiment} runStatus={activeRun?.trial.status} /> : <div className={`results-layout ${focusedExperiment ? 'focused' : ''}`}>
       {!focusedExperiment ? <aside className="dataset-picker" aria-label="Available datasets">
-        <div className="dataset-picker-title"><strong>{focusedExperiment ? 'Runs' : 'Select runs'}</strong><span>{selected.length} selected</span></div>
+        <div className="dataset-picker-title"><strong>{focusedExperiment ? 'Executions' : 'Select executions'}</strong><span>{selected.length} selected</span></div>
         {selectable.map(artifact => {
           const operation = operations.find(item => item.id === artifact.operationId)
           const active = selected.includes(artifact.id)
@@ -243,12 +244,12 @@ export function ResultsView({artifacts, experiments, operations, workspaces, ses
       <div className="results-content">
         {notice && <div className="validation-item warning">{notice}</div>}
         {comparison && !loading && comparisonWarnings(displayed, comparison.sourceConfigurations).map(warning => <div key={warning} className="validation-item warning">{warning}</div>)}
-        {!viewSelected.length && <div className="results-placeholder"><strong>Select runs</strong></div>}
+        {!viewSelected.length && <div className="results-placeholder"><strong>Select executions</strong></div>}
         {loading && <div className="results-placeholder"><span className="results-spinner" /><strong>Loading verified data…</strong></div>}
-        {error && <><ErrorFeedback message={error} /><div className="validation-item error">{error}</div></>}
+        {error && <ErrorFeedback message={error} />}
         {!loading && !error && loaded.length > 0 && <>
           {!focusedExperiment && <div className="results-workbench-head">
-            <div><h3>{activeRun ? `${activeRun.variant.name} · Run ${activeRun.trial.position}` : focusedExperiment ? 'Aggregated results' : experiment?.name ?? displayed[0].label}</h3><p>{displayed.length} run{displayed.length === 1 ? '' : 's'} · {metrics.length} metric{metrics.length === 1 ? '' : 's'}</p></div>
+            <div><h3>{activeRun ? `${activeRun.variant.name} · Execution ${activeRun.trial.position}` : focusedExperiment ? 'Aggregated results' : experiment?.name ?? displayed[0].label}</h3><p>{displayed.length} execution{displayed.length === 1 ? '' : 's'} · {metrics.length} metric{metrics.length === 1 ? '' : 's'}</p></div>
             <div className="results-heading-actions">{!focusedExperiment && <button className="button primary" disabled={selected.length < 2} onClick={() => setSaving(true)}>Save comparison</button>}</div>
           </div>}
           <nav className="results-tabs" aria-label="Result sections">{(['statistics', 'charts', 'downloads'] as ResultsTab[]).map(tab => <button key={tab} className={activeTab === tab ? 'active' : ''} aria-current={activeTab === tab ? 'page' : undefined} onClick={() => setActiveTab(tab)}>{({statistics: 'Statistics', charts: 'Plots', downloads: 'Export'} as Record<ResultsTab, string>)[tab]}</button>)}</nav>
@@ -267,17 +268,17 @@ function ExperimentProgress({experiment}: {experiment: Experiment}) {
   const trials = experiment.variants.flatMap(variant => variant.trials.map(trial => ({variant: variant.name, trial})))
   const running = trials.find(item => ['running','initializing','initialized'].includes(item.trial.status))
   const failed = trials.filter(item => ['failed', 'canceled'].includes(item.trial.status)).length
-  const detail = running ? `${running.variant} · Run ${running.trial.position} ${running.trial.status==='initialized'?'ready to start':running.trial.status==='initializing'?'initializing':'in progress'}` : failed ? `${failed} run${failed === 1 ? '' : 's'} did not complete` : progress.completed === progress.total ? 'All runs completed' : 'Waiting for the next run'
+  const detail = running ? `${running.variant} · Execution ${running.trial.position} ${running.trial.status==='initialized'?'ready to start':running.trial.status==='initializing'?'initializing':'in progress'}` : failed ? `${failed} run${failed === 1 ? '' : 's'} did not complete` : progress.completed === progress.total ? 'All executions completed' : 'Waiting for the next execution'
   return <article className="experiment-progress-card">
-    <div><strong>{progress.completed} of {progress.total} runs finished</strong><small>{detail}</small></div>
-    <div className="experiment-progress" aria-label={`${progress.completed} of ${progress.total} runs finished`}><span style={{width: `${progress.total ? progress.completed / progress.total * 100 : 0}%`}} /></div>
+    <div><strong>{progress.completed} of {progress.total} executions finished</strong><small>{detail}</small></div>
+    <div className="experiment-progress" aria-label={`${progress.completed} of ${progress.total} executions finished`}><span style={{width: `${progress.total ? progress.completed / progress.total * 100 : 0}%`}} /></div>
   </article>
 }
 
 function RunDiagnostics({status, error, pipelineRunId, operationId, openPipelineRun, openOperation}: {status: string; error?: string; pipelineRunId?: string; operationId: string; openPipelineRun?: (id: string) => void; openOperation?: (id: string) => void}) {
   const running = ['running', 'initializing', 'starting', 'prechecking', 'verifying'].includes(status)
   const failed = ['failed', 'canceled'].includes(status)
-  const label = status === 'initialized' ? 'Initialization complete' : status==='initializing'?'Run initializing':status === 'queued' ? 'Run waiting to start' : status === 'canceled' ? 'Run canceled' : failed ? 'Run needs attention' : running ? 'Run in progress' : status === 'succeeded' ? 'Run completed' : 'Run status unavailable'
+  const label = status === 'initialized' ? 'Initialization complete' : status==='initializing'?'Execution initializing':status === 'queued' ? 'Execution waiting to start' : status === 'canceled' ? 'Execution canceled' : failed ? 'Execution needs attention' : running ? 'Execution in progress' : status === 'succeeded' ? 'Execution completed' : 'Execution status unavailable'
   if (!error && !running && !failed && !(pipelineRunId && openPipelineRun)) return null
   return <div className={`run-diagnostics ${failed ? 'failed' : ''}`}><div><strong>{label}</strong>{error && <p>{error}</p>}</div>{pipelineRunId && openPipelineRun ? <button className="button secondary compact" onClick={() => openPipelineRun(pipelineRunId)}>{running ? 'Live process logs' : 'Process logs'}</button> : operationId && openOperation ? <button className="button secondary compact" onClick={() => openOperation(operationId)}>{running ? 'Live logs' : 'Error logs'}</button> : null}</div>
 }
@@ -316,7 +317,7 @@ function RunLoadProgress({trial, configuration, operation, name}: {trial: Experi
     label = 'Load completed · processing results'
   }
   const runElapsed = trial.startedAt ? Math.max(0, (Math.min(trial.completedAt ? new Date(trial.completedAt).getTime() : now, now) - new Date(trial.startedAt).getTime())) : 0
-  return <section className="run-load-progress"><div className="run-load-progress-head"><span className={`status-dot ${trial.status}`} /><div><strong>{name ?? 'Input load progress'}</strong><small>{label}{trial.startedAt ? ` · run elapsed ${formatDuration(runElapsed)}` : ''}</small></div></div><LoadProfilePreview steps={steps} progressSeconds={progress} progressLabel={label} /></section>
+  return <section className="run-load-progress"><div className="run-load-progress-head"><span className={`status-dot ${trial.status}`} /><div><strong>{name ?? 'Input load progress'}</strong><small>{label}{trial.startedAt ? ` · execution elapsed ${formatDuration(runElapsed)}` : ''}</small></div></div><LoadProfilePreview steps={steps} progressSeconds={progress} progressLabel={label} /></section>
 }
 
 function loadStepsFromConfiguration(configuration: Record<string, unknown> | undefined): LoadProfileStep[] {
@@ -383,7 +384,7 @@ function SaveExperimentDialog({open, close, selected, operations, workspaces, se
       grouped.set(key, variant)
     }
     if ([...grouped.values()].some(item => !item.name) || grouped.size < 2) {
-      setError('Provide at least two distinct variant names.')
+      setError('Enter two distinct approach names.')
       setPending(false)
       return
     }
@@ -400,7 +401,7 @@ function SaveExperimentDialog({open, close, selected, operations, workspaces, se
   return <Dialog open={open} onClose={close} title="Save experiment">
     <form onSubmit={submit}>
       <label>Name<input name="name" maxLength={120} placeholder="Default vs custom strategy" required autoFocus /></label>
-      <div className="trial-mapping"><span className="field-description">Shared names group repeated runs.</span>{selected.map(artifact => <label key={artifact.id}><span>{operations.find(item => item.id === artifact.operationId)?.title ?? artifact.name}</span><input name={`variant-${artifact.id}`} maxLength={80} defaultValue={operations.find(item => item.id === artifact.operationId)?.title ?? artifact.name} required /></label>)}</div>
+      <div className="trial-mapping"><span className="field-description">Shared names group repeated executions.</span>{selected.map(artifact => <label key={artifact.id}><span>{operations.find(item => item.id === artifact.operationId)?.title ?? artifact.name}</span><input name={`variant-${artifact.id}`} maxLength={80} defaultValue={operations.find(item => item.id === artifact.operationId)?.title ?? artifact.name} required /></label>)}</div>
       <ErrorFeedback message={error} />
       <div className="modal-actions"><button className="button secondary" type="button" onClick={close}>Cancel</button><button className="button primary" disabled={pending}>{pending ? 'Saving…' : 'Save experiment'}</button></div>
     </form>
@@ -788,7 +789,7 @@ function ServiceStatisticsTable({datasets, experiment}: {datasets: LoadedDataset
   if (!rows.length) return null
   const allServices = [...new Set(rows.map(row => row.service))]
   const services = allServices.filter(service => service.toLowerCase().includes(query.trim().toLowerCase())).sort((left, right) => left.localeCompare(right, undefined, {numeric: true}))
-  return <div className="service-statistics"><h4>{experiment ? 'By service · Across runs' : 'By service'}</h4><div className="list-toolbar"><input type="search" aria-label={`Search services for ${experiment ? 'all runs' : datasets[0].label}`} placeholder="Search services…" value={query} onChange={event => setQuery(event.target.value)} /><span>{services.length} of {allServices.length}</span></div>{!services.length && <p className="empty-inline">No services match your search.</p>}<div className="statistics-table-wrap"><ResponsiveTable className="runs-table" aria-label={experiment ? 'Service statistics across runs' : `Service statistics for ${datasets[0].label}`}><thead><tr><th>Metric</th>{experiment && <th>Strategy</th>}<th>{experiment ? 'Runs' : 'Samples'}</th><th>Mean</th><th>Std. dev.</th><th>Min</th><th>Median</th><th>Max</th></tr></thead>{services.map(service => <tbody key={service}><tr className="service-statistics-group"><th scope="rowgroup" colSpan={experiment ? 8 : 7}>{service}</th></tr>{rows.filter(row => row.service === service).map(row => <tr key={`${row.metric}-${row.group}`}><td>{statisticsMetricTitle(row.metric)}</td>{experiment && <td>{row.group}</td>}<td>{row.summary.count}</td><SummaryCells summary={row.summary} unit={row.unit} /></tr>)}</tbody>)}</ResponsiveTable></div></div>
+  return <div className="service-statistics"><h4>{experiment ? 'By service · Across executions' : 'By service'}</h4><div className="list-toolbar"><input type="search" aria-label={`Search services for ${experiment ? 'all executions' : datasets[0].label}`} placeholder="Search services…" value={query} onChange={event => setQuery(event.target.value)} /><span>{services.length} of {allServices.length}</span></div>{!services.length && <p className="empty-inline">No services match your search.</p>}<div className="statistics-table-wrap"><ResponsiveTable className="runs-table" aria-label={experiment ? 'Service statistics across executions' : `Service statistics for ${datasets[0].label}`}><thead><tr><th>Metric</th>{experiment && <th>Strategy</th>}<th>{experiment ? 'Executions' : 'Samples'}</th><th>Mean</th><th>Std. dev.</th><th>Min</th><th>Median</th><th>Max</th></tr></thead>{services.map(service => <tbody key={service}><tr className="service-statistics-group"><th scope="rowgroup" colSpan={experiment ? 8 : 7}>{service}</th></tr>{rows.filter(row => row.service === service).map(row => <tr key={`${row.metric}-${row.group}`}><td>{statisticsMetricTitle(row.metric)}</td>{experiment && <td>{row.group}</td>}<td>{row.summary.count}</td><SummaryCells summary={row.summary} unit={row.unit} /></tr>)}</tbody>)}</ResponsiveTable></div></div>
 }
 
 function SummaryCells({summary, unit}: {summary: ScientificSummary; unit: string}) {
@@ -833,7 +834,7 @@ export function statisticsCSV(datasets: LoadedDataset[], metrics: string[], expe
 function StatisticsTable({datasets, metrics, experiment}: {datasets: LoadedDataset[]; metrics: string[]; experiment?: Experiment}) {
   const runPositions = new Map(experiment?.variants.flatMap(variant => variant.trials.map(trial => [trial.resultArtifactId, trial.position] as const)) ?? [])
   const orderedDatasets = [...datasets].sort((left, right) => {
-    const position = (dataset: LoadedDataset) => runPositions.get(dataset.artifact.id) ?? Number(dataset.label.match(/Run (\d+)/i)?.[1] ?? 0)
+    const position = (dataset: LoadedDataset) => runPositions.get(dataset.artifact.id) ?? Number(dataset.label.match(/(?:Run|Execution) (\d+)/i)?.[1] ?? 0)
     return position(left) - position(right)
   })
   const comparison = Boolean(experiment && experiment.variants.length > 1)
@@ -841,10 +842,10 @@ function StatisticsTable({datasets, metrics, experiment}: {datasets: LoadedDatas
   const effects = experiment ? variantEffectSizes(experiment, datasets, metrics) : []
   return <>
     {experiment && experiment.variants.length > 1 && <StrategyComparison datasets={datasets} metrics={metrics} experiment={experiment} />}
-    {!!effects.length && <section className="statistics-card"><div><h3>Difference between strategies</h3></div><div className="statistics-table-wrap"><ResponsiveTable className="effects-table"><thead><tr><th>Comparison</th><th>Metric</th><th title="Standardized effect size">Cohen's d</th><th>Difference</th><th>Runs</th></tr></thead><tbody>{effects.map(row => <tr key={row.metric}><td>{row.left} vs {row.right}</td><td>{statisticsMetricTitle(row.metric)}</td><td>{row.value.toFixed(3)}</td><td>{effectMagnitude(row.value)}</td><td>{row.leftCount} / {row.rightCount}</td></tr>)}</tbody></ResponsiveTable></div></section>}
-    {!!aggregates.length && <section className="statistics-card"><div><h3>Across runs</h3></div><div className="statistics-table-wrap"><ResponsiveTable className="aggregate-table"><thead><tr><th>Strategy</th><th>Metric</th><th>Runs</th><th>Runs missing</th><th>Mean across runs</th><th>Std. dev.</th><th>Min</th><th>Median</th><th>Max</th><th>Variation</th><th>95% interval</th></tr></thead><tbody>{aggregates.map(row => <tr key={`${row.variant}-${row.metric}`}><td>{row.variant}</td><td>{statisticsMetricTitle(row.metric)}</td><td>{row.summary.count}</td><td>{row.missing}</td><td>{formatMetric(row.summary.mean, row.unit)}</td><td>{formatMetric(row.summary.standardDeviation, row.unit)}</td><td>{formatMetric(row.summary.min, row.unit)}</td><td>{formatMetric(row.summary.median, row.unit)}</td><td>{formatMetric(row.summary.max, row.unit)}</td><td>{(row.summary.coefficientOfVariation * 100).toFixed(1)}%</td><td>{formatMetric(row.summary.confidence95Low, row.unit)}–{formatMetric(row.summary.confidence95High, row.unit)}</td></tr>)}</tbody></ResponsiveTable></div></section>}
-    {!comparison && <><h3>Within each run</h3>
-    {orderedDatasets.map(dataset => <section className="statistics-card" key={dataset.artifact.id}><div><h3>{dataset.label}</h3></div><div className="statistics-table-wrap"><ResponsiveTable className="runs-table" aria-label={`Statistics for ${dataset.label}`}><thead><tr><th>Metric</th><th>Samples / events</th><th>Mean / total</th><th>Std. dev.</th><th>Min</th><th>Median</th><th>Max</th><th>Variation</th><th>95% interval</th></tr></thead><tbody>{metrics.map(metric => <RunStatisticsRow key={metric} dataset={dataset} metric={metric} />)}</tbody></ResponsiveTable></div><ServiceStatisticsTable datasets={[dataset]} /></section>)}
+    {!!effects.length && <section className="statistics-card"><div><h3>Difference between strategies</h3></div><div className="statistics-table-wrap"><ResponsiveTable className="effects-table"><thead><tr><th>Comparison</th><th>Metric</th><th title="Standardized effect size">Cohen's d</th><th>Difference</th><th>Executions</th></tr></thead><tbody>{effects.map(row => <tr key={row.metric}><td>{row.left} vs {row.right}</td><td>{statisticsMetricTitle(row.metric)}</td><td>{row.value.toFixed(3)}</td><td>{effectMagnitude(row.value)}</td><td>{row.leftCount} / {row.rightCount}</td></tr>)}</tbody></ResponsiveTable></div></section>}
+    {!!aggregates.length && <section className="statistics-card"><div><h3>Across executions</h3></div><div className="statistics-table-wrap"><ResponsiveTable className="aggregate-table"><thead><tr><th>Strategy</th><th>Metric</th><th>Executions</th><th>Executions missing</th><th>Mean across executions</th><th>Std. dev.</th><th>Min</th><th>Median</th><th>Max</th><th>Variation</th><th>95% interval</th></tr></thead><tbody>{aggregates.map(row => <tr key={`${row.variant}-${row.metric}`}><td>{row.variant}</td><td>{statisticsMetricTitle(row.metric)}</td><td>{row.summary.count}</td><td>{row.missing}</td><td>{formatMetric(row.summary.mean, row.unit)}</td><td>{formatMetric(row.summary.standardDeviation, row.unit)}</td><td>{formatMetric(row.summary.min, row.unit)}</td><td>{formatMetric(row.summary.median, row.unit)}</td><td>{formatMetric(row.summary.max, row.unit)}</td><td>{(row.summary.coefficientOfVariation * 100).toFixed(1)}%</td><td>{formatMetric(row.summary.confidence95Low, row.unit)}–{formatMetric(row.summary.confidence95High, row.unit)}</td></tr>)}</tbody></ResponsiveTable></div></section>}
+    {!comparison && <><h3>Within each execution</h3>
+    {orderedDatasets.map(dataset => <section className="statistics-card" key={dataset.artifact.id}><div><h3>{dataset.label}</h3></div><FormTabs label={`Statistics for ${dataset.label}`} items={[{id:"overall",title:"Overall",content:<div className="statistics-table-wrap"><ResponsiveTable className="runs-table" aria-label={`Statistics for ${dataset.label}`}><thead><tr><th>Metric</th><th>Samples / events</th><th>Mean / total</th><th>Std. dev.</th><th>Min</th><th>Median</th><th>Max</th><th>Variation</th><th>95% interval</th></tr></thead><tbody>{metrics.map(metric => <RunStatisticsRow key={metric} dataset={dataset} metric={metric} />)}</tbody></ResponsiveTable></div>},...(serviceStatisticsRows([dataset]).length?[{id:"services",title:"By service",content:<ServiceStatisticsTable datasets={[dataset]}/>}]:[])]}/></section>)}
     </>}
     {!comparison && experiment && serviceStatisticsRows(datasets, experiment).some(row => row.acrossRuns) && <section className="statistics-card"><ServiceStatisticsTable datasets={datasets} experiment={experiment} /></section>}
   </>
@@ -861,13 +862,13 @@ function StrategyComparison({datasets, metrics, experiment}: {datasets: LoadedDa
   return <section className="statistics-card">
     <div><h3>Strategy comparison</h3></div>
     <div className="statistics-table-wrap"><ResponsiveTable aria-label="Strategy comparison">
-      <thead><tr><th>Metric</th>{columns.map(({variant, available}) => <th key={variant.id}>{variant.alias || variant.name}<small className="muted"> · {available}/{variant.trials.length} runs</small></th>)}</tr></thead>
+      <thead><tr><th>Metric</th>{columns.map(({variant, available}) => <th key={variant.id}>{variant.alias || variant.name}<small className="muted"> · {available}/{variant.trials.length} executions</small></th>)}</tr></thead>
       <tbody>{visibleMetrics.map(metric => <tr key={metric}>
         <td>{statisticsMetricTitle(metric)}</td>
         {columns.map(({variant, rows}) => {
           const row = rows.find(item => item.metric === metric)
           const aggregation = metric === 'descheduler.evictions' ? 'Total evictions per run' : metric === 'scheduler.pod_scheduling_latency' ? 'Mean per pod' : isControlMetric(metric) ? 'Mean per cycle' : 'Mean over time windows'
-          return <td key={variant.id} title={row ? `${aggregation}; ${row.summary.count} run(s) with this metric${row.summary.count > 1 ? '; mean ± sample standard deviation across runs' : ''}` : 'No collected data'}>{row ? <>{formatMetric(row.summary.mean, row.unit)}{row.summary.count > 1 && <> ± {formatMetric(row.summary.standardDeviation, row.unit)}</>}</> : '—'}</td>
+          return <td key={variant.id} title={row ? `${aggregation}; ${row.summary.count} execution(s) with this metric${row.summary.count > 1 ? '; mean ± sample standard deviation across executions' : ''}` : 'No collected data'}>{row ? <>{formatMetric(row.summary.mean, row.unit)}{row.summary.count > 1 && <> ± {formatMetric(row.summary.standardDeviation, row.unit)}</>}</> : '—'}</td>
         })}
       </tr>)}</tbody>
     </ResponsiveTable></div>
@@ -981,7 +982,7 @@ function formatDuration(milliseconds: number): string {
 }
 
 function plotLabel(value: string): string {
-  return value.replace(/ · Run \d+$/i, '')
+  return value.replace(/ · (?:Run|Execution) \d+$/i, '')
 }
 
 function validateDataset(dataset: TimeSeriesDataset) {

@@ -19,6 +19,8 @@ import (
 	"kubephos.dev/kubephos/internal/catalog"
 	"kubephos.dev/kubephos/internal/domain"
 	"kubephos.dev/kubephos/internal/id"
+	"kubephos.dev/kubephos/internal/placement"
+	applicationdeployer "kubephos.dev/kubephos/plugins/application-deployer/runtime"
 
 	"kubephos.dev/kubephos/internal/schema"
 
@@ -35,13 +37,15 @@ func (s *Server) listCatalogApplications(response http.ResponseWriter, request *
 }
 
 type applicationPreview struct {
-	ApplicationRef     string                           `json:"applicationRef"`
-	Renderer           string                           `json:"renderer"`
-	Digest             string                           `json:"digest"`
-	Content            string                           `json:"content"`
-	LoadScenarioDigest string                           `json:"loadScenarioDigest,omitempty"`
-	LoadScenarios      []applicationLoadScenarioPreview `json:"loadScenarios"`
-	WorkloadTargets    []applicationWorkloadPreview     `json:"workloadTargets"`
+	PlacementDefaults      []placement.WorkloadDefaults     `json:"placementDefaults,omitempty"`
+	PlacementDefaultsError string                           `json:"placementDefaultsError,omitempty"`
+	ApplicationRef         string                           `json:"applicationRef"`
+	Renderer               string                           `json:"renderer"`
+	Digest                 string                           `json:"digest"`
+	Content                string                           `json:"content"`
+	LoadScenarioDigest     string                           `json:"loadScenarioDigest,omitempty"`
+	LoadScenarios          []applicationLoadScenarioPreview `json:"loadScenarios"`
+	WorkloadTargets        []applicationWorkloadPreview     `json:"workloadTargets"`
 }
 
 type applicationWorkloadPreview struct {
@@ -147,7 +151,7 @@ func (s *Server) getCatalogApplicationManifest(response http.ResponseWriter, req
 	} else {
 		response.Header().Set("Cache-Control", "private, max-age=300")
 	}
-	writeJSON(response, http.StatusOK, preview)
+	writeApplicationPreview(response, preview)
 }
 
 func (s *Server) resolveCatalogApplication(response http.ResponseWriter, request *http.Request) {
@@ -170,7 +174,7 @@ func (s *Server) resolveCatalogApplication(response http.ResponseWriter, request
 		failure.write(response)
 		return
 	}
-	writeJSON(response, http.StatusOK, preview)
+	writeApplicationPreview(response, preview)
 }
 
 func (s *Server) catalogApplicationPreview(ctx context.Context, application domain.CatalogApplication, refresh bool) (applicationPreview, bool, *managedOperationFailure) {
@@ -526,4 +530,15 @@ func (s *Server) deleteCatalogApplication(response http.ResponseWriter, request 
 		return
 	}
 	response.WriteHeader(http.StatusNoContent)
+}
+
+func writeApplicationPreview(response http.ResponseWriter, preview applicationPreview) {
+	targets, _ := json.Marshal(preview.WorkloadTargets)
+	defaults, err := applicationdeployer.PlacementDefaults(preview.Content, targets)
+	if err != nil {
+		preview.PlacementDefaultsError = "Application placement defaults could not be resolved."
+	} else {
+		preview.PlacementDefaults = defaults
+	}
+	writeJSON(response, http.StatusOK, preview)
 }

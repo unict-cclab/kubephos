@@ -14,8 +14,9 @@ describe('configuration readout', () => {
   it('separates application, network, load and strategy settings without editable controls', () => {
     render(<ConfigurationReadout item={item} clusters={[]} applications={[application]} plugins={[]} strategies={[]} />)
     expect(screen.queryByRole('textbox')).not.toBeInTheDocument()
-    fireEvent.click(screen.getByRole('tab', {name: 'Application'}))
-    expect(within(screen.getByRole('tabpanel', {name: 'Application'})).getByText('Services')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', {name: 'Application'}))
+    expect(within(screen.getByRole('region', {name: 'Application'})).getByText('Services')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', {name:'Monitoring'}))
     fireEvent.click(screen.getByRole('tab', {name: 'Network'}))
     const network = within(screen.getByRole('tabpanel', {name: 'Network'}))
     expect(network.getByRole('columnheader', {name: 'Jitter (ms)'})).toBeInTheDocument()
@@ -27,30 +28,42 @@ describe('configuration readout', () => {
     expect(network.getByText('100')).toBeInTheDocument()
     expect(network.queryByText('50')).not.toBeInTheDocument()
     expect(network.queryByText('Shared profile')).not.toBeInTheDocument()
-    fireEvent.click(screen.getByRole('tab', {name: 'Load profile'}))
-    const load = within(screen.getByRole('tabpanel', {name: 'Load profile'}))
+    fireEvent.click(screen.getByRole('button', {name: 'Load profile'}))
+    const load = within(screen.getByRole('region', {name: 'Load profile'}))
     expect(load.getByRole('columnheader', {name: 'Rate (req/s)'})).toBeInTheDocument()
     expect(load.queryByText('Baseline (requests/s)')).not.toBeInTheDocument()
-    fireEvent.click(screen.getByRole('tab', {name: 'Scheduling'}))
+    fireEvent.click(screen.getByRole('button', {name:'Scheduling and scaling'}))
+    fireEvent.click(screen.getByRole('tab', {name: 'Scheduler'}))
     expect(screen.getByText('s0')).toBeVisible()
   })
 
   it('shows external destinations without exposing secrets', () => {
     render(<ConfigurationReadout item={{...item, definition: {applicationValues: {}, destinationMode: 'external', externalDestination: {targetUrl: 'https://example.test', runtimeImage: 'locust', script: 'class User:\n    pass', parameters: {apiToken: 'private'}}, components: []}}} clusters={[]} applications={[]} plugins={[] as Plugin[]} strategies={[]} />)
-    fireEvent.click(screen.getByRole('tab', {name: 'External destination'}))
-    expect(screen.getByText('Locustfile')).toBeVisible()
+    fireEvent.click(screen.getByRole('button', {name: 'External destination'}))
+    fireEvent.click(screen.getByRole('tab', {name:'Locustfile'}))
+    expect(screen.getByRole('tab',{name:'Locustfile'})).toHaveAttribute('aria-selected','true')
     expect(screen.queryByText('private')).not.toBeInTheDocument()
     expect(screen.queryByRole('tab', {name: 'Network'})).not.toBeInTheDocument()
   })
 })
 
 
-it('keeps scheduling, descheduling and scaling in distinct detail tabs', () => {
-  const components = ['scheduler', 'descheduler', 'autoscaler'].map(kind => ({id: kind, pluginId: kind, capability: `${kind}.kubernetes.install`, configuration: {configFile: `${kind} settings`}, targets: {include: [], exclude: []}}))
-  render(<ConfigurationReadout item={{...item, definition: {...item.definition, components}}} clusters={[]} applications={[]} plugins={[]} strategies={[]} />)
-  expect(screen.queryByRole('tab', {name: 'Scheduling and scaling'})).not.toBeInTheDocument()
-  for (const [title, kind] of [['Scheduling', 'scheduler'], ['Descheduling', 'descheduler'], ['Scaling', 'autoscaler']]) {
-    fireEvent.click(screen.getByRole('tab', {name: title}))
-    expect(screen.getByRole('tabpanel', {name: title})).toHaveTextContent(`${kind}.kubernetes.install`)
-  }
+it('uses the same scheduling sections in edit and view', () => {
+ const components=['scheduler','descheduler','autoscaler'].map(kind=>({id:kind,pluginId:kind,capability:`${kind}.kubernetes.install`,configuration:{configFile:`${kind} settings`},targets:{include:[],exclude:[]}}))
+ render(<ConfigurationReadout item={{...item,definition:{...item.definition,components}}} clusters={[]} applications={[]} plugins={[]} strategies={[]}/>)
+ fireEvent.click(screen.getByRole('button',{name:'Scheduling and scaling'}))
+ for(const title of ['Scheduler','Descheduler','Autoscaler']) {
+  fireEvent.click(screen.getByRole('tab',{name:title}))
+  expect(screen.getByRole('tabpanel',{name:title})).toBeVisible()
+ }
+ expect(screen.queryByRole('button',{name:'Save changes'})).not.toBeInTheDocument()
+})
+
+it('keeps network under Monitoring and always shows Phase 1 for a static network profile',()=>{
+ render(<ConfigurationReadout item={item} clusters={[]} applications={[application]} plugins={[]} strategies={[]}/>)
+ fireEvent.click(screen.getByRole('button',{name:'Monitoring'}))
+ fireEvent.click(screen.getByRole('tab',{name:'Network'}))
+ expect(screen.getByRole('tab',{name:'Phase 1'})).toHaveAttribute('aria-selected','true')
+ expect(screen.getByRole('table',{name:'Phase 1 duration'})).toHaveTextContent('15')
+ expect(screen.queryByRole('textbox')).not.toBeInTheDocument()
 })

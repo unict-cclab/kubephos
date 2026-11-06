@@ -129,3 +129,18 @@ func Validate(values map[string]any, services []string) error {
 	}
 	return nil
 }
+
+// ValidateSettings validates a resource-only object, as opposed to a complete
+// application values object which can contain other generator parameters.
+func ValidateSettings(values map[string]any, services []string) error {
+	for key := range values {
+		allowed := key == "resourceOverrides"
+		for _, field := range Fields {
+			allowed = allowed || key == field
+		}
+		if !allowed {
+			return fmt.Errorf("Unknown resource field %s", key)
+		}
+	}
+	return Validate(values, services)
+}
