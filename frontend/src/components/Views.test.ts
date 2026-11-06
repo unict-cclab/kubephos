@@ -2,7 +2,7 @@ import {describe, expect, it, vi} from 'vitest'
 import {createElement, type ComponentProps} from 'react'
 import {fireEvent, render, screen, within} from '@testing-library/react'
 import {Views, buildRecentActivity, canDeleteKubernetesCluster} from './Views'
-import type {Experiment, ManagedResource} from '../types'
+import type {Application, Experiment, ExperimentConfiguration, ManagedResource} from '../types'
 
 describe('buildRecentActivity', () => {
   it('shows user resources and experiments instead of internal operations', () => {
@@ -13,6 +13,18 @@ describe('buildRecentActivity', () => {
     expect(items.map(item => item.title)).toEqual(['Experiment in progress', 'Kubernetes cluster ready'])
     expect(items[0].detail).toBe('Scheduler comparison')
     expect(items[0].href).toBe('results/instance/exp-1')
+  })
+
+  it('shows other users only their own work and their assigned clusters', () => {
+    const mine = {id: 'exp-mine', name: 'My run', status: 'running', ownerUserId: 'alice', createdAt: '2026-09-17T10:00:00Z'} as Experiment
+    const shared = {id: 'exp-shared', name: 'Shared run', status: 'running', ownerUserId: 'bob', createdAt: '2026-09-17T10:30:00Z'} as Experiment
+    const configuration = {id: 'cfg-bob', name: 'Bob config', ownerUserId: 'bob', validation: {valid: true}, createdAt: '2026-09-17T10:40:00Z'} as unknown as ExperimentConfiguration
+    const assigned = {id: 'cluster-1', name: 'assigned-cluster', kind: 'kubernetes-cluster', status: 'ready', createdAt: '2026-09-17T09:00:00Z'} as ManagedResource
+    const application = {reference: 'app', name: 'New app', createdAt: '2026-09-17T11:00:00Z'} as Application
+    const input = {experiments: [mine, shared], configurations: [configuration], connections: [], resources: [assigned], applications: [application]}
+
+    expect(buildRecentActivity({...input, ownedBy: 'alice'}).map(item => item.detail)).toEqual(['My run', 'assigned-cluster'])
+    expect(buildRecentActivity(input)).toHaveLength(5)
   })
 })
 
@@ -27,7 +39,7 @@ function viewProps(view: 'catalog' | 'kubernetes' | 'infrastructure'): Component
   const noop = () => {}
   const asyncNoop = async () => {}
   return {
-    view, system: null, pluginRuntime: null, workspaces: [], pipelines: [], pipelineRuns: [], operations: [], artifacts: [], experiments: [], experimentConfigurations: [], plugins: [], pluginPackages: [], pluginImports: [], applications: [], strategies: [], credentials: [], connections: [], machineTemplates: [], infrastructureServices: [], kubernetesClusters: [], resources: [], audit: [], users: [], clusterAssignments: [], clusterActions: {}, session: {authenticated: true}, isAdmin: true,
+    view, system: null, pluginRuntime: null, workspaces: [], pipelines: [], pipelineRuns: [], operations: [], artifacts: [], experiments: [], experimentConfigurations: [], plugins: [], pluginPackages: [], pluginImports: [], applications: [], strategies: [], credentials: [], connections: [], machineTemplates: [], infrastructureServices: [], kubernetesClusters: [], resources: [], audit: [], users: [], clusterAssignments: [], adminRequests: [], clusterActions: {}, session: {authenticated: true}, isAdmin: true,
     changed: asyncNoop, navigate: noop, openOperation: noop, importApplication: noop, deleteApplication: async () => true, addConnection: noop, addMachineTemplate: noop, addInfrastructureService: noop, deleteConnection: asyncNoop, deleteMachineTemplate: asyncNoop, deleteInfrastructureService: asyncNoop, addKubernetesCluster: noop, deleteKubernetesCluster: asyncNoop, recreateKubernetesCluster: asyncNoop,
   }
 }
@@ -116,4 +128,15 @@ it('keeps the active catalog creation action in the shared heading and opens its
       expect(heading.getAllByRole('button')).toHaveLength(1)
     }
   } finally {vi.unstubAllGlobals()}
+})
+
+describe('kubernetes view for other users', () => {
+  it('asks an administrator for a cluster instead of explaining how to create one', () => {
+    const navigate = vi.fn()
+    render(createElement(Views, {...viewProps('kubernetes'), isAdmin: false, navigate}))
+    expect(screen.getByText('No cluster assigned to you')).toBeInTheDocument()
+    expect(screen.queryByText(/Harbor registry/)).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', {name: 'Ask an admin'}))
+    expect(navigate).toHaveBeenCalledWith('requests')
+  })
 })

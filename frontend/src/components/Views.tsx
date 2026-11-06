@@ -11,7 +11,7 @@ import {ActionIcon} from './ActionIcon'
 import {useEffect, useState} from 'react'
 import {formatDate, formatRelativeTime} from '../lib'
 import {useDetailRoute} from '../detailRoute'
-import type {Application, Artifact, AuditEvent, CatalogStrategy, ClusterUserAssignment, Connection, Credential, Experiment, ExperimentConfiguration, InfrastructureResource, ManagedResource, Operation, Pipeline, PipelineRun, Plugin, PluginImportJob, PluginPackage, PluginRuntimeStatus, Session, SystemStatus, User, View, Workspace} from '../types'
+import type {AdminRequest, Application, Artifact, AuditEvent, CatalogStrategy, ClusterUserAssignment, Connection, Credential, Experiment, ExperimentConfiguration, InfrastructureResource, ManagedResource, Operation, Pipeline, PipelineRun, Plugin, PluginImportJob, PluginPackage, PluginRuntimeStatus, Session, SystemStatus, User, View, Workspace} from '../types'
 import {ExperimentConfigurationsView} from './ExperimentConfigurationsView'
 import {ExperimentsHistoryView} from './ExperimentsHistoryView'
 import {ResourceDetailsPage} from './ResourceDetailsDialog'
@@ -24,6 +24,7 @@ import type {SectionIconKind} from './SectionIcon'
 import {SetupJourney, setupSteps} from './SetupJourney'
 import {ResourceAction} from './ResourceAction'
 import {UsersView} from './UsersView'
+import {RequestsView} from './RequestsView'
 import {AdministrationView} from './AdministrationView'
 
 interface ViewProps {
@@ -52,6 +53,7 @@ interface ViewProps {
   audit: AuditEvent[]
   users: User[]
   clusterAssignments: ClusterUserAssignment[]
+  adminRequests: AdminRequest[]
   session: Session
   changed: (message?: string) => Promise<void>
   isAdmin: boolean
@@ -95,6 +97,7 @@ export function Views(props: ViewProps) {
       <ExperimentConfigurationsView items={props.experimentConfigurations} experiments={props.experiments} artifacts={props.artifacts} operations={props.operations} clusters={props.kubernetesClusters} workspaces={props.workspaces} applications={props.applications} plugins={props.plugins} strategies={props.strategies} session={props.session} isAdmin={props.isAdmin} changed={props.changed} openOperation={props.openOperation} openExperiment={id => {window.location.hash = `results/instance/${encodeURIComponent(id)}`} } />
     </section>}
     {props.view === 'administration' && props.isAdmin && <section className="view active"><AdministrationView session={props.session} changed={props.changed} /></section>}
+    {props.view === 'requests' && <section className="view active"><RequestsView requests={props.adminRequests} isAdmin={props.isAdmin} session={props.session} changed={props.changed} /></section>}
     {props.view === 'users' && <section className="view active">
       {props.isAdmin && <UsersView users={props.users} assignments={props.clusterAssignments} clusters={props.kubernetesClusters} session={props.session} changed={props.changed} />}
     </section>}
@@ -107,7 +110,7 @@ function Overview(props: ViewProps) {
   const clusters = props.kubernetesClusters.filter(item => resourceStatus(item) === 'ready').length
   const active = props.experiments.filter(item => ['queued', 'running', 'initializing', 'initialized'].includes(item.status)).length
   const completed = props.experiments.filter(item => item.status === 'succeeded').length
-  const activity = buildRecentActivity({experiments: props.experiments, configurations: props.experimentConfigurations, connections: props.connections, resources: [...props.machineTemplates, ...props.infrastructureServices, ...props.kubernetesClusters], applications: props.applications})
+  const activity = buildRecentActivity({experiments: props.experiments, configurations: props.experimentConfigurations, connections: props.connections, resources: [...props.machineTemplates, ...props.infrastructureServices, ...props.kubernetesClusters], applications: props.applications, ownedBy: props.isAdmin ? undefined : props.session.user?.id ?? ''})
   const username = props.session.user?.username
   const steps = setupSteps({isAdmin: props.isAdmin, connections: props.connections.length, readyClusters: clusters, configurations: props.experimentConfigurations.length, completedExperiments: completed})
   const setupComplete = steps.every(step => step.done)
@@ -154,7 +157,14 @@ export interface RecentActivityItem {
   href: string
 }
 
-export function buildRecentActivity({experiments, configurations, connections, resources, applications}: {experiments: Experiment[]; configurations: ExperimentConfiguration[]; connections: Connection[]; resources: ManagedResource[]; applications: Application[]}): RecentActivityItem[] {
+// With ownedBy set (other users), the feed shows only that user's experiments and
+// configurations plus the resources the API already limits them to, such as assigned clusters.
+export function buildRecentActivity({experiments, configurations, connections, resources, applications, ownedBy}: {experiments: Experiment[]; configurations: ExperimentConfiguration[]; connections: Connection[]; resources: ManagedResource[]; applications: Application[]; ownedBy?: string}): RecentActivityItem[] {
+  if (ownedBy !== undefined) {
+    experiments = experiments.filter(item => item.ownerUserId === ownedBy)
+    configurations = configurations.filter(item => item.ownerUserId === ownedBy)
+    applications = []
+  }
   const experimentTitles: Record<string, string> = {queued: 'Experiment queued', running: 'Experiment in progress', succeeded: 'Experiment completed', failed: 'Experiment failed', canceled: 'Experiment stopped', cancelled: 'Experiment stopped'}
   const resourceTitles: Record<string, (label: string) => string> = {
     pending: label => `Preparing ${label.toLowerCase()}`,
@@ -182,7 +192,7 @@ export function buildRecentActivity({experiments, configurations, connections, r
 }
 
 function RecentActivity({items}: {items: RecentActivityItem[]}) {
-  if (!items.length) return <Empty title="No activity yet">Create a configuration or prepare a cluster to see your first activity here.</Empty>
+  if (!items.length) return <Empty title="No activity yet">Changes to clusters, configurations and experiments appear here.</Empty>
   return <ol className="activity-feed">{items.map(item => <li key={item.id}>
     <button type="button" className="activity-item" onClick={() => {window.location.hash = item.href}}>
       <span className="activity-copy"><strong>{item.title}</strong><span>{item.detail}</span></span>
@@ -260,7 +270,9 @@ function Kubernetes(props: ViewProps) {
       {label: 'Type', render: item => item.spec.mode === 'multi' ? 'Multi' : 'Single'},
       {label: 'Nodes', render: item => clusterNodeCount(item)},
       {label: 'Status', render: item => <ResourceStatus resource={item} override={props.clusterActions[item.id]} />},
-    ]} actions={item => <><ResourceAction action="view" label={`View ${item.name} details`} onClick={() => detail.open('resource', item.id)} />{props.isAdmin && <ResourceAction action="delete" label={`Delete ${item.name}`} disabled={Boolean(props.clusterActions[item.id]) || !canDeleteKubernetesCluster(item.status)} onClick={() => void props.deleteKubernetesCluster(item.id, item.name)} />}</>} /> : <Empty title="No Kubernetes cluster">Prepare a ready Harbor registry and NFS server in Infrastructure, then create your first cluster.</Empty>}
+    ]} actions={item => <><ResourceAction action="view" label={`View ${item.name} details`} onClick={() => detail.open('resource', item.id)} />{props.isAdmin && <ResourceAction action="delete" label={`Delete ${item.name}`} disabled={Boolean(props.clusterActions[item.id]) || !canDeleteKubernetesCluster(item.status)} onClick={() => void props.deleteKubernetesCluster(item.id, item.name)} />}</>} /> : props.isAdmin
+      ? <Empty title="No Kubernetes cluster">Prepare a ready Harbor registry and NFS server in Infrastructure, then create your first cluster.</Empty>
+      : <Empty title="No cluster assigned to you"><p>Clusters are created by administrators. Ask one to assign you a cluster.</p><button type="button" className="button secondary compact" onClick={() => props.navigate('requests')}>Ask an admin</button></Empty>}
 
   </>
 }

@@ -100,6 +100,9 @@ func auditTarget(request *http.Request) (string, string, string, bool) {
 	if len(parts) == 3 && parts[0] == "users" && parts[2] == "password" && request.Method == http.MethodPost {
 		return "user.password.reset", "users", parts[1], true
 	}
+	if len(parts) == 3 && parts[0] == "users" && parts[2] == "role" && request.Method == http.MethodPut {
+		return "user.role.update", "users", parts[1], true
+	}
 	if len(parts) == 2 && parts[0] == "users" && request.Method == http.MethodPatch {
 		return "user.email.update", "users", parts[1], true
 	}
@@ -126,6 +129,8 @@ func auditTarget(request *http.Request) (string, string, string, bool) {
 			return "plugin.import", "plugin", "", true
 		case "terminals":
 			return "terminal.ticket.create", "ssh-terminal", "", true
+		case "admin-requests":
+			return "admin-request.create", "admin-request", "", true
 		}
 	}
 
@@ -135,7 +140,7 @@ func auditTarget(request *http.Request) (string, string, string, bool) {
 	// Keep a resource ID on updates as well as creation, so attribution can be read back.
 	if len(parts) >= 2 {
 		switch parts[0] {
-		case "application-deployments", "experiment-configurations", "users", "connections", "credentials", "machine-templates", "infrastructure-services", "kubernetes-clusters", "workspaces":
+		case "application-deployments", "experiment-configurations", "users", "connections", "credentials", "machine-templates", "infrastructure-services", "kubernetes-clusters", "workspaces", "admin-requests":
 			if parts[0] != "experiment-configurations" || len(parts) < 3 || parts[2] != "clone" {
 				return strings.TrimSuffix(parts[0], "s") + "." + strings.ToLower(request.Method), parts[0], parts[1], true
 			}

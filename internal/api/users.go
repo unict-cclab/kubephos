@@ -234,3 +234,39 @@ func (s *Server) resetUserPassword(w http.ResponseWriter, r *http.Request) {
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
+
+// setUserRole promotes a user to administrator or demotes one back to user.
+// Administrators cannot change their own role, so at least one always remains.
+func (s *Server) setUserRole(w http.ResponseWriter, r *http.Request) {
+	var input struct {
+		Role string `json:"role"`
+	}
+	if err := decodeJSON(r, &input); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	input.Role = strings.ToLower(strings.TrimSpace(input.Role))
+	if input.Role != "admin" && input.Role != "user" {
+		writeError(w, http.StatusUnprocessableEntity, "invalid_role", "Role must be admin or user.")
+		return
+	}
+	actor := requestUser(r)
+	if r.PathValue("id") == actor.ID {
+		writeError(w, http.StatusConflict, "self_role_change", "You cannot change your own role.")
+		return
+	}
+	user, err := s.store.SetIdentityUserRole(r.Context(), r.PathValue("id"), actor.ID, input.Role)
+	if errors.Is(err, storage.ErrConflict) {
+		writeError(w, http.StatusForbidden, "permission_denied", "Administrator access is required.")
+		return
+	}
+	if errors.Is(err, storage.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "not_found", "User not found.")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database_error", "Could not change the role.")
+		return
+	}
+	writeJSON(w, http.StatusOK, user)
+}

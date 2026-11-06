@@ -6,6 +6,9 @@ export interface NavigationItem {
   description: string
   adminOnly?: boolean
   hash?: string
+  // Wording for users who are not administrators, when it differs.
+  memberLabel?: string
+  memberDescription?: string
 }
 export interface SidebarItem extends NavigationItem { views: View[] }
 export interface SidebarSection { id: string; label: string; items: SidebarItem[] }
@@ -20,11 +23,17 @@ const destinations: NavigationItem[] = [
   {view: 'results', label: 'Runs', description: 'Configure an experiment, run it and compare the results'},
   {view: 'comparisons', label: 'Comparisons', description: 'Saved comparisons of results'},
   {view: 'users', label: 'Users', description: 'Accounts and cluster access', adminOnly: true},
+  {view: 'requests', label: 'Requests', description: 'Messages from users to the administrators', memberLabel: 'Ask an admin', memberDescription: 'Send a message to the administrators'},
+  // Reached from the account menu rather than the sidebar.
   {view: 'administration', label: 'Import and export', description: 'Export and import platform state', adminOnly: true},
 ]
 
+function forRole(item: NavigationItem, admin: boolean): NavigationItem {
+  return admin || !item.memberLabel ? item : {...item, label: item.memberLabel, description: item.memberDescription ?? item.description}
+}
+
 export function navigationTargets(admin: boolean): NavigationItem[] {
-  return destinations.filter(item => admin || !item.adminOnly)
+  return destinations.filter(item => admin || !item.adminOnly).map(item => forRole(item, admin))
 }
 
 export function visibleNavigation(admin: boolean): SidebarSection[] {
@@ -38,14 +47,14 @@ export function visibleNavigation(admin: boolean): SidebarSection[] {
     {id:'deployments',label:'',items:[item('deployments')]},
     {id:'catalog',label:'',items:[item('catalog')]},
     {id:'experiments',label:'Experiments',items:[item('experiments'),item('results'),item('comparisons')]},
-    ...(admin?[{id:'administration',label:'Administration',items:[item('users'),item('administration')]}]:[])
+    admin?{id:'administration',label:'Administration',items:[item('users'),item('requests')]}:{id:'requests',label:'',items:[item('requests')]}
   ]
 }
 
 export interface CurrentSection { group?: string; description: string }
-export function currentSection(view: View): CurrentSection | null {
+export function currentSection(view: View, admin = true): CurrentSection | null {
   const item = destinations.find(item => item.view === view)
-  return item ? {description: item.description} : null
+  return item ? {description: forRole(item, admin).description} : null
 }
 export function isNavigableView(view: string): view is View {
   return destinations.some(item => item.view === view)

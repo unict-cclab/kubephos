@@ -166,6 +166,8 @@ input[type="file"]::file-selector-button:hover { background: var(--primary-hover
 
 .table-empty, .empty-state { padding-block: 48px; }
 .table-empty-copy > strong, .empty-state strong { color: var(--foreground); font-size: 15px; font-weight: 600; }
+.empty-state p { margin: 6px 0 0; }
+.empty-state .button { margin-top: 14px; }
 
 /* Tabs: underlined, so the page has a single filled element per row ------- */
 
@@ -246,6 +248,37 @@ input[type="file"]::file-selector-button:hover { background: var(--primary-hover
   .load-profile-workspace { grid-template-columns: minmax(0, 1fr); }
   .load-profile-live { position: static; }
 }
+
+/* Admin requests ---------------------------------------------------------- */
+
+.request-composer { display: grid; gap: 12px; max-width: 720px; margin-bottom: 40px; padding: 20px; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--card); }
+.request-composer > label { margin: 0; }
+.request-composer textarea { min-height: 120px; resize: vertical; }
+.request-composer-footer { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 16px; }
+.request-composer-hint { flex: 1; min-width: 200px; color: var(--muted-foreground); font-size: 13px; }
+.request-composer-count { color: var(--muted-foreground); font: 500 12px/1 var(--font-mono); }
+.request-section-title { margin: 0 0 12px; font-size: 15px; font-weight: 600; }
+.request-filter-count { margin-left: 4px; color: var(--muted-foreground); font: 500 12px/1 var(--font-mono); }
+
+.request-list { display: grid; gap: 12px; max-width: 880px; margin: 0; padding: 0; list-style: none; }
+.request-card { display: grid; gap: 12px; padding: 16px 20px; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--card); }
+.request-card.is-open { border-left: 3px solid var(--amber); }
+.request-card-head { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 14px; color: var(--muted-foreground); font-size: 13px; }
+.request-card-head time { font: 500 12px/1 var(--font-mono); }
+.request-card-head .status { margin-left: auto; }
+.request-message { margin: 0; color: var(--foreground); font-size: 14px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
+.request-reply { display: grid; gap: 6px; margin: 0; padding: 12px 14px; border-radius: var(--radius-md); background: var(--muted); }
+.request-reply-author { color: var(--muted-foreground); font-size: 12px; font-weight: 600; }
+.request-quoted { max-height: 160px; overflow: auto; padding-left: 12px; border-left: 2px solid var(--border); color: var(--muted-foreground); }
+.request-card-foot { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px 16px; padding-top: 12px; border-top: 1px solid var(--border); color: var(--muted-foreground); font-size: 13px; }
+.request-card-foot > .button { margin-left: auto; }
+.request-empty { max-width: 880px; }
+
+/* Sidebar counter for items that need attention. */
+.app-nav-badge { min-width: 20px; margin-left: auto; padding: 1px 7px; border-radius: var(--radius-full); background: var(--primary); color: var(--primary-foreground); font: 600 11px/18px var(--font-mono); text-align: center; }
+
+/* Text for assistive technology only. */
+.visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 
 /* Command palette --------------------------------------------------------- */
 

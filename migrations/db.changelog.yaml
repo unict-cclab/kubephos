@@ -383,3 +383,19 @@ databaseChangeLog:
             path: changes/054-application-deployments.sql
             relativeToChangelogFile: true
             splitStatements: false
+  - changeSet:
+      id: 055-admin-requests
+      author: kubephos
+      changes:
+        - sqlFile:
+            path: changes/055-admin-requests.sql
+            relativeToChangelogFile: true
+            splitStatements: false
+  - changeSet:
+      id: 056-admin-request-replies
+      author: kubephos
+      changes:
+        - sqlFile:
+            path: changes/056-admin-request-replies.sql
+            relativeToChangelogFile: true
+            splitStatements: false
