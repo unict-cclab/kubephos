@@ -166,18 +166,18 @@ Docker restarts the long-running services after host reboot. Do not run
 
 ## Move instance state to another server
 
-Administrators can use **Administration → Export / Import** to move
+Administrators can use **Administration → Import and export** to move
 infrastructure and reusable configuration to a new KubePhos instance.
 
 1. Wait for queued and running experiments, infrastructure operations and plugin
    imports to finish on the source instance.
-2. Open **Administration → Export**, choose an archive password of at least 12 characters,
+2. Open **Administration → Import and export → Export**, choose an archive password of at least 12 characters,
    confirm it and select **Export state**. Keep the downloaded `.kps` file and its
    password: both are required for import.
 3. Install KubePhos on the new server using the same release. Keep the new
    installation's generated `.env`, credentials and encryption key.
 4. Sign in as an administrator on the destination. Before adding resources, open
-   **Administration → Import**, choose the `.kps` file, enter its archive password and select
+   **Administration → Import and export → Import**, choose the `.kps` file, enter its archive password and select
    **Review archive**. Check the source version, date and resource counts, then
    select **Import state**.
 5. Stop the old instance before managing the transferred infrastructure from the

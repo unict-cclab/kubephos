@@ -156,7 +156,7 @@ replacements. Kubernetes condition timestamps have one-second resolution: zero
 latency means scheduling completed within that same timestamp second. Short-lived
 counter events or resets wholly between scrapes cannot be reconstructed.
 
-**All runs** shows one mean curve per approach and a shaded band of one sample
+**All executions** shows one mean curve per approach and a shaded band of one sample
 standard deviation between runs. Windows align to workload start at Data resolution
 (the coarsest grid when resolutions differ). Each run contributes equally; only
 windows present in every included run are shown. Warmup is excluded, missing windows
@@ -170,7 +170,7 @@ counters and histogram for its application statistics.
 
 ## Cluster maintenance
 
-Administrators can use **Manage nodes** to migrate VMs, scale application pools,
+Administrators can use **Edit** to migrate VMs, scale application pools,
 and add/remove application pools. Master and management pools and their node
 counts remain fixed. Maintenance requires a ready cluster with no queued or
 running experiments; experiment admission is blocked during maintenance.
