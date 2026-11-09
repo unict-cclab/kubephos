@@ -4,14 +4,16 @@
  * Cascade layers make precedence explicit: a later layer always wins over an
  * earlier one, whatever the selector specificity. New styling therefore goes
  * into `components` or `shell` with plain selectors instead of escalating
- * specificity against the inherited stylesheets.
+ * specificity against the inherited stylesheets. A fix belongs in the rule it
+ * corrects: there is no override file layered on top.
  *
  *   tokens      design variables for both themes (theme.css)
  *   legacy      shared stylesheet also served by the Go web UI
  *   console     screen-specific layouts of the React console
- *   components  buttons, fields, cards, tables, tabs, status, dialogs
+ *   components  buttons, fields, tables, property sheets, tabs, status,
+ *               dialogs, editors and notifications
  *   shell       application chrome and page compositions, which may adapt
- *               components to their context (e.g. buttons on the hero)
+ *               components to their context (e.g. links in the sidebar)
  */
 @layer tokens, legacy, console, components, shell;
 
@@ -20,4 +22,3 @@
 @import "./console.css" layer(console);
 @import "./components.css" layer(components);
 @import "./shell.css" layer(shell);
-@import "./refinements.css" layer(shell);

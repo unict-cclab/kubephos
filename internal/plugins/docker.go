@@ -21,8 +21,12 @@ import (
 
 const (
 	commandOutputLimit = 1 << 20
-	pluginOutputLimit  = 16 << 20
+	// Metrics datasets are the largest plugin output, at about 55 bytes per sample:
+	// 64 MiB holds roughly 1.2 million samples, hours of 1 s data across dozens of series.
+	pluginOutputLimit = 64 << 20
 )
+
+var errPluginOutputTooLarge = fmt.Errorf("plugin output exceeds %d MiB; for metrics, choose a coarser data resolution or a shorter run", pluginOutputLimit>>20)
 
 type DockerRunner struct {
 	host              string
@@ -179,7 +183,7 @@ func (d *DockerRunner) Run(ctx context.Context, image, command string, payload [
 	defer cancel()
 	_ = exec.CommandContext(cleanupContext, d.binary, append(d.connectionArguments(), "rm", "-f", name)...).Run()
 	if stdout.exceeded {
-		return nil, messages, errors.New("plugin output exceeds 16 MiB")
+		return nil, messages, errPluginOutputTooLarge
 	}
 	if processErr != nil {
 		return nil, messages, processErr

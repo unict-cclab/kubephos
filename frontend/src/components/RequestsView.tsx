@@ -42,7 +42,7 @@ function RequestInbox({requests, session, changed}: Props) {
     }
   }
   const action = (item: AdminRequest) => item.status === 'open'
-    ? <button type="button" className="button primary compact" onClick={() => setResolving(item)}>Resolve</button>
+    ? <button type="button" className="button secondary compact" onClick={() => setResolving(item)}>Resolve</button>
     : <button type="button" className="button secondary compact" disabled={pending === item.id} onClick={() => void reopen(item)}>{pending === item.id ? 'Reopening…' : 'Reopen'}</button>
   return <>
     <ResourceListHeading title="Requests" />

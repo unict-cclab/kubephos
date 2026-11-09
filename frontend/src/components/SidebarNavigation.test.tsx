@@ -27,3 +27,15 @@ it('keeps grouped destinations collapsed until expanded and gives direct destina
  expect(screen.queryByRole('button',{name:'VM templates'})).not.toBeInTheDocument()
  expect(screen.getByRole('button',{name:'Catalog'})).toHaveClass('app-nav-section-link')
 })
+
+it('keeps only the group of the current page open after navigation',()=>{
+ const navigate=vi.fn()
+ const {rerender}=render(<SidebarNavigation sections={visibleNavigation(true)} view="kubernetes" navigate={navigate}/>)
+ fireEvent.click(screen.getByRole('button',{name:'Experiments'}))
+ expect(screen.getByRole('button',{name:'Infrastructure'})).toHaveAttribute('aria-expanded','true')
+ expect(screen.getByRole('button',{name:'Experiments'})).toHaveAttribute('aria-expanded','true')
+ rerender(<SidebarNavigation sections={visibleNavigation(true)} view="users" navigate={navigate}/>)
+ expect(screen.getByRole('button',{name:'Infrastructure'})).toHaveAttribute('aria-expanded','false')
+ expect(screen.getByRole('button',{name:'Experiments'})).toHaveAttribute('aria-expanded','false')
+ expect(screen.getByRole('button',{name:'Administration'})).toHaveAttribute('aria-expanded','true')
+})

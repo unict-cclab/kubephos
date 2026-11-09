@@ -103,6 +103,7 @@ func NewServer(store *storage.Store, registry *plugins.Registry, artifactStore *
 	router.HandleFunc("POST /api/v1/application-deployments/{id}/retry", server.retryApplicationDeployment)
 	router.HandleFunc("GET /api/v1/kubernetes-clusters/{id}/istio-proxy-defaults", server.getIstioProxyDefaults)
 	router.HandleFunc("POST /api/v1/administration/state/export", server.exportState)
+	router.HandleFunc("GET /api/v1/administration/state/readiness", server.stateImportReadiness)
 	router.HandleFunc("POST /api/v1/administration/state/inspect", server.inspectState)
 	router.HandleFunc("POST /api/v1/administration/state/import", server.importState)
 	router.HandleFunc("GET /api/v1/plugins", server.listPlugins)

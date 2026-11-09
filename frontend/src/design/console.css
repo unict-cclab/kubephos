@@ -182,7 +182,7 @@
 
 @media screen {
   .page-content.has-editor-page > :not(.editor-page) { display: none; }
-  .editor-page { width: 100%; max-height: none; overflow: visible; min-width: 0; animation: editor-enter .15s ease-out; }
+  .editor-page { width: 100%; max-height: none; overflow: visible; min-width: 0; }
   .editor-page-header { display: grid; gap: 16px; margin-bottom: 32px; padding-bottom: 24px; border-bottom: 1px solid var(--line); }
   .editor-page-header h2 { margin: 0; font-size: clamp(24px, 2.3vw, 32px); font-weight: var(--font-weight-title); letter-spacing: -.04em; line-height: 1.25; outline: none; }
   .editor-back { display: inline-flex; justify-self: start; align-items: center; gap: 8px; border: 0; background: transparent; color: var(--muted-foreground); padding: 4px 0; cursor: pointer; font-size: 13px; font-weight: 600; }
@@ -215,7 +215,6 @@
   .editor-page-body .pipeline-stage { padding: 20px; background: var(--surface); border-color: var(--line); }
   .editor-page-body .pipeline-stage-head { padding-bottom: 16px; margin-bottom: 16px; }
   .editor-page-body .pipeline-stage-fields { gap: 20px 24px; }
-  @keyframes editor-enter { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
 }
 @media screen and (max-width: 1100px) {
   .editor-page-layout.has-sections { grid-template-columns: minmax(0, 1fr); gap: 20px; }
@@ -232,7 +231,6 @@
   .modal-content > .modal-actions { padding: 16px 20px; }
   .editor-page .modal-actions { flex-wrap: wrap; }
 }
-@media (prefers-reduced-motion: reduce) { .editor-page { animation: none; } }
 
 @media screen {
   button, input, select, textarea, summary { font-family: var(--font-sans); }
@@ -1236,11 +1234,13 @@
   .state-transfer-panel .button { justify-self: start; }
   .state-transfer-review { margin-top: 32px; display: grid; gap: 20px; }
   .state-transfer-review h4 { margin: 0; font-weight: 600; }
-  .state-transfer-review table { width: 100%; border-collapse: collapse; }
-  .state-transfer-review :is(th, td) { border: 1px solid var(--line); padding: 10px 14px; text-align: left; }
-  .state-transfer-review th { font-weight: 600; width: 50%; }
-  .state-transfer-review td { font-weight: 400; overflow-wrap: anywhere; }
+  .state-transfer-review table { width: 100%; }
+  .state-transfer-review td { overflow-wrap: anywhere; }
   .state-transfer-success { margin: 0 0 24px; }
+  /* Explains, before an archive is chosen, why this instance cannot accept an import. */
+  .state-transfer-notice { display: grid; gap: 4px; margin: 0 0 24px; padding: 14px 16px; border: 1px solid color-mix(in srgb, var(--amber) 30%, transparent); border-radius: var(--radius-md); background: var(--amber-background); }
+  .state-transfer-notice strong { color: var(--foreground); font-size: 14px; font-weight: 600; }
+  .state-transfer-notice p { margin: 0; color: var(--muted-foreground); font-size: 14px; line-height: 1.5; }
 }
 
 /* Adapt resource lists to their available content width, including the sidebar. */

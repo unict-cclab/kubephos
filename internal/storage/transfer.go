@@ -223,6 +223,35 @@ func transferFresh(ctx context.Context, tx pgx.Tx) error {
 	}
 	return nil
 }
+
+// transferTarget checks that this instance may receive an import: always idle,
+// and empty unless the administrator confirmed that its state is replaced.
+func transferTarget(ctx context.Context, tx pgx.Tx, replace bool) error {
+	if replace {
+		return transferIdle(ctx, tx)
+	}
+	return transferFresh(ctx, tx)
+}
+
+// transferReplace clears the state an import restores, so an archive can
+// replace a populated instance. Experiments and saved comparisons depend on the
+// replaced configurations and go with them; users, sessions and the audit
+// trail stay. Stored objects are queued by exact key: imported objects share
+// their operation folders, so whole folders must not be deleted.
+func transferReplace(ctx context.Context, tx pgx.Tx) error {
+	if _, err := tx.Exec(ctx, `INSERT INTO artifact_deletions(storage_key) SELECT storage_key FROM artifacts UNION SELECT storage_key FROM experiment_figures ON CONFLICT DO NOTHING`); err != nil {
+		return err
+	}
+	quoted := []string{}
+	for _, table := range append(append([]string{}, transferTables...), "experiments", "plugin_import_jobs", "result_comparisons") {
+		if table != "audit_events" {
+			quoted = append(quoted, pgx.Identifier{table}.Sanitize())
+		}
+	}
+	_, err := tx.Exec(ctx, `TRUNCATE `+strings.Join(quoted, ",")+` CASCADE`)
+	return err
+}
+
 func validateState(state *transfer.State) error {
 	if state.Format != 1 || len(state.Tables) != len(transferTables) {
 		return errors.New("invalid state archive tables")
@@ -251,7 +280,7 @@ func validateState(state *transfer.State) error {
 	}
 	return nil
 }
-func (s *Store) CheckStateImport(ctx context.Context, state *transfer.State) error {
+func (s *Store) CheckStateImport(ctx context.Context, state *transfer.State, replace bool) error {
 	if err := validateState(state); err != nil {
 		return err
 	}
@@ -267,13 +296,41 @@ func (s *Store) CheckStateImport(ctx context.Context, state *transfer.State) err
 	if schema != state.Schema {
 		return ErrTransferSchema
 	}
-	return transferFresh(ctx, tx)
+	return transferTarget(ctx, tx, replace)
+}
+
+// InstanceContents counts what an import would replace on this instance.
+type InstanceContents struct {
+	Connections    int `json:"connections"`
+	Credentials    int `json:"credentials"`
+	Resources      int `json:"resources"`
+	Configurations int `json:"configurations"`
+	Experiments    int `json:"experiments"`
+}
+
+// StateImportReadiness reports whether this instance could accept an import
+// now, before an archive is chosen: nil, ErrTransferBusy or ErrTransferTarget,
+// with the contents an import would replace when the instance holds data.
+func (s *Store) StateImportReadiness(ctx context.Context) (InstanceContents, error) {
+	var contents InstanceContents
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return contents, err
+	}
+	defer tx.Rollback(ctx)
+	if err = transferFresh(ctx, tx); !errors.Is(err, ErrTransferTarget) {
+		return contents, err
+	}
+	if scan := tx.QueryRow(ctx, `SELECT (SELECT count(*) FROM provider_connections),(SELECT count(*) FROM credentials),(SELECT count(*) FROM managed_resources),(SELECT count(*) FROM experiment_configurations),(SELECT count(*) FROM experiments)`).Scan(&contents.Connections, &contents.Credentials, &contents.Resources, &contents.Configurations, &contents.Experiments); scan != nil {
+		return contents, scan
+	}
+	return contents, err
 }
 
 // ImportState commits metadata only after all objects are durable. Pending
 // object cleanup is registered outside the transaction, so a process crash
 // cannot leave untracked secret files behind. Success cancels cleanup atomically.
-func (s *Store) ImportState(ctx context.Context, state *transfer.State, ownerID string, cleanupKeys []string, writeObjects func() error) (err error) {
+func (s *Store) ImportState(ctx context.Context, state *transfer.State, ownerID string, cleanupKeys []string, replace bool, writeObjects func() error) (err error) {
 	if err = validateState(state); err != nil {
 		return err
 	}
@@ -313,11 +370,16 @@ func (s *Store) ImportState(ctx context.Context, state *transfer.State, ownerID 
 	if schema != state.Schema {
 		return ErrTransferSchema
 	}
-	if err = transferFresh(ctx, tx); err != nil {
+	if err = transferTarget(ctx, tx, replace); err != nil {
 		return err
 	}
 	if err = writeObjects(); err != nil {
 		return err
+	}
+	if replace {
+		if err = transferReplace(ctx, tx); err != nil {
+			return err
+		}
 	}
 	for _, table := range []string{"catalog_application_previews", "catalog_models", "catalog_applications", "workspaces"} {
 		if _, err = tx.Exec(ctx, `DELETE FROM `+pgx.Identifier{table}.Sanitize()); err != nil {

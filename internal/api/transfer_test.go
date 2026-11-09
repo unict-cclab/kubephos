@@ -52,13 +52,17 @@ func transferCall(t *testing.T, handler http.HandlerFunc, path string, body io.R
 	handler(w, r)
 	return w
 }
-func importCall(t *testing.T, handler http.HandlerFunc, archive []byte, password string) *httptest.ResponseRecorder {
+// importCall uploads an archive; fields adds extra form values as name, value pairs.
+func importCall(t *testing.T, handler http.HandlerFunc, archive []byte, password string, fields ...string) *httptest.ResponseRecorder {
 	t.Helper()
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
 	file, _ := writer.CreateFormFile("file", "state.kps")
 	_, _ = file.Write(archive)
 	_ = writer.WriteField("password", password)
+	for i := 0; i+1 < len(fields); i += 2 {
+		_ = writer.WriteField(fields[i], fields[i+1])
+	}
 	_ = writer.Close()
 	return transferCall(t, handler, "/api/v1/administration/state/import", &body, writer.FormDataContentType())
 }
@@ -293,6 +297,33 @@ func TestStateTransferAcrossVaultsAndIsolatedInstances(t *testing.T) {
 	if count != 0 {
 		t.Fatal("invalid archive left partial metadata")
 	}
+	// Re-importing into the populated instance the archive came from requires an
+	// explicit replace, which removes data created after the export and the
+	// experiments that depended on it, while users and new objects survive.
+	exec(`INSERT INTO users(id,username,role) VALUES ('destination-admin','importer','admin')`)
+	exec(`INSERT INTO experiment_configurations(id,workspace_id,cluster_resource_id,name,application_ref,application_digest,definition,validation,owner_user_id) VALUES ('created-later','ws_default','cluster','later','app:test','sha256:test','{}','{}','source-admin')`)
+	if refused := importCall(t, source.importState, archive, password); refused.Code != 409 {
+		t.Fatalf("populated instance imported without replace: %d", refused.Code)
+	}
+	if replaced := importCall(t, source.importState, archive, password, "replace", "true"); replaced.Code != 200 {
+		t.Fatalf("replace import: %d %s", replaced.Code, replaced.Body.String())
+	}
+	var configurations, experiments, users int
+	var oldObjectQueued bool
+	e = pool.QueryRow(ctx, `SELECT (SELECT count(*) FROM experiment_configurations),(SELECT count(*) FROM experiments),(SELECT count(*) FROM users),EXISTS(SELECT 1 FROM artifact_deletions WHERE storage_key=$1)`, stored.Key).Scan(&configurations, &experiments, &users, &oldObjectQueued)
+	if e != nil || configurations != len(state.Tables["experiment_configurations"]) || experiments != 0 || users != 3 || !oldObjectQueued {
+		t.Fatal("replace did not restore exactly the archive state", e, configurations, experiments, users, oldObjectQueued)
+	}
+	if e = source.store.ProcessArtifactDeletions(ctx, source.artifacts.Delete); e != nil {
+		t.Fatal(e)
+	}
+	restored, e := source.store.GetArtifact(ctx, artifactID)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if payload, e := source.readArtifactPayload(ctx, restored); e != nil || !bytes.Equal(payload, plain) {
+		t.Fatal("replacing state removed the imported object", e)
+	}
 	// Export is unavailable while source work is queued.
 	exec(`UPDATE operations SET status='queued' WHERE id=$1`, op)
 	busy := transferCall(t, source.exportState, "/api/v1/administration/state/export", strings.NewReader(`{"password":"`+password+`"}`), "application/json")
@@ -329,6 +360,40 @@ func TestStateTransferRequiresAdministratorAndCSRF(t *testing.T) {
 		if w.Code != test.status || called != (test.status == 204) {
 			t.Fatalf("authorization: want %d got %d", test.status, w.Code)
 		}
+	}
+}
+
+func TestStateImportReadinessExplainsBlockedImports(t *testing.T) {
+	server, pool := transferServer(t, "")
+	ctx := context.Background()
+	readiness := func() map[string]any {
+		t.Helper()
+		r := httptest.NewRequest(http.MethodGet, "/api/v1/administration/state/readiness", nil)
+		w := httptest.NewRecorder()
+		server.stateImportReadiness(w, r)
+		var value map[string]any
+		if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &value) != nil {
+			t.Fatalf("readiness: status %d body %s", w.Code, w.Body.String())
+		}
+		return value
+	}
+	if value := readiness(); value["ready"] != true {
+		t.Fatal("fresh instance not ready for import", value)
+	}
+	op := "op_readiness"
+	if _, err := pool.Exec(ctx, `INSERT INTO operations(id,workspace_id,plugin_id,title,status,spec,plan,validation,plan_hash) VALUES ($1,'ws_default','test','Infrastructure','queued','{}','{}','{}',repeat('a',64))`, op); err != nil {
+		t.Fatal(err)
+	}
+	if value := readiness(); value["ready"] != false || value["reason"] != "busy" {
+		t.Fatal("running work not reported", value)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE operations SET status='succeeded' WHERE id=$1`, op); err != nil {
+		t.Fatal(err)
+	}
+	value := readiness()
+	contents, _ := value["contents"].(map[string]any)
+	if value["ready"] != false || value["reason"] != "not-empty" || contents == nil || contents["experiments"] != float64(0) {
+		t.Fatal("existing data not reported", value)
 	}
 }
 

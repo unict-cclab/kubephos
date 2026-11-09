@@ -1,3 +1,42 @@
+# Frontend review — 9 November 2026
+
+- Resource lists with many columns no longer clip their row actions at laptop
+  widths: wide lists use a tighter column gutter and scroll inside their card
+  when they still exceed it.
+- The sidebar keeps only the group of the current page open after navigation,
+  so it no longer outgrows the viewport; its scrollbar follows the theme.
+- On phones, setup steps keep their Done/Next state on the step row; only the
+  current action wraps below the description.
+- Open requests drop the colored edge on their rounded card and use a secondary
+  Resolve action, keeping one solid ink button per view.
+- Removed stylesheet rules that later layers fully overrode (inverted account
+  dock, mono version and dates, unused sidebar groups and menu identity) and
+  merged duplicated declarations, so each component is styled in one place.
+- `refinements.css` is gone: its rules now live with the components and shell
+  rules they corrected. Field states use `:where()` selectors with rising
+  specificity (base, hover, invalid, focus) instead of a later override layer.
+- Import states before an archive is chosen what it would replace, using the
+  new `GET /api/v1/administration/state/readiness`. On an instance with data,
+  importing asks to overwrite everything; on confirmation the import sends
+  `replace=true` and, in the same transaction, clears the transferred state,
+  experiments and saved comparisons before restoring the archive. Users,
+  sessions and the audit log are kept; old stored objects are queued for
+  deletion by exact key, so newly imported objects are never removed. Running
+  work still blocks the import. Import never merges.
+- Empty lists show only their empty state (and filters); dates use the
+  interface language with a 24-hour clock; the sorted column reads in full ink;
+  disabled fields and file pickers look disabled.
+- Usability: clicking a list row opens its details (row controls excepted);
+  configuration types describe themselves and show why Comparison is
+  unavailable; phone list toolbars keep search, count and display on one row.
+- Validation: frontend tests, typecheck, production build, asset budget and
+  both-theme contrast checks passed; Go vet and Go tests passed against a
+  disposable PostgreSQL, except three plugin tests that need `jq`/`python3`,
+  absent from the test image. Overview, lists, details, Import and the command
+  palette were checked in the browser at desktop and phone widths, in both
+  themes, against the development stack; the readiness response was stubbed
+  there because the running backend predates it. No resources were changed.
+
 # Frontend review — 6 November 2026
 
 - Integrated the visual foundation from `feature/frontend-refresh` at `92423b6`,

@@ -52,7 +52,7 @@ export function ModelCatalogContent({session, isAdmin, changed, catalog}: ModelC
   return <>
     {isAdmin && <ResourceListAction><ResourceAction action="create" label="Add model" onClick={() => {setEditing(undefined); setOpen(true)}} /></ResourceListAction>}
     {error && <ErrorFeedback message={error} />}
-    {loading ? <p role="status">Loading models…</p> : <ResourceListTable items={models.map(model => ({...model, createdAt: model.createdAt ?? '', updatedAt: model.updatedAt ?? ''}))} label="AI models" editable searchText={model => `${model.id} ${model.quantization} ${model.origin}`} columns={[
+    {loading ? <p role="status">Loading models…</p> : <ResourceListTable open={model => detail.open('model', model.id)} items={models.map(model => ({...model, createdAt: model.createdAt ?? '', updatedAt: model.updatedAt ?? ''}))} label="AI models" editable searchText={model => `${model.id} ${model.quantization} ${model.origin}`} columns={[
       {label: 'Name', render: model => <h3>{model.id}</h3>},
       {label: 'Quantization', render: model => model.quantization || '—'},
       {label: 'Status', render: model => model.enabled ? 'Enabled' : 'Archived'}

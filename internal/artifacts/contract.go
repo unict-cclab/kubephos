@@ -15,7 +15,9 @@ import (
 	"kubephos.dev/kubephos/internal/domain"
 )
 
-const MaxArtifactBytes = 16 * 1024 * 1024
+// MaxArtifactBytes matches the plugin output limit: metrics datasets from long,
+// fine-grained runs are the largest artifacts.
+const MaxArtifactBytes = 64 * 1024 * 1024
 
 var artifactIdentity = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9.-]{0,127}$`)
 var artifactVersion = regexp.MustCompile(`^v[0-9]+(?:alpha[0-9]+|beta[0-9]+)?$`)

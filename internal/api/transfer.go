@@ -147,34 +147,37 @@ func (s *Server) exportState(response http.ResponseWriter, request *http.Request
 	response.Header().Set("X-Content-Type-Options", "nosniff")
 	_, _ = response.Write(value)
 }
-func (s *Server) readStateArchive(response http.ResponseWriter, request *http.Request) (*transfer.State, bool) {
+// readStateArchive decrypts and checks an uploaded archive. The `replace`
+// field confirms that a populated instance may have its state replaced.
+func (s *Server) readStateArchive(response http.ResponseWriter, request *http.Request) (*transfer.State, bool, bool) {
 	request.Body = http.MaxBytesReader(response, request.Body, transfer.MaxBytes+(1<<20))
 	if err := request.ParseMultipartForm(1 << 20); err != nil {
 		writeError(response, 400, "invalid_archive", "Choose an encrypted state archive smaller than 128 MiB.")
-		return nil, false
+		return nil, false, false
 	}
 	defer request.MultipartForm.RemoveAll()
 	file, _, err := request.FormFile("file")
 	if err != nil {
 		writeError(response, 400, "invalid_archive", "Choose a state archive.")
-		return nil, false
+		return nil, false, false
 	}
 	defer file.Close()
 	value, err := io.ReadAll(io.LimitReader(file, transfer.MaxBytes+1))
 	if err != nil || len(value) > transfer.MaxBytes {
 		writeError(response, 413, "archive_too_large", "State archive exceeds 128 MiB.")
-		return nil, false
+		return nil, false, false
 	}
 	state, err := transfer.Decrypt(value, request.FormValue("password"))
 	if err != nil {
 		transferError(response, err)
-		return nil, false
+		return nil, false, false
 	}
-	if err = s.store.CheckStateImport(request.Context(), state); err != nil {
+	replace := request.FormValue("replace") == "true"
+	if err = s.store.CheckStateImport(request.Context(), state, replace); err != nil {
 		transferError(response, err)
-		return nil, false
+		return nil, false, false
 	}
-	return state, true
+	return state, replace, true
 }
 func stateSummary(state *transfer.State) map[string]any {
 	counts := map[string]int{}
@@ -188,19 +191,36 @@ func (s *Server) inspectState(response http.ResponseWriter, request *http.Reques
 		return
 	}
 	defer s.transferMu.Unlock()
-	state, ok := s.readStateArchive(response, request)
+	state, _, ok := s.readStateArchive(response, request)
 	if !ok {
 		return
 	}
 	response.Header().Set("Cache-Control", "no-store")
 	writeJSON(response, 200, stateSummary(state))
 }
+
+// stateImportReadiness lets the interface explain before an archive is chosen
+// whether an import would replace existing data, or must wait for running work.
+func (s *Server) stateImportReadiness(response http.ResponseWriter, request *http.Request) {
+	response.Header().Set("Cache-Control", "no-store")
+	contents, err := s.store.StateImportReadiness(request.Context())
+	switch {
+	case err == nil:
+		writeJSON(response, 200, map[string]any{"ready": true})
+	case errors.Is(err, storage.ErrTransferTarget):
+		writeJSON(response, 200, map[string]any{"ready": false, "reason": "not-empty", "contents": contents})
+	case errors.Is(err, storage.ErrTransferBusy):
+		writeJSON(response, 200, map[string]any{"ready": false, "reason": "busy"})
+	default:
+		transferError(response, err)
+	}
+}
 func (s *Server) importState(response http.ResponseWriter, request *http.Request) {
 	if !s.beginStateTransfer(response) {
 		return
 	}
 	defer s.transferMu.Unlock()
-	state, ok := s.readStateArchive(response, request)
+	state, replace, ok := s.readStateArchive(response, request)
 	if !ok {
 		return
 	}
@@ -303,7 +323,7 @@ func (s *Server) importState(response http.ResponseWriter, request *http.Request
 	}
 	sort.Strings(keys)
 	user := request.Context().Value(authenticatedUserKey{}).(domain.User)
-	err := s.store.ImportState(ctx, state, user.ID, keys, func() error {
+	err := s.store.ImportState(ctx, state, user.ID, keys, replace, func() error {
 		for _, object := range objects {
 			if _, err := s.artifacts.Put(ctx, object.key, object.name, object.media, object.value); err != nil {
 				return err

@@ -10,8 +10,10 @@ function Badge({count}: {count?: number}) {
 export function SidebarNavigation({sections, view, navigate, badges = {}}: {sections: SidebarSection[]; view: View; navigate: (view: View,hash?:string) => void; badges?: Partial<Record<View, number>>}) {
  const [hash,setHash]=useState(window.location.hash.replace(/^#/,''))
  useEffect(()=>{const update=()=>setHash(window.location.hash.replace(/^#/,''));window.addEventListener('hashchange',update);return()=>window.removeEventListener('hashchange',update)},[])
- const [expanded,setExpanded]=useState<Record<string,boolean>>(()=>Object.fromEntries(sections.map(section=>[section.id,section.items.some(item=>item.view===view)])))
- useEffect(()=>{const current=sections.find(section=>section.items.some(item=>item.view===view));if(current)setExpanded(previous=>({...previous,[current.id]:true}))},[view])
+ // Only the group holding the current page stays open after navigation, so the sidebar never outgrows the viewport.
+ const expandedFor=(current:View)=>Object.fromEntries(sections.map(section=>[section.id,section.items.some(item=>item.view===current)]))
+ const [expanded,setExpanded]=useState<Record<string,boolean>>(()=>expandedFor(view))
+ useEffect(()=>setExpanded(expandedFor(view)),[view])
  return <nav className="app-nav app-nav-direct" aria-label="Main navigation">{sections.map(section=>{
   const grouped=Boolean(section.label)
   const current=section.items.some(item=>item.view===view)

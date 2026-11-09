@@ -1,5 +1,5 @@
 import {fireEvent, render, screen, within} from '@testing-library/react'
-import {describe, expect, it} from 'vitest'
+import {describe, expect, it, vi} from 'vitest'
 import {ResourceListTable} from './ResourceListTable'
 
 describe('resource list ordering', () => {
@@ -33,7 +33,7 @@ it('searches resources and provides a way to clear an empty search', () => {
   expect(screen.getByText('Baseline')).toBeInTheDocument()
   expect(screen.queryByText('Autoscaler')).not.toBeInTheDocument()
   fireEvent.change(search, {target: {value: 'missing'}})
-  expect(screen.getByText('No results match your search.')).toBeInTheDocument()
+  expect(screen.getByText('No results match your search.').closest('td')).toHaveAttribute('colspan', '5')
   fireEvent.click(screen.getByRole('button', {name: 'Clear search'}))
   expect(screen.getByText('Autoscaler')).toBeInTheDocument()
 })
@@ -50,7 +50,7 @@ it('keeps creator and last editor separate and searchable', () => {
 })
 
 it('opens display options without a text button and closes them with Escape or an outside click', () => {
-  render(<ResourceListTable items={[]} label="Resources" columns={[{label: 'Name', render: () => null}]} actions={() => null} />)
+  render(<ResourceListTable items={[{id: 'a', createdAt: '2026-09-01T00:00:00Z', updatedAt: '2026-09-01T00:00:00Z'}]} label="Resources" columns={[{label: 'Name', render: () => null}]} actions={() => null} />)
   const toggle = screen.getByLabelText('Table display')
   const menu = toggle.closest('details')!
   expect(screen.queryByText('Columns')).not.toBeInTheDocument()
@@ -73,7 +73,7 @@ it('sorts through display settings when table headers are not shown on a small s
 })
 
 it('selects every available column by default', () => {
-  render(<ResourceListTable items={[]} label="Resources" editable columns={[{label: 'Name', render: () => null}, {label: 'Status', render: () => null}]} actions={() => null} />)
+  render(<ResourceListTable items={[{id: 'a', createdAt: '2026-09-01T00:00:00Z', updatedAt: '2026-09-01T00:00:00Z'}]} label="Resources" editable columns={[{label: 'Name', render: () => null}, {label: 'Status', render: () => null}]} actions={() => null} />)
   fireEvent.click(screen.getByLabelText('Table display'))
   screen.getAllByRole('checkbox').forEach(checkbox => expect(checkbox).toBeChecked())
   expect(screen.getByRole('columnheader', {name: 'Created'})).toBeInTheDocument()
@@ -90,4 +90,22 @@ it('keeps filters available on empty lists and distinguishes an empty list from 
   fireEvent.change(screen.getByRole('searchbox'), {target: {value: 'missing'}})
   expect(screen.getByText('No results match your search.')).toBeInTheDocument()
   expect(screen.queryByText('No resources yet')).not.toBeInTheDocument()
+})
+
+it('shows an empty list as a single empty state without search, counts or column headers', () => {
+  render(<ResourceListTable items={[]} label="Resources" columns={[{label: 'Name', render: () => null}]} actions={() => null} searchText={() => ''} empty={<strong>No resources yet</strong>} />)
+  expect(screen.getByText('No resources yet')).toBeInTheDocument()
+  expect(screen.queryByRole('table')).not.toBeInTheDocument()
+  expect(screen.queryByRole('searchbox')).not.toBeInTheDocument()
+  expect(screen.queryByLabelText('Table display')).not.toBeInTheDocument()
+})
+
+it('opens a row from anywhere on it, but not from its own actions', () => {
+  const open = vi.fn()
+  const items = [{id: 'a', name: 'Baseline', createdAt: '', updatedAt: ''}]
+  render(<ResourceListTable items={items} label="Resources" open={open} columns={[{label: 'Name', render: item => item.name}]} actions={() => <button type="button">Delete</button>} />)
+  fireEvent.click(screen.getByRole('button', {name: 'Delete'}))
+  expect(open).not.toHaveBeenCalled()
+  fireEvent.click(screen.getByText('Baseline'))
+  expect(open).toHaveBeenCalledWith(items[0])
 })
