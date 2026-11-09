@@ -8,12 +8,11 @@ interface Props {
   version?: string
   refreshing: boolean
   refresh: () => void
-  openBackup: () => void
   signOut: () => void
 }
 
 // Disclosure anchored to the account bar: identity, appearance and session actions.
-export function AccountMenu({username, isAdmin, version, refreshing, refresh, openBackup, signOut}: Props) {
+export function AccountMenu({username, isAdmin, version, refreshing, refresh, signOut}: Props) {
   const [open, setOpen] = useState(false)
   const root = useRef<HTMLDivElement>(null)
   const trigger = useRef<HTMLButtonElement>(null)
@@ -35,7 +34,6 @@ export function AccountMenu({username, isAdmin, version, refreshing, refresh, op
     {open && <div id="account-menu-panel" className="account-menu-panel" role="group" aria-label="Account">
       <button type="button" className="account-menu-item" aria-pressed={dark} onClick={toggle}><ActionIcon name="moon" /><span>Dark mode</span><span className="account-menu-switch" aria-hidden="true" /></button>
       <button type="button" className="account-menu-item" disabled={refreshing} onClick={run(refresh)}><ActionIcon name="refresh" /><span>{refreshing ? 'Refreshing…' : 'Refresh data'}</span></button>
-      {isAdmin && <button type="button" className="account-menu-item" onClick={run(openBackup)}><ActionIcon name="archive" /><span>Import and export</span></button>}
       <button type="button" className="account-menu-item account-menu-sign-out" onClick={run(signOut)}><ActionIcon name="logout" /><span>Sign out</span></button>
     </div>}
     <p className="app-version" aria-label="KubePhos version"><span>Version</span><strong>{version || '—'}</strong></p>

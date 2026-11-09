@@ -66,6 +66,6 @@ func Catalog() []Target {
 		{Project: "ghcr-proxy", Upstream: "https://ghcr.io", Type: "github-ghcr", Source: "ghcr.io", Repository: "chaos-mesh/chaos-daemon", Reference: "v2.8.3"},
 		{Project: "gcr-proxy", Upstream: "https://gcr.io", Type: "docker-registry", Source: "gcr.io", Repository: "google-containers/pause", Reference: "3.2"},
 		{Project: "quay-proxy", Upstream: "https://quay.io", Type: "docker-registry", Source: "quay.io", Repository: "prometheus/busybox", Reference: "latest"},
-		{Project: "istio-proxy", Upstream: "https://registry.istio.io", Type: "docker-registry", Source: "registry.istio.io", Repository: "release/pilot", Reference: "1.30.0", StaticRepositories: []string{"release/pilot", "release/proxyv2"}},
+		{Project: "istio-proxy", Upstream: "https://registry.istio.io", Type: "docker-registry", Source: "registry.istio.io", Repository: "release/pilot", Reference: "1.30.0", StaticRepositories: []string{"release/pilot", "release/proxyv2", "release/install-cni", "release/ztunnel"}},
 	}
 }

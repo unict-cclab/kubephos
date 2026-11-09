@@ -32,6 +32,16 @@ changes future executions; existing experiments keep their saved settings.
 per-service overrides. Native TCP applications retain their default opt-out.
 Cilium multi cluster groups do not use Istio.
 
+**Application → Istio → Data plane → Ambient** enrolls the whole application
+namespace in Istio ambient mode instead of injecting sidecars: ztunnel carries the
+traffic and one waypoint per namespace reports request metrics, so request rate and
+P95 statistics stay available. Per-service injection and proxy resources do not apply.
+The first ambient run on a cluster installs istio-cni, ztunnel and the ambient
+control plane profile, which then stay installed; sidecar experiments are unaffected.
+Clusters must pull `registry.istio.io/release/install-cni` and `ztunnel` through the
+managed Harbor: Harbors created before ambient support need
+`kubephos release harbor-profile-sync <harbor-resource-id>` once.
+
 Monitoring follows Load profile. Network conditions can remain static
 or use phases with individual latency, jitter, bandwidth, packet loss and directed
 link overrides. Phase durations must sum to the load profile duration. A phase

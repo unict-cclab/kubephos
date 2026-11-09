@@ -2,6 +2,7 @@ package applicationdeployer
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -96,7 +97,7 @@ func configureIstioInjection(content string, workloads []workloadTarget, enabled
 }
 
 func namespaceIstioInjection(input stepInput, cluster clusterConnection, endpoints []serviceEndpoint) string {
-	if cluster.Spec.Networking == "cilium" {
+	if cluster.Spec.Networking == "cilium" || input.IstioDataPlane == istioAmbient {
 		return "disabled"
 	}
 	enabled := !nativeTCPEndpoints(endpoints)
@@ -110,4 +111,40 @@ func namespaceIstioInjection(input stepInput, cluster clusterConnection, endpoin
 		return "enabled"
 	}
 	return "disabled"
+}
+
+// Ambient mode enrolls the whole namespace in ztunnel and sends its services
+// through a single waypoint, which reports the L7 metrics sidecars would report.
+const (
+	istioAmbient    = "ambient"
+	ambientWaypoint = "waypoint"
+)
+
+func validateIstioDataPlane(spec Spec) error {
+	switch spec.IstioDataPlane {
+	case "", "sidecar":
+		return nil
+	case istioAmbient:
+		if (spec.IstioInjection != nil && *spec.IstioInjection) || len(spec.IstioInjectionOverrides) > 0 || len(spec.IstioProxyResources) > 0 {
+			return errors.New("Istio ambient mode applies to the whole namespace: sidecar injection, service overrides and proxy resources must be left empty.")
+		}
+		return nil
+	default:
+		return errors.New("Istio data plane must be sidecar or ambient.")
+	}
+}
+
+func ambientNamespaceLabels(labels map[string]string) {
+	labels["istio-injection"] = "disabled"
+	labels["istio.io/dataplane-mode"] = istioAmbient
+	labels["istio.io/use-waypoint"] = ambientWaypoint
+}
+
+func waypointManifest(namespace, marker string) []byte {
+	value, _ := json.Marshal(map[string]any{
+		"apiVersion": "gateway.networking.k8s.io/v1", "kind": "Gateway",
+		"metadata": map[string]any{"name": ambientWaypoint, "namespace": namespace, "annotations": map[string]string{ownershipKey: marker}, "labels": map[string]string{"app.kubernetes.io/managed-by": "kubephos", "istio.io/waypoint-for": "service"}},
+		"spec":     map[string]any{"gatewayClassName": "istio-waypoint", "listeners": []map[string]any{{"name": "mesh", "port": 15008, "protocol": "HBONE"}}},
+	})
+	return value
 }

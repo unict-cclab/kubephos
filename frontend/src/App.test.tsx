@@ -1,5 +1,5 @@
 import {useState} from 'react'
-import {fireEvent, render, screen, waitFor, within} from '@testing-library/react'
+import {fireEvent, render, screen, waitFor} from '@testing-library/react'
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest'
 
 vi.mock('./api', () => ({
@@ -56,8 +56,8 @@ describe('application navigation', () => {
 
   it('opens the administrator state transfer section', async () => {
     render(<App />)
-    fireEvent.click(await screen.findByRole('button', {name: 'Account settings'}))
-    fireEvent.click(within(screen.getByRole('group',{name:'Account'})).getByRole('button', {name: 'Import and export'}))
+    fireEvent.click(await screen.findByRole('button', {name: 'Administration'}))
+    fireEvent.click(screen.getByRole('button', {name: 'Import and export'}))
     await waitFor(() => expect(screen.getByText('Current view: administration')).toBeInTheDocument())
   })
 

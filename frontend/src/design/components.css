@@ -274,6 +274,16 @@ input[type="file"]::file-selector-button:hover { background: var(--primary-hover
 .request-card-foot > .button { margin-left: auto; }
 .request-empty { max-width: 880px; }
 
+/* Service override picker ------------------------------------------------- */
+
+.service-override-picker label { margin-bottom: 12px; }
+.service-override-options { display: grid; gap: 6px; max-height: min(420px, 55vh); margin: 0; padding: 0; overflow-y: auto; list-style: none; }
+.service-override-option { display: flex; width: 100%; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--card); color: var(--foreground); font: inherit; text-align: left; cursor: pointer; }
+.service-override-option:hover:not(:disabled) { border-color: var(--foreground); }
+.service-override-option:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+.service-override-option:disabled { color: var(--muted-foreground); background: var(--muted); cursor: not-allowed; }
+.service-override-used { font-size: 12px; }
+
 /* Sidebar counter for items that need attention. */
 .app-nav-badge { min-width: 20px; margin-left: auto; padding: 1px 7px; border-radius: var(--radius-full); background: var(--primary); color: var(--primary-foreground); font: 600 11px/18px var(--font-mono); text-align: center; }
 

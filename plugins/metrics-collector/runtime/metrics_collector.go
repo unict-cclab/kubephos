@@ -629,11 +629,16 @@ func trafficEntryPointMatcher(deployment applicationDeployment) string {
 	return "^(?:" + strings.Join(names, "|") + ")$"
 }
 
+// serviceReporter selects server-side L7 measurements: sidecars report them as
+// "destination" and Istio ambient waypoints as "waypoint". A namespace runs one
+// data plane, so the two never count the same request twice.
+const serviceReporter = `reporter=~"destination|waypoint"`
+
 func metricDefinitions(namespace, _ string) []metricDefinition {
 	selector := strconv.Quote(namespace)
 	return append(locustMetricDefinitions(namespace), []metricDefinition{
-		{ID: "application.request_rps", Unit: "requests_per_second", Aggregation: "sum", Query: `sum by (destination_workload) (rate(istio_requests_total{reporter="destination",destination_workload_namespace=` + selector + `}[1m]))`},
-		{ID: "application.p95_response_time", Unit: "milliseconds", Aggregation: "mean", Query: `histogram_quantile(0.95, sum by (destination_workload, le) (rate(istio_request_duration_milliseconds_bucket{reporter="destination",destination_workload_namespace=` + selector + `}[1m])))`},
+		{ID: "application.request_rps", Unit: "requests_per_second", Aggregation: "sum", Query: `sum by (destination_workload) (rate(istio_requests_total{` + serviceReporter + `,destination_workload_namespace=` + selector + `}[1m]))`},
+		{ID: "application.p95_response_time", Unit: "milliseconds", Aggregation: "mean", Query: `histogram_quantile(0.95, sum by (destination_workload, le) (rate(istio_request_duration_milliseconds_bucket{` + serviceReporter + `,destination_workload_namespace=` + selector + `}[1m])))`},
 		{ID: "cpu.cores", Unit: "cores", Aggregation: "sum", Query: `sum by (pod) (rate(container_cpu_usage_seconds_total{namespace=` + selector + `,container!="",container!="POD",pod!~"kubephos-pod-scheduling-.*"}[1m]))`},
 		{ID: "memory.working_set", Unit: "bytes", Aggregation: "sum", Query: `sum by (pod) (container_memory_working_set_bytes{namespace=` + selector + `,container!="",container!="POD",pod!~"kubephos-pod-scheduling-.*"})`},
 		{ID: "pod.restarts", Unit: "count", Aggregation: "sum", Query: `sum by (pod) (kube_pod_container_status_restarts_total{namespace=` + selector + `,pod!~"kubephos-pod-scheduling-.*"})`},

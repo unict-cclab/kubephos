@@ -40,6 +40,7 @@ it('defaults Istio on and supports independently enabling a service when globall
  fireEvent.click(screen.getByRole('checkbox',{name:'Enable Istio injection'}))
  fireEvent.click(screen.getByText('Service overrides'))
  fireEvent.click(screen.getByRole('button',{name:'Add service override'}))
+ fireEvent.click(within(screen.getByRole('dialog',{name:'Choose a service'})).getByRole('button',{name:'api'}))
  expect(screen.getByLabelText('Istio injection for api')).toHaveValue('true')
  expect((container.querySelector('[name="istioInjection"]') as HTMLInputElement).value).toBe('false')
  expect(JSON.parse((container.querySelector('[name="istioInjectionOverrides"]') as HTMLInputElement).value)).toEqual({api:true})

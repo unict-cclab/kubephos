@@ -66,6 +66,10 @@ func (s *Server) createApplicationDeployment(w http.ResponseWriter, r *http.Requ
 		writeError(w, 422, "invalid_deployment", "Choose a catalog application without experiment components.")
 		return
 	}
+	if input.Definition.IstioDataPlane == "ambient" {
+		writeError(w, 422, "invalid_istio_data_plane", "Istio ambient mode is available for experiments only; application deployments use sidecars.")
+		return
+	}
 	user := requestUser(r)
 	if !s.validateClusterAssignment(w, r, user, input.ClusterResourceID) {
 		return

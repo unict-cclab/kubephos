@@ -48,6 +48,7 @@ it('validates against actual manifest selectors and excludes services using Defa
  expect((document.querySelector('form') as HTMLFormElement).checkValidity()).toBe(false)
  fireEvent.click(screen.getByRole('tab',{name:'Service overrides'}))
  fireEvent.click(screen.getByRole('button',{name:'Add service override'}))
+ fireEvent.click(within(screen.getByRole('dialog',{name:'Choose a service'})).getByRole('button',{name:'api'}))
  fireEvent.change(screen.getByLabelText('Node selector mode for api'),{target:{value:'none'}})
  expect((document.querySelector('form') as HTMLFormElement).checkValidity()).toBe(true)
  fireEvent.change(screen.getByLabelText('Node selector mode for api'),{target:{value:'custom'}})

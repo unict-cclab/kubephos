@@ -32,6 +32,9 @@ spec:
       istioInjectionOverrides:
         type: object
         additionalProperties: true
+      istioDataPlane:
+        type: string
+        enum: [sidecar, ambient]
       clusterConnectionRef:
         type: string
         title: Kubernetes cluster

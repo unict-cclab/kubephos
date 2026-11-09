@@ -5,6 +5,7 @@ import {ProxyResourcesEditor} from './ProxyResourcesEditor'
 import {resolveApplicationPreview} from '../applicationPreview'
 import {ApplicationPlacementEditor} from './ApplicationPlacementEditor'
 import {IstioInjectionEditor} from './IstioInjectionEditor'
+import {IstioSettingsEditor} from './IstioSettingsEditor'
 import {CloneDialog} from './CloneDialog'
 import {ErrorFeedback, useErrorState} from './ToastRegion'
 import {ResourceListHeading} from './ResourceListHeading'
@@ -428,6 +429,7 @@ export function ExperimentConfigurationDialog({open, close, clusters, workspaces
           istioProxyResources: destinationMode==='application'?JSON.parse(String(values.get('istioProxyResources')??'null'))??undefined:undefined,
           istioInjection: destinationMode === 'application' ? values.get('istioInjection') === 'true' : undefined,
           istioInjectionOverrides: destinationMode === 'application' ? JSON.parse(String(values.get('istioInjectionOverrides') ?? '{}')) : undefined,
+          istioDataPlane: destinationMode === 'application' && values.get('istioDataPlane') === 'ambient' ? 'ambient' : undefined,
           podDisruptionBudgetMinAvailable: destinationMode === 'application' ? Number(values.get('podDisruptionBudgetMinAvailable')) : 0,
           components: (deploymentMode ? [] : submittedComponents).map((component, index) => {
             const plugin = compatiblePlugins.find(item => item.id === component.pluginId)
@@ -477,7 +479,7 @@ export function ExperimentConfigurationDialog({open, close, clusters, workspaces
         {application && !topologyError && <ApplicationTopologyGraph components={effectiveApplicationComponents} />}
           </>},
           {id: 'placement', title: 'Placement', content: <ApplicationPlacementEditor networking={selectedCluster?.spec.mode==='multi'?'cilium':String(selectedCluster?.spec.networking??'')} enabled={placementVisible} application={application} session={session} values={applicationValues} key={`placement-${item?.id ?? 'new'}-${applicationRef}`} services={effectiveApplicationComponents} initial={item?.definition.applicationPlacement} />},
-          {id: 'istio', title: 'Istio', content: <FormTabs label="Istio settings" items={[{id:'injection',title:'Injection',content:<IstioInjectionEditor key={`istio-${item?.id ?? 'new'}-${applicationRef}-${clusterResourceId}`} services={effectiveApplicationComponents} enabled={typeof item?.definition.istioInjection === 'boolean' ? item.definition.istioInjection : !nativeTCP} overrides={item?.definition.istioInjectionOverrides as Record<string, boolean> | undefined} disabled={selectedCluster?.spec.mode === 'multi'} />},{id:'proxy-resources',title:'Proxy resources',content:<ProxyResourcesEditor clusterId={clusterResourceId} session={session} key={`proxy-${item?.id??'new'}-${applicationRef}`} services={effectiveApplicationComponents} initial={item?.definition.istioProxyResources} disabled={selectedCluster?.spec.mode==='multi'}/>}]}/>}
+          {id: 'istio', title: 'Istio', content: <IstioSettingsEditor key={`istio-mode-${item?.id ?? 'new'}`} dataPlane={item?.definition.istioDataPlane} disabled={selectedCluster?.spec.mode === 'multi'} ambientAvailable={!deploymentMode}><FormTabs label="Istio settings" items={[{id:'injection',title:'Injection',content:<IstioInjectionEditor key={`istio-${item?.id ?? 'new'}-${applicationRef}-${clusterResourceId}`} services={effectiveApplicationComponents} enabled={typeof item?.definition.istioInjection === 'boolean' ? item.definition.istioInjection : !nativeTCP} overrides={item?.definition.istioInjectionOverrides as Record<string, boolean> | undefined} disabled={selectedCluster?.spec.mode === 'multi'} />},{id:'proxy-resources',title:'Proxy resources',content:<ProxyResourcesEditor clusterId={clusterResourceId} session={session} key={`proxy-${item?.id??'new'}-${applicationRef}`} services={effectiveApplicationComponents} initial={item?.definition.istioProxyResources} disabled={selectedCluster?.spec.mode==='multi'}/>}]}/></IstioSettingsEditor>}
         ]} />
       </> : <FormTabs label="External destination settings" items={[
         {id: 'target', title: 'Target', content: <div className="form-stack"><label>External endpoint<input type="url" value={externalTargetUrl} onChange={event => setExternalTargetUrl(event.target.value)} placeholder="https://api.example.com" maxLength={2048} required /></label><label>Locust runtime image<input value={externalRuntimeImage} onChange={event => setExternalRuntimeImage(event.target.value)} maxLength={512} required /></label></div>},
