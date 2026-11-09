@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -36,6 +37,8 @@ var istioCNIValues = []byte("profile: ambient\nglobal:\n  platform: k3s\n  varia
 type AmbientPlugin struct {
 	Runner  clusterRunner
 	Fetcher chartFetcher
+	// AgentTimeout bounds the wait for each node agent; zero means ten minutes.
+	AgentTimeout time.Duration
 }
 
 func (plugin AmbientPlugin) platform() Plugin {
@@ -48,8 +51,9 @@ func (AmbientPlugin) Manifest() plugins.Manifest {
 		Description:    "Installs istio-cni and ztunnel and switches the managed Istio control plane to the ambient profile, once per cluster.",
 		Schema:         json.RawMessage(`{"type":"object","additionalProperties":false,"required":["clusterConnectionRef"],"properties":{"clusterConnectionRef":{"type":"string","title":"Kubernetes cluster","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ClusterConnection","x-kubephos-artifact-version":"v1alpha1"}}}`),
 		ArtifactInputs: []domain.ArtifactContract{{Type: "ClusterConnection", Version: "v1alpha1"}},
-		Capabilities:   []string{"istio.ambient.install"},
-		Permissions:    []string{"cluster.admin", "network.http"},
+		// Experiments run cleanup after every run; for ambient mode it is a deliberate no-op.
+		Capabilities: []string{"istio.ambient.install", "lifecycle.cleanup"},
+		Permissions:  []string{"cluster.admin", "network.http"},
 	}
 }
 
@@ -139,27 +143,96 @@ func (plugin AmbientPlugin) Execute(ctx context.Context, step domain.PlanStep, l
 			return nil, fmt.Errorf("install Gateway API CRDs: %w", err)
 		}
 	}
-	steps := []struct {
-		message, chart, release string
-		values                  []byte
-	}{
-		{"Switching the Istio control plane to the ambient profile", "istiod", istiodRelease, istiodValues(true)},
-		{"Installing the Istio CNI node agent", "istio-cni", istioCNIRelease, istioCNIValues},
-		{"Installing ztunnel on every node", "ztunnel", ztunnelRelease, nil},
+	if err := log("info", "Switching the Istio control plane to the ambient profile"); err != nil {
+		return nil, err
 	}
-	for _, item := range steps {
-		if err := log("info", item.message); err != nil {
+	if _, err := runner.Helm(ctx, kubeconfig, charts["istiod"], istiodValues(true), "upgrade", "--install", istiodRelease, "@chart", "--namespace", istioNamespace, "--values", "@values", "--wait", "--timeout", "10m", "--atomic"); err != nil {
+		return nil, fmt.Errorf("switch the Istio control plane to the ambient profile: %w", err)
+	}
+	agents := []nodeAgent{
+		{"Installing the Istio CNI node agent", "istio-cni", istioCNIRelease, "istio-cni-node", istioCNIValues},
+		{"Installing ztunnel on every node", "ztunnel", ztunnelRelease, "ztunnel", []byte("{}\n")},
+	}
+	for _, agent := range agents {
+		if err := log("info", agent.message); err != nil {
 			return nil, err
 		}
-		values := item.values
-		if values == nil {
-			values = []byte("{}\n")
-		}
-		if _, err := runner.Helm(ctx, kubeconfig, charts[item.chart], values, "upgrade", "--install", item.release, "@chart", "--namespace", istioNamespace, "--values", "@values", "--wait", "--timeout", "10m", "--atomic"); err != nil {
-			return nil, fmt.Errorf("%s: %w (the managed Harbor must mirror registry.istio.io/release/install-cni and ztunnel; run kubephos release harbor-profile-sync)", strings.ToLower(item.message), err)
+		if err := plugin.installNodeAgent(ctx, runner, kubeconfig, charts[agent.chart], agent); err != nil {
+			return nil, err
 		}
 	}
 	return json.RawMessage(`{}`), nil
+}
+
+// nodeAgent is a DaemonSet that ambient mode runs on every node.
+type nodeAgent struct {
+	message, chart, release, daemonSet string
+	values                             []byte
+}
+
+// Image pulls that fail this way never recover by waiting.
+var imagePullFailures = []string{"ErrImagePull", "ImagePullBackOff", "InvalidImageName"}
+
+// installNodeAgent installs a node agent and waits for it, stopping as soon as a
+// pod cannot pull its image instead of waiting for the whole timeout. A failed
+// install is removed, so the next run starts clean.
+func (plugin AmbientPlugin) installNodeAgent(ctx context.Context, runner clusterRunner, kubeconfig string, chart []byte, agent nodeAgent) error {
+	if _, err := runner.Helm(ctx, kubeconfig, chart, agent.values, "upgrade", "--install", agent.release, "@chart", "--namespace", istioNamespace, "--values", "@values"); err != nil {
+		return fmt.Errorf("install %s: %w", agent.daemonSet, err)
+	}
+	remove := func() {
+		_, _ = runner.Helm(ctx, kubeconfig, nil, nil, "uninstall", agent.release, "--namespace", istioNamespace, "--wait", "--timeout", "5m")
+	}
+	deadline := time.Now().Add(plugin.agentTimeout())
+	for {
+		reason, err := imagePullFailure(ctx, runner, kubeconfig, agent.daemonSet)
+		if err != nil {
+			return err
+		}
+		if reason != "" {
+			remove()
+			return fmt.Errorf("%s cannot pull its image (%s): the managed Harbor does not mirror registry.istio.io/release/install-cni and ztunnel yet. Run kubephos release harbor-profile-sync <harbor-resource-id> once, then retry", agent.daemonSet, reason)
+		}
+		if _, err := runner.Kubectl(ctx, kubeconfig, nil, "rollout", "status", "daemonset/"+agent.daemonSet, "-n", istioNamespace, "--timeout=15s"); err == nil {
+			return nil
+		}
+		if err := ctx.Err(); err != nil {
+			remove()
+			return err
+		}
+		if time.Now().After(deadline) {
+			remove()
+			return fmt.Errorf("%s is not ready on every node after %s", agent.daemonSet, plugin.agentTimeout())
+		}
+	}
+}
+
+// imagePullFailure returns the first image pull failure among the DaemonSet's pods,
+// which are named after it.
+func imagePullFailure(ctx context.Context, runner clusterRunner, kubeconfig, daemonSet string) (string, error) {
+	output, err := runner.Kubectl(ctx, kubeconfig, nil, "get", "pods", "-n", istioNamespace, "-o", `jsonpath={range .items[*]}{.metadata.name}{" "}{.status.initContainerStatuses[*].state.waiting.reason}{" "}{.status.containerStatuses[*].state.waiting.reason}{"\n"}{end}`)
+	if err != nil {
+		return "", fmt.Errorf("read %s pods: %w", daemonSet, err)
+	}
+	for _, line := range strings.Split(output, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 2 || !strings.HasPrefix(fields[0], daemonSet+"-") {
+			continue
+		}
+		for _, reason := range fields[1:] {
+			if slices.Contains(imagePullFailures, reason) {
+				return reason, nil
+			}
+		}
+	}
+	return "", nil
+}
+
+func (plugin AmbientPlugin) agentTimeout() time.Duration {
+	if plugin.AgentTimeout > 0 {
+		return plugin.AgentTimeout
+	}
+	return 10 * time.Minute
 }
 
 func (plugin AmbientPlugin) Verify(ctx context.Context, step domain.PlanStep, _ json.RawMessage, log plugins.Logger) (domain.HealthReport, error) {

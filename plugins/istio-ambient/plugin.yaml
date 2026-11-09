@@ -38,6 +38,7 @@ spec:
         version: v1alpha1
   capabilities:
     - istio.ambient.install
+    - lifecycle.cleanup
   permissions:
     - cluster.admin
     - network.http

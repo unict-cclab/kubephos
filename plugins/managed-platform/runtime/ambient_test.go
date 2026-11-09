@@ -4,19 +4,27 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
+	"slices"
 	"strings"
 	"testing"
+	"time"
+
+	"gopkg.in/yaml.v3"
 
 	"kubephos.dev/kubephos/internal/domain"
 )
 
 // ambientCluster records the commands the ambient plugin sends to a fake cluster.
 type ambientCluster struct {
-	ambient    bool
-	gatewayAPI bool
-	kubectl    []string
-	helm       []string
-	values     map[string]string
+	ambient     bool
+	gatewayAPI  bool
+	pods        string // "name reason" lines returned for istio-system pods
+	notReady    bool   // rollouts never complete
+	kubectl     []string
+	helm        []string
+	uninstalled []string
+	values      map[string]string
 }
 
 func (cluster *ambientCluster) Kubectl(_ context.Context, _ string, _ []byte, args ...string) (string, error) {
@@ -38,11 +46,19 @@ func (cluster *ambientCluster) Kubectl(_ context.Context, _ string, _ []byte, ar
 			return "", nil
 		}
 		return "", errors.New("not found")
+	case strings.HasPrefix(command, "get pods -n "+istioNamespace):
+		return cluster.pods, nil
+	case strings.HasPrefix(command, "rollout status") && cluster.notReady:
+		return "", errors.New("timed out waiting for the condition")
 	}
 	return "", nil
 }
 
 func (cluster *ambientCluster) Helm(_ context.Context, _ string, _, values []byte, args ...string) (string, error) {
+	if args[0] == "uninstall" {
+		cluster.uninstalled = append(cluster.uninstalled, args[1])
+		return "", nil
+	}
 	cluster.helm = append(cluster.helm, args[2])
 	cluster.values[args[2]] = string(values)
 	return "", nil
@@ -124,5 +140,59 @@ func TestAmbientChartsArePinned(t *testing.T) {
 		if !ids[id] {
 			t.Fatalf("ambient chart %s is missing", id)
 		}
+	}
+}
+
+// Experiments clean up after every run, so the engine rejects mutating stages
+// whose plugin does not declare lifecycle.cleanup.
+func TestAmbientPluginCanRunInsideExperiments(t *testing.T) {
+	plugin := AmbientPlugin{}
+	plan, err := plugin.Plan(context.Background(), json.RawMessage(`{"clusterConnectionRef":"art_cluster"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !plan.Steps[0].Mutating || !plugin.Manifest().HasCapability("lifecycle.cleanup") {
+		t.Fatal("a mutating ambient step must declare lifecycle.cleanup")
+	}
+	raw, err := os.ReadFile("../../istio-ambient/plugin.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var packaged struct {
+		Spec struct {
+			Capabilities []string `yaml:"capabilities"`
+		} `yaml:"spec"`
+	}
+	if err := yaml.Unmarshal(raw, &packaged); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(packaged.Spec.Capabilities, plugin.Manifest().Capabilities) {
+		t.Fatalf("plugin.yaml capabilities %v differ from the runtime manifest %v", packaged.Spec.Capabilities, plugin.Manifest().Capabilities)
+	}
+}
+
+func TestAmbientStopsAtOnceWhenHarborLacksTheImages(t *testing.T) {
+	cluster := &ambientCluster{values: map[string]string{}, notReady: true, pods: "istiod-7dfb \nkiali-75c5 ImagePullBackOff\nistio-cni-node-55bbx  ImagePullBackOff\n"}
+	_, err := (AmbientPlugin{Runner: cluster, Fetcher: fakeAmbientCharts{}}).Execute(context.Background(), ambientStep(), silent)
+	if err == nil || !strings.Contains(err.Error(), "istio-cni-node cannot pull its image (ImagePullBackOff)") || !strings.Contains(err.Error(), "harbor-profile-sync") {
+		t.Fatalf("missing images were not reported clearly: %v", err)
+	}
+	if !slices.Equal(cluster.uninstalled, []string{istioCNIRelease}) || slices.Contains(cluster.helm, ztunnelRelease) {
+		t.Fatalf("the failed agent was not removed or the next one was installed: installed %v, removed %v", cluster.helm, cluster.uninstalled)
+	}
+}
+
+func TestAmbientIgnoresPullFailuresOfOtherPods(t *testing.T) {
+	cluster := &ambientCluster{values: map[string]string{}, pods: "kiali-75c5 ImagePullBackOff\nmy-ztunnel-x ErrImagePull\n"}
+	if _, err := (AmbientPlugin{Runner: cluster, Fetcher: fakeAmbientCharts{}}).Execute(context.Background(), ambientStep(), silent); err != nil {
+		t.Fatalf("an unrelated pod stopped the install: %v", err)
+	}
+}
+
+func TestAmbientRemovesAnAgentThatNeverBecomesReady(t *testing.T) {
+	cluster := &ambientCluster{values: map[string]string{}, notReady: true}
+	_, err := (AmbientPlugin{Runner: cluster, Fetcher: fakeAmbientCharts{}, AgentTimeout: time.Nanosecond}).Execute(context.Background(), ambientStep(), silent)
+	if err == nil || !strings.Contains(err.Error(), "istio-cni-node is not ready") || !slices.Equal(cluster.uninstalled, []string{istioCNIRelease}) {
+		t.Fatalf("a stuck agent was not removed: %v %v", err, cluster.uninstalled)
 	}
 }
