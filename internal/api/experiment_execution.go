@@ -553,6 +553,9 @@ func (s *Server) experimentPipelineForCluster(ctx context.Context, configuration
 	deploySpec := map[string]any{"mode": "deploy"}
 	if definition.IstioDataPlane == "ambient" {
 		deploySpec["istioDataPlane"] = "ambient"
+		if len(definition.IstioWaypoint) > 0 {
+			deploySpec["istioWaypoint"] = definition.IstioWaypoint
+		}
 	}
 	if len(definition.IstioProxyResources) > 0 {
 		deploySpec["istioProxyResources"] = definition.IstioProxyResources

@@ -24,6 +24,7 @@ import (
 	"kubephos.dev/kubephos/internal/placement"
 	"kubephos.dev/kubephos/internal/plugins"
 	"kubephos.dev/kubephos/internal/podscheduling"
+	"kubephos.dev/kubephos/internal/workloadresources"
 )
 
 const (
@@ -52,6 +53,7 @@ type Spec struct {
 	IstioInjection                  *bool                          `json:"istioInjection,omitempty"`
 	IstioInjectionOverrides         map[string]bool                `json:"istioInjectionOverrides,omitempty"`
 	IstioDataPlane                  string                         `json:"istioDataPlane,omitempty"`
+	IstioWaypoint                   map[string]any                 `json:"istioWaypoint,omitempty"`
 	ClusterConnectionRef            string                         `json:"clusterConnectionRef"`
 	ManifestSetRef                  string                         `json:"manifestSetRef"`
 	WorkloadTargetsRef              string                         `json:"workloadTargetsRef"`
@@ -173,7 +175,7 @@ func (Plugin) Manifest() plugins.Manifest {
 	return plugins.Manifest{
 		ID: pluginID, Name: "Kubernetes application deployer", Version: "0.13.0",
 		Description:     "Deploys any validated application package into an isolated Kubernetes namespace and prepares shared experiment control resources when requested.",
-		Schema:          json.RawMessage(`{"type":"object","additionalProperties":false,"required":["clusterConnectionRef","manifestSetRef","workloadTargetsRef","serviceEndpointsRef"],"properties":{"clusterConnectionRef":{"type":"string","title":"Kubernetes cluster","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ClusterConnection","x-kubephos-artifact-version":"v1alpha1"},"manifestSetRef":{"type":"string","title":"Application manifests","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ManifestSet","x-kubephos-artifact-version":"v1alpha1"},"workloadTargetsRef":{"type":"string","title":"Application workloads","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"WorkloadTargets","x-kubephos-artifact-version":"v1alpha1"},"serviceEndpointsRef":{"type":"string","title":"Application endpoints","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ServiceEndpoints","x-kubephos-artifact-version":"v1alpha1"},"mode":{"type":"string","enum":["prepare","deploy"]},"schedulerName":{"type":"string"},"schedulerInclude":{"type":"array","items":{"type":"string"}},"schedulerExclude":{"type":"array","items":{"type":"string"}},"podDisruptionBudgetMinAvailable":{"type":"integer","title":"Minimum available replicas","description":"PDB minAvailable generated for every deschedulable workload.","minimum":1,"maximum":20},"controlNamespace":{"type":"boolean","x-kubephos-hidden":true},"istioInjection":{"type":"boolean"},"istioInjectionOverrides":{"type":"object","additionalProperties":true},"istioDataPlane":{"type":"string","enum":["sidecar","ambient"]},"applicationPlacement":{"type":"object"},"istioProxyResources":{"type":"object"},"placementControlName":{"type":"string","maxLength":63,"x-kubephos-hidden":true},"namespacePolicy":{"type":"string","enum":["create"],"x-kubephos-hidden":true},"applicationNamespace":{"type":"string","maxLength":63}}}`),
+		Schema:          json.RawMessage(`{"type":"object","additionalProperties":false,"required":["clusterConnectionRef","manifestSetRef","workloadTargetsRef","serviceEndpointsRef"],"properties":{"clusterConnectionRef":{"type":"string","title":"Kubernetes cluster","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ClusterConnection","x-kubephos-artifact-version":"v1alpha1"},"manifestSetRef":{"type":"string","title":"Application manifests","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ManifestSet","x-kubephos-artifact-version":"v1alpha1"},"workloadTargetsRef":{"type":"string","title":"Application workloads","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"WorkloadTargets","x-kubephos-artifact-version":"v1alpha1"},"serviceEndpointsRef":{"type":"string","title":"Application endpoints","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ServiceEndpoints","x-kubephos-artifact-version":"v1alpha1"},"mode":{"type":"string","enum":["prepare","deploy"]},"schedulerName":{"type":"string"},"schedulerInclude":{"type":"array","items":{"type":"string"}},"schedulerExclude":{"type":"array","items":{"type":"string"}},"podDisruptionBudgetMinAvailable":{"type":"integer","title":"Minimum available replicas","description":"PDB minAvailable generated for every deschedulable workload.","minimum":1,"maximum":20},"controlNamespace":{"type":"boolean","x-kubephos-hidden":true},"istioInjection":{"type":"boolean"},"istioInjectionOverrides":{"type":"object","additionalProperties":true},"istioDataPlane":{"type":"string","enum":["sidecar","ambient"]},"istioWaypoint":{"type":"object"},"applicationPlacement":{"type":"object"},"istioProxyResources":{"type":"object"},"placementControlName":{"type":"string","maxLength":63,"x-kubephos-hidden":true},"namespacePolicy":{"type":"string","enum":["create"],"x-kubephos-hidden":true},"applicationNamespace":{"type":"string","maxLength":63}}}`),
 		ArtifactInputs:  []domain.ArtifactContract{{Type: "ClusterConnection", Version: "v1alpha1"}, {Type: "ManifestSet", Version: "v1alpha1"}, {Type: "WorkloadTargets", Version: "v1alpha1"}, {Type: "ServiceEndpoints", Version: "v1alpha1"}},
 		ArtifactOutputs: []domain.ArtifactContract{{Type: "ApplicationDeployment", Version: "v1alpha1"}},
 		Capabilities:    []string{"applications.kubernetes.deploy", "applications.kubernetes.preflight", "applications.kubernetes.cleanup", "lifecycle.cleanup", "lifecycle.cleanup.compatible"},
@@ -440,14 +442,24 @@ func (plugin Plugin) Execute(ctx context.Context, step domain.PlanStep, log plug
 		return nil, fmt.Errorf("create isolated namespace: %w", err)
 	}
 	if ambient {
-		if err := log("info", "Starting the Istio ambient waypoint for the namespace"); err != nil {
+		waypoint, err := workloadresources.ParseWaypoint(input.IstioWaypoint)
+		if err != nil {
 			return nil, err
 		}
-		if _, err := runner.Run(ctx, cluster.Spec.Kubeconfig, waypointManifest(input.Namespace, input.Marker), "apply", "-f", "-"); err != nil {
+		if err := log("info", waypointLogMessage(waypoint)); err != nil {
+			return nil, err
+		}
+		if _, err := runner.Run(ctx, cluster.Spec.Kubeconfig, waypointManifest(input.Namespace, input.Marker, waypoint), "apply", "-f", "-"); err != nil {
 			return nil, fmt.Errorf("create Istio ambient waypoint: %w", err)
 		}
 		if _, err := runner.Run(ctx, cluster.Spec.Kubeconfig, nil, "wait", "--for=condition=Programmed", "gateway/"+ambientWaypoint, "--namespace", input.Namespace, "--timeout=180s"); err != nil {
 			return nil, fmt.Errorf("Istio ambient waypoint readiness: %w", err)
+		}
+		// A sized waypoint is ready only when every replica runs with its resources.
+		if !waypoint.IsDefault() {
+			if _, err := runner.Run(ctx, cluster.Spec.Kubeconfig, nil, "rollout", "status", "deployment/"+ambientWaypoint, "--namespace", input.Namespace, "--timeout=300s"); err != nil {
+				return nil, fmt.Errorf("Istio ambient waypoint replicas: %w", err)
+			}
 		}
 	}
 	if input.PlacementControlName != "" {

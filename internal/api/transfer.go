@@ -147,6 +147,7 @@ func (s *Server) exportState(response http.ResponseWriter, request *http.Request
 	response.Header().Set("X-Content-Type-Options", "nosniff")
 	_, _ = response.Write(value)
 }
+
 // readStateArchive decrypts and checks an uploaded archive. The `replace`
 // field confirms that a populated instance may have its state replaced.
 func (s *Server) readStateArchive(response http.ResponseWriter, request *http.Request) (*transfer.State, bool, bool) {

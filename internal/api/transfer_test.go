@@ -52,6 +52,7 @@ func transferCall(t *testing.T, handler http.HandlerFunc, path string, body io.R
 	handler(w, r)
 	return w
 }
+
 // importCall uploads an archive; fields adds extra form values as name, value pairs.
 func importCall(t *testing.T, handler http.HandlerFunc, archive []byte, password string, fields ...string) *httptest.ResponseRecorder {
 	t.Helper()

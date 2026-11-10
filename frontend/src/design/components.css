@@ -463,6 +463,19 @@ input[type="file"]:disabled::file-selector-button { background: var(--muted); co
 .strategy-target-editor .target-editor-list { gap: 8px; padding: 8px 0 0; }
 .strategy-target-editor .target-editor-list article { padding: 8px 12px; border: 1px solid var(--border); background: transparent; }
 
+/* Istio: whether to use it comes first; ambient mode then sizes its waypoint. */
+.istio-settings > label { max-width: 360px; }
+.istio-ambient-settings { display: grid; gap: 16px; min-width: 0; margin: 0; padding: 0; border: 0; }
+.istio-ambient-settings[hidden] { display: none; }
+.waypoint-settings { display: grid; gap: 12px; max-width: 720px; padding: 16px 20px 20px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--card); }
+.waypoint-settings-title { margin: 0; font-size: 14px; font-weight: 600; }
+.waypoint-settings > label { max-width: 200px; margin: 0; }
+.waypoint-hint { margin: -4px 0 4px; color: var(--muted-foreground); font-size: 13px; line-height: 1.5; }
+.waypoint-resource-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px 20px; }
+.waypoint-resource { display: grid; gap: 8px; min-width: 0; }
+.waypoint-resource-label { font-size: 14px; font-weight: 550; }
+@media (max-width: 600px) { .waypoint-resource-grid { grid-template-columns: minmax(0, 1fr); } }
+
 /* Load profile ------------------------------------------------------------ */
 
 /* Phases on the left, a sticky live chart on the right; stacked when narrow. */

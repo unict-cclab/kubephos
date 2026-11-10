@@ -10,6 +10,12 @@ import {InputData} from './InputData'
 import {ReadoutTable} from './ReadoutTable'
 import {PlacementReadout} from './ApplicationPlacementEditor'
 
+// Waypoint size as saved; empty fields run with Istio's defaults.
+function waypointRows(settings: Record<string, unknown> = {}): string[][] {
+ const value = (field: string) => settings[field] === undefined || settings[field] === '' ? 'Istio default' : String(settings[field])
+ return [['Waypoint replicas', settings.replicas === undefined ? '1 (Istio default)' : String(settings.replicas)], ['CPU request per replica', value('cpuRequest')], ['CPU limit per replica', value('cpuLimit')], ['Memory request per replica', value('memoryRequest')], ['Memory limit per replica', value('memoryLimit')]]
+}
+
 export function ResourceSettingsReadout({value={},label='Resources',defaults}:{defaults?:ReactNode;value?:Record<string,unknown>;label?:string}) {
  const [section,setSection]=useState('common')
  const rows=(settings:Record<string,unknown>,common:Record<string,unknown>={})=>['CPU','Memory'].map(name=>[name,...['Request','Limit'].map(kind=>String(settings[`${name.toLowerCase()}${kind}`]??common[`${name.toLowerCase()}${kind}`]??'—'))])
@@ -37,6 +43,6 @@ export function ApplicationSettingsReadout({application,item,session,networking,
  ...(Object.keys(resources.properties??{}).length?[{id:'resources',title:'Resources',content:<ResourceSettingsReadout value={values}/>}]:[]),
  ...(topology?[{id:'topology',title:'Topology',content:topology}]:[]),
  {id:'placement',title:'Placement',content:<PlacementReadout deploymentId={deploymentId} networking={networking} value={item.definition.applicationPlacement} application={application} session={session} values={item.definition.applicationValues}/>},
- {id:'istio',title:'Istio',content:item.definition.istioDataPlane==='ambient'?<ReadoutTable label="Istio settings" data={{headers:['Field','Value'],rows:[['Data plane','Ambient (whole namespace, one waypoint)']]}}/>:<FormTabs label="Istio settings" items={[{id:'injection',title:'Injection',content:<IstioInjectionReadout enabled={istio} overrides={item.definition.istioInjectionOverrides}/>},{id:'proxy-resources',title:'Proxy resources',content:<ResourceSettingsReadout defaults={<ProxyResourceDefaults clusterId={item.clusterResourceId} session={session} disabled={networking==='cilium'}/>} label="Proxy resources" value={item.definition.istioProxyResources}/>}]}/>}
+ {id:'istio',title:'Istio',content:item.definition.istioDataPlane==='ambient'?<ReadoutTable label="Istio settings" data={{headers:['Field','Value'],rows:[['Use Istio','Yes'],['Data plane','Ambient (whole namespace)'],...waypointRows(item.definition.istioWaypoint)]}}/>:!istio&&!Object.values(item.definition.istioInjectionOverrides??{}).some(Boolean)?<ReadoutTable label="Istio settings" data={{headers:['Field','Value'],rows:[['Use Istio',networking==='cilium'?'No (Cilium networking)':'No']]}}/>:<FormTabs label="Istio settings" items={[{id:'injection',title:'Injection',content:<IstioInjectionReadout enabled={istio} overrides={item.definition.istioInjectionOverrides}/>},{id:'proxy-resources',title:'Proxy resources',content:<ResourceSettingsReadout defaults={<ProxyResourceDefaults clusterId={item.clusterResourceId} session={session} disabled={networking==='cilium'}/>} label="Proxy resources" value={item.definition.istioProxyResources}/>}]}/>}
  ]}/>
 }

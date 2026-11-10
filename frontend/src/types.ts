@@ -407,6 +407,8 @@ export interface ExperimentConfiguration extends ResourceAttributionFields {
     istioInjectionOverrides?: Record<string, boolean>
     /** Absent means sidecar, the behaviour before ambient mode existed. */
     istioDataPlane?: IstioDataPlane
+    /** Ambient waypoint size: replicas and per-replica cpuRequest, cpuLimit, memoryRequest, memoryLimit. */
+    istioWaypoint?: Record<string, unknown>
 		destinationMode?: 'application' | 'external'
 		externalDestination?: {targetUrl: string; runtimeImage: string; script: string; parameters?: Record<string, string>}
 		podDisruptionBudgetMinAvailable?: number

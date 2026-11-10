@@ -51,7 +51,9 @@ type experimentConfigurationDefinitionInput struct {
 	IstioInjection          *bool                          `json:"istioInjection,omitempty"`
 	IstioInjectionOverrides map[string]bool                `json:"istioInjectionOverrides,omitempty"`
 	// IstioDataPlane is "sidecar" (default when empty) or "ambient", which enrolls the whole namespace.
-	IstioDataPlane                  string                                  `json:"istioDataPlane,omitempty"`
+	IstioDataPlane string `json:"istioDataPlane,omitempty"`
+	// IstioWaypoint sizes the ambient waypoint: replicas and per-replica resources.
+	IstioWaypoint                   map[string]any                          `json:"istioWaypoint,omitempty"`
 	Kind                            string                                  `json:"kind,omitempty"`
 	Variants                        []experimentSuiteVariantInput           `json:"variants,omitempty"`
 	Runs                            int                                     `json:"runs,omitempty"`
@@ -646,8 +648,14 @@ func validExperimentTargets(include, exclude []string, pattern *regexp.Regexp, a
 func validateIstioDataPlane(definition experimentConfigurationDefinitionInput) *managedOperationFailure {
 	switch definition.IstioDataPlane {
 	case "", "sidecar":
+		if len(definition.IstioWaypoint) > 0 {
+			return &managedOperationFailure{status: http.StatusUnprocessableEntity, code: "invalid_istio_waypoint", message: "Waypoint replicas and resources apply to Istio ambient mode only."}
+		}
 		return nil
 	case "ambient":
+		if _, err := workloadresources.ParseWaypoint(definition.IstioWaypoint); err != nil {
+			return &managedOperationFailure{status: http.StatusUnprocessableEntity, code: "invalid_istio_waypoint", message: err.Error()}
+		}
 		if definition.DestinationMode == "external" {
 			return &managedOperationFailure{status: http.StatusUnprocessableEntity, code: "invalid_istio_data_plane", message: "Istio ambient mode needs an application deployed by KubePhos."}
 		}

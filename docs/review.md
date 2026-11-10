@@ -1,3 +1,20 @@
+# Istio settings review — 10 November 2026
+
+- The Istio tab asks first whether the run uses Istio. "No" submits no sidecar,
+  waypoint or proxy settings; "Yes" shows the data plane, then the sidecar
+  settings or, for ambient mode, the waypoint size. Saved configurations open
+  on their actual choice, and the read-only view shows it.
+- Ambient configurations set the waypoint replicas (1 to 10) and per-replica
+  CPU and memory requests and limits (`definition.istioWaypoint`), validated
+  with the same quantity rules as proxy resources by the API and the deployer.
+  The deployer overlays the Deployment Istio generates through a ConfigMap in
+  `infrastructure.parametersRef` and waits for every replica; without these
+  settings the waypoint manifest is unchanged.
+- Validation: Go vet and tests (`internal/workloadresources`, `internal/api`,
+  `internal/storage`, application deployer) with a disposable PostgreSQL,
+  frontend tests, typecheck, build, asset budget and contrast passed. The editor
+  was checked in an isolated review page; no run was started on a cluster.
+
 # Requests and ownership review — 10 November 2026
 
 - Members edit the text of their own open requests in place and can mark them

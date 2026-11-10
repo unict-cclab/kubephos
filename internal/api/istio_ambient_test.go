@@ -37,6 +37,10 @@ func TestIstioDataPlaneValidation(t *testing.T) {
 		"ambient overrides": {experimentConfigurationDefinitionInput{IstioDataPlane: "ambient", IstioInjectionOverrides: map[string]bool{"api": false}}, false},
 		"ambient external":  {experimentConfigurationDefinitionInput{IstioDataPlane: "ambient", DestinationMode: "external"}, false},
 		"unknown":           {experimentConfigurationDefinitionInput{IstioDataPlane: "proxyless"}, false},
+		"ambient waypoint":  {experimentConfigurationDefinitionInput{IstioDataPlane: "ambient", IstioWaypoint: map[string]any{"replicas": 3.0, "cpuRequest": "250m", "memoryLimit": "256Mi"}}, true},
+		"too many replicas": {experimentConfigurationDefinitionInput{IstioDataPlane: "ambient", IstioWaypoint: map[string]any{"replicas": 11.0}}, false},
+		"waypoint limits":   {experimentConfigurationDefinitionInput{IstioDataPlane: "ambient", IstioWaypoint: map[string]any{"cpuRequest": "2", "cpuLimit": "1"}}, false},
+		"sidecar waypoint":  {experimentConfigurationDefinitionInput{IstioWaypoint: map[string]any{"replicas": 2.0}}, false},
 	} {
 		if failure := validateIstioDataPlane(test.definition); (failure == nil) != test.valid {
 			t.Errorf("%s: expected valid=%v, got %#v", name, test.valid, failure)

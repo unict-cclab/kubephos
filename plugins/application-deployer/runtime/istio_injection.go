@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"gopkg.in/yaml.v3"
+	"kubephos.dev/kubephos/internal/workloadresources"
 )
 
 // Absent settings preserve existing manifests and the catalog's bootstrap opt-outs.
@@ -123,12 +124,16 @@ const (
 func validateIstioDataPlane(spec Spec) error {
 	switch spec.IstioDataPlane {
 	case "", "sidecar":
+		if len(spec.IstioWaypoint) > 0 {
+			return errors.New("Waypoint replicas and resources apply to Istio ambient mode only.")
+		}
 		return nil
 	case istioAmbient:
 		if (spec.IstioInjection != nil && *spec.IstioInjection) || len(spec.IstioInjectionOverrides) > 0 || len(spec.IstioProxyResources) > 0 {
 			return errors.New("Istio ambient mode applies to the whole namespace: sidecar injection, service overrides and proxy resources must be left empty.")
 		}
-		return nil
+		_, err := workloadresources.ParseWaypoint(spec.IstioWaypoint)
+		return err
 	default:
 		return errors.New("Istio data plane must be sidecar or ambient.")
 	}
@@ -140,11 +145,49 @@ func ambientNamespaceLabels(labels map[string]string) {
 	labels["istio.io/use-waypoint"] = ambientWaypoint
 }
 
-func waypointManifest(namespace, marker string) []byte {
-	value, _ := json.Marshal(map[string]any{
+const waypointSettingsName = ambientWaypoint + "-settings"
+
+// waypointManifest returns the namespace waypoint. When it is sized, a ConfigMap
+// referenced through infrastructure.parametersRef overlays the Deployment Istio
+// generates, so the replicas and proxy resources survive its reconciliation.
+func waypointManifest(namespace, marker string, settings workloadresources.Waypoint) []byte {
+	metadata := func(name string, labels map[string]string) map[string]any {
+		return map[string]any{"name": name, "namespace": namespace, "annotations": map[string]string{ownershipKey: marker}, "labels": labels}
+	}
+	spec := map[string]any{"gatewayClassName": "istio-waypoint", "listeners": []map[string]any{{"name": "mesh", "port": 15008, "protocol": "HBONE"}}}
+	gateway := map[string]any{
 		"apiVersion": "gateway.networking.k8s.io/v1", "kind": "Gateway",
-		"metadata": map[string]any{"name": ambientWaypoint, "namespace": namespace, "annotations": map[string]string{ownershipKey: marker}, "labels": map[string]string{"app.kubernetes.io/managed-by": "kubephos", "istio.io/waypoint-for": "service"}},
-		"spec":     map[string]any{"gatewayClassName": "istio-waypoint", "listeners": []map[string]any{{"name": "mesh", "port": 15008, "protocol": "HBONE"}}},
-	})
+		"metadata": metadata(ambientWaypoint, map[string]string{"app.kubernetes.io/managed-by": "kubephos", "istio.io/waypoint-for": "service"}),
+		"spec":     spec,
+	}
+	if settings.IsDefault() {
+		value, _ := json.Marshal(gateway)
+		return value
+	}
+	overlay := map[string]any{}
+	if settings.Replicas > 0 {
+		overlay["replicas"] = settings.Replicas
+	}
+	if len(settings.Resources) > 0 {
+		overlay["template"] = map[string]any{"spec": map[string]any{"containers": []map[string]any{{"name": "istio-proxy", "resources": settings.Resources}}}}
+	}
+	deployment, _ := json.Marshal(map[string]any{"spec": overlay})
+	spec["infrastructure"] = map[string]any{"parametersRef": map[string]string{"group": "", "kind": "ConfigMap", "name": waypointSettingsName}}
+	value, _ := json.Marshal(map[string]any{"apiVersion": "v1", "kind": "List", "items": []map[string]any{
+		{"apiVersion": "v1", "kind": "ConfigMap", "metadata": metadata(waypointSettingsName, map[string]string{"app.kubernetes.io/managed-by": "kubephos"}), "data": map[string]string{"deployment": string(deployment)}},
+		gateway,
+	}})
 	return value
+}
+
+func waypointLogMessage(settings workloadresources.Waypoint) string {
+	if settings.IsDefault() {
+		return "Starting the Istio ambient waypoint for the namespace"
+	}
+	replicas := max(settings.Replicas, 1)
+	unit := "replicas"
+	if replicas == 1 {
+		unit = "replica"
+	}
+	return fmt.Sprintf("Starting the Istio ambient waypoint for the namespace with %d %s", replicas, unit)
 }
