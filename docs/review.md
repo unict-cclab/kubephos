@@ -10,6 +10,14 @@
   The deployer overlays the Deployment Istio generates through a ConfigMap in
   `infrastructure.parametersRef` and waits for every replica; without these
   settings the waypoint manifest is unchanged.
+- The deployer's `plugin.yaml` now accepts `istioWaypoint`; it was missing, so
+  runs with a sized waypoint failed validation with "Property is not allowed".
+  A test now requires `plugin.yaml` and the runtime manifest to declare the
+  same configuration properties.
+- Deploy application offers the same Istio choices, ambient included. The
+  deployment pipeline installs ambient mode on the cluster before deploying
+  and passes the waypoint size to the deployer; multi-cluster deployments,
+  which run Cilium, still refuse ambient mode with an explanation.
 - Validation: Go vet and tests (`internal/workloadresources`, `internal/api`,
   `internal/storage`, application deployer) with a disposable PostgreSQL,
   frontend tests, typecheck, build, asset budget and contrast passed. The editor

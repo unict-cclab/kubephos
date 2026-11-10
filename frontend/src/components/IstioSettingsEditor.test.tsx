@@ -75,12 +75,3 @@ describe('Istio settings editor', () => {
     expect(values().get('istioWaypoint')).toBeNull()
   })
 })
-
-describe('Istio settings for application deployments', () => {
-  it('offers no data plane choice and submits sidecar settings unchanged', () => {
-    const values = renderEditor({ambientAvailable: false})
-    expect(screen.queryByRole('combobox', {name: 'Data plane'})).not.toBeInTheDocument()
-    expect(values().get('istioDataPlane')).toBeNull()
-    expect(values().get('istioInjection')).toBe('true')
-  })
-})

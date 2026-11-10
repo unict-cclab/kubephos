@@ -14,21 +14,21 @@ const waypointResources: {field: string; label: string; kind: 'cpu' | 'memory'}[
 // Sidecar mode keeps per-service injection and proxy resources. Ambient mode applies to the
 // whole namespace and sizes its waypoint. Settings of the modes not chosen stay mounted inside
 // disabled fieldsets, so they leave the submitted form but return if that mode is chosen again.
-// Long-lived application deployments run sidecars only, so they omit the data plane choice.
-export function IstioSettingsEditor({dataPlane: initialDataPlane = 'sidecar', enabled: initialEnabled = true, waypoint, disabled = false, ambientAvailable = true, children}: {dataPlane?: IstioDataPlane; enabled?: boolean; waypoint?: Record<string, unknown>; disabled?: boolean; ambientAvailable?: boolean; children: ReactNode}) {
+// Experiment configurations and long-lived application deployments offer the same choices.
+export function IstioSettingsEditor({dataPlane: initialDataPlane = 'sidecar', enabled: initialEnabled = true, waypoint, disabled = false, children}: {dataPlane?: IstioDataPlane; enabled?: boolean; waypoint?: Record<string, unknown>; disabled?: boolean; children: ReactNode}) {
   const [enabled, setEnabled] = useState(initialEnabled || initialDataPlane === 'ambient')
   const [dataPlane, setDataPlane] = useState<IstioDataPlane>(initialDataPlane)
   const using = !disabled && enabled
-  const ambient = using && ambientAvailable && dataPlane === 'ambient'
+  const ambient = using && dataPlane === 'ambient'
   return <div className="form-stack istio-settings">
-    {ambientAvailable && <input type="hidden" name="istioDataPlane" value={ambient ? 'ambient' : 'sidecar'} />}
+    <input type="hidden" name="istioDataPlane" value={ambient ? 'ambient' : 'sidecar'} />
     <label>Use Istio<select value={using ? 'yes' : 'no'} disabled={disabled} onChange={event => setEnabled(event.target.value === 'yes')}>
       <option value="yes">Yes</option>
       <option value="no">No</option>
     </select></label>
     {disabled && <p className="details-copy">Multi-cluster runs use Cilium networking, which does not run Istio.</p>}
     {!disabled && !using && <p className="details-copy">The application runs without a service mesh: no sidecars, no waypoint and no Istio request metrics.</p>}
-    {using && ambientAvailable && <label>Data plane<select value={dataPlane} onChange={event => setDataPlane(event.target.value as IstioDataPlane)}>
+    {using && <label>Data plane<select value={dataPlane} onChange={event => setDataPlane(event.target.value as IstioDataPlane)}>
       <option value="sidecar">Sidecar</option>
       <option value="ambient">Ambient</option>
     </select></label>}

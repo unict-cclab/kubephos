@@ -13,6 +13,7 @@ import (
 	"kubephos.dev/kubephos/internal/placement"
 	"kubephos.dev/kubephos/internal/plugins"
 	applicationdeployer "kubephos.dev/kubephos/plugins/application-deployer/runtime"
+	managedplatform "kubephos.dev/kubephos/plugins/managed-platform/runtime"
 )
 
 func TestStandaloneDeploymentTargetsEveryMemberWithoutExperimentComponents(t *testing.T) {
@@ -73,6 +74,28 @@ func TestStandaloneDeploymentTargetsEveryMemberWithoutExperimentComponents(t *te
 	_ = json.Unmarshal(def.Stages[1].Spec, &single)
 	if single["istioInjection"] != true {
 		t.Fatal("single cluster injection setting lost")
+	}
+
+	// Ambient mode is installed on the cluster before the deployment, which enrolls the
+	// namespace and sizes its waypoint; multi-cluster deployments run Cilium instead.
+	server.registry = plugins.NewRegistry(manifestOnlyPlugin{plugins.Manifest{ID: "test-materializer", Version: "1", Capabilities: []string{"applications.materialize"}, ArtifactOutputs: outputs}}, manifestOnlyPlugin{(applicationdeployer.Plugin{}).Manifest()}, manifestOnlyPlugin{managedplatform.AmbientPlugin{}.Manifest()})
+	ambient := input
+	ambient.Definition.IstioInjection = nil
+	ambient.Definition.IstioDataPlane = "ambient"
+	ambient.Definition.IstioWaypoint = map[string]any{"replicas": 2.0, "cpuRequest": "250m"}
+	def, failure = server.applicationDeploymentPipeline(ctx, ambient, cluster)
+	if failure != nil || len(def.Stages) != 3 || def.Stages[1].ID != "istio-ambient" || def.Stages[2].ID != "deploy-1" {
+		t.Fatal("ambient deployment does not install ambient mode before deploying", failure, def)
+	}
+	var deploy map[string]any
+	_ = json.Unmarshal(def.Stages[2].Spec, &deploy)
+	waypoint, _ := deploy["istioWaypoint"].(map[string]any)
+	if deploy["istioDataPlane"] != "ambient" || waypoint["replicas"] != 2.0 || waypoint["cpuRequest"] != "250m" {
+		t.Fatalf("ambient settings not passed to the deployer: %v", deploy)
+	}
+	cluster.Spec = json.RawMessage(`{"mode":"multi","members":[{"name":"one"},{"name":"two"},{"name":"three"}]}`)
+	if _, failure = server.applicationDeploymentPipeline(ctx, ambient, cluster); failure == nil || failure.code != "invalid_istio_data_plane" {
+		t.Fatal("ambient mode accepted on a multi-cluster deployment", failure)
 	}
 }
 
