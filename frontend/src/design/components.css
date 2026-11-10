@@ -7,9 +7,14 @@
  * actions, frameless icon actions, and color only where it carries state.
  */
 
-/* Focus ------------------------------------------------------------------- */
+/* Focus and motion -------------------------------------------------------- */
 
 :is(button, summary, a, [tabindex]):focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+/* Headings focused by script to announce new content are not controls: no ring. */
+:is(h1, h2, h3, h4)[tabindex="-1"]:focus-visible { outline: none; }
+
+/* Views and notifications appear without entrance motion. */
+.view, .toast { animation: none; }
 
 /* Buttons ----------------------------------------------------------------- */
 
@@ -27,8 +32,6 @@
   box-shadow: none;
   transition: background-color var(--duration-fast) var(--ease-out), color var(--duration-fast) var(--ease-out), transform var(--duration-fast) var(--ease-out);
 }
-
-.button:disabled { opacity: .4; }
 
 .button.primary, .resource-action.action-create { background: var(--primary); color: var(--primary-foreground); }
 .button.primary:hover:not(:disabled), .resource-action.action-create:hover:not(:disabled) { background: var(--primary-hover); color: var(--primary-foreground); }
@@ -58,7 +61,7 @@
   font-weight: 550;
 }
 
-/* Icon actions: frameless, revealed on hover. Declared after the button
+/* Icon actions: frameless, brightened on hover. Declared after the button
    variants so they win over `.button.secondary` at equal specificity. */
 .button.icon-button,
 .icon-button,
@@ -78,21 +81,40 @@
 }
 :is(.button.icon-button, .icon-button, .theme-toggle, .resource-action:not(.action-create, .action-add)):hover:not(:disabled) { background: var(--muted); color: var(--foreground); }
 .resource-action.action-delete:hover:not(:disabled) { background: var(--error-background); color: var(--error-foreground); }
-.resource-action:disabled:hover { background: transparent; color: var(--muted-foreground); }
 .icon-button.is-busy .action-icon { animation: icon-spin .8s linear infinite; }
 @keyframes icon-spin { to { transform: rotate(360deg); } }
 .theme-toggle svg { width: 17px; height: 17px; }
+
+/* Disabled actions remain readable, but never look like active destinations.
+   Declared after every variant so it wins at equal specificity. */
+:is(.button, .resource-action, .configuration-kind):disabled {
+  border-color: var(--border);
+  background: var(--muted);
+  color: var(--muted-foreground);
+  box-shadow: none;
+  opacity: .6;
+  cursor: not-allowed;
+}
+
+/* A disabled action explains itself on hover or keyboard focus. */
+.disabled-action-hint { position: relative; display: flex; min-width: 0; }
+.disabled-action-hint > button, .disabled-action-hint > .resource-action { width: 100%; }
+.disabled-action-hint > button:disabled { pointer-events: none; }
+.disabled-action-hint:has(> button:disabled) { cursor: not-allowed; }
+.disabled-action-hint:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; border-radius: var(--radius-sm); }
+.disabled-action-tooltip { position: absolute; top: calc(100% + 8px); right: 0; z-index: 100; width: max-content; max-width: min(320px, calc(100vw - 32px)); padding: 8px 10px; border-radius: var(--radius-sm); background: var(--foreground); color: var(--background); font: 400 12px/1.5 var(--font-sans); text-align: left; box-shadow: var(--shadow-md); pointer-events: none; }
+.disabled-action-tooltip[hidden] { display: none; }
 
 .text-button { color: var(--foreground); font-weight: 550; text-decoration: underline; text-underline-offset: 3px; text-decoration-color: var(--input); }
 .text-button:hover { background: transparent; text-decoration-color: var(--foreground); }
 
 /* Fields ------------------------------------------------------------------ */
 
+/* Field states rise in specificity: base < hover < invalid < focus. The base
+   selectors use :where() so contextual field rules win without escalation. */
 label { font-weight: 550; }
 
-input:not([type="checkbox"]):not([type="radio"]):not([type="color"]):not([type="file"]),
-select,
-textarea {
+:where(input:not([type="checkbox"], [type="radio"], [type="color"], [type="file"]), select, textarea) {
   border-color: var(--field-border);
   border-radius: var(--radius-sm);
   background-color: var(--card);
@@ -100,10 +122,20 @@ textarea {
   box-shadow: none;
   transition: border-color var(--duration-fast) var(--ease-out), box-shadow var(--duration-fast) var(--ease-out);
 }
-input:not([type="checkbox"]):not([type="radio"]):not([type="color"]):not([type="file"]),
-select { min-height: var(--control-height); }
-:is(input, select, textarea):hover:not(:disabled):not(:focus) { border-color: var(--foreground); }
-:is(input, select, textarea):focus { border-color: var(--ring); box-shadow: 0 0 0 3px var(--focus-ring); outline: none; }
+:where(input:not([type="checkbox"], [type="radio"], [type="color"], [type="file"]), select) { min-height: var(--control-height); }
+:where(input:not([type="checkbox"], [type="radio"], [type="color"], [type="file"]), select, textarea):disabled { border-color: var(--border); background-color: var(--muted); color: var(--muted-foreground); cursor: not-allowed; }
+:where(input, select, textarea):hover:not(:disabled, :focus) { border-color: var(--foreground); }
+:where(input, select, textarea)[aria-invalid="true"]:not(:focus) { border-color: var(--error-foreground); }
+:where(input, select, textarea)[aria-invalid="true"] { --field-focus-color: var(--error-foreground); }
+
+/* Focus changes paint only: text fields draw an inner ring, so focusing or
+   validating a field never shifts the layout around it. */
+:where(input, select, textarea):focus { border-color: var(--ring); box-shadow: 0 0 0 3px var(--focus-ring); outline: none; }
+:where(input:not([type="checkbox"], [type="radio"], [type="color"], [type="file"]), select, textarea):focus {
+  border-color: var(--field-focus-color, var(--ring));
+  box-shadow: var(--field-focus-shadow, inset 0 0 0 1px var(--field-focus-color, var(--ring)));
+}
+
 input[type="checkbox"], input[type="radio"] { accent-color: var(--primary); }
 select { cursor: pointer; }
 
@@ -118,9 +150,16 @@ input[type="file"]::file-selector-button {
   font: 550 13px/20px var(--font-sans);
   cursor: pointer;
 }
-input[type="file"]::file-selector-button:hover { background: var(--primary-hover); }
+input[type="file"]:not(:disabled)::file-selector-button:hover { background: var(--primary-hover); }
+input[type="file"]:disabled { opacity: .6; cursor: not-allowed; }
+input[type="file"]:disabled::file-selector-button { background: var(--muted); color: var(--muted-foreground); cursor: not-allowed; }
 
 .field-hint { color: var(--muted-foreground); }
+
+/* Inline feedback grows below each field without shifting adjacent controls. */
+.field-validation-error { display: block; margin: 0; color: var(--error-foreground); font-size: 12px; font-weight: 400; line-height: 1.4; text-align: left; overflow-wrap: anywhere; }
+/* Keep the controls level when a single field displays validation feedback. */
+:is(.field-row, .schema-fields, .capacity-grid, .pool-row) { align-items: start; }
 
 /* Surfaces ---------------------------------------------------------------- */
 
@@ -131,30 +170,47 @@ input[type="file"]::file-selector-button:hover { background: var(--primary-hover
   box-shadow: none;
 }
 
-/* Lists and tables -------------------------------------------------------- */
+/* Tables ------------------------------------------------------------------ */
 
-/* Resource lists: quiet headers, hairline rows, people and dates as light
-   metadata, row actions revealed on hover or keyboard focus. */
-@container resource-list (min-width: 1041px) {
-  .resource-list-table { border-collapse: separate; border-spacing: 0; }
-  .resource-list-table th { height: 40px; padding: 0 16px; border-bottom: 1px solid var(--border); background: transparent; color: var(--muted-foreground); font-size: 12px; font-weight: 500; letter-spacing: 0; text-transform: none; white-space: nowrap; }
-  .resource-list-table th button { color: inherit; font: inherit; }
-  .resource-list-table th:is([aria-sort="ascending"], [aria-sort="descending"]) { color: var(--foreground); }
-  .resource-list-table td { height: 60px; padding: 10px 16px; border-bottom: 1px solid var(--border); color: var(--muted-foreground); font-size: 13px; vertical-align: middle; }
-  .resource-list-table td:first-child { color: var(--foreground); }
-  .resource-list-table tbody tr:last-child td { border-bottom: 0; }
-  .resource-list-actions .history-row-actions { justify-content: flex-end; }
+/* One system for every table: hairline rows instead of a grid of boxes, small
+   muted column labels, a single spacing scale and figures in tabular digits.
+   Text stays left aligned so columns scan from a straight edge. Narrow
+   containers keep their stacked-card layouts from the console stylesheet. */
+:root {
+  --table-cell-x: 16px;
+  --table-cell-y: 12px;
+  --table-rule: color-mix(in srgb, var(--border) 72%, transparent);
+  --table-head-tint: color-mix(in srgb, var(--muted) 55%, var(--card));
 }
+:is(.resource-list-table, .readout-table, .statistics-table) { border-collapse: separate; border-spacing: 0; font-variant-numeric: tabular-nums; }
+:is(.resource-list-table, .readout-table, .statistics-table) :is(th, td) { text-align: left; line-height: 1.5; }
+:is(.resource-list-table, .readout-table, .statistics-table) :is(thead th, thead th button) { color: var(--muted-foreground); font-size: 12px; font-weight: 500; letter-spacing: .01em; }
+
+/* Resource lists: a card whose rows are separated by hairlines, with people
+   and dates as light metadata. A table wider than its card scrolls inside it,
+   so the row actions stay reachable. */
+.resource-list-table-wrap { overflow-x: auto; }
 .resource-list-table tbody tr { transition: background-color var(--duration-fast) var(--ease-out); }
 .resource-list-table tbody tr:hover { background: color-mix(in srgb, var(--muted) 70%, transparent); }
+/* Rows with details open them on click, as their hover already suggests. */
+.resource-list-table tbody tr.is-openable { cursor: pointer; }
 .resource-list-table td h3 { margin: 0; color: var(--foreground); font-size: 14px; font-weight: 550; letter-spacing: -.01em; }
-.resource-list-date time { font-family: var(--font-mono); font-size: 12px; white-space: nowrap; }
+.resource-list-date time { font-size: 12px; white-space: nowrap; }
+.resource-list-table th button { color: inherit; font: inherit; }
+/* The sorted column reads in full ink, so the current order is visible at a glance. */
+.resource-list-table :is(th[aria-sort="ascending"], th[aria-sort="descending"]),
+.resource-list-table :is(th[aria-sort="ascending"], th[aria-sort="descending"]) button { color: var(--foreground); }
 
-.list-person { display: inline-flex; align-items: center; gap: 8px; max-width: 100%; overflow: hidden; color: var(--foreground); text-overflow: ellipsis; white-space: nowrap; }
-.list-person-avatar { display: grid; width: 22px; height: 22px; flex: 0 0 22px; place-items: center; border-radius: 50%; background: var(--secondary); color: var(--muted-foreground); font-size: 11px; font-weight: 600; text-transform: uppercase; }
-
-/* Row actions stay visible in muted ink and brighten with their row. */
-.resource-list-table tbody tr:is(:hover, :focus-within) .resource-list-actions .resource-action:not(:disabled) { color: var(--foreground); }
+@container resource-list (min-width: 1041px) {
+  /* Lists carry up to ten columns: a tighter gutter keeps them within a laptop-width card. */
+  .resource-list-table { --table-cell-x: 12px; }
+  .resource-list-table thead th { height: 44px; padding: 0 var(--table-cell-x); border: 0; border-bottom: 1px solid var(--border); background: var(--table-head-tint); text-transform: none; white-space: nowrap; }
+  .resource-list-table td { height: 56px; padding: var(--table-cell-y) var(--table-cell-x); border: 0; border-bottom: 1px solid var(--table-rule); color: var(--muted-foreground); font-size: 13px; vertical-align: middle; }
+  .resource-list-table :is(th, td):first-child { padding-left: 20px; }
+  .resource-list-table td:first-child { color: var(--foreground); font-size: 14px; }
+  .resource-list-table tbody tr:last-child td { border-bottom: 0; }
+  .resource-list-table tbody tr:hover { background: color-mix(in srgb, var(--muted) 45%, transparent); }
+}
 
 /* Narrow lists render rows as cards (console layer); keep their labels quiet. */
 @container resource-list (max-width: 1040px) {
@@ -162,7 +218,80 @@ input[type="file"]::file-selector-button:hover { background: var(--primary-hover
   .resource-list-table tbody td h3 { margin: 0; font-size: 15px; font-weight: 600; }
 }
 
+/* Row actions stay visible in muted ink and brighten with their row. */
+.resource-list-table .history-row-actions { opacity: 1; visibility: visible; pointer-events: auto; }
+.resource-list-table tbody tr:is(:hover, :focus-within) .history-row-actions .resource-action:not(:disabled) { color: var(--foreground); }
+
+.list-person { display: inline-flex; align-items: center; gap: 8px; max-width: 100%; overflow: hidden; color: var(--foreground); text-overflow: ellipsis; white-space: nowrap; }
+.list-person-avatar { display: grid; width: 22px; height: 22px; flex: 0 0 22px; place-items: center; border-radius: 50%; background: var(--secondary); color: var(--muted-foreground); font-size: 11px; font-weight: 600; text-transform: uppercase; }
+
 .list-toolbar > input[type="search"] { max-width: 420px; }
+/* On phones the search shrinks first, so search, count and display options share one row. */
+@media (max-width: 600px) { .list-toolbar > input[type="search"] { flex: 1 1 0; max-width: none; } }
+
+/* Read-only and statistics tables: the same rhythm, framed by one rounded edge. */
+.readout-table-wrap, .statistics-table-wrap { min-width: 0; }
+@container (min-width: 601px) {
+  :is(.readout-table, .statistics-table) { border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--card); overflow: hidden; }
+  :is(.readout-table, .statistics-table) :is(th, td) { padding: var(--table-cell-y) var(--table-cell-x); border: 0; border-bottom: 1px solid var(--table-rule); vertical-align: top; }
+  :is(.readout-table, .statistics-table) thead th { background: var(--table-head-tint); border-bottom-color: var(--border); }
+  :is(.readout-table, .statistics-table) tbody tr:last-child :is(th, td) { border-bottom: 0; }
+  :is(.readout-table, .statistics-table) tbody :is(th[scope="row"], td:first-child) { color: var(--foreground); font-weight: 500; background: transparent; }
+  :is(.readout-table, .statistics-table) td { color: var(--foreground); font-weight: 400; }
+}
+
+/* Small read-only tables remain tables, even in a side-by-side column. */
+.readout-compact { display: table; width: 100%; table-layout: auto; }
+.readout-compact thead { display: table-header-group; position: static; width: auto; height: auto; clip-path: none; overflow: visible; }
+.readout-compact tbody { display: table-row-group; }
+.readout-compact tbody tr { display: table-row; padding: 0; }
+.readout-compact tbody :is(th, td) { display: table-cell; padding: var(--table-cell-y) var(--table-cell-x); border: 0; border-bottom: 1px solid var(--table-rule); overflow-wrap: anywhere; }
+.readout-compact tbody tr:last-child :is(th, td) { border-bottom: 0; }
+.readout-compact tbody td::before { display: none; }
+
+/* Property sheets ---------------------------------------------------------- */
+
+/* Field and value pairs read as a property sheet: label on the left, value on the right. */
+.readout-field-value { border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--card); overflow: hidden; }
+.readout-table.readout-field-value thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+.readout-field-value tbody :is(th, td) { padding: var(--table-cell-y) var(--table-cell-x); border: 0; border-bottom: 1px solid var(--table-rule); vertical-align: top; background: transparent; }
+.readout-field-value tbody tr:last-child :is(th, td) { border-bottom: 0; }
+.readout-field-value tbody :is(th, td):first-child { width: min(36%, 260px); color: var(--muted-foreground); font-size: 13px; font-weight: 400; }
+.readout-field-value tbody td:not(:first-child) { color: var(--foreground); font-size: 14px; }
+
+/* Detail field lists share the property-sheet look of field and value tables. */
+:is(.input-data-grid, .simple-detail-grid, .detail-page .details-summary, .wizard-review dl) { border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--card); overflow: hidden; }
+:is(.input-data-grid, .simple-detail-grid, .detail-page .details-summary, .wizard-review dl) > div { gap: 0; padding: 0; border: 0; border-bottom: 1px solid var(--table-rule); background: transparent; }
+:is(.input-data-grid, .simple-detail-grid, .detail-page .details-summary, .wizard-review dl) > div:last-child { border-bottom: 0; }
+:is(.input-data-grid, .simple-detail-grid, .wizard-review dl) > div > dt,
+.detail-page .details-summary > div > span { padding: var(--table-cell-y) var(--table-cell-x); border: 0; background: transparent; color: var(--muted-foreground); font-size: 13px; font-weight: 400; }
+:is(.input-data-grid, .simple-detail-grid, .wizard-review dl) > div > dd,
+.detail-page .details-summary > div > strong { padding: var(--table-cell-y) var(--table-cell-x); color: var(--foreground); font-size: 14px; font-weight: 400; }
+/* A list nested inside a value is part of that value: no second frame. */
+.input-data-grid .input-data-grid { border: 0; border-radius: 0; background: transparent; }
+.input-data-grid .input-data-grid > div > :is(dt, dd) { padding-inline: 0; }
+
+/* A secret value reads as plain text in its sheet, with its reveal action beside it. */
+.simple-secret-field > dd { display: flex; align-items: center; gap: 12px; }
+.simple-secret-field input { flex: 1; min-width: 0; min-height: 0; margin: 0; padding: 0; border: 0; border-radius: 0; background: transparent; color: inherit; font: inherit; line-height: inherit; }
+.simple-secret-field .text-button { flex: none; }
+
+/* The created and updated strip uses the same label and value hierarchy, in columns. */
+.resource-attribution { border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--card); overflow: hidden; }
+.resource-attribution > div { padding: var(--table-cell-y) var(--table-cell-x); border: 0; border-inline-end: 1px solid var(--table-rule); }
+.resource-attribution > div:last-child { border-inline-end: 0; }
+.resource-attribution dt { margin: 0 0 4px; color: var(--muted-foreground); font-size: 12px; font-weight: 400; }
+.resource-attribution dd { margin: 0; color: var(--foreground); font-size: 14px; font-weight: 400; }
+@media screen and (max-width: 1000px) {
+  .resource-attribution > div:nth-child(2n) { border-inline-end: 0; }
+  .resource-attribution > div:nth-last-child(n + 3) { border-bottom: 1px solid var(--table-rule); }
+}
+@media screen and (max-width: 480px) {
+  .resource-attribution > div { border-inline-end: 0; }
+  .resource-attribution > div:not(:last-child) { border-bottom: 1px solid var(--table-rule); }
+}
+
+/* Empty states ------------------------------------------------------------ */
 
 .table-empty, .empty-state { padding-block: 48px; }
 .table-empty-copy > strong, .empty-state strong { color: var(--foreground); font-size: 15px; font-weight: 600; }
@@ -201,6 +330,29 @@ input[type="file"]::file-selector-button:hover { background: var(--primary-hover
 
 .results-tabs button.active, .form-tab-list [aria-selected="true"] { border-bottom-color: var(--foreground); color: var(--foreground); }
 
+/* Detail pages and nested form sections share one tab rhythm. */
+.detail-tabs { display: flex; flex-wrap: wrap; gap: 8px 24px; margin: 24px 0; padding: 0; border-bottom: 1px solid var(--border); }
+.detail-tabs > button { min-height: 44px; padding: 10px 8px; border: 0; border-bottom: 2px solid transparent; background: transparent; color: var(--muted-foreground); font-weight: 600; }
+.detail-tabs > button.active { color: var(--foreground); border-bottom-color: var(--foreground); }
+.form-tab-list { gap: 8px 24px; margin: 0 0 24px; }
+.form-tab-list > [role="tab"] { padding-inline: 8px; }
+.form-tab-panel[hidden] { display: none; }
+/* A tab already separates its content; avoid a second divider and empty band. */
+.form-tab-panel > :is(.details-section, .readout-section):first-child { margin-top: 0; padding-top: 0; border-top: 0; }
+/* Nested tabs use a single gap between their heading and fields. */
+.form-tab-panel .form-tab-list { margin-bottom: 16px; }
+.form-tab-panel > .form-tabs { padding-top: 0; }
+.form-tab-panel .form-tab-panel { gap: 16px; }
+.form-tab-panel .form-tab-panel > .form-stack { gap: 16px; }
+/* Stable actions: tabs wrap independently, without pushing add controls down. */
+.form-tab-heading { display: grid; grid-template-columns: minmax(0, 1fr) max-content; align-items: start; gap: 12px 20px; margin-bottom: 16px; }
+.form-tab-heading > .form-tab-list { min-height: 40px; margin-bottom: 0; }
+.form-tab-actions { min-height: 40px; align-items: center; justify-content: flex-end; }
+@media (max-width: 600px) {
+  .form-tab-heading { grid-template-columns: minmax(0, 1fr); }
+  .form-tab-actions { justify-content: flex-start; }
+}
+
 /* Status ------------------------------------------------------------------ */
 
 .status, .status-pill {
@@ -227,13 +379,102 @@ input[type="file"]::file-selector-button:hover { background: var(--primary-hover
 /* Dialogs ----------------------------------------------------------------- */
 
 .modal { border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--card); box-shadow: var(--shadow); }
-
 .modal::backdrop { background: var(--backdrop); }
 .modal-header h2 { font-weight: var(--font-weight-title); letter-spacing: -.03em; }
-
+/* Scrollbars must not recenter a dialog's form when its content grows. */
+.modal-body { scrollbar-gutter: stable; }
+/* Configuration types: a title and one line saying what each does, or why it
+   is unavailable. That reason stays at full contrast, so it is not dimmed. */
+.configuration-kind { text-align: left; }
+.configuration-kind-copy { display: grid; flex: 1; gap: 2px; min-width: 0; }
+.configuration-kind-copy strong { color: var(--foreground); font-size: 14px; font-weight: 550; }
+.configuration-kind-copy span { color: var(--muted-foreground); font-size: 13px; font-weight: 400; }
+.configuration-kind:disabled { opacity: 1; }
+.configuration-kind:disabled .configuration-kind-copy strong { color: var(--muted-foreground); }
+.configuration-kind:disabled .action-icon { visibility: hidden; }
 
 .editor-back { color: var(--muted-foreground); transition: color var(--duration-fast) var(--ease-out); }
 .editor-back:hover { color: var(--foreground); }
+
+/* Wizard ------------------------------------------------------------------ */
+
+.wizard-progress { background: var(--card); border-radius: var(--radius-lg) var(--radius-lg) 0 0; }
+.wizard-progress button { border-radius: var(--radius-sm); }
+.wizard-progress button[aria-current] { background: var(--muted); color: var(--foreground); }
+.wizard-progress [aria-current] .wizard-step-number { border-color: var(--primary); background: var(--primary); color: var(--primary-foreground); }
+.wizard-panels :is(.field-row, .schema-fields) { align-items: start; }
+.modal-body:has(> .wizard-form) { padding: 0; }
+.modal-body > .wizard-form .wizard-panels > section { min-height: 260px; padding: 24px; }
+
+/* Editors ----------------------------------------------------------------- */
+
+/* Page editors use the page width, rather than the old modal width. */
+.editor-page.cluster-maintenance-modal { width: 100%; max-width: none; }
+.cluster-maintenance-modal .wizard-actions { position: sticky; bottom: 0; z-index: 1; margin: 0; background: var(--surface); }
+
+/* Placement: selector and toleration settings sit side by side, divided by a
+   single rule instead of nested cards. */
+.placement-sections { position: relative; column-gap: 40px; }
+.placement-sections:has(> :nth-child(2))::before { content: ""; position: absolute; inset-block: 0; inset-inline-start: 50%; border-inline-start: 1px solid var(--border); pointer-events: none; }
+.placement-sections:not(:has(> :nth-child(2))) { grid-template-columns: minmax(0, 1fr); }
+@media (max-width: 900px) {
+  .placement-sections { row-gap: 20px; column-gap: 0; }
+  .placement-sections::before { display: none; }
+  .placement-sections > :nth-child(2) { border-block-start: 1px solid var(--border); padding-block-start: 20px; }
+}
+.placement-fields { align-content: start; }
+.placement-field-group { gap: 12px; }
+.placement-field-actions { display: flex; justify-content: flex-end; min-height: 34px; }
+:is(.placement-pair, .placement-taint, .placement-toleration) { align-items: start; }
+:is(.placement-pair, .placement-taint, .placement-toleration) > button { align-self: start; margin-top: 27px; }
+.placement-service-heading { grid-template-columns: minmax(0, 320px) auto; justify-content: space-between; }
+@media (max-width: 720px) { .placement-service-heading { grid-template-columns: minmax(0, 1fr) auto; } }
+/* Each pool tab shows its defaults before the editable settings. */
+.pool-placement-layout { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; min-width: 0; }
+.pool-placement-layout .placement-field-actions { justify-content: flex-start; }
+.deployment-placement-fields { min-width: 0; margin: 0; padding: 0; border: 0; background: transparent; }
+
+/* Service resources: label, request and limit per row, aligned to the top. */
+.service-resources .form-tab-panel > .form-stack { gap: 12px; }
+.service-resources .service-resource-grid { margin-block: 0; }
+.service-resource-grid { align-items: start; }
+.service-resource-grid > :nth-child(3n + 1) { align-self: start; padding-top: 8px; }
+.service-resource-grid > strong { align-self: center; }
+.resource-quantity { display: grid; grid-template-columns: minmax(70px, 1fr) minmax(105px, .8fr); align-items: start; gap: 8px; }
+.resource-quantity > .field-validation-error { grid-column: 1 / -1; }
+.resource-quantity > :is(input, select), .resource-quantity-value > input { width: 100%; min-width: 0; }
+.resource-quantity-value { min-width: 0; }
+
+/* Network and mesh editors avoid adding full section spacing again when nested. */
+.network-phases-editor, .network-phase-panel { gap: 16px; }
+.network-link-settings { min-width: 0; margin: 0; padding: 0; border: 0; }
+.network-link-settings[hidden] { display: none; }
+.istio-injection-editor .form-disclosure-body { gap: 12px; padding-bottom: 16px; }
+.istio-injection-editor .form-section-actions { margin-bottom: 0; }
+.istio-service-heading { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; align-items: end; gap: 16px; }
+@media (max-width: 600px) {
+  .istio-service-heading { grid-template-columns: minmax(0, 1fr) auto; }
+  .istio-service-heading > label:first-child { grid-column: 1 / -1; }
+}
+
+.strategy-target-editor { padding: 0; background: transparent; }
+.strategy-target-editor > .target-editor-heading { margin: 0; padding: 12px 0; }
+.strategy-target-editor .target-editor-heading > span { padding: 0; background: transparent; color: var(--muted-foreground); font-weight: 400; }
+.strategy-target-editor .target-editor-list { gap: 8px; padding: 8px 0 0; }
+.strategy-target-editor .target-editor-list article { padding: 8px 12px; border: 1px solid var(--border); background: transparent; }
+
+/* Istio: whether to use it comes first; ambient mode then sizes its waypoint. */
+.istio-settings > label { max-width: 360px; }
+.istio-ambient-settings { display: grid; gap: 16px; min-width: 0; margin: 0; padding: 0; border: 0; }
+.istio-ambient-settings[hidden] { display: none; }
+.waypoint-settings { display: grid; gap: 12px; max-width: 720px; padding: 16px 20px 20px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--card); }
+.waypoint-settings-title { margin: 0; font-size: 14px; font-weight: 600; }
+.waypoint-settings > label { max-width: 200px; margin: 0; }
+.waypoint-hint { margin: -4px 0 4px; color: var(--muted-foreground); font-size: 13px; line-height: 1.5; }
+.waypoint-resource-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px 20px; }
+.waypoint-resource { display: grid; gap: 8px; min-width: 0; }
+.waypoint-resource-label { font-size: 14px; font-weight: 550; }
+@media (max-width: 600px) { .waypoint-resource-grid { grid-template-columns: minmax(0, 1fr); } }
 
 /* Load profile ------------------------------------------------------------ */
 
@@ -249,20 +490,75 @@ input[type="file"]::file-selector-button:hover { background: var(--primary-hover
   .load-profile-live { position: static; }
 }
 
+/* Detail pages ------------------------------------------------------------ */
+
+/* Detail pages use their grid gap as the single source of outer spacing. */
+.detail-page > :is(.resource-attribution, .detail-tabs, .cluster-resource-summary) { margin-block: 0; }
+.activity-status { margin-bottom: 24px; }
+
+/* Topology diagrams stay readable in dark mode; their exported canvas stays white. */
+:root[data-theme="dark"] .application-topology-edges { stroke: var(--muted-foreground); }
+:root[data-theme="dark"] .application-topology-node circle { fill: #b0bac7; }
+:root[data-theme="dark"] .application-topology-node.entrypoint circle { fill: #8293ab; }
+.application-topology-node:hover circle { transform: none; }
+
+/* Results ----------------------------------------------------------------- */
+
+/* On screen, statistics tabs already name each section. */
+@media screen { .form-tab-panel > .service-statistics > h4 { display: none; } }
+/* Printed results use plain ink on paper and show every statistics tab. */
+@media print {
+  :root { --background: #ffffff; --sheet: #ffffff; --foreground: #111111; --card: #ffffff; --card-foreground: #111111; --muted: #f2f2f2; --muted-foreground: #444444; --border: #cccccc; --primary: #111111; --primary-foreground: #ffffff; }
+  .statistics-card .form-tab-list { display: none; }
+  .statistics-card .form-tab-panel[hidden] { display: block !important; }
+}
+
 /* Admin requests ---------------------------------------------------------- */
 
-.request-composer { display: grid; gap: 12px; max-width: 720px; margin-bottom: 40px; padding: 20px; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--card); }
+/* Members follow their requests on the left and write a new one in a card that
+   stays in view on the right; narrow screens put the form first. */
+.request-page-intro { max-width: 640px; margin: -8px 0 32px; color: var(--muted-foreground); font-size: 15px; line-height: 1.5; }
+.request-page { display: grid; grid-template-columns: minmax(0, 1fr) minmax(300px, 360px); align-items: start; gap: 32px; }
+.request-feed { min-width: 0; }
+.request-feed > .request-list + .request-group-title, .request-feed > .request-list + .request-history { margin-top: 28px; }
+/* Resolved requests fold away, so a long history never crowds the open ones. */
+.request-history { margin: 0; padding: 0; border: 0; border-radius: 0; background: transparent; }
+.request-history > summary { width: fit-content; padding: 4px 8px 4px 0; border-radius: var(--radius-sm); cursor: pointer; list-style: none; }
+.request-history > summary::-webkit-details-marker { display: none; }
+.request-history > summary::before { content: ""; width: 6px; height: 6px; margin-right: 2px; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; transform: rotate(-45deg); transition: transform var(--duration-fast) var(--ease-out); }
+.request-history[open] > summary::before { transform: rotate(45deg); }
+.request-history > summary:hover { color: var(--foreground); }
+.request-history:not([open]) > summary { margin-bottom: 0; }
+.request-more { justify-self: start; margin-top: 8px; }
+.request-group-title { display: flex; align-items: center; gap: 8px; margin: 0 0 10px; color: var(--muted-foreground); font-size: 12px; font-weight: 550; letter-spacing: .06em; text-transform: uppercase; }
+.request-group-title > span { color: var(--muted-foreground); font: 500 12px/1 var(--font-mono); letter-spacing: 0; }
+.request-composer { position: sticky; top: 24px; display: grid; gap: 14px; padding: 20px; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--card); box-shadow: var(--shadow-sm); }
+.request-composer-title { margin: 0; font-size: 16px; font-weight: 600; letter-spacing: -.01em; }
+.request-composer-hint { margin: -6px 0 0; color: var(--muted-foreground); font-size: 13px; line-height: 1.5; }
 .request-composer > label { margin: 0; }
-.request-composer textarea { min-height: 120px; resize: vertical; }
-.request-composer-footer { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 16px; }
-.request-composer-hint { flex: 1; min-width: 200px; color: var(--muted-foreground); font-size: 13px; }
+.request-composer textarea { min-height: 140px; resize: vertical; }
+.request-composer-footer { display: flex; align-items: center; justify-content: space-between; gap: 8px 16px; }
+.request-composer > .button { width: 100%; }
 .request-composer-count { color: var(--muted-foreground); font: 500 12px/1 var(--font-mono); }
-.request-section-title { margin: 0 0 12px; font-size: 15px; font-weight: 600; }
+/* Open requests used out of the limit, one pip each. */
+.request-slots { display: inline-flex; align-items: center; gap: 8px; color: var(--muted-foreground); font-size: 13px; }
+.request-slots-pips { display: inline-flex; gap: 4px; }
+.request-slots-pips > span { width: 8px; height: 8px; border-radius: 50%; background: var(--border); }
+.request-slots-pips > .is-used { background: var(--foreground); }
+@media (max-width: 1100px) {
+  .request-page { grid-template-columns: minmax(0, 1fr); }
+  .request-composer { position: static; order: -1; }
+}
+.request-section-title { margin: 0 0 16px; font-size: 16px; font-weight: 600; letter-spacing: -.01em; }
+/* The inbox filters by status on the left and by requester on the right. */
+.request-inbox-toolbar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px 16px; max-width: 880px; margin-bottom: 20px; }
+.request-inbox-toolbar > .history-filters { margin: 0; }
+.request-search { flex: 0 1 280px; min-width: 0; }
+@media (max-width: 600px) { .request-search { flex-basis: 100%; } }
 .request-filter-count { margin-left: 4px; color: var(--muted-foreground); font: 500 12px/1 var(--font-mono); }
 
 .request-list { display: grid; gap: 12px; max-width: 880px; margin: 0; padding: 0; list-style: none; }
 .request-card { display: grid; gap: 12px; padding: 16px 20px; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--card); }
-.request-card.is-open { border-left: 3px solid var(--amber); }
 .request-card-head { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 14px; color: var(--muted-foreground); font-size: 13px; }
 .request-card-head time { font: 500 12px/1 var(--font-mono); }
 .request-card-head .status { margin-left: auto; }
@@ -271,8 +567,26 @@ input[type="file"]::file-selector-button:hover { background: var(--primary-hover
 .request-reply-author { color: var(--muted-foreground); font-size: 12px; font-weight: 600; }
 .request-quoted { max-height: 160px; overflow: auto; padding-left: 12px; border-left: 2px solid var(--border); color: var(--muted-foreground); }
 .request-card-foot { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px 16px; padding-top: 12px; border-top: 1px solid var(--border); color: var(--muted-foreground); font-size: 13px; }
-.request-card-foot > .button { margin-left: auto; }
+.request-card-actions { display: flex; align-items: center; gap: 8px; margin-left: auto; }
+/* Actions alone need no divider; a resolution keeps its rule above it. */
+.request-card.is-open .request-card-foot { padding-top: 0; border-top: 0; }
+/* A member edits an open request in place of its message. */
+.request-edit { display: grid; gap: 8px; margin: 0; }
+.request-edit > label { margin: 0; }
+.request-edit textarea { min-height: 96px; resize: vertical; }
+.request-edit-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
+.request-edit-actions > .request-composer-count { margin-right: auto; }
 .request-empty { max-width: 880px; }
+
+/* Service override picker ------------------------------------------------- */
+
+.service-override-picker label { margin-bottom: 12px; }
+.service-override-options { display: grid; gap: 6px; max-height: min(420px, 55vh); margin: 0; padding: 0; overflow-y: auto; list-style: none; }
+.service-override-option { display: flex; width: 100%; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--card); color: var(--foreground); font: inherit; text-align: left; cursor: pointer; }
+.service-override-option:hover:not(:disabled) { border-color: var(--foreground); }
+.service-override-option:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+.service-override-option:disabled { color: var(--muted-foreground); background: var(--muted); cursor: not-allowed; }
+.service-override-used { font-size: 12px; }
 
 /* Sidebar counter for items that need attention. */
 .app-nav-badge { min-width: 20px; margin-left: auto; padding: 1px 7px; border-radius: var(--radius-full); background: var(--primary); color: var(--primary-foreground); font: 600 11px/18px var(--font-mono); text-align: center; }
@@ -285,11 +599,16 @@ input[type="file"]::file-selector-button:hover { background: var(--primary-hover
 kbd { padding: 1px 6px; border: 1px solid var(--input); border-radius: 5px; background: var(--card); color: var(--muted-foreground); font: 500 11px/18px var(--font-mono); }
 
 .command-palette { width: min(560px, calc(100vw - 32px)); max-height: min(480px, calc(100vh - 32px)); margin: 14vh auto auto; padding: 0; overflow: hidden; }
-.command-palette-search { display: flex; align-items: center; gap: 10px; padding: 0 16px; border-bottom: 1px solid var(--border); color: var(--muted-foreground); }
+.command-palette[open] { display: flex; flex-direction: column; max-height: min(480px, 72svh); }
+/* The search is a single header, rather than a nested form box. */
+.command-palette-search { display: flex; flex: none; align-items: center; gap: 10px; min-height: 56px; padding: 8px 16px; border-bottom: 1px solid var(--border); color: var(--muted-foreground); }
+.command-palette-search:focus-within { border-bottom-color: var(--ring); }
+.command-palette-search > :is(.action-icon, kbd) { flex: none; }
 .command-palette-search input,
 .command-palette-search input:hover:not(:disabled):not(:focus),
-.command-palette-search input:focus { flex: 1; min-height: 56px; padding: 0; border: 0; background: transparent; box-shadow: none; color: var(--foreground); font-size: 16px; }
-.command-palette ul { display: grid; gap: 2px; max-height: 380px; margin: 0; padding: 6px; overflow-y: auto; list-style: none; }
+.command-palette-search input:focus { flex: 1 1 0; width: 0; min-width: 0; height: 40px; min-height: 40px; padding: 0; border: 0; border-radius: 0; background: transparent; box-shadow: none; color: var(--foreground); font-size: 16px; }
+.command-palette [role="listbox"] { display: grid; gap: 2px; min-height: 0; margin: 0; padding: 6px; overflow-y: auto; scrollbar-gutter: stable; list-style: none; }
+.command-palette [role="listbox"]:empty { display: none; }
 .command-palette li { display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 12px; padding: 10px 12px; border-radius: var(--radius-sm); cursor: pointer; }
 .command-palette li strong { font-size: 14px; font-weight: 550; }
 .command-palette li span { grid-column: 1; color: var(--muted-foreground); font-size: 13px; }
@@ -298,21 +617,18 @@ kbd { padding: 1px 6px; border: 1px solid var(--input); border-radius: 5px; back
 .command-palette li[aria-selected="true"] .action-icon { opacity: 1; }
 .command-palette-empty { margin: 0; padding: 32px 16px; color: var(--muted-foreground); font-size: 14px; text-align: center; }
 
-/* Notifications carry severity through their full background. */
-.toast { border-radius:var(--radius-sm); box-shadow:var(--shadow-md); }
-.toast.success { background:var(--success-background); color:var(--success-foreground); border:1px solid color-mix(in srgb,var(--success-foreground) 30%,transparent); }
-.toast.error { background:var(--error-background); color:var(--error-foreground); border:1px solid color-mix(in srgb,var(--error-foreground) 30%,transparent); }
-.toast.info { background:var(--blue-background); color:var(--blue); border:1px solid color-mix(in srgb,var(--blue) 30%,transparent); }
-.toast-message::before { content:none; }
-.toast .icon-button { color:inherit; }
-.toast .icon-button:hover:not(:disabled) { background:color-mix(in srgb,currentColor 10%,transparent); color:inherit; }
+/* Notifications ----------------------------------------------------------- */
 
-/* Wizard ------------------------------------------------------------------ */
-
-.wizard-progress { background: var(--card); border-radius: var(--radius-lg) var(--radius-lg) 0 0; }
-.wizard-progress button { border-radius: var(--radius-sm); }
-.wizard-progress button[aria-current] { background: var(--muted); color: var(--foreground); }
-.wizard-progress [aria-current] .wizard-step-number { border-color: var(--primary); background: var(--primary); color: var(--primary-foreground); }
+/* Notifications size to their message and carry severity through their full background. */
+.toast-region { display: grid; justify-items: end; gap: 8px; width: auto; max-width: min(400px, calc(100vw - 32px)); }
+.toast { align-items: center; gap: 8px; width: fit-content; max-width: 100%; padding: 10px 12px; border-radius: var(--radius-sm); box-shadow: var(--shadow-md); }
+.toast.success { border: 1px solid color-mix(in srgb, var(--success-foreground) 30%, transparent); background: var(--success-background); color: var(--success-foreground); }
+.toast.error { border: 1px solid color-mix(in srgb, var(--error-foreground) 30%, transparent); background: var(--error-background); color: var(--error-foreground); }
+.toast.info { border: 1px solid color-mix(in srgb, var(--blue) 30%, transparent); background: var(--blue-background); color: var(--blue); }
+.toast-message { line-height: 1.4; }
+.toast-message::before { content: none; }
+.toast .icon-button { color: inherit; }
+.toast .icon-button:hover:not(:disabled) { background: color-mix(in srgb, currentColor 10%, transparent); color: inherit; }
 
 /* Feedback ---------------------------------------------------------------- */
 
@@ -320,9 +636,9 @@ kbd { padding: 1px 6px; border: 1px solid var(--input); border-radius: 5px; back
 .connection-notice { border-radius: var(--radius-lg); background: var(--amber-background); }
 
 /* Code previews own their scroll area, independent of their surrounding page. */
-.code-block { position:relative; width:100%; min-width:0; max-width:100%; margin:0; overflow:hidden; border:1px solid var(--code-border,var(--border)); border-radius:var(--radius-sm); background:var(--code-background,var(--muted)); color:var(--code-foreground,var(--foreground)); }
-.code-block-actions { position:absolute; z-index:1; inset:8px 24px auto auto; display:flex; justify-content:flex-end; margin:0; }
-.code-block pre { box-sizing:border-box; width:100%; min-width:0; max-width:100%; max-height:min(56vh,560px); margin:0; padding:50px 16px 16px; overflow:auto; overscroll-behavior:contain; border:0; border-radius:0; background:transparent; color:inherit; font:12px/1.6 var(--font-mono); white-space:pre; tab-size:2; }
-.code-block pre code { font:inherit; white-space:inherit; }
-.code-preview-panel { min-width:0; gap:12px; }
-.code-preview-panel > :is(.details-heading,.details-copy) { margin:0; }
+.code-block { width: 100%; min-width: 0; max-width: 100%; margin: 0; overflow: hidden; border: 1px solid var(--code-border, var(--border)); border-radius: var(--radius-sm); background: var(--code-background, var(--muted)); color: var(--code-foreground, var(--foreground)); }
+.code-block-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; margin: 0; padding: 8px 12px; }
+.code-block pre { box-sizing: border-box; width: 100%; min-width: 0; max-width: 100%; max-height: min(56vh, 560px); margin: 0; padding: 12px 16px 16px; overflow: auto; overscroll-behavior: contain; border: 0; border-radius: 0; background: transparent; color: inherit; font: 12px/1.6 var(--font-mono); white-space: pre; tab-size: 2; }
+.code-block pre code { font: inherit; white-space: inherit; }
+.code-preview-panel { min-width: 0; gap: 12px; }
+.code-preview-panel > :is(.details-heading, .details-copy) { margin: 0; }

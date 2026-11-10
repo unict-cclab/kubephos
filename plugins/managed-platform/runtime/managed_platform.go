@@ -356,8 +356,7 @@ func (plugin Plugin) Execute(ctx context.Context, step domain.PlanStep, log plug
 		if err := placeManagementIngress(ctx, runner, cluster.Spec.Kubeconfig); err != nil {
 			return nil, err
 		}
-		istiodValues := []byte("replicaCount: 1\nnodeSelector:\n  kubephos.dev/role: management\nmeshConfig:\n  enableTracing: true\n  extensionProviders:\n  - name: jaeger\n    opentelemetry:\n      service: jaeger.kubephos-observability.svc.cluster.local\n      port: 4317\n")
-		if _, err := runner.Helm(ctx, cluster.Spec.Kubeconfig, charts["istiod"], istiodValues, "upgrade", "--install", istiodRelease, "@chart", "--namespace", istioNamespace, "--values", "@values", "--wait", "--timeout", "10m", "--atomic"); err != nil {
+		if _, err := runner.Helm(ctx, cluster.Spec.Kubeconfig, charts["istiod"], istiodValues(false), "upgrade", "--install", istiodRelease, "@chart", "--namespace", istioNamespace, "--values", "@values", "--wait", "--timeout", "10m", "--atomic"); err != nil {
 			return nil, fmt.Errorf("install Istio control plane: %w", err)
 		}
 
@@ -604,7 +603,7 @@ func (plugin Plugin) Cleanup(ctx context.Context, step domain.PlanStep, _ json.R
 	if _, err := runner.Kubectl(ctx, cluster.Spec.Kubeconfig, networkObservabilityManifest(input.Marker, cluster.Spec.Networking), "delete", "-f", "-", "--ignore-not-found", "--wait=true", "--timeout=5m"); err != nil {
 		return err
 	}
-	for _, release := range []struct{ name, namespace string }{{headlampRelease, observabilityNamespace}, {kialiRelease, istioNamespace}, {alloyRelease, observabilityNamespace}, {lokiRelease, observabilityNamespace}, {cpaRelease, systemNamespace}, {chaosRelease, chaosNamespace}, {istiodRelease, istioNamespace}, {istioBaseRelease, istioNamespace}} {
+	for _, release := range []struct{ name, namespace string }{{headlampRelease, observabilityNamespace}, {kialiRelease, istioNamespace}, {alloyRelease, observabilityNamespace}, {lokiRelease, observabilityNamespace}, {cpaRelease, systemNamespace}, {chaosRelease, chaosNamespace}, {ztunnelRelease, istioNamespace}, {istioCNIRelease, istioNamespace}, {istiodRelease, istioNamespace}, {istioBaseRelease, istioNamespace}} {
 		if cluster.Spec.Networking == "cilium" && release.namespace == istioNamespace {
 			continue
 		}
@@ -1282,17 +1281,37 @@ func namespaceOwnership(ctx context.Context, runner clusterRunner, kubeconfig, n
 	return object.Metadata.Annotations[ownershipKey] == marker, true, nil
 }
 
+// istiodValues configures the managed control plane. Ambient mode keeps the same
+// settings and adds the ambient profile with the default image variant, the one
+// the managed Harbor mirrors.
+func istiodValues(ambient bool) []byte {
+	values := "replicaCount: 1\nnodeSelector:\n  kubephos.dev/role: management\nmeshConfig:\n  enableTracing: true\n  extensionProviders:\n  - name: jaeger\n    opentelemetry:\n      service: jaeger.kubephos-observability.svc.cluster.local\n      port: 4317\n"
+	if ambient {
+		values += "profile: ambient\nglobal:\n  variant: \"\"\n"
+	}
+	return []byte(values)
+}
+
 func (plugin Plugin) fetchCharts(ctx context.Context, networking ...string) (map[string][]byte, error) {
+	selected := make([]chartSpec, 0, len(managedCharts))
+	for _, chart := range managedCharts {
+		if len(networking) > 0 && networking[0] == "cilium" && (chart.ID == "istio-base" || chart.ID == "istiod" || chart.ID == "kiali") {
+			continue
+		}
+		selected = append(selected, chart)
+	}
+	return plugin.fetchChartSet(ctx, selected)
+}
+
+// fetchChartSet downloads charts in parallel and verifies each digest.
+func (plugin Plugin) fetchChartSet(ctx context.Context, charts []chartSpec) (map[string][]byte, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	values := map[string][]byte{}
 	var lock sync.Mutex
 	var first error
 	var wait sync.WaitGroup
-	for _, chart := range managedCharts {
-		if len(networking) > 0 && networking[0] == "cilium" && (chart.ID == "istio-base" || chart.ID == "istiod" || chart.ID == "kiali") {
-			continue
-		}
+	for _, chart := range charts {
 		chart := chart
 		wait.Add(1)
 		go func() {

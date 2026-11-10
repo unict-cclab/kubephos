@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"kubephos.dev/kubephos/internal/artifacts"
 )
 
 type recordingContainerRunner struct {
@@ -86,11 +88,12 @@ spec:
 }
 
 func TestPluginOutputLimitSupportsMetricsDatasets(t *testing.T) {
-	if pluginOutputLimit != 16*commandOutputLimit {
+	if pluginOutputLimit != 64*commandOutputLimit {
 		t.Fatalf("plugin output limit = %d, command output limit = %d", pluginOutputLimit, commandOutputLimit)
 	}
 	buffer := &limitedBuffer{limit: pluginOutputLimit}
-	payload := make([]byte, commandOutputLimit+1)
+	// Larger than the previous 16 MiB limit, which long metrics runs exceeded.
+	payload := make([]byte, 20<<20)
 	if _, err := buffer.Write(payload); err != nil {
 		t.Fatal(err)
 	}
@@ -571,5 +574,12 @@ func TestPluginErrorMessageUsesBoundedFinalCause(t *testing.T) {
 	}
 	if fallback := pluginErrorMessage(nil, context.DeadlineExceeded); fallback != context.DeadlineExceeded.Error() {
 		t.Fatalf("unexpected fallback %q", fallback)
+	}
+}
+
+// A dataset the artifact store accepts must also fit in the plugin output that carries it.
+func TestPluginOutputCarriesTheLargestArtifact(t *testing.T) {
+	if pluginOutputLimit < artifacts.MaxArtifactBytes {
+		t.Fatalf("plugin output limit %d is below the artifact limit %d", pluginOutputLimit, artifacts.MaxArtifactBytes)
 	}
 }

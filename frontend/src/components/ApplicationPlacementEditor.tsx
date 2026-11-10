@@ -7,6 +7,7 @@ import {KeyValueFields, TolerationFields} from './PlacementFields'
 import {FormTabs} from './FormTabs'
 import {ResourceAction} from './ResourceAction'
 import {ReadoutTable} from './ReadoutTable'
+import {ServiceOverridePicker} from './ServiceOverridePicker'
 
 type Mode = 'inherit' | 'custom' | 'none'
 const modeNames:Record<Mode,string>={inherit:'Common',custom:'Override',none:'Defaults only'}
@@ -17,7 +18,6 @@ export function ApplicationPlacementEditor({services, initial, application, sess
   const [settings,setSettings]=useState<ApplicationPlacement>(() => structuredClone(initial??{}))
   const drafts=Object.fromEntries(Object.entries(settings.serviceOverrides??{}).filter(([id]) => services.some(service => service.id===id)))
   const overrides=Object.fromEntries(Object.entries(drafts).map(([id,entry])=>[id,{nodeSelectorMode:entry.nodeSelectorMode,tolerationsMode:entry.tolerationsMode,...(entry.nodeSelectorMode==='custom'?{nodeSelector:entry.nodeSelector}:{}),...(entry.tolerationsMode==='custom'?{tolerations:entry.tolerations}:{})}]))
-  const next=services.find(service => !Object.hasOwn(overrides,service.id))
   const change=(id:string,values:Partial<ServicePlacementOverride>) => setSettings(current => ({...current,serviceOverrides:{...current.serviceOverrides,[id]:{...current.serviceOverrides?.[id],...values}}}))
   const mode=(id:string,kind:'nodeSelector'|'tolerations',value:Mode) => {
     const current=drafts[id]
@@ -39,7 +39,7 @@ export function ApplicationPlacementEditor({services, initial, application, sess
         <section className="placement-field-group" aria-label="Common node selector"><h4>Node selector</h4><KeyValueFields validate={selectorError()} label="Node selector" value={settings.nodeSelector} onChange={nodeSelector => setSettings(current => ({...current,nodeSelector}))}/></section>
         <section className="placement-field-group" aria-label="Common tolerations"><h4>Tolerations</h4><TolerationFields value={settings.tolerations} onChange={tolerations => setSettings(current => ({...current,tolerations}))}/></section>
       </div></section></>},
-       {id:'services',title:'Service overrides',content:<FormTabs label="Service placement overrides" selectedId={selectedService} onSelect={setSelectedService} actions={<button type="button" className="button secondary compact" disabled={!next} onClick={()=>{if(next){change(next.id,{nodeSelectorMode:'inherit',tolerationsMode:'inherit'});setSelectedService(next.id)}}}>Add service override</button>} items={Object.entries(drafts).map(([id,override])=>({id,title:id,content:<section className="form-stack" aria-label={`Placement for ${id}`}>
+       {id:'services',title:'Service overrides',content:<FormTabs label="Service placement overrides" selectedId={selectedService} onSelect={setSelectedService} actions={<ServiceOverridePicker services={services} taken={id=>Object.hasOwn(drafts,id)} onAdd={id=>{change(id,{nodeSelectorMode:'inherit',tolerationsMode:'inherit'});setSelectedService(id)}}/>} items={Object.entries(drafts).map(([id,override])=>({id,title:id,content:<section className="form-stack" aria-label={`Placement for ${id}`}>
         <div className="placement-service-heading"><label>Service<select aria-label={`Placement service ${id}`} value={id} onChange={event=>{const target=event.target.value;setSettings(current=>{const copy={...current.serviceOverrides};delete copy[id];copy[target]=override;return {...current,serviceOverrides:copy}});setSelectedService(target)}}>{services.map(service=><option value={service.id} key={service.id} disabled={service.id!==id&&Object.hasOwn(drafts,service.id)}>{service.id}</option>)}</select></label><ResourceAction action="delete" label={`Remove placement override for ${id}`} onClick={()=>setSettings(current=>{const copy={...current.serviceOverrides};delete copy[id];return {...current,serviceOverrides:copy}})}/></div>
         <div className="placement-common-grid placement-sections">
           <section className="placement-field-group"><label>Node selector{selectMode(id,'nodeSelector',override.nodeSelectorMode)}</label>{override.nodeSelectorMode==='custom'&&<KeyValueFields validate={selectorError(id)} label={`${id} node selector`} value={override.nodeSelector} onChange={nodeSelector=>change(id,{nodeSelector})}/>}</section>

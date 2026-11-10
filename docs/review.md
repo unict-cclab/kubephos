@@ -1,3 +1,90 @@
+# Istio settings review — 10 November 2026
+
+- The Istio tab asks first whether the run uses Istio. "No" submits no sidecar,
+  waypoint or proxy settings; "Yes" shows the data plane, then the sidecar
+  settings or, for ambient mode, the waypoint size. Saved configurations open
+  on their actual choice, and the read-only view shows it.
+- Ambient configurations set the waypoint replicas (1 to 10) and per-replica
+  CPU and memory requests and limits (`definition.istioWaypoint`), validated
+  with the same quantity rules as proxy resources by the API and the deployer.
+  The deployer overlays the Deployment Istio generates through a ConfigMap in
+  `infrastructure.parametersRef` and waits for every replica; without these
+  settings the waypoint manifest is unchanged.
+- The deployer's `plugin.yaml` now accepts `istioWaypoint`; it was missing, so
+  runs with a sized waypoint failed validation with "Property is not allowed".
+  A test now requires `plugin.yaml` and the runtime manifest to declare the
+  same configuration properties.
+- Deploy application offers the same Istio choices, ambient included. The
+  deployment pipeline installs ambient mode on the cluster before deploying
+  and passes the waypoint size to the deployer; multi-cluster deployments,
+  which run Cilium, still refuse ambient mode with an explanation.
+- Validation: Go vet and tests (`internal/workloadresources`, `internal/api`,
+  `internal/storage`, application deployer) with a disposable PostgreSQL,
+  frontend tests, typecheck, build, asset budget and contrast passed. The editor
+  was checked in an isolated review page; no run was started on a cluster.
+
+# Requests and ownership review — 10 November 2026
+
+- Members edit the text of their own open requests in place and can mark them
+  resolved when they solve them; the card then reads "Resolved by you".
+  Replying, reopening and other members' requests stay out of reach (the API
+  answers 403, or 404 for someone else's request). Administrators can delete
+  any request after confirming it (`DELETE /api/v1/admin-requests/{id}`).
+- Ask an admin uses two columns: the member's requests, grouped as Open and
+  Resolved, beside a sticky New request card with a meter of the three open
+  requests allowed; phones show the form first. Resolved requests fold into a
+  collapsed section showing the five newest; administrators see the ten newest
+  resolved requests. Older ones appear on demand.
+- Administrators search the inbox by username: part of a name, in any case,
+  narrows both tabs and their counts, with suggestions of users who sent
+  requests and a Clear search action when nothing matches.
+- Configurations and Runs show the Created by filter only when the list mixes
+  creators (members also see items shared with them) or a choice is active.
+- Validation: Go vet and the `internal/api` and `internal/storage` tests with a
+  disposable PostgreSQL, frontend tests, typecheck, build, asset budget and
+  contrast checks passed. The member page was checked at desktop and phone
+  widths in both themes with sample data in an isolated preview; the running
+  development backend still predates these endpoints.
+
+# Frontend review — 9 November 2026
+
+- Resource lists with many columns no longer clip their row actions at laptop
+  widths: wide lists use a tighter column gutter and scroll inside their card
+  when they still exceed it.
+- The sidebar keeps only the group of the current page open after navigation,
+  so it no longer outgrows the viewport; its scrollbar follows the theme.
+- On phones, setup steps keep their Done/Next state on the step row; only the
+  current action wraps below the description.
+- Open requests drop the colored edge on their rounded card and use a secondary
+  Resolve action, keeping one solid ink button per view.
+- Removed stylesheet rules that later layers fully overrode (inverted account
+  dock, mono version and dates, unused sidebar groups and menu identity) and
+  merged duplicated declarations, so each component is styled in one place.
+- `refinements.css` is gone: its rules now live with the components and shell
+  rules they corrected. Field states use `:where()` selectors with rising
+  specificity (base, hover, invalid, focus) instead of a later override layer.
+- Import states before an archive is chosen what it would replace, using the
+  new `GET /api/v1/administration/state/readiness`. On an instance with data,
+  importing asks to overwrite everything; on confirmation the import sends
+  `replace=true` and, in the same transaction, clears the transferred state,
+  experiments and saved comparisons before restoring the archive. Users,
+  sessions and the audit log are kept; old stored objects are queued for
+  deletion by exact key, so newly imported objects are never removed. Running
+  work still blocks the import. Import never merges.
+- Empty lists show only their empty state (and filters); dates use the
+  interface language with a 24-hour clock; the sorted column reads in full ink;
+  disabled fields and file pickers look disabled.
+- Usability: clicking a list row opens its details (row controls excepted);
+  configuration types describe themselves and show why Comparison is
+  unavailable; phone list toolbars keep search, count and display on one row.
+- Validation: frontend tests, typecheck, production build, asset budget and
+  both-theme contrast checks passed; Go vet and Go tests passed against a
+  disposable PostgreSQL, except three plugin tests that need `jq`/`python3`,
+  absent from the test image. Overview, lists, details, Import and the command
+  palette were checked in the browser at desktop and phone widths, in both
+  themes, against the development stack; the readiness response was stubbed
+  there because the running backend predates it. No resources were changed.
+
 # Frontend review — 6 November 2026
 
 - Integrated the visual foundation from `feature/frontend-refresh` at `92423b6`,

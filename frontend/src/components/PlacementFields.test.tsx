@@ -1,6 +1,6 @@
 import {WizardForm,WizardStep} from './WizardForm'
 import {TolerationFields} from './PlacementFields'
-import {fireEvent, render, screen, waitFor} from '@testing-library/react'
+import {fireEvent, render, screen, within, waitFor} from '@testing-library/react'
 import {useState} from 'react'
 import {describe, expect, it, vi} from 'vitest'
 import {ApplicationPlacementEditor} from './ApplicationPlacementEditor'
@@ -29,6 +29,7 @@ describe('Application placement', () => {
   render(<ApplicationPlacementEditor services={services} initial={{nodeSelector:{disk:'ssd'},tolerations:[{key:'gpu',operator:'Exists'}]}} />)
   fireEvent.click(screen.getByRole('tab',{name:'Service overrides'}))
   fireEvent.click(screen.getByText('Add service override'))
+  fireEvent.click(within(screen.getByRole('dialog',{name:'Choose a service'})).getByRole('button',{name:'api'}))
   fireEvent.change(screen.getByLabelText('Node selector mode for api'),{target:{value:'custom'}})
   fireEvent.change(screen.getByLabelText('api node selector value 1'),{target:{value:'hdd'}})
   fireEvent.change(screen.getByLabelText('Tolerations mode for api'),{target:{value:'none'}})
@@ -71,9 +72,11 @@ it('navigates placement overrides by service tab and keeps independent custom dr
  render(<ApplicationPlacementEditor services={services} initial={{nodeSelector:{disk:'ssd'}}}/>)
  fireEvent.click(screen.getByRole('tab',{name:'Service overrides'}))
  fireEvent.click(screen.getByRole('button',{name:'Add service override'}))
+ fireEvent.click(within(screen.getByRole('dialog',{name:'Choose a service'})).getByRole('button',{name:'api'}))
  fireEvent.change(screen.getByLabelText('Node selector mode for api'),{target:{value:'custom'}})
  fireEvent.change(screen.getByLabelText('api node selector value 1'),{target:{value:'hdd'}})
  fireEvent.click(screen.getByRole('button',{name:'Add service override'}))
+ fireEvent.click(within(screen.getByRole('dialog',{name:'Choose a service'})).getByRole('button',{name:'db'}))
  expect(screen.getByRole('tab',{name:'db'})).toHaveAttribute('aria-selected','true')
  fireEvent.change(screen.getByLabelText('Tolerations mode for db'),{target:{value:'none'}})
  fireEvent.click(screen.getByRole('tab',{name:'api'}))

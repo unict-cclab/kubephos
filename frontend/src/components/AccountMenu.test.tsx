@@ -8,7 +8,7 @@ afterEach(() => {
 })
 
 function renderMenu(isAdmin: boolean) {
-  const actions = {refresh: vi.fn(), openBackup: vi.fn(), signOut: vi.fn()}
+  const actions = {refresh: vi.fn(), signOut: vi.fn()}
   render(<AccountMenu username="fabio" isAdmin={isAdmin} version="1.2.3" refreshing={false} {...actions} />)
   return actions
 }
@@ -48,14 +48,10 @@ it('opens account options from the gear and closes with Escape', () => {
   expect(gear).toHaveFocus()
 })
 
-it('runs session actions and offers backups to administrators', () => {
+it('runs session actions and keeps import and export in the sidebar', () => {
   const actions = renderMenu(true)
   fireEvent.click(screen.getByRole('button', {name: 'Account settings'}))
-  fireEvent.click(screen.getByRole('button', {name: 'Import and export'}))
-  expect(actions.openBackup).toHaveBeenCalled()
-  expect(screen.queryByRole('group', {name: 'Account'})).not.toBeInTheDocument()
-
-  fireEvent.click(screen.getByRole('button', {name: 'Account settings'}))
+  expect(screen.queryByRole('button', {name: 'Import and export'})).not.toBeInTheDocument()
   fireEvent.click(screen.getByRole('button', {name: 'Sign out'}))
   expect(actions.signOut).toHaveBeenCalled()
 })

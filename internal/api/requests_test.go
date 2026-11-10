@@ -34,12 +34,13 @@ func TestAdminRequestTextValidation(t *testing.T) {
 	}
 }
 
-func TestAdminRequestRoutesAreMemberSendOnly(t *testing.T) {
+func TestAdminRequestRoutesReachMembers(t *testing.T) {
 	if !userMutationAllowed("/api/v1/admin-requests") {
 		t.Fatal("members cannot send requests")
 	}
-	if userMutationAllowed("/api/v1/admin-requests/req_1") {
-		t.Fatal("members can change a request's status")
+	// Ownership and the administrator-only changes are enforced by the handlers.
+	if !userMutationAllowed("/api/v1/admin-requests/req_1") {
+		t.Fatal("members cannot edit or resolve their own requests")
 	}
 	if adminReadPath("/api/v1/admin-requests") {
 		t.Fatal("members cannot read their own requests")
@@ -50,6 +51,7 @@ func TestAdminRequestsAreAudited(t *testing.T) {
 	for _, test := range []struct{ method, path, action, targetType, id string }{
 		{http.MethodPost, "/api/v1/admin-requests", "admin-request.create", "admin-request", ""},
 		{http.MethodPatch, "/api/v1/admin-requests/req_1", "admin-request.patch", "admin-requests", "req_1"},
+		{http.MethodDelete, "/api/v1/admin-requests/req_1", "admin-request.delete", "admin-requests", "req_1"},
 	} {
 		action, targetType, targetID, ok := auditTarget(httptest.NewRequest(test.method, test.path, nil))
 		if !ok || action != test.action || targetType != test.targetType || targetID != test.id {
@@ -120,7 +122,15 @@ func TestAdminRequestLifecycle(t *testing.T) {
 		}{
 			"administrator sends":     {s.createAdminRequest, http.MethodPost, "", "root", `{"message":"hello"}`, http.StatusForbidden},
 			"empty message":           {s.createAdminRequest, http.MethodPost, "", "alice", `{"message":"   "}`, http.StatusUnprocessableEntity},
-			"member resolves":         {s.updateAdminRequest, http.MethodPatch, request.ID, "alice", `{"status":"resolved"}`, http.StatusForbidden},
+			"member resolves another": {s.updateAdminRequest, http.MethodPatch, request.ID, "bob", `{"status":"resolved"}`, http.StatusNotFound},
+			"member edits another":    {s.updateAdminRequest, http.MethodPatch, request.ID, "bob", `{"message":"Mine now."}`, http.StatusNotFound},
+			"member reopens":          {s.updateAdminRequest, http.MethodPatch, request.ID, "alice", `{"status":"open"}`, http.StatusForbidden},
+			"member replies":          {s.updateAdminRequest, http.MethodPatch, request.ID, "alice", `{"status":"resolved","reply":"Done."}`, http.StatusForbidden},
+			"member clears message":   {s.updateAdminRequest, http.MethodPatch, request.ID, "alice", `{"message":"   "}`, http.StatusUnprocessableEntity},
+			"member changes nothing":  {s.updateAdminRequest, http.MethodPatch, request.ID, "alice", `{}`, http.StatusUnprocessableEntity},
+			"admin edits message":     {s.updateAdminRequest, http.MethodPatch, request.ID, "root", `{"message":"Rewritten."}`, http.StatusForbidden},
+			"member deletes":          {s.deleteAdminRequest, http.MethodDelete, request.ID, "alice", ``, http.StatusForbidden},
+			"delete missing request":  {s.deleteAdminRequest, http.MethodDelete, "req_missing", "root", ``, http.StatusNotFound},
 			"unknown status":          {s.updateAdminRequest, http.MethodPatch, request.ID, "root", `{"status":"closed"}`, http.StatusUnprocessableEntity},
 			"reply without resolving": {s.updateAdminRequest, http.MethodPatch, request.ID, "root", `{"status":"open","reply":"Done."}`, http.StatusUnprocessableEntity},
 			"missing request":         {s.updateAdminRequest, http.MethodPatch, "req_missing", "root", `{"status":"resolved"}`, http.StatusNotFound},
@@ -155,5 +165,31 @@ func TestAdminRequestLifecycle(t *testing.T) {
 		decode(call(s.createAdminRequest, http.MethodPost, "", "bob", `{"message":"My own request."}`), http.StatusCreated)
 		decode(call(s.updateAdminRequest, http.MethodPatch, request.ID, "root", `{"status":"resolved"}`), http.StatusOK)
 		decode(call(s.createAdminRequest, http.MethodPost, "", "alice", `{"message":"Now there is room."}`), http.StatusCreated)
+	})
+
+	t.Run("members edit and resolve their own open requests", func(t *testing.T) {
+		mine := decode(call(s.createAdminRequest, http.MethodPost, "", "bob", `{"message":"Please add GPUs."}`), http.StatusCreated)
+		edited := decode(call(s.updateAdminRequest, http.MethodPatch, mine.ID, "bob", `{"message":"  Please add two GPUs.  "}`), http.StatusOK)
+		if edited.Message != "Please add two GPUs." || edited.Status != domain.AdminRequestOpen {
+			t.Fatalf("edit: %+v", edited)
+		}
+		resolved := decode(call(s.updateAdminRequest, http.MethodPatch, mine.ID, "bob", `{"status":"resolved"}`), http.StatusOK)
+		if resolved.Status != domain.AdminRequestResolved || resolved.ResolvedBy != "bob" || resolved.Reply != "" || resolved.Message != "Please add two GPUs." {
+			t.Fatalf("self-resolve: %+v", resolved)
+		}
+		if w := call(s.updateAdminRequest, http.MethodPatch, mine.ID, "bob", `{"message":"Changed my mind."}`); w.Code != http.StatusConflict {
+			t.Fatalf("a resolved request was edited: %d", w.Code)
+		}
+	})
+
+	t.Run("administrators delete requests", func(t *testing.T) {
+		if w := call(s.deleteAdminRequest, http.MethodDelete, request.ID, "root", ""); w.Code != http.StatusNoContent {
+			t.Fatalf("delete: %d %s", w.Code, w.Body.String())
+		}
+		for _, item := range list("root") {
+			if item.ID == request.ID {
+				t.Fatal("a deleted request is still listed")
+			}
+		}
 	})
 }

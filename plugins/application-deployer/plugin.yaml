@@ -32,6 +32,12 @@ spec:
       istioInjectionOverrides:
         type: object
         additionalProperties: true
+      istioDataPlane:
+        type: string
+        enum: [sidecar, ambient]
+      istioWaypoint:
+        type: object
+        x-kubephos-hidden: true
       clusterConnectionRef:
         type: string
         title: Kubernetes cluster

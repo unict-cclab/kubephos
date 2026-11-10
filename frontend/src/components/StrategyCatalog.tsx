@@ -53,7 +53,7 @@ export function StrategyCatalog(props: Props) {
     {confirmationDialog}
     {props.isAdmin && <ResourceListAction><ResourceAction action="create" label={`Add ${props.kind}`} onClick={() => { setEditing(undefined); setOpen(true) }} /></ResourceListAction>}
     {error && <ErrorFeedback message={error} />}
-    <ResourceListTable items={catalogItems} label={`${props.kind.charAt(0).toUpperCase()}${props.kind.slice(1)}s`} editable searchText={item => `${item.name} ${item.sourceImage}`} columns={[
+    <ResourceListTable open={item => detail.open('strategy', item.id)} items={catalogItems} label={`${props.kind.charAt(0).toUpperCase()}${props.kind.slice(1)}s`} editable searchText={item => `${item.name} ${item.sourceImage}`} columns={[
       {label: 'Name', render: item => <h3>{item.name}</h3>},
       {label: 'Status', render: item => <span className={`status ${item.status}`}>{strategyStatus(item.status)}</span>}
     ]} actions={item => <><ResourceAction action="view" label={`View ${item.name} details`} onClick={() => detail.open('strategy', item.id)} />{props.isAdmin && <ResourceAction action="edit" label={`Edit ${item.name} settings`} disabled={!['succeeded', 'failed', 'canceled'].includes(item.status)} onClick={() => edit(item)} />}{props.isAdmin && <ResourceAction action="delete" label={`Delete ${item.name}`} disabled={!['succeeded', 'failed', 'canceled'].includes(item.status)} onClick={() => void remove(item)} />}</>} />

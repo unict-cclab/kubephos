@@ -162,6 +162,10 @@ func (s *Server) applicationDeploymentPipeline(ctx context.Context, input applic
 	if len(members) == 0 {
 		return def, &managedOperationFailure{status: 409, code: "cluster_invalid", message: "The cluster members are unavailable."}
 	}
+	ambient := input.Definition.IstioDataPlane == "ambient"
+	if ambient && group {
+		return def, &managedOperationFailure{status: 422, code: "invalid_istio_data_plane", message: "Istio ambient mode is not available on multi-cluster deployments, which use Cilium networking instead of Istio."}
+	}
 	for i, name := range members {
 		var connection domain.Artifact
 		if group {
@@ -175,6 +179,18 @@ func (s *Server) applicationDeploymentPipeline(ctx context.Context, input applic
 		sources := map[string]experimentArtifactSource{artifactContractKey("ClusterConnection", "v1alpha1"): {ExternalID: connection.ID}}
 		registerExperimentOutputs(sources, "application", materializer.Manifest())
 		spec := map[string]any{"applicationNamespace": input.Definition.Namespace, "namespacePolicy": "create"}
+		// Ambient mode is installed on the cluster first; the deployer then enrolls the namespace and sizes its waypoint.
+		if ambient {
+			stage, failure := s.istioAmbientStage(sources, input.ApplicationRef)
+			if failure != nil {
+				return def, failure
+			}
+			def.Stages = append(def.Stages, stage)
+			spec["istioDataPlane"] = "ambient"
+			if len(input.Definition.IstioWaypoint) > 0 {
+				spec["istioWaypoint"] = input.Definition.IstioWaypoint
+			}
+		}
 		if input.PlacementControlName != "" {
 			spec["placementControlName"] = input.PlacementControlName
 		}

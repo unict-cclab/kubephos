@@ -1,10 +1,10 @@
-import {DisabledActionHint} from './DisabledActionHint'
 import {comparativeSources} from './comparativeSources'
 import {applicationSettingsSchema} from './applicationSettings'
 import {ProxyResourcesEditor} from './ProxyResourcesEditor'
 import {resolveApplicationPreview} from '../applicationPreview'
 import {ApplicationPlacementEditor} from './ApplicationPlacementEditor'
 import {IstioInjectionEditor} from './IstioInjectionEditor'
+import {IstioSettingsEditor} from './IstioSettingsEditor'
 import {CloneDialog} from './CloneDialog'
 import {ErrorFeedback, useErrorState} from './ToastRegion'
 import {ResourceListHeading} from './ResourceListHeading'
@@ -17,7 +17,7 @@ import {ActionIcon} from './ActionIcon'
 import {ComparativeConfigurationDialog} from './ComparativeConfigurationDialog'
 import {ResourceListTable} from './ResourceListTable'
 import {useDeleteConfirmation} from './ConfirmationDialog'
-import {useEffect, useMemo, useRef, useState, type FormEvent} from 'react'
+import {useEffect, useId, useMemo, useRef, useState, type FormEvent} from 'react'
 import {request} from '../api'
 import {readSchemaValues} from '../lib'
 import type {Application, ApplicationComponent, Artifact, CatalogStrategy, Experiment, ExperimentConfiguration, JsonSchema, ManagedResource, Operation, Plugin, Session, Workspace} from '../types'
@@ -31,12 +31,11 @@ import {SchemaFields, hasConfigurableFields} from './SchemaFields'
 import {ResultsView} from './LazyResultsView'
 import {DetailBreadcrumb} from './DetailBreadcrumb'
 import {useDetailRoute} from '../detailRoute'
-import {SectionIcon} from './SectionIcon'
 import {ResourceAction} from './ResourceAction'
 import {ExperimentExecutionDialog} from './ExperimentExecutionDialog'
 import {ApplicationTopologyGraph} from './ApplicationTopologyGraph'
 import {InitialReplicaEditor} from './InitialReplicaEditor'
-import {OwnerFilter, ownerLabel} from './OwnerFilter'
+import {OwnerFilter, canFilterByOwner, ownerLabel} from './OwnerFilter'
 
 interface Props {
   items: ExperimentConfiguration[]
@@ -120,12 +119,15 @@ export function ExperimentConfigurationsView(props: Props) {
     {confirmationDialog}
     <ResourceListHeading title="Configurations" icon="configurations" action={<>{(props.isAdmin || Boolean(props.session.user)) && <ResourceAction action="create" label="New configuration" disabled={!ready} onClick={() => setCreating('choose')} />}</>} />
     {error && <ErrorFeedback message={error} />}
-    <ResourceListTable editable filters={<OwnerFilter items={props.items} value={owner} onChange={setOwner} />} empty={<><strong>{props.items.length ? 'No matching configurations' : 'No configurations yet'}</strong><p>{props.items.length ? 'Choose another owner filter to find your configuration.' : 'Start with a ready Kubernetes cluster, then choose an application or an external endpoint.'}</p></>} searchText={item => `${item.name} ${ownerLabel(item)} ${item.kind} ${item.validation.valid ? 'validated' : 'needs review'}`} items={visibleItems} label="Configurations" columns={[
+    <ResourceListTable open={item => detail.open('configuration', item.id)} editable filters={canFilterByOwner(props.items, owner) ? <OwnerFilter items={props.items} value={owner} onChange={setOwner} /> : undefined} empty={<><strong>{props.items.length ? 'No matching configurations' : 'No configurations yet'}</strong><p>{props.items.length ? 'Choose another owner filter to find your configuration.' : 'Start with a ready Kubernetes cluster, then choose an application or an external endpoint.'}</p></>} searchText={item => `${item.name} ${ownerLabel(item)} ${item.kind} ${item.validation.valid ? 'validated' : 'needs review'}`} items={visibleItems} label="Configurations" columns={[
       {label: 'Name', render: item => <h3>{item.name}</h3>},
       {label: 'Type', render: item => item.kind === 'suite' ? 'Comparative' : 'Single'},
       {label: 'Experiments', render: item => experimentCounts.get(item.id) ?? 0}
     ]} actions={item => <><ResourceSharing kind="experiment-configurations" id={item.id} name={item.name} ownerUserId={item.ownerUserId} session={props.session} changed={props.changed} /><ResourceAction action="view" label={`View ${item.name} details`} onClick={() => detail.open('configuration', item.id)} />{(props.isAdmin || canManageResource(props.session, item.ownerUserId)) && <ResourceAction action="delete" label={`Delete ${item.name}`} onClick={() => void remove(item)} />}</>} />
-    <Dialog open={creating === 'choose'} onClose={() => setCreating(null)} title="New configuration"><div className="configuration-kind-options"><button className="configuration-kind" type="button" onClick={() => setCreating('single')}><SectionIcon kind="experiments" /><span>Single experiment</span><ActionIcon name="right" /></button><DisabledActionHint disabled={comparisonSources.length<2} reason="Requires two valid single configurations."><button className="configuration-kind" type="button" disabled={comparisonSources.length<2} title={comparisonSources.length<2?'Requires two valid single configurations.':undefined} onClick={() => {if(comparisonSources.length>=2)setCreating('suite')}}><SectionIcon kind="experiments" /><span>Comparison</span><ActionIcon name="right" /></button></DisabledActionHint></div></Dialog>
+    <Dialog open={creating === 'choose'} onClose={() => setCreating(null)} title="New configuration"><div className="configuration-kind-options">
+      <ConfigurationKind title="Single experiment" description="Run one application with a load profile and the strategies you choose." onSelect={() => setCreating('single')} />
+      <ConfigurationKind title="Comparison" description={comparisonSources.length < 2 ? 'Available once you have two valid single experiments to compare.' : 'Run several single experiments side by side and compare their results.'} disabled={comparisonSources.length < 2} onSelect={() => setCreating('suite')} />
+    </div></Dialog>
     <ExperimentConfigurationDialog {...props} open={creating === 'single'} close={() => setCreating(null)} />
     <ComparativeConfigurationDialog {...props} configurations={comparisonSources} open={creating === 'suite'} close={() => setCreating(null)} />
     <ExperimentExecutionDialog open={Boolean(running)} configurations={running ? [running] : []} initialConfigurationId={running?.id} lockConfiguration close={() => setRunning(null)} session={props.session} changed={props.changed} onCreated={props.openExperiment ?? (() => {})} />
@@ -228,6 +230,12 @@ export function ExperimentConfigurationDialog({open, close, clusters, workspaces
 	const effectiveApplicationComponents = dynamicTopology ? resolvedComponents ?? application?.descriptor.spec?.interface?.components ?? [] : application?.descriptor.spec?.interface?.components ?? []
   const applicationValues = normalizeApplicationValues(application, {...(application?.descriptor.spec?.defaults ?? {}), ...(item?.definition.applicationValues ?? {})})
   const nativeTCP = Boolean(application?.descriptor.spec?.interface?.endpoints?.length) && application!.descriptor.spec!.interface!.endpoints!.every(endpoint => endpoint.protocol === 'tcp')
+  // A saved configuration uses Istio when it runs ambient or injects at least one service;
+  // new configurations follow the application default (no mesh for TCP-only applications).
+  const savedIstio = item?.definition
+  const istioInUse = savedIstio ? savedIstio.istioDataPlane === 'ambient' || savedIstio.istioInjection !== false || Object.values(savedIstio.istioInjectionOverrides ?? {}).some(Boolean) : !nativeTCP
+  // Choosing "Use Istio" later injects every service by default.
+  const istioInjectionDefault = istioInUse ? (typeof savedIstio?.istioInjection === 'boolean' ? savedIstio.istioInjection : !nativeTCP) : true
   const configurableReplicas = Boolean(application?.descriptor.spec?.valuesSchema?.properties?.initialReplicas)
   const parametersSchema = applicationSettingsSchema(application?.descriptor.spec?.valuesSchema ?? emptySchema, false)
   const hasParameters = hasConfigurableFields(parametersSchema, applicationValues) || !configurableReplicas
@@ -428,6 +436,8 @@ export function ExperimentConfigurationDialog({open, close, clusters, workspaces
           istioProxyResources: destinationMode==='application'?JSON.parse(String(values.get('istioProxyResources')??'null'))??undefined:undefined,
           istioInjection: destinationMode === 'application' ? values.get('istioInjection') === 'true' : undefined,
           istioInjectionOverrides: destinationMode === 'application' ? JSON.parse(String(values.get('istioInjectionOverrides') ?? '{}')) : undefined,
+          istioDataPlane: destinationMode === 'application' && values.get('istioDataPlane') === 'ambient' ? 'ambient' : undefined,
+          istioWaypoint: destinationMode === 'application' && values.get('istioDataPlane') === 'ambient' ? JSON.parse(String(values.get('istioWaypoint') ?? 'null')) ?? undefined : undefined,
           podDisruptionBudgetMinAvailable: destinationMode === 'application' ? Number(values.get('podDisruptionBudgetMinAvailable')) : 0,
           components: (deploymentMode ? [] : submittedComponents).map((component, index) => {
             const plugin = compatiblePlugins.find(item => item.id === component.pluginId)
@@ -477,7 +487,7 @@ export function ExperimentConfigurationDialog({open, close, clusters, workspaces
         {application && !topologyError && <ApplicationTopologyGraph components={effectiveApplicationComponents} />}
           </>},
           {id: 'placement', title: 'Placement', content: <ApplicationPlacementEditor networking={selectedCluster?.spec.mode==='multi'?'cilium':String(selectedCluster?.spec.networking??'')} enabled={placementVisible} application={application} session={session} values={applicationValues} key={`placement-${item?.id ?? 'new'}-${applicationRef}`} services={effectiveApplicationComponents} initial={item?.definition.applicationPlacement} />},
-          {id: 'istio', title: 'Istio', content: <FormTabs label="Istio settings" items={[{id:'injection',title:'Injection',content:<IstioInjectionEditor key={`istio-${item?.id ?? 'new'}-${applicationRef}-${clusterResourceId}`} services={effectiveApplicationComponents} enabled={typeof item?.definition.istioInjection === 'boolean' ? item.definition.istioInjection : !nativeTCP} overrides={item?.definition.istioInjectionOverrides as Record<string, boolean> | undefined} disabled={selectedCluster?.spec.mode === 'multi'} />},{id:'proxy-resources',title:'Proxy resources',content:<ProxyResourcesEditor clusterId={clusterResourceId} session={session} key={`proxy-${item?.id??'new'}-${applicationRef}`} services={effectiveApplicationComponents} initial={item?.definition.istioProxyResources} disabled={selectedCluster?.spec.mode==='multi'}/>}]}/>}
+          {id: 'istio', title: 'Istio', content: <IstioSettingsEditor key={`istio-mode-${item?.id ?? 'new'}-${applicationRef}`} enabled={istioInUse} waypoint={item?.definition.istioWaypoint} dataPlane={item?.definition.istioDataPlane} disabled={selectedCluster?.spec.mode === 'multi'}><FormTabs label="Istio settings" items={[{id:'injection',title:'Injection',content:<IstioInjectionEditor key={`istio-${item?.id ?? 'new'}-${applicationRef}-${clusterResourceId}`} services={effectiveApplicationComponents} enabled={istioInjectionDefault} overrides={item?.definition.istioInjectionOverrides as Record<string, boolean> | undefined} disabled={selectedCluster?.spec.mode === 'multi'} />},{id:'proxy-resources',title:'Proxy resources',content:<ProxyResourcesEditor clusterId={clusterResourceId} session={session} key={`proxy-${item?.id??'new'}-${applicationRef}`} services={effectiveApplicationComponents} initial={item?.definition.istioProxyResources} disabled={selectedCluster?.spec.mode==='multi'}/>}]}/></IstioSettingsEditor>}
         ]} />
       </> : <FormTabs label="External destination settings" items={[
         {id: 'target', title: 'Target', content: <div className="form-stack"><label>External endpoint<input type="url" value={externalTargetUrl} onChange={event => setExternalTargetUrl(event.target.value)} placeholder="https://api.example.com" maxLength={2048} required /></label><label>Locust runtime image<input value={externalRuntimeImage} onChange={event => setExternalRuntimeImage(event.target.value)} maxLength={512} required /></label></div>},
@@ -602,4 +612,13 @@ function normalizeApplicationValues(application: Application | undefined, values
     return {...values, replicaOverrides: {...overrides, 'inference-router': values.routerReplicas}}
   }
   return values
+}
+
+// A configuration type states what it does; when unavailable, it says why instead.
+function ConfigurationKind({title, description, disabled = false, onSelect}: {title: string; description: string; disabled?: boolean; onSelect: () => void}) {
+  const id = useId()
+  return <button className="configuration-kind" type="button" disabled={disabled} aria-labelledby={`${id}-title`} aria-describedby={`${id}-description`} onClick={onSelect}>
+    <span className="configuration-kind-copy"><strong id={`${id}-title`}>{title}</strong><span id={`${id}-description`}>{description}</span></span>
+    <ActionIcon name="right" />
+  </button>
 }

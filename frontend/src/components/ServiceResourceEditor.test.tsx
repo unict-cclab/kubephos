@@ -1,4 +1,4 @@
-import {fireEvent, render, screen} from '@testing-library/react'
+import {fireEvent, render, screen, within} from '@testing-library/react'
 import {describe, expect, it, vi} from 'vitest'
 import type {ApplicationComponent, JsonSchema} from '../types'
 import {SchemaFields} from './SchemaFields'
@@ -26,6 +26,7 @@ describe('Service resources', () => {
     const form = container.querySelector('form')!
     fireEvent.click(screen.getByRole('tab',{name:'Service overrides'}))
     fireEvent.click(screen.getByRole('button', {name: 'Add service override'}))
+    fireEvent.click(within(screen.getByRole('dialog',{name:'Choose a service'})).getByRole('button',{name:'m1'}))
     expect(screen.getByRole('textbox', {name: 'CPU request for m1'})).toHaveAttribute('placeholder', 'Inherited: 250m')
     fireEvent.change(screen.getByRole('textbox', {name: 'CPU request for m1'}), {target: {value: '500m'}})
     expect(readSchemaValues(form, schema)).toEqual({cpuRequest: '250m', memoryLimit: '2Gi', resourceOverrides: {m1: {cpuRequest: '500m'}}})
@@ -39,8 +40,10 @@ describe('Service resources', () => {
     const {container} = render(<form><SchemaFields schema={schema} serviceTargets={services} applications={[]} artifacts={[]} connections={[]} credentials={[]} /></form>)
     fireEvent.click(screen.getByRole('tab',{name:'Service overrides'}))
     fireEvent.click(screen.getByRole('button', {name:'Add service override'}))
+    fireEvent.click(within(screen.getByRole('dialog',{name:'Choose a service'})).getByRole('button',{name:'m1'}))
     fireEvent.change(screen.getByRole('textbox', {name:'CPU request for m1'}), {target:{value:'100m'}})
     fireEvent.click(screen.getByRole('button', {name:'Add service override'}))
+    fireEvent.click(within(screen.getByRole('dialog',{name:'Choose a service'})).getByRole('button',{name:'m2'}))
     expect(screen.getByRole('tab', {name:'m2'})).toHaveAttribute('aria-selected','true')
     fireEvent.change(screen.getByRole('textbox', {name:'Memory limit for m2'}), {target:{value:'256Mi'}})
     fireEvent.click(screen.getByRole('tab', {name:'m1'}))

@@ -20,12 +20,13 @@ describe('users view', () => {
     expect(screen.getByText('All')).toHaveClass('user-cluster-count')
   })
 
-  it('renders an empty table state', () => {
+  it('renders an empty state without an empty table', () => {
     const session = {authenticated: true, csrfToken: 'csrf', user: {id: 'admin-1', username: 'administrator', role: 'admin'}} as Session
 
     render(<UsersView users={[]} assignments={[]} clusters={[]} session={session} changed={vi.fn()} />)
 
-    expect(screen.getByText('No users.').closest('td')).toHaveAttribute('colspan', '9')
+    expect(screen.getByText('No users.')).toBeInTheDocument()
+    expect(screen.queryByRole('table')).not.toBeInTheDocument()
   })
 
   it.each(['Cancel', 'Close', 'success'])('starts with a fresh form after %s', async exit => {

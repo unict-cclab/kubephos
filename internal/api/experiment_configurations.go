@@ -44,12 +44,16 @@ type experimentConfigurationInput struct {
 }
 
 type experimentConfigurationDefinitionInput struct {
-	IstioProxyResources             map[string]any                          `json:"istioProxyResources,omitempty"`
-	ApplicationPlacement            *placement.ApplicationSettings          `json:"applicationPlacement,omitempty"`
-	Namespace                       string                                  `json:"namespace,omitempty"`
-	TwoPhaseStart                   bool                                    `json:"twoPhaseStart,omitempty"`
-	IstioInjection                  *bool                                   `json:"istioInjection,omitempty"`
-	IstioInjectionOverrides         map[string]bool                         `json:"istioInjectionOverrides,omitempty"`
+	IstioProxyResources     map[string]any                 `json:"istioProxyResources,omitempty"`
+	ApplicationPlacement    *placement.ApplicationSettings `json:"applicationPlacement,omitempty"`
+	Namespace               string                         `json:"namespace,omitempty"`
+	TwoPhaseStart           bool                           `json:"twoPhaseStart,omitempty"`
+	IstioInjection          *bool                          `json:"istioInjection,omitempty"`
+	IstioInjectionOverrides map[string]bool                `json:"istioInjectionOverrides,omitempty"`
+	// IstioDataPlane is "sidecar" (default when empty) or "ambient", which enrolls the whole namespace.
+	IstioDataPlane string `json:"istioDataPlane,omitempty"`
+	// IstioWaypoint sizes the ambient waypoint: replicas and per-replica resources.
+	IstioWaypoint                   map[string]any                          `json:"istioWaypoint,omitempty"`
 	Kind                            string                                  `json:"kind,omitempty"`
 	Variants                        []experimentSuiteVariantInput           `json:"variants,omitempty"`
 	Runs                            int                                     `json:"runs,omitempty"`
@@ -525,6 +529,9 @@ func (s *Server) validatedExperimentConfiguration(ctx context.Context, input exp
 			return domain.ExperimentConfiguration{}, &managedOperationFailure{status: http.StatusUnprocessableEntity, code: "invalid_istio_service", message: "Istio override refers to an unknown application service: " + service}
 		}
 	}
+	if failure := validateIstioDataPlane(input.Definition); failure != nil {
+		return domain.ExperimentConfiguration{}, failure
+	}
 	validation.Issues = append(validation.Issues, domain.ValidationIssue{Level: "info", Path: "clusterResourceId", Message: "Cluster health and every runtime dependency will be checked again before each run step."})
 	definition, _ := json.Marshal(input.Definition)
 	return domain.ExperimentConfiguration{ID: id.New("expcfg"), Kind: "single", WorkspaceID: input.WorkspaceID, ClusterResourceID: input.ClusterResourceID, Name: input.Name, Description: input.Description, ApplicationRef: applicationRef, ApplicationDigest: applicationDigest, Definition: definition, Validation: validation}, nil
@@ -635,4 +642,28 @@ func validExperimentTargets(include, exclude []string, pattern *regexp.Regexp, a
 		}
 	}
 	return true
+}
+
+// Ambient mode applies to the whole namespace, so it excludes every per-sidecar setting.
+func validateIstioDataPlane(definition experimentConfigurationDefinitionInput) *managedOperationFailure {
+	switch definition.IstioDataPlane {
+	case "", "sidecar":
+		if len(definition.IstioWaypoint) > 0 {
+			return &managedOperationFailure{status: http.StatusUnprocessableEntity, code: "invalid_istio_waypoint", message: "Waypoint replicas and resources apply to Istio ambient mode only."}
+		}
+		return nil
+	case "ambient":
+		if _, err := workloadresources.ParseWaypoint(definition.IstioWaypoint); err != nil {
+			return &managedOperationFailure{status: http.StatusUnprocessableEntity, code: "invalid_istio_waypoint", message: err.Error()}
+		}
+		if definition.DestinationMode == "external" {
+			return &managedOperationFailure{status: http.StatusUnprocessableEntity, code: "invalid_istio_data_plane", message: "Istio ambient mode needs an application deployed by KubePhos."}
+		}
+		if (definition.IstioInjection != nil && *definition.IstioInjection) || len(definition.IstioInjectionOverrides) > 0 || len(definition.IstioProxyResources) > 0 {
+			return &managedOperationFailure{status: http.StatusUnprocessableEntity, code: "invalid_istio_data_plane", message: "Istio ambient mode applies to the whole namespace: remove sidecar injection, service overrides and proxy resources."}
+		}
+		return nil
+	default:
+		return &managedOperationFailure{status: http.StatusUnprocessableEntity, code: "invalid_istio_data_plane", message: "Istio data plane must be sidecar or ambient."}
+	}
 }

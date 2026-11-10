@@ -130,11 +130,14 @@ type loadStep struct {
 	RPS             float64 `json:"rps"`
 	BaselineRPS     float64 `json:"baselineRps"`
 	AmplitudeRPS    float64 `json:"amplitudeRps"`
-	PeriodSeconds   int     `json:"periodSeconds"`
-	PhaseSeconds    int     `json:"phaseSeconds"`
-	StartRPS        float64 `json:"startRps"`
-	EndRPS          float64 `json:"endRps"`
-	Curve           float64 `json:"curve"`
+	// The configuration editor saves sinusoidal steps as a range instead of baseline and amplitude.
+	MinRPS        *float64 `json:"minRps,omitempty"`
+	MaxRPS        *float64 `json:"maxRps,omitempty"`
+	PeriodSeconds int      `json:"periodSeconds"`
+	PhaseSeconds  int      `json:"phaseSeconds"`
+	StartRPS      float64  `json:"startRps"`
+	EndRPS        float64  `json:"endRps"`
+	Curve         float64  `json:"curve"`
 }
 
 type serviceEndpoint struct {
@@ -572,7 +575,12 @@ func configuredRPS(value loadSession, elapsed float64) float64 {
 				if step.PeriodSeconds <= 0 {
 					return 0
 				}
-				return math.Max(0, step.BaselineRPS+step.AmplitudeRPS*math.Sin(2*math.Pi*(local+float64(step.PhaseSeconds))/float64(step.PeriodSeconds)))
+				baseline, amplitude := step.BaselineRPS, step.AmplitudeRPS
+				// Same rule as the load generator: a range, when present, defines the wave.
+				if step.MinRPS != nil && step.MaxRPS != nil {
+					baseline, amplitude = (*step.MinRPS+*step.MaxRPS)/2, (*step.MaxRPS-*step.MinRPS)/2
+				}
+				return math.Max(0, baseline+amplitude*math.Sin(2*math.Pi*(local+float64(step.PhaseSeconds))/float64(step.PeriodSeconds)))
 			case "exponential":
 				progress := math.Min(1, local/math.Max(duration, 1))
 				shaped := progress
@@ -629,11 +637,16 @@ func trafficEntryPointMatcher(deployment applicationDeployment) string {
 	return "^(?:" + strings.Join(names, "|") + ")$"
 }
 
+// serviceReporter selects server-side L7 measurements: sidecars report them as
+// "destination" and Istio ambient waypoints as "waypoint". A namespace runs one
+// data plane, so the two never count the same request twice.
+const serviceReporter = `reporter=~"destination|waypoint"`
+
 func metricDefinitions(namespace, _ string) []metricDefinition {
 	selector := strconv.Quote(namespace)
 	return append(locustMetricDefinitions(namespace), []metricDefinition{
-		{ID: "application.request_rps", Unit: "requests_per_second", Aggregation: "sum", Query: `sum by (destination_workload) (rate(istio_requests_total{reporter="destination",destination_workload_namespace=` + selector + `}[1m]))`},
-		{ID: "application.p95_response_time", Unit: "milliseconds", Aggregation: "mean", Query: `histogram_quantile(0.95, sum by (destination_workload, le) (rate(istio_request_duration_milliseconds_bucket{reporter="destination",destination_workload_namespace=` + selector + `}[1m])))`},
+		{ID: "application.request_rps", Unit: "requests_per_second", Aggregation: "sum", Query: `sum by (destination_workload) (rate(istio_requests_total{` + serviceReporter + `,destination_workload_namespace=` + selector + `}[1m]))`},
+		{ID: "application.p95_response_time", Unit: "milliseconds", Aggregation: "mean", Query: `histogram_quantile(0.95, sum by (destination_workload, le) (rate(istio_request_duration_milliseconds_bucket{` + serviceReporter + `,destination_workload_namespace=` + selector + `}[1m])))`},
 		{ID: "cpu.cores", Unit: "cores", Aggregation: "sum", Query: `sum by (pod) (rate(container_cpu_usage_seconds_total{namespace=` + selector + `,container!="",container!="POD",pod!~"kubephos-pod-scheduling-.*"}[1m]))`},
 		{ID: "memory.working_set", Unit: "bytes", Aggregation: "sum", Query: `sum by (pod) (container_memory_working_set_bytes{namespace=` + selector + `,container!="",container!="POD",pod!~"kubephos-pod-scheduling-.*"})`},
 		{ID: "pod.restarts", Unit: "count", Aggregation: "sum", Query: `sum by (pod) (kube_pod_container_status_restarts_total{namespace=` + selector + `,pod!~"kubephos-pod-scheduling-.*"})`},

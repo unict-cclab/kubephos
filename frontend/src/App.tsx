@@ -198,7 +198,7 @@ function PlatformApp() {
         <div id="main-navigation" className={`app-sidebar-body${mobileNavigationOpen ? ' is-open' : ''}`} onKeyDown={event => {if (event.key === 'Escape' && mobileNavigationOpen) closeMobileNavigation()}}>
           <button type="button" className="app-jump" onClick={() => setPaletteOpen(true)}><ActionIcon name="search" /><span>Jump to…</span><kbd>{paletteShortcut()}</kbd></button>
           <SidebarNavigation sections={navigationSections} view={view} navigate={navigate} badges={isAdmin ? {requests: data.adminRequests.filter(item => item.status === 'open').length} : {}} />
-          <AccountMenu username={session.user?.username ?? 'Account'} isAdmin={isAdmin} version={data.system?.version} refreshing={refreshing} refresh={() => void load(false)} openBackup={() => navigate('administration')} signOut={() => void logout()} />
+          <AccountMenu username={session.user?.username ?? 'Account'} isAdmin={isAdmin} version={data.system?.version} refreshing={refreshing} refresh={() => void load(false)} signOut={() => void logout()} />
         </div>
       </aside>
       <main className="app-main">

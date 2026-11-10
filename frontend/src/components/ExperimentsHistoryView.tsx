@@ -13,7 +13,7 @@ import {ResultsView} from './LazyResultsView'
 import {ResourceAction} from './ResourceAction'
 import {ExperimentExecutionDialog, runnableConfigurations} from './ExperimentExecutionDialog'
 
-import {OwnerFilter, ownerLabel} from './OwnerFilter'
+import {OwnerFilter, canFilterByOwner, ownerLabel} from './OwnerFilter'
 interface Props {
   experiments: Experiment[]
   configurations: ExperimentConfiguration[]
@@ -90,7 +90,7 @@ export function ExperimentsHistoryView(props: Props) {
     <ResourceListHeading title="Runs" icon="experiments" action={<>{Boolean(props.session.user) && <DisabledActionHint disabled={!runnable.length} reason="Requires a valid configuration."><ResourceAction action="create" label="New run" disabled={!runnable.length} title={runnable.length ? 'New run' : 'Requires a valid configuration.'} onClick={launch} /></DisabledActionHint>}</>} />
     {error && <ErrorFeedback message={error} />}
     <div className="history-filters" role="group" aria-label="Filter experiments">{(['all', 'active', 'completed'] as Filter[]).map(value => <button key={value} type="button" className={filter === value ? 'active' : ''} aria-pressed={filter === value} onClick={() => setFilter(value)}>{value === 'all' ? 'All' : value === 'active' ? 'In progress' : 'Completed'}</button>)}</div>
-    <ResourceListTable filters={<OwnerFilter items={props.experiments} value={owner} onChange={setOwner} />} empty={<><strong>{filter === 'all' && !owner ? 'No runs yet' : 'No matching runs'}</strong><p>{filter === 'all' && !owner ? 'Run an experiment from a validated configuration to start collecting results.' : 'Choose another status or owner filter.'}</p></>} searchText={item => `${item.name} ${ownerLabel(item)} ${item.kind} ${experimentDisplayStatus(item)}`} items={items} label="Runs" columns={[
+    <ResourceListTable open={item => detail.open('instance', item.id)} filters={canFilterByOwner(props.experiments, owner) ? <OwnerFilter items={props.experiments} value={owner} onChange={setOwner} /> : undefined} empty={<><strong>{filter === 'all' && !owner ? 'No runs yet' : 'No matching runs'}</strong><p>{filter === 'all' && !owner ? 'Run an experiment from a validated configuration to start collecting results.' : 'Choose another status or owner filter.'}</p></>} searchText={item => `${item.name} ${ownerLabel(item)} ${item.kind} ${experimentDisplayStatus(item)}`} items={items} label="Runs" columns={[
       {label: 'Name', render: item => <><h3>{item.name}</h3><small>{item.kind === 'suite' ? `Comparative · ${item.variants.length} configurations` : item.variants[0]?.name ?? props.configurations.find(value => value.id === item.configurationId)?.name ?? 'Single experiment'}</small></>},
       {label: 'Executions', render: item => {const trials = item.variants.flatMap(variant => variant.trials); return `${trials.filter(trial => ['succeeded', 'failed', 'canceled'].includes(trial.status)).length}/${trials.length}`}},
       {label: 'Status', render: item => <span className={`status ${experimentDisplayStatus(item)}`}>{experimentDisplayStatus(item)}</span>}

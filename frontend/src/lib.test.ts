@@ -1,5 +1,12 @@
 import {describe, expect, it} from 'vitest'
-import {experimentDisplayStatus, formatBytes, formatRelativeTime, humanize} from './lib'
+import {experimentDisplayStatus, formatBytes, formatDate, formatRelativeTime, humanize} from './lib'
+
+describe('formatDate', () => {
+  it('uses the interface language and a 24-hour clock, whatever the browser locale', () => {
+    expect(formatDate('2026-10-28T16:16:00')).toBe('Oct 28, 2026, 16:16')
+    expect(formatDate('not a date')).toBe('—')
+  })
+})
 
 describe('formatRelativeTime', () => {
   const now = Date.parse('2026-11-05T12:00:00Z')

@@ -543,7 +543,20 @@ func (s *Server) experimentPipelineForCluster(ctx context.Context, configuration
 			return domain.PipelineDefinition{}, failure
 		}
 	}
+	if definition.IstioDataPlane == "ambient" {
+		stage, failure := s.istioAmbientStage(sources, configuration.ApplicationRef)
+		if failure != nil {
+			return domain.PipelineDefinition{}, failure
+		}
+		definitionResult.Stages = append(definitionResult.Stages, stage)
+	}
 	deploySpec := map[string]any{"mode": "deploy"}
+	if definition.IstioDataPlane == "ambient" {
+		deploySpec["istioDataPlane"] = "ambient"
+		if len(definition.IstioWaypoint) > 0 {
+			deploySpec["istioWaypoint"] = definition.IstioWaypoint
+		}
+	}
 	if len(definition.IstioProxyResources) > 0 {
 		deploySpec["istioProxyResources"] = definition.IstioProxyResources
 	}
@@ -734,4 +747,19 @@ func artifactContractKey(artifactType, version string) string {
 func marshalRaw(value any) json.RawMessage {
 	raw, _ := json.Marshal(value)
 	return raw
+}
+
+// istioAmbientStage enables the cluster-wide ambient layer, which must be running
+// before the application namespace joins it.
+func (s *Server) istioAmbientStage(sources map[string]experimentArtifactSource, applicationRef string) (domain.PipelineStage, *managedOperationFailure) {
+	plugin, err := s.pluginForCapability("", "istio.ambient.install")
+	if err != nil {
+		return domain.PipelineStage{}, &managedOperationFailure{status: http.StatusConflict, code: "capability_unavailable", message: err.Error()}
+	}
+	spec := map[string]any{}
+	bindings, failure := experimentArtifactBindings(spec, plugin.Manifest(), sources, applicationRef)
+	if failure != nil {
+		return domain.PipelineStage{}, failure
+	}
+	return domain.PipelineStage{ID: "istio-ambient", PluginID: plugin.Manifest().ID, Title: "Enable Istio ambient mode", Spec: marshalRaw(spec), Bindings: bindings}, nil
 }

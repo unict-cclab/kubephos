@@ -24,7 +24,6 @@ const destinations: NavigationItem[] = [
   {view: 'comparisons', label: 'Comparisons', description: 'Saved comparisons of results'},
   {view: 'users', label: 'Users', description: 'Accounts and cluster access', adminOnly: true},
   {view: 'requests', label: 'Requests', description: 'Messages from users to the administrators', memberLabel: 'Ask an admin', memberDescription: 'Send a message to the administrators'},
-  // Reached from the account menu rather than the sidebar.
   {view: 'administration', label: 'Import and export', description: 'Export and import platform state', adminOnly: true},
 ]
 
@@ -47,7 +46,7 @@ export function visibleNavigation(admin: boolean): SidebarSection[] {
     {id:'deployments',label:'',items:[item('deployments')]},
     {id:'catalog',label:'',items:[item('catalog')]},
     {id:'experiments',label:'Experiments',items:[item('experiments'),item('results'),item('comparisons')]},
-    admin?{id:'administration',label:'Administration',items:[item('users'),item('requests')]}:{id:'requests',label:'',items:[item('requests')]}
+    admin?{id:'administration',label:'Administration',items:[item('users'),item('requests'),item('administration')]}:{id:'requests',label:'',items:[item('requests')]}
   ]
 }
 

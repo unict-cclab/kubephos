@@ -526,7 +526,7 @@ func (p *Process) invoke(parent context.Context, command string, input, output a
 		return ctx.Err()
 	}
 	if outputExceeded {
-		return errors.New("plugin output exceeds 16 MiB")
+		return errPluginOutputTooLarge
 	}
 	if processErr != nil {
 		return errors.New(pluginErrorMessage(messages, processErr))

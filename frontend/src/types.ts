@@ -6,6 +6,7 @@ export interface ResourceAttributionFields {
 }
 
 export type Role = 'admin' | 'user'
+export type IstioDataPlane = 'sidecar' | 'ambient'
 export type View = 'deployments' | 'overview' | 'infrastructure' | 'kubernetes' | 'experiments' | 'results' | 'catalog' | 'users' | 'administration' | 'comparisons' | 'requests'
 
 // A message a user sends to the administrators.
@@ -404,6 +405,10 @@ export interface ExperimentConfiguration extends ResourceAttributionFields {
     applicationPlacement?: ApplicationPlacement
     istioInjection?: boolean
     istioInjectionOverrides?: Record<string, boolean>
+    /** Absent means sidecar, the behaviour before ambient mode existed. */
+    istioDataPlane?: IstioDataPlane
+    /** Ambient waypoint size: replicas and per-replica cpuRequest, cpuLimit, memoryRequest, memoryLimit. */
+    istioWaypoint?: Record<string, unknown>
 		destinationMode?: 'application' | 'external'
 		externalDestination?: {targetUrl: string; runtimeImage: string; script: string; parameters?: Record<string, string>}
 		podDisruptionBudgetMinAvailable?: number

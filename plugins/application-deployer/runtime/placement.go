@@ -13,7 +13,13 @@ import (
 )
 
 func configureApplicationManifest(content string, workloads []workloadTarget, input stepInput) (string, error) {
-	value, err := configureIstioInjection(content, workloads, input.IstioInjection, input.IstioInjectionOverrides)
+	injection, overrides := input.IstioInjection, input.IstioInjectionOverrides
+	if input.IstioDataPlane == istioAmbient {
+		// Pods in an ambient namespace must not also get a sidecar.
+		disabled := false
+		injection, overrides = &disabled, nil
+	}
+	value, err := configureIstioInjection(content, workloads, injection, overrides)
 	if err != nil {
 		return "", err
 	}

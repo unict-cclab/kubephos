@@ -1,6 +1,8 @@
 import type {Application, Experiment, JsonSchema, SchemaProperty} from './types'
 
-const dateFormatter = new Intl.DateTimeFormat(undefined, {dateStyle: 'medium', timeStyle: 'short'})
+// Dates follow the interface language, like relative times and headings, with a
+// 24-hour clock that reads unambiguously in logs and tables: "Oct 28, 2026, 16:16".
+const dateFormatter = new Intl.DateTimeFormat('en', {dateStyle: 'medium', timeStyle: 'short', hourCycle: 'h23'})
 
 export function formatDate(value: string): string {
   const date = new Date(value)

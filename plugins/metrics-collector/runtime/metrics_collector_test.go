@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"math"
 	"net/url"
 	"slices"
 	"strconv"
@@ -178,7 +179,7 @@ func TestLoadMetricsUseLocustClient(t *testing.T) {
 func TestApplicationMetricsRemainSeparatedByDestinationWorkload(t *testing.T) {
 	definitions := metricDefinitions("experiment", "^(?:gateway)$")
 	for _, definition := range definitions[4:6] {
-		if !strings.Contains(definition.Query, `reporter="destination"`) || !strings.Contains(definition.Query, `destination_workload_namespace="experiment"`) || !strings.Contains(definition.Query, "destination_workload") {
+		if !strings.Contains(definition.Query, serviceReporter) || !strings.Contains(definition.Query, `destination_workload_namespace="experiment"`) || !strings.Contains(definition.Query, "destination_workload") {
 			t.Fatalf("application query must retain the destination workload label: %s", definition.Query)
 		}
 	}
@@ -377,12 +378,29 @@ func TestEndToEndMetricsAlwaysUseLocustAndKeepServiceMetricsOnIstio(t *testing.T
 					t.Fatalf("end-to-end metric is not client-side and isolated: %+v", definition)
 				}
 			}
-			if strings.HasPrefix(definition.ID, "application.") && !strings.Contains(definition.Query, `reporter="destination"`) {
+			if strings.HasPrefix(definition.ID, "application.") && !strings.Contains(definition.Query, serviceReporter) {
 				t.Fatalf("service metric lost destination measurement: %+v", definition)
 			}
 		}
 		if loadMetrics != 4 {
 			t.Fatalf("expected four Locust end-to-end metrics, got %d", loadMetrics)
 		}
+	}
+}
+
+// The configuration editor saves sinusoidal steps as a range without baseline or amplitude.
+func TestConfiguredLoadSeriesReadsSinusoidalRange(t *testing.T) {
+	start := time.Date(2026, 9, 10, 10, 0, 0, 0, time.UTC)
+	var value loadSession
+	if err := json.Unmarshal([]byte(`{"spec":{"scenarioId":"journey","steps":[{"type":"sinusoidal","durationSeconds":30,"minRps":50,"maxRps":150,"periodSeconds":30,"phaseSeconds":0}]}}`), &value); err != nil {
+		t.Fatal(err)
+	}
+	series := configuredLoadSeries(value, start, start.Add(30*time.Second), 15*time.Second)
+	values := make([]float64, 0, len(series.Points))
+	for _, point := range series.Points {
+		values = append(values, point.Value)
+	}
+	if math.Abs(values[0]-100) > 1e-9 || slices.Max(values) < 149 || slices.Min(values) > 51 {
+		t.Fatalf("a sinusoidal range must oscillate between 50 and 150 around 100, got %v", values)
 	}
 }

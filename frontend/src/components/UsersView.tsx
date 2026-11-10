@@ -20,7 +20,7 @@ export function UsersView({users, assignments, clusters, session, changed}: {use
   if (selected) return <><UserDetailsPage user={selected} close={() => setSelectedID(null)} assignments={assignments} clusters={clusters} session={session} changed={changed} edit={() => setAccount({user: selected, mode: 'email'})} reset={() => setAccount({user: selected, mode: 'password'})} />{accountDialog}</>
   return <>
     <ResourceListHeading title="Users" action={<ResourceAction action="create" label="Create user" onClick={() => setCreating(true)} />} />
-    <ResourceListTable items={users.map(user => ({...user, createdAt: user.createdAt ?? '', updatedAt: user.updatedAt ?? ''}))} label="Users" editable searchText={user => `${user.username} ${user.email ?? ''} ${user.role}`} columns={[
+    <ResourceListTable open={user => setSelectedID(user.id)} items={users.map(user => ({...user, createdAt: user.createdAt ?? '', updatedAt: user.updatedAt ?? ''}))} label="Users" editable searchText={user => `${user.username} ${user.email ?? ''} ${user.role}`} columns={[
       {label: 'Username', render: user => <span className="user-identity">{user.username}</span>},
       {label: 'Email', render: user => user.email || '—'},
       {label: 'Role', render: user => <span className={`user-role ${user.role}`}>{user.role === 'admin' ? 'Administrator' : 'User'}</span>},
