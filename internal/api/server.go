@@ -184,6 +184,7 @@ func NewServer(store *storage.Store, registry *plugins.Registry, artifactStore *
 	router.HandleFunc("GET /api/v1/admin-requests", server.listAdminRequests)
 	router.HandleFunc("POST /api/v1/admin-requests", server.createAdminRequest)
 	router.HandleFunc("PATCH /api/v1/admin-requests/{id}", server.updateAdminRequest)
+	router.HandleFunc("DELETE /api/v1/admin-requests/{id}", server.deleteAdminRequest)
 	router.HandleFunc("GET /api/v1/infrastructure/resources", server.listInfrastructureResources)
 	router.HandleFunc("GET /api/v1/terminal-targets", server.listTerminalTargets)
 	router.HandleFunc("POST /api/v1/terminals", server.createTerminal)

@@ -502,13 +502,46 @@ input[type="file"]:disabled::file-selector-button { background: var(--muted); co
 
 /* Admin requests ---------------------------------------------------------- */
 
-.request-composer { display: grid; gap: 12px; max-width: 720px; margin-bottom: 40px; padding: 20px; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--card); }
+/* Members follow their requests on the left and write a new one in a card that
+   stays in view on the right; narrow screens put the form first. */
+.request-page-intro { max-width: 640px; margin: -8px 0 32px; color: var(--muted-foreground); font-size: 15px; line-height: 1.5; }
+.request-page { display: grid; grid-template-columns: minmax(0, 1fr) minmax(300px, 360px); align-items: start; gap: 32px; }
+.request-feed { min-width: 0; }
+.request-feed > .request-list + .request-group-title, .request-feed > .request-list + .request-history { margin-top: 28px; }
+/* Resolved requests fold away, so a long history never crowds the open ones. */
+.request-history { margin: 0; padding: 0; border: 0; border-radius: 0; background: transparent; }
+.request-history > summary { width: fit-content; padding: 4px 8px 4px 0; border-radius: var(--radius-sm); cursor: pointer; list-style: none; }
+.request-history > summary::-webkit-details-marker { display: none; }
+.request-history > summary::before { content: ""; width: 6px; height: 6px; margin-right: 2px; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; transform: rotate(-45deg); transition: transform var(--duration-fast) var(--ease-out); }
+.request-history[open] > summary::before { transform: rotate(45deg); }
+.request-history > summary:hover { color: var(--foreground); }
+.request-history:not([open]) > summary { margin-bottom: 0; }
+.request-more { justify-self: start; margin-top: 8px; }
+.request-group-title { display: flex; align-items: center; gap: 8px; margin: 0 0 10px; color: var(--muted-foreground); font-size: 12px; font-weight: 550; letter-spacing: .06em; text-transform: uppercase; }
+.request-group-title > span { color: var(--muted-foreground); font: 500 12px/1 var(--font-mono); letter-spacing: 0; }
+.request-composer { position: sticky; top: 24px; display: grid; gap: 14px; padding: 20px; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--card); box-shadow: var(--shadow-sm); }
+.request-composer-title { margin: 0; font-size: 16px; font-weight: 600; letter-spacing: -.01em; }
+.request-composer-hint { margin: -6px 0 0; color: var(--muted-foreground); font-size: 13px; line-height: 1.5; }
 .request-composer > label { margin: 0; }
-.request-composer textarea { min-height: 120px; resize: vertical; }
-.request-composer-footer { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 16px; }
-.request-composer-hint { flex: 1; min-width: 200px; color: var(--muted-foreground); font-size: 13px; }
+.request-composer textarea { min-height: 140px; resize: vertical; }
+.request-composer-footer { display: flex; align-items: center; justify-content: space-between; gap: 8px 16px; }
+.request-composer > .button { width: 100%; }
 .request-composer-count { color: var(--muted-foreground); font: 500 12px/1 var(--font-mono); }
-.request-section-title { margin: 0 0 12px; font-size: 15px; font-weight: 600; }
+/* Open requests used out of the limit, one pip each. */
+.request-slots { display: inline-flex; align-items: center; gap: 8px; color: var(--muted-foreground); font-size: 13px; }
+.request-slots-pips { display: inline-flex; gap: 4px; }
+.request-slots-pips > span { width: 8px; height: 8px; border-radius: 50%; background: var(--border); }
+.request-slots-pips > .is-used { background: var(--foreground); }
+@media (max-width: 1100px) {
+  .request-page { grid-template-columns: minmax(0, 1fr); }
+  .request-composer { position: static; order: -1; }
+}
+.request-section-title { margin: 0 0 16px; font-size: 16px; font-weight: 600; letter-spacing: -.01em; }
+/* The inbox filters by status on the left and by requester on the right. */
+.request-inbox-toolbar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px 16px; max-width: 880px; margin-bottom: 20px; }
+.request-inbox-toolbar > .history-filters { margin: 0; }
+.request-search { flex: 0 1 280px; min-width: 0; }
+@media (max-width: 600px) { .request-search { flex-basis: 100%; } }
 .request-filter-count { margin-left: 4px; color: var(--muted-foreground); font: 500 12px/1 var(--font-mono); }
 
 .request-list { display: grid; gap: 12px; max-width: 880px; margin: 0; padding: 0; list-style: none; }
@@ -521,7 +554,15 @@ input[type="file"]:disabled::file-selector-button { background: var(--muted); co
 .request-reply-author { color: var(--muted-foreground); font-size: 12px; font-weight: 600; }
 .request-quoted { max-height: 160px; overflow: auto; padding-left: 12px; border-left: 2px solid var(--border); color: var(--muted-foreground); }
 .request-card-foot { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px 16px; padding-top: 12px; border-top: 1px solid var(--border); color: var(--muted-foreground); font-size: 13px; }
-.request-card-foot > .button { margin-left: auto; }
+.request-card-actions { display: flex; align-items: center; gap: 8px; margin-left: auto; }
+/* Actions alone need no divider; a resolution keeps its rule above it. */
+.request-card.is-open .request-card-foot { padding-top: 0; border-top: 0; }
+/* A member edits an open request in place of its message. */
+.request-edit { display: grid; gap: 8px; margin: 0; }
+.request-edit > label { margin: 0; }
+.request-edit textarea { min-height: 96px; resize: vertical; }
+.request-edit-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
+.request-edit-actions > .request-composer-count { margin-right: auto; }
 .request-empty { max-width: 880px; }
 
 /* Service override picker ------------------------------------------------- */

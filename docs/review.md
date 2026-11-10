@@ -1,3 +1,26 @@
+# Requests and ownership review — 10 November 2026
+
+- Members edit the text of their own open requests in place and can mark them
+  resolved when they solve them; the card then reads "Resolved by you".
+  Replying, reopening and other members' requests stay out of reach (the API
+  answers 403, or 404 for someone else's request). Administrators can delete
+  any request after confirming it (`DELETE /api/v1/admin-requests/{id}`).
+- Ask an admin uses two columns: the member's requests, grouped as Open and
+  Resolved, beside a sticky New request card with a meter of the three open
+  requests allowed; phones show the form first. Resolved requests fold into a
+  collapsed section showing the five newest; administrators see the ten newest
+  resolved requests. Older ones appear on demand.
+- Administrators search the inbox by username: part of a name, in any case,
+  narrows both tabs and their counts, with suggestions of users who sent
+  requests and a Clear search action when nothing matches.
+- Configurations and Runs show the Created by filter only when the list mixes
+  creators (members also see items shared with them) or a choice is active.
+- Validation: Go vet and the `internal/api` and `internal/storage` tests with a
+  disposable PostgreSQL, frontend tests, typecheck, build, asset budget and
+  contrast checks passed. The member page was checked at desktop and phone
+  widths in both themes with sample data in an isolated preview; the running
+  development backend still predates these endpoints.
+
 # Frontend review — 9 November 2026
 
 - Resource lists with many columns no longer clip their row actions at laptop

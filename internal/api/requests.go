@@ -73,20 +73,27 @@ func (s *Server) createAdminRequest(response http.ResponseWriter, request *http.
 	writeJSON(response, http.StatusCreated, saved)
 }
 
-// Only administrators resolve or reopen requests; the middleware enforces the same rule.
-// A reply is accepted only together with the resolution.
+type adminRequestUpdate struct {
+	Status  string  `json:"status"`
+	Reply   string  `json:"reply"`
+	Message *string `json:"message"`
+}
+
+// Administrators resolve, with an optional reply, or reopen any request. A member
+// may edit the text of their own open request or resolve it themselves.
 func (s *Server) updateAdminRequest(response http.ResponseWriter, request *http.Request) {
 	user := requestUser(request)
-	if user.Role != "admin" {
-		writeError(response, http.StatusForbidden, "permission_denied", "Administrator access is required.")
-		return
-	}
-	var input struct {
-		Status string `json:"status"`
-		Reply  string `json:"reply"`
-	}
+	var input adminRequestUpdate
 	if err := decodeJSON(request, &input); err != nil {
 		writeError(response, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	if user.Role != "admin" {
+		s.updateOwnAdminRequest(response, request, user, input)
+		return
+	}
+	if input.Message != nil {
+		writeError(response, http.StatusForbidden, "permission_denied", "Only the user who sent a request can edit its message.")
 		return
 	}
 	if input.Status != domain.AdminRequestOpen && input.Status != domain.AdminRequestResolved {
@@ -112,4 +119,57 @@ func (s *Server) updateAdminRequest(response http.ResponseWriter, request *http.
 		return
 	}
 	writeJSON(response, http.StatusOK, saved)
+}
+
+// A member changes only their own open request: its text, or its resolution when
+// they solved the problem themselves. Reopening and replies stay with administrators.
+func (s *Server) updateOwnAdminRequest(response http.ResponseWriter, request *http.Request, user domain.User, input adminRequestUpdate) {
+	if input.Reply != "" || (input.Status != "" && input.Status != domain.AdminRequestResolved) {
+		writeError(response, http.StatusForbidden, "permission_denied", "Only an administrator can reply to or reopen a request.")
+		return
+	}
+	resolve := input.Status == domain.AdminRequestResolved
+	message := ""
+	if input.Message != nil {
+		var err error
+		if message, err = trimAdminRequestText(*input.Message, true); err != nil {
+			writeError(response, http.StatusUnprocessableEntity, "invalid_message", err.Error())
+			return
+		}
+	} else if !resolve {
+		writeError(response, http.StatusUnprocessableEntity, "invalid_request", "Send a new message or resolve the request.")
+		return
+	}
+	saved, err := s.store.UpdateOwnAdminRequest(request.Context(), request.PathValue("id"), user.ID, message, resolve)
+	if errors.Is(err, storage.ErrNotFound) {
+		writeError(response, http.StatusNotFound, "not_found", "Request not found.")
+		return
+	}
+	if errors.Is(err, storage.ErrConflict) {
+		writeError(response, http.StatusConflict, "request_resolved", "This request is already resolved and can no longer be changed.")
+		return
+	}
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, "database_error", "Could not update the request. Try again.")
+		return
+	}
+	writeJSON(response, http.StatusOK, saved)
+}
+
+// Only administrators delete requests.
+func (s *Server) deleteAdminRequest(response http.ResponseWriter, request *http.Request) {
+	if requestUser(request).Role != "admin" {
+		writeError(response, http.StatusForbidden, "permission_denied", "Administrator access is required.")
+		return
+	}
+	err := s.store.DeleteAdminRequest(request.Context(), request.PathValue("id"))
+	if errors.Is(err, storage.ErrNotFound) {
+		writeError(response, http.StatusNotFound, "not_found", "Request not found.")
+		return
+	}
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, "database_error", "Could not delete the request. Try again.")
+		return
+	}
+	response.WriteHeader(http.StatusNoContent)
 }

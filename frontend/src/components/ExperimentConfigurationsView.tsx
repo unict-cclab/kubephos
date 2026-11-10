@@ -35,7 +35,7 @@ import {ResourceAction} from './ResourceAction'
 import {ExperimentExecutionDialog} from './ExperimentExecutionDialog'
 import {ApplicationTopologyGraph} from './ApplicationTopologyGraph'
 import {InitialReplicaEditor} from './InitialReplicaEditor'
-import {OwnerFilter, ownerLabel} from './OwnerFilter'
+import {OwnerFilter, canFilterByOwner, ownerLabel} from './OwnerFilter'
 
 interface Props {
   items: ExperimentConfiguration[]
@@ -119,7 +119,7 @@ export function ExperimentConfigurationsView(props: Props) {
     {confirmationDialog}
     <ResourceListHeading title="Configurations" icon="configurations" action={<>{(props.isAdmin || Boolean(props.session.user)) && <ResourceAction action="create" label="New configuration" disabled={!ready} onClick={() => setCreating('choose')} />}</>} />
     {error && <ErrorFeedback message={error} />}
-    <ResourceListTable open={item => detail.open('configuration', item.id)} editable filters={<OwnerFilter items={props.items} value={owner} onChange={setOwner} />} empty={<><strong>{props.items.length ? 'No matching configurations' : 'No configurations yet'}</strong><p>{props.items.length ? 'Choose another owner filter to find your configuration.' : 'Start with a ready Kubernetes cluster, then choose an application or an external endpoint.'}</p></>} searchText={item => `${item.name} ${ownerLabel(item)} ${item.kind} ${item.validation.valid ? 'validated' : 'needs review'}`} items={visibleItems} label="Configurations" columns={[
+    <ResourceListTable open={item => detail.open('configuration', item.id)} editable filters={canFilterByOwner(props.items, owner) ? <OwnerFilter items={props.items} value={owner} onChange={setOwner} /> : undefined} empty={<><strong>{props.items.length ? 'No matching configurations' : 'No configurations yet'}</strong><p>{props.items.length ? 'Choose another owner filter to find your configuration.' : 'Start with a ready Kubernetes cluster, then choose an application or an external endpoint.'}</p></>} searchText={item => `${item.name} ${ownerLabel(item)} ${item.kind} ${item.validation.valid ? 'validated' : 'needs review'}`} items={visibleItems} label="Configurations" columns={[
       {label: 'Name', render: item => <h3>{item.name}</h3>},
       {label: 'Type', render: item => item.kind === 'suite' ? 'Comparative' : 'Single'},
       {label: 'Experiments', render: item => experimentCounts.get(item.id) ?? 0}

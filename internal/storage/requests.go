@@ -85,3 +85,39 @@ func (s *Store) SetAdminRequestStatus(ctx context.Context, id, status, reply, ad
 	}
 	return s.GetAdminRequest(ctx, id)
 }
+
+// UpdateOwnAdminRequest lets a member edit the text of their own open request,
+// resolve it themselves, or both. An empty message keeps the current text.
+// Another member's request reads as missing; a resolved one is a conflict.
+func (s *Store) UpdateOwnAdminRequest(ctx context.Context, id, requesterID, message string, resolve bool) (domain.AdminRequest, error) {
+	result, err := s.pool.Exec(ctx, `UPDATE admin_requests SET
+		message=COALESCE(NULLIF($3,''),message),
+		status=CASE WHEN $4 THEN 'resolved' ELSE status END,
+		resolved_by_user_id=CASE WHEN $4 THEN requester_user_id ELSE resolved_by_user_id END,
+		resolved_at=CASE WHEN $4 THEN now() ELSE resolved_at END,
+		updated_at=now()
+		WHERE id=$1 AND requester_user_id=$2 AND status='open'`, id, requesterID, message, resolve)
+	if err != nil {
+		return domain.AdminRequest{}, err
+	}
+	if result.RowsAffected() == 0 {
+		item, err := s.GetAdminRequest(ctx, id)
+		if err != nil || item.RequesterUserID != requesterID {
+			return domain.AdminRequest{}, ErrNotFound
+		}
+		return domain.AdminRequest{}, ErrConflict
+	}
+	return s.GetAdminRequest(ctx, id)
+}
+
+// DeleteAdminRequest removes a request on behalf of an administrator.
+func (s *Store) DeleteAdminRequest(ctx context.Context, id string) error {
+	result, err := s.pool.Exec(ctx, `DELETE FROM admin_requests WHERE id=$1`, id)
+	if err != nil {
+		return err
+	}
+	if result.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
