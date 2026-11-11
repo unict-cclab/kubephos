@@ -9,7 +9,7 @@ RUN npm run build
 
 FROM docker:29.8.0-cli AS dockercli
 
-FROM golang:1.26.10-alpine3.23 AS build
+FROM golang:1.26.11-alpine3.23 AS build
 
 WORKDIR /src
 COPY go.mod go.sum ./

@@ -12,7 +12,7 @@ jobs:
   go:
     name: ${{ matrix.name }}
     runs-on: ubuntu-latest
-    container: golang:1.26.10
+    container: golang:1.26.11
     strategy:
       fail-fast: false
       matrix:
@@ -42,7 +42,7 @@ jobs:
   storage:
     name: PostgreSQL
     runs-on: ubuntu-latest
-    container: golang:1.26.10
+    container: golang:1.26.11
     services:
       postgres:
         image: postgres:18.6-alpine3.23

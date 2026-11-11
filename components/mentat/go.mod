@@ -2,7 +2,7 @@ module kubephos.dev/kubephos/components/mentat
 
 go 1.26.0
 
-toolchain go1.26.10
+toolchain go1.26.11
 
 require (
 	github.com/digineo/go-ping v1.0.1
