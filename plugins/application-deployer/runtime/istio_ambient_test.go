@@ -26,9 +26,14 @@ func TestAmbientDisablesEverySidecar(t *testing.T) {
 
 func TestAmbientNamespaceUsesOneWaypoint(t *testing.T) {
 	labels := map[string]string{}
-	ambientNamespaceLabels(labels)
+	ambientNamespaceLabels(labels, true)
 	if labels["istio.io/dataplane-mode"] != "ambient" || labels["istio.io/use-waypoint"] != ambientWaypoint || labels["istio-injection"] != "disabled" {
 		t.Fatalf("unexpected ambient labels: %v", labels)
+	}
+	optIn := map[string]string{}
+	ambientNamespaceLabels(optIn, false)
+	if optIn["istio.io/dataplane-mode"] != "ambient" || optIn["istio.io/use-waypoint"] != "" {
+		t.Fatalf("an opt-in namespace routes every service through the waypoint: %v", optIn)
 	}
 	var gateway struct {
 		Metadata struct {
@@ -118,5 +123,82 @@ func TestSizedWaypointOverlaysTheGeneratedDeployment(t *testing.T) {
 	containers := overlay.Spec.Template.Spec.Containers
 	if overlay.Spec.Replicas != 3 || len(containers) != 1 || containers[0].Name != "istio-proxy" || containers[0].Resources["requests"]["cpu"] != "250m" || containers[0].Resources["limits"]["memory"] != "256Mi" {
 		t.Fatalf("unexpected deployment overlay: %+v", overlay)
+	}
+}
+
+func TestWaypointServiceOverridesLabelTheirServices(t *testing.T) {
+	manifest := `apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: frontend
+spec:
+  template:
+    metadata:
+      labels: {app: frontend, tier: web}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cart
+spec:
+  template:
+    metadata:
+      labels: {app: cart}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: frontend
+spec:
+  selector: {app: frontend}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: cart
+spec:
+  selector: {app: cart}
+`
+	workloads := []workloadTarget{{ID: "frontend", Kind: "Deployment", Name: "frontend"}, {ID: "cart", Kind: "Deployment", Name: "cart"}}
+	serviceLabel := func(content, name string) string {
+		t.Helper()
+		for _, document := range strings.Split(content, "---") {
+			if strings.Contains(document, "kind: Service") && strings.Contains(document, "name: "+name+"\n") {
+				for _, line := range strings.Split(document, "\n") {
+					if strings.Contains(line, "istio.io/use-waypoint") {
+						_, value, _ := strings.Cut(line, "istio.io/use-waypoint:")
+						return strings.TrimSpace(value)
+					}
+				}
+				return ""
+			}
+		}
+		t.Fatalf("service %s missing:\n%s", name, content)
+		return ""
+	}
+	// Every service uses the waypoint by default; cart is excluded.
+	result, err := configureWaypointServices(manifest, workloads, workloadresources.Waypoint{AllServices: true, ServiceOverrides: map[string]bool{"cart": false, "frontend": true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if serviceLabel(result, "cart") != "none" || serviceLabel(result, "frontend") != "" {
+		t.Fatalf("exclusion not applied:\n%s", result)
+	}
+	// No service uses the waypoint by default; frontend is included.
+	result, err = configureWaypointServices(manifest, workloads, workloadresources.Waypoint{ServiceOverrides: map[string]bool{"frontend": true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if serviceLabel(result, "frontend") != ambientWaypoint || serviceLabel(result, "cart") != "" {
+		t.Fatalf("inclusion not applied:\n%s", result)
+	}
+	if unchanged, err := configureWaypointServices(manifest, workloads, workloadresources.Waypoint{AllServices: true}); err != nil || unchanged != manifest {
+		t.Fatal("settings without exceptions changed the manifest", err)
+	}
+	if _, err := configureWaypointServices(manifest, workloads, workloadresources.Waypoint{AllServices: true, ServiceOverrides: map[string]bool{"payments": false}}); err == nil {
+		t.Fatal("an unknown service was accepted")
+	}
+	if _, err := configureWaypointServices(strings.Split(manifest, "---\napiVersion: v1\nkind: Service")[0], workloads, workloadresources.Waypoint{AllServices: true, ServiceOverrides: map[string]bool{"cart": false}}); err == nil {
+		t.Fatal("an exception without a Kubernetes Service was accepted")
 	}
 }

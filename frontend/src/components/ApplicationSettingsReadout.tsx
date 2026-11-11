@@ -13,7 +13,13 @@ import {PlacementReadout} from './ApplicationPlacementEditor'
 // Waypoint size as saved; empty fields run with Istio's defaults.
 function waypointRows(settings: Record<string, unknown> = {}): string[][] {
  const value = (field: string) => settings[field] === undefined || settings[field] === '' ? 'Istio default' : String(settings[field])
- return [['Waypoint replicas', settings.replicas === undefined ? '1 (Istio default)' : String(settings.replicas)], ['CPU request per replica', value('cpuRequest')], ['CPU limit per replica', value('cpuLimit')], ['Memory request per replica', value('memoryRequest')], ['Memory limit per replica', value('memoryLimit')]]
+ const overrides = Object.entries((settings.serviceOverrides ?? {}) as Record<string, boolean>)
+ return [
+  ['Waypoint replicas', settings.replicas === undefined ? '1 (Istio default)' : String(settings.replicas)],
+  ['CPU request per replica', value('cpuRequest')], ['CPU limit per replica', value('cpuLimit')], ['Memory request per replica', value('memoryRequest')], ['Memory limit per replica', value('memoryLimit')],
+  ['Every service uses the waypoint', settings.allServices === false ? 'No' : 'Yes'],
+  ...overrides.map(([id, use]) => [id, use ? 'Uses the waypoint' : 'Bypasses the waypoint']),
+ ]
 }
 
 export function ResourceSettingsReadout({value={},label='Resources',defaults}:{defaults?:ReactNode;value?:Record<string,unknown>;label?:string}) {

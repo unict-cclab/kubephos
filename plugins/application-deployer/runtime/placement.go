@@ -10,6 +10,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 	"kubephos.dev/kubephos/internal/placement"
+	"kubephos.dev/kubephos/internal/workloadresources"
 )
 
 func configureApplicationManifest(content string, workloads []workloadTarget, input stepInput) (string, error) {
@@ -26,6 +27,15 @@ func configureApplicationManifest(content string, workloads []workloadTarget, in
 	value, err = configureProxyResources(value, workloads, input.IstioProxyResources)
 	if err != nil {
 		return "", err
+	}
+	if input.IstioDataPlane == istioAmbient {
+		waypoint, err := workloadresources.ParseWaypoint(input.IstioWaypoint)
+		if err != nil {
+			return "", err
+		}
+		if value, err = configureWaypointServices(value, workloads, waypoint); err != nil {
+			return "", err
+		}
 	}
 	value, err = configureApplicationPlacement(value, workloads, input.ApplicationPlacement)
 	if err == nil && input.PlacementControlName != "" {

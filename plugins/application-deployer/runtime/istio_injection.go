@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -139,10 +140,114 @@ func validateIstioDataPlane(spec Spec) error {
 	}
 }
 
-func ambientNamespaceLabels(labels map[string]string) {
+// ambientNamespaceLabels enrolls the namespace in ambient mode. Its services use the
+// waypoint by default only when allServices is set; Service labels make exceptions.
+func ambientNamespaceLabels(labels map[string]string, allServices bool) {
 	labels["istio-injection"] = "disabled"
 	labels["istio.io/dataplane-mode"] = istioAmbient
-	labels["istio.io/use-waypoint"] = ambientWaypoint
+	if allServices {
+		labels["istio.io/use-waypoint"] = ambientWaypoint
+	}
+}
+
+const useWaypointLabel = "istio.io/use-waypoint"
+
+// configureWaypointServices labels the Services of application components whose
+// waypoint use differs from the namespace default: "waypoint" includes a service,
+// "none" excludes it. A Service belongs to a component when its selector matches
+// the labels of that component's pod template.
+func configureWaypointServices(content string, workloads []workloadTarget, settings workloadresources.Waypoint) (string, error) {
+	if len(settings.ServiceOverrides) == 0 {
+		return content, nil
+	}
+	components := map[string]string{}
+	for _, workload := range workloads {
+		components[workload.Kind+"/"+workload.Name] = workload.ID
+	}
+	for id := range settings.ServiceOverrides {
+		if !slices.ContainsFunc(workloads, func(workload workloadTarget) bool { return workload.ID == id }) {
+			return "", fmt.Errorf("Waypoint override refers to unknown application service %s", id)
+		}
+	}
+	decoder := yaml.NewDecoder(strings.NewReader(content))
+	resources := []map[string]any{}
+	podLabels := map[string]map[string]any{}
+	for {
+		var resource map[string]any
+		err := decoder.Decode(&resource)
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return "", err
+		}
+		if len(resource) == 0 {
+			continue
+		}
+		resources = append(resources, resource)
+		metadata, _ := resource["metadata"].(map[string]any)
+		if id, ok := components[fmt.Sprint(resource["kind"])+"/"+fmt.Sprint(metadata["name"])]; ok {
+			spec, _ := resource["spec"].(map[string]any)
+			template, _ := spec["template"].(map[string]any)
+			templateMetadata, _ := template["metadata"].(map[string]any)
+			labels, _ := templateMetadata["labels"].(map[string]any)
+			podLabels[id] = labels
+		}
+	}
+	labelled := map[string]bool{}
+	for _, resource := range resources {
+		if resource["kind"] != "Service" {
+			continue
+		}
+		spec, _ := resource["spec"].(map[string]any)
+		selector, _ := spec["selector"].(map[string]any)
+		if len(selector) == 0 {
+			continue
+		}
+		for id, use := range settings.ServiceOverrides {
+			if use == settings.AllServices || !selects(selector, podLabels[id]) {
+				continue
+			}
+			metadata, _ := resource["metadata"].(map[string]any)
+			labels, _ := metadata["labels"].(map[string]any)
+			if labels == nil {
+				labels = map[string]any{}
+				metadata["labels"] = labels
+			}
+			value := "none"
+			if use {
+				value = ambientWaypoint
+			}
+			labels[useWaypointLabel] = value
+			labelled[id] = true
+		}
+	}
+	for id, use := range settings.ServiceOverrides {
+		if use != settings.AllServices && !labelled[id] {
+			return "", fmt.Errorf("Application service %s has no Kubernetes Service to route through the waypoint", id)
+		}
+	}
+	var result bytes.Buffer
+	encoder := yaml.NewEncoder(&result)
+	for _, resource := range resources {
+		if err := encoder.Encode(resource); err != nil {
+			return "", err
+		}
+	}
+	if err := encoder.Close(); err != nil {
+		return "", err
+	}
+	return result.String(), nil
+}
+
+// selects reports whether every selector label matches the pod labels.
+func selects(selector, labels map[string]any) bool {
+	for key, value := range selector {
+		if labels[key] != value {
+			return false
+		}
+	}
+	return len(labels) > 0
 }
 
 const waypointSettingsName = ambientWaypoint + "-settings"
@@ -160,7 +265,7 @@ func waypointManifest(namespace, marker string, settings workloadresources.Waypo
 		"metadata": metadata(ambientWaypoint, map[string]string{"app.kubernetes.io/managed-by": "kubephos", "istio.io/waypoint-for": "service"}),
 		"spec":     spec,
 	}
-	if settings.IsDefault() {
+	if settings.DefaultSize() {
 		value, _ := json.Marshal(gateway)
 		return value
 	}
@@ -181,7 +286,7 @@ func waypointManifest(namespace, marker string, settings workloadresources.Waypo
 }
 
 func waypointLogMessage(settings workloadresources.Waypoint) string {
-	if settings.IsDefault() {
+	if settings.DefaultSize() {
 		return "Starting the Istio ambient waypoint for the namespace"
 	}
 	replicas := max(settings.Replicas, 1)
