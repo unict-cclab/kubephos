@@ -1,3 +1,8 @@
+import {usePreparedComparison} from '../usePreparedComparison'
+import type {ComparisonColumns, PreparedComparison} from '../comparisonPreparation'
+import {responseTimeSLO, addDerivedMetrics, serviceMetricStatistics, aggregateMetric, aggregatePlotMetric, summarize, isControlMetric, serviceStatisticsMetrics, serviceStatisticsRows, statisticsCSV, podSchedulingStatistics, variantStatistics, variantEffectSizes, validateDataset, plotLabel, type LoadedDataset, type AggregateSeries, type ScientificSummary} from '../resultsData'
+export {serviceMetricStatistics, aggregateMetric, aggregatePlotMetric, summarize, statisticsCSV, podSchedulingStatistics, variantStatistics, cohenD} from '../resultsData'
+export type {LoadedDataset, AggregateSeries} from '../resultsData'
 import {FormTabs} from './FormTabs'
 import {ErrorFeedback, useErrorState} from './ToastRegion'
 import {ResponsiveTable} from './ResponsiveTable'
@@ -31,27 +36,13 @@ export interface ResultsViewProps {
   comparison?: {sourceConfigurations: Record<string, Record<string, unknown>>; actions?: React.ReactNode; sources?: React.ReactNode}
 }
 
-export interface LoadedDataset {
-  artifact: Artifact
-  dataset: TimeSeriesDataset
-  label: string
-  color?: string
-}
-
-export interface AggregateSeries {
-  artifactID: string
-  label: string
-  unit: string
-  points: MetricPoint[]
-  deviation?: MetricPoint[]
-  stepMilliseconds?: number
-  sloMilliseconds?: number
-  color?: string
-}
-
 type ResultsTab = 'statistics' | 'charts' | 'downloads'
 
-export function ResultsView({artifacts, experiments, operations, workspaces, session, changed, openOperation, openPipelineRun, focusedExperiment, onBack, comparison}: ResultsViewProps) {
+export function ResultsView(props: ResultsViewProps) {
+  return props.comparison && props.focusedExperiment ? <ComparisonResults {...props} experiment={props.focusedExperiment} /> : <ExperimentResultsView {...props} />
+}
+
+function ExperimentResultsView({artifacts, experiments, operations, workspaces, session, changed, openOperation, openPipelineRun, focusedExperiment, onBack, comparison}: ResultsViewProps) {
   const {confirmDelete, confirmAction, confirmationDialog} = useDeleteConfirmation()
   const available = useMemo(() => artifacts.filter(item => !item.sensitive && item.type === 'TimeSeriesDataset' && item.version === 'v1alpha1').sort((left, right) => right.verifiedAt.localeCompare(left.verifiedAt)), [artifacts])
   const datasetCache = useRef(new Map<string, TimeSeriesDataset>())
@@ -155,13 +146,14 @@ export function ResultsView({artifacts, experiments, operations, workspaces, ses
   const experiment = focusedExperiment ?? experiments.find(item => item.id === activeExperiment)
   const experimentPresentation = useMemo(() => {
     const presentation = new Map<string, {label: string; color?: string}>()
-    for (const variant of experiment?.variants ?? []) for (const trial of variant.trials) if (trial.resultArtifactId) presentation.set(trial.resultArtifactId, {label: `${variant.alias || variant.name} · Execution ${trial.position}`, color: variant.color})
+    for (const variant of experiment?.variants ?? []) for (const trial of variant.trials) if (trial.resultArtifactId) presentation.set(trial.resultArtifactId, {label: experiment?.kind === 'comparison' ? variant.alias || variant.name : `${variant.alias || variant.name} · Execution ${trial.position}`, color: variant.color})
     return presentation
   }, [experiment])
   const displayed = useMemo(() => loaded.map(item => ({...item, label: experimentPresentation.get(item.artifact.id)?.label ?? datasetLabel(item.artifact, operations), color: experimentPresentation.get(item.artifact.id)?.color})), [loaded, experimentPresentation, operations])
   const metrics = useMemo(() => [...new Set(displayed.flatMap(item => [...item.dataset.spec.series.map(series => series.metric), ...(item.dataset.spec.controlMetrics ?? []).filter(summary => summary.status !== 'not_configured').map(summary => summary.metric)]))].filter(metric => !['load.mean_response_time', 'load.p50_response_time', 'load.p99_response_time'].includes(metric) && (!metric.startsWith('application.') || metric === 'application.p95_response_time')).filter(metric => !comparison || comparisonMetricCompatible(displayed, metric)).sort(), [displayed, Boolean(comparison)])
-  const statisticsMetrics = [...new Set([...metrics, ...displayed.flatMap(item => item.dataset.spec.controlMetrics?.map(summary => summary.metric) ?? [])])].filter(metric => !['application.p95_response_time', 'redis.operation_p95_response_time'].includes(metric))
-  const visibleMetrics = [...groupMetrics(metrics.filter(metric => !isControlMetric(metric))).values()].flat()
+  const statisticsMetrics = useMemo(() => [...new Set([...metrics, ...displayed.flatMap(item => item.dataset.spec.controlMetrics?.map(summary => summary.metric) ?? [])])].filter(metric => !['application.p95_response_time', 'redis.operation_p95_response_time'].includes(metric)), [metrics, displayed])
+  const visibleMetrics = useMemo(() => [...groupMetrics(metrics.filter(metric => !isControlMetric(metric))).values()].flat(), [metrics])
+  const warnings = useMemo(() => comparison ? comparisonWarnings(displayed, comparison.sourceConfigurations) : [], [displayed, comparison?.sourceConfigurations])
   const plotHeight = activeTab === 'charts' ? sharedChartHeight(displayed, visibleMetrics, activeRun ? undefined : experiment) : 465
 
 
@@ -227,7 +219,7 @@ export function ResultsView({artifacts, experiments, operations, workspaces, ses
     {comparison?.sources}
     <ErrorFeedback message={actionError} />
     {!focusedExperiment && experiments.length > 0 && <div className="experiment-history"><div className="experiment-history-title"><span><b>1</b><strong>Choose an experiment</strong></span><span>{experiments.length} saved</span></div><div className="experiment-cards">{experiments.map(item => <button key={item.id} className={activeExperiment === item.id ? 'active' : ''} onClick={() => openExperiment(item)}><span className={`status-dot ${experimentDisplayStatus(item)}`} /><span><strong>{item.name}</strong><small>{item.status === 'queued' && item.scheduledFor && new Date(item.scheduledFor).getTime() > Date.now() ? `Scheduled ${formatDate(item.scheduledFor)}` : `${experimentDisplayStatus(item)} · ${item.variants.length} strategies · ${item.variants.reduce((total, variant) => total + variant.trials.length, 0)} executions`}</small></span><ActionIcon name="right" /></button>)}</div></div>}
-    {focusedExperiment && <nav className="experiment-run-tabs" aria-label="Run executions"><button className="run-tab summary" aria-current={runTab === 'summary' ? 'page' : undefined} data-active={runTab === 'summary'} onClick={() => {setRunTab('summary'); setActiveTab('statistics')}}><span className="run-tab-label">All executions</span></button>{focusedRuns.map(({variant, trial}) => <button key={trial.id} className={`run-tab ${trial.status}`} aria-current={runTab === trial.id ? 'page' : undefined} data-active={runTab === trial.id} onClick={() => {setRunTab(trial.id); setActiveTab('statistics')}}><span className={`status-dot ${trial.status}`} /><span className="run-tab-label">{variant.name} · Execution {trial.position}</span></button>)}</nav>}
+    {focusedExperiment && !comparison && <nav className="experiment-run-tabs" aria-label="Run executions"><button className="run-tab summary" aria-current={runTab === 'summary' ? 'page' : undefined} data-active={runTab === 'summary'} onClick={() => {setRunTab('summary'); setActiveTab('statistics')}}><span className="run-tab-label">All executions</span></button>{focusedRuns.map(({variant, trial}) => <button key={trial.id} className={`run-tab ${trial.status}`} aria-current={runTab === trial.id ? 'page' : undefined} data-active={runTab === trial.id} onClick={() => {setRunTab(trial.id); setActiveTab('statistics')}}><span className={`status-dot ${trial.status}`} /><span className="run-tab-label">{variant.name} · Execution {trial.position}</span></button>)}</nav>}
     {experiment && (!activeRun ? <>{experiment.status !== 'succeeded' && <ExperimentProgress experiment={experiment} />}{liveRun && <RunLoadProgress name={`${liveRun.variant.name} · Execution ${liveRun.trial.position}`} trial={liveRun.trial} configuration={liveRun.variant.configuration} operation={operations.find(item => item.id === liveRun.trial.operationId)} />}</> : <><RunDiagnostics status={activeRun.trial.status} error={activeRun.trial.error} pipelineRunId={activeRun.trial.pipelineRunId} operationId={activeRun.trial.operationId} openPipelineRun={openPipelineRun} openOperation={openOperation} /><RunLoadProgress trial={activeRun.trial} configuration={activeRun.variant.configuration} operation={operations.find(item => item.id === activeRun.trial.operationId)} /></>)}
     {!selectable.length || activeRun && !viewSelected.length ? <EmptyResults experiment={experiment} runStatus={activeRun?.trial.status} /> : <div className={`results-layout ${focusedExperiment ? 'focused' : ''}`}>
       {!focusedExperiment ? <aside className="dataset-picker" aria-label="Available datasets">
@@ -243,7 +235,7 @@ export function ResultsView({artifacts, experiments, operations, workspaces, ses
       </aside> : null}
       <div className="results-content">
         {notice && <div className="validation-item warning">{notice}</div>}
-        {comparison && !loading && comparisonWarnings(displayed, comparison.sourceConfigurations).map(warning => <div key={warning} className="validation-item warning">{warning}</div>)}
+        {comparison && !loading && warnings.map(warning => <div key={warning} className="validation-item warning">{warning}</div>)}
         {!viewSelected.length && <div className="results-placeholder"><strong>Select executions</strong></div>}
         {loading && <div className="results-placeholder"><span className="results-spinner" /><strong>Loading verified data…</strong></div>}
         {error && <ErrorFeedback message={error} />}
@@ -259,7 +251,7 @@ export function ResultsView({artifacts, experiments, operations, workspaces, ses
         </>}
       </div>
     </div>}
-    <SaveExperimentDialog open={saving} close={() => setSaving(false)} selected={selected.map(id => availableByID.get(id)).filter((item): item is Artifact => Boolean(item))} operations={operations} workspaces={workspaces} session={session} changed={changed} />
+    {!comparison && <SaveExperimentDialog open={saving} close={() => setSaving(false)} selected={selected.map(id => availableByID.get(id)).filter((item): item is Artifact => Boolean(item))} operations={operations} workspaces={workspaces} session={session} changed={changed} />}
   </>
 }
 
@@ -330,34 +322,6 @@ function loadStepsFromConfiguration(configuration: Record<string, unknown> | und
     if (settings && typeof settings === 'object') return loadProfileSteps((settings as Record<string, unknown>).steps)
   }
   return []
-}
-
-function responseTimeSLO(experiment: Experiment | undefined, artifactID: string, sourceConfiguration?: Record<string, unknown>): number | undefined {
-  const variant = experiment?.variants.find(item => item.trials.some(trial => trial.resultArtifactId === artifactID))
-  const configuration = sourceConfiguration ?? variant?.configuration
-  const components = Array.isArray(configuration?.components) ? configuration.components : []
-  for (const value of components) {
-    if (!value || typeof value !== 'object') continue
-    const component = value as Record<string, unknown>
-    if (!String(component.capability ?? '').startsWith('metrics.')) continue
-    const settings = component.configuration
-    const objective = settings && typeof settings === 'object' ? Number((settings as Record<string, unknown>).sloMilliseconds) : 0
-    if (Number.isFinite(objective) && objective > 0) return objective
-  }
-  return undefined
-}
-
-function addDerivedMetrics(dataset: TimeSeriesDataset, configuredSLO?: number) {
-  const datasetSLO = Number(dataset.spec.sloMilliseconds)
-  const sloMilliseconds = Number.isFinite(datasetSLO) && datasetSLO > 0
-    ? datasetSLO
-    : Number.isFinite(configuredSLO) && Number(configuredSLO) > 0 ? Number(configuredSLO) : undefined
-  if (sloMilliseconds === undefined) return
-  dataset.spec.sloMilliseconds = sloMilliseconds
-  if (dataset.spec.series.some(series => series.metric === 'load.slo_violation_percentage')) return
-  const response = dataset.spec.series.find(series => series.metric === 'load.p95_response_time')
-  if (!response) return
-  dataset.spec.series.push({metric: 'load.slo_violation_percentage', unit: 'percent', aggregation: 'mean', labels: {objective: `${sloMilliseconds}ms`}, points: response.points.map(point => ({timestamp: point.timestamp, value: point.value > sloMilliseconds ? 100 : 0}))})
 }
 
 export function experimentProgress(experiment: Experiment): {completed: number; total: number} {
@@ -442,7 +406,8 @@ function sharedChartHeight(datasets: LoadedDataset[], metrics: string[], experim
     const {rows} = serviceMetricStatistics(datasets, metric, experiment)
     if (!rows.length) continue
     const services = [...new Set(rows.map(row => row.service))]
-    const labels = [...new Set(rows.map(row => row.group))]
+    const groupIDs = [...new Set(rows.map(row => row.groupID))]
+    const labels = groupIDs.map(id => rows.find(row => row.groupID === id)!.group)
     const width = 860
     const labelHeight = Math.max(...services.map(service => service.length)) * 7 + 25
     height = Math.max(height, 383 + labelHeight + 20 + chartLegendLayout(labels, 110, width - 64, 22, 14).rows * 21 + 12)
@@ -496,13 +461,14 @@ function MetricChart({metric, series, canvasHeight, omitSLO = false}: {metric: s
 }
 
 
-function ServiceMetricChart({metric, datasets, experiment, canvasHeight}: {metric: string; datasets: LoadedDataset[]; experiment?: Experiment; canvasHeight: number}) {
+function ServiceMetricChart({metric, datasets, experiment, canvasHeight, prepared}: {metric: string; datasets: LoadedDataset[]; experiment?: Experiment; canvasHeight: number; prepared?: ReturnType<typeof serviceMetricStatistics>}) {
   const responseTime = metric.endsWith('p95_response_time')
   const title = responseTime ? metric.startsWith('redis.') ? 'Mean window P95 per Redis operation' : 'Mean window P95 per service' : metric.startsWith('redis.') ? metricTitle(metric) : `${metricTitle(metric)} by service`
-  const {rows} = serviceMetricStatistics(datasets, metric, experiment)
+  const {rows} = prepared ?? serviceMetricStatistics(datasets, metric, experiment)
   if (!rows.length) return null
   const services = [...new Set(rows.map(row => row.service))]
-  const labels = [...new Set(rows.map(row => row.group))]
+  const groupIDs = [...new Set(rows.map(row => row.groupID))]
+  const labels = groupIDs.map(id => rows.find(row => row.groupID === id)!.group)
   const width = 860
   const left = 110
   const right = width - 64
@@ -526,7 +492,7 @@ function ServiceMetricChart({metric, datasets, experiment, canvasHeight}: {metri
       <rect width={width} height={height} fill="#ffffff" />
       {axis.ticks.map(tick => <g key={tick}><line x1={left} y1={y(tick)} x2={right} y2={y(tick)} stroke="#e5e7eb" /><text x={left - 12} y={y(tick) + 5} textAnchor="end" className="tick" fontSize="14" fill="#111" fontFamily="Arial, Helvetica, DejaVu Sans, sans-serif">{formatAxisValue(tick, unit)}</text></g>)}
       {rows.map((row, index) => {
-        const groupIndex = labels.indexOf(row.group)
+        const groupIndex = groupIDs.indexOf(row.groupID)
         const center = serviceX(services.indexOf(row.service)) + (groupIndex - (labels.length - 1) / 2) * barSlot
         const color = row.color ?? colors[groupIndex % colors.length]
         const low = y(Math.max(0, row.summary.mean - row.summary.standardDeviation))
@@ -539,8 +505,8 @@ function ServiceMetricChart({metric, datasets, experiment, canvasHeight}: {metri
       {labels.map((label, index) => {
         const legendX = legend.entries[index].x
         const legendY = legendTop + legend.entries[index].row * 21
-        const color = rows.find(row => row.group === label)?.color ?? colors[index % colors.length]
-        return <g key={label}><rect x={legendX} y={legendY - 12} width="16" height="16" fill={color} /><text x={legendX + 24} y={legendY + 1} className="tick" fontSize="14" fill="#111" fontFamily="Arial, Helvetica, DejaVu Sans, sans-serif">{compactLabel(label)}</text></g>
+        const color = rows.find(row => row.groupID === groupIDs[index])?.color ?? colors[index % colors.length]
+        return <g key={groupIDs[index]}><rect x={legendX} y={legendY - 12} width="16" height="16" fill={color} /><text x={legendX + 24} y={legendY + 1} className="tick" fontSize="14" fill="#111" fontFamily="Arial, Helvetica, DejaVu Sans, sans-serif">{compactLabel(label)}</text></g>
       })}
     </svg></div>
   </article>
@@ -626,161 +592,9 @@ export function compactLabel(value: string): string {
   return label.length <= 34 ? label : `${label.slice(0, 31)}...`
 }
 
-export function serviceMetricStatistics(datasets: LoadedDataset[], metric: string, experiment?: Experiment) {
-  const groups = new Map<string, {service: string; group: string; color?: string; unit: string; runs: ScientificSummary[]}>()
-  let unmatched = 0
-  for (const dataset of datasets) {
-    const deployments = [...new Set(dataset.dataset.spec.series.filter(series => series.metric === 'deployment.ready_replicas').map(series => series.labels.deployment || series.labels.statefulset).filter(Boolean))].sort((a, b) => b.length - a.length)
-    const variant = experiment?.variants.find(item => item.trials.some(trial => trial.resultArtifactId === dataset.artifact.id))
-    const group = variant?.alias || variant?.name || plotLabel(dataset.label)
-    const groupID = variant?.id || dataset.artifact.id
-    const services = new Map<string, {unit: string; points: Map<string, number>; counts: Map<string, number>}>()
-    for (const series of dataset.dataset.spec.series.filter(series => series.metric === metric)) {
-      if (series.labels['app.kubernetes.io/name'] === 'kubephos-load' || ['deployment', 'pod', 'destination_workload', 'service'].some(label => series.labels[label]?.startsWith('kubephos-load-'))) continue
-      const pod = series.labels.pod
-      // Older datasets contain pod labels only. Match against deployments actually present in the same run.
-      const service = series.labels.deployment || series.labels.statefulset || series.labels.destination_workload || series.labels.service || series.labels.operation || deployments.find(name => pod?.startsWith(`${name}-`) && /^(?:[a-z0-9]+-[a-z0-9]+|[0-9]+)$/.test(pod.slice(name.length + 1)))
-      if (!service) {unmatched++; continue}
-      if (metric === 'application.p95_response_time' && (service === 'node-proxy' || service.startsWith('gateway-'))) continue
-      const values = services.get(service) ?? {unit: series.unit, points: new Map<string, number>(), counts: new Map<string, number>()}
-      for (const point of series.points) if (Number.isFinite(point.value)) {
-        values.points.set(point.timestamp, (values.points.get(point.timestamp) ?? 0) + point.value)
-        values.counts.set(point.timestamp, (values.counts.get(point.timestamp) ?? 0) + 1)
-      }
-      services.set(service, values)
-    }
-    for (const [service, values] of services) {
-      const key = JSON.stringify([service, groupID])
-      const row = groups.get(key) ?? {service, group, color: variant?.color ?? dataset.color, unit: values.unit, runs: []}
-      if (values.points.size) row.runs.push(summarize([...values.points].map(([timestamp, value]) => metric.endsWith('p95_response_time') ? value / values.counts.get(timestamp)! : value)))
-      groups.set(key, row)
-    }
-  }
-  return {unmatched, rows: [...groups.values()].filter(row => row.runs.length).sort((a, b) => a.service.localeCompare(b.service, undefined, {numeric: true}) || a.group.localeCompare(b.group)).map(row => ({...row, summary: row.runs.length > 1 ? summarize(row.runs.map(run => run.mean)) : row.runs[0], acrossRuns: row.runs.length > 1}))}
-}
-
-export function aggregateMetric(datasets: LoadedDataset[], metric: string): AggregateSeries[] {
-  return datasets.map(item => {
-    const matching = item.dataset.spec.series.filter(series => series.metric === metric)
-    const values = new Map<number, number>()
-    const counts = new Map<number, number>()
-    for (const series of matching) {
-      for (const point of series.points) {
-        const timestamp = new Date(point.timestamp).getTime()
-        values.set(timestamp, (values.get(timestamp) ?? 0) + point.value)
-        counts.set(timestamp, (counts.get(timestamp) ?? 0) + 1)
-      }
-    }
-    const aggregation = matching[0]?.aggregation ?? 'sum'
-    const startedAt = new Date(!isControlMetric(metric) && item.dataset.spec.workloadStartedAt ? item.dataset.spec.workloadStartedAt : item.dataset.spec.start).getTime()
-    return {
-      artifactID: item.artifact.id,
-      label: item.label,
-      unit: matching[0]?.unit ?? '',
-      sloMilliseconds: item.dataset.spec.sloMilliseconds,
-      color: item.color,
-      points: (metric === 'scheduler.pod_scheduling_latency' ? matching.flatMap(series => series.points.map(point => [Number.isFinite(Date.parse(series.labels.scheduled_at)) ? Date.parse(series.labels.scheduled_at) : Date.parse(point.timestamp), point.value] as [number, number])) : [...values.entries()]).sort((left, right) => left[0] - right[0]).map(([timestamp, value]) => ({timestamp: new Date(Math.max(0, timestamp - startedAt)).toISOString(), value: aggregation === 'mean' && metric !== 'scheduler.pod_scheduling_latency' ? value / (counts.get(timestamp) ?? 1) : value}))
-    }
-  }).filter(item => item.points.length > 0)
-}
-
-// Keep raw per-run statistics separate from the presentation of repeated trials.
-export function aggregatePlotMetric(datasets: LoadedDataset[], metric: string, experiment?: Experiment): AggregateSeries[] {
-  if (!experiment) return aggregateMetric(datasets, metric)
-  const groups = new Map<string, {label: string; color?: string; datasets: LoadedDataset[]}>()
-  datasets.forEach(dataset => {
-    const index = experiment.variants.findIndex(variant => variant.trials.some(trial => trial.resultArtifactId === dataset.artifact.id))
-    const variant = experiment.variants[index]
-    const key = variant ? `variant-${index}` : dataset.artifact.id
-    const group = groups.get(key) ?? {label: variant?.alias || variant?.name || plotLabel(dataset.label), color: variant?.color ?? dataset.color, datasets: []}
-    group.datasets.push(dataset)
-    groups.set(key, group)
-  })
-  return [...groups.entries()].flatMap(([key, group]) => {
-    const runs = group.datasets.map(dataset => {
-      const origin = Date.parse(dataset.dataset.spec.workloadStartedAt || dataset.dataset.spec.start)
-      const end = Date.parse(dataset.dataset.spec.end)
-      const series = dataset.dataset.spec.series.filter(series => series.metric === metric).map(series => ({...series, points: series.points.filter(point => Number.isFinite(point.value) && Date.parse(point.timestamp) >= origin && (!Number.isFinite(end) || Date.parse(point.timestamp) <= end))}))
-      return aggregateMetric([{...dataset, dataset: {...dataset.dataset, spec: {...dataset.dataset.spec, series}}}], metric)[0]
-    })
-    if (runs.length === 1) return runs[0] ? [{...runs[0], label: group.label, color: group.color}] : []
-    // A missing run/metric is not a zero and cannot contribute to an N-run mean.
-    if (runs.some(run => !run)) return []
-    const intervals = group.datasets.map(dataset => dataset.dataset.spec.stepSeconds * 1000).filter(value => Number.isFinite(value) && value > 0)
-    const inferred = runs.flatMap(run => run.points.slice(1).map((point, index) => Date.parse(point.timestamp) - Date.parse(run.points[index].timestamp))).filter(value => value > 0)
-    const step = intervals.length ? Math.max(...intervals) : inferred.length ? Math.min(...inferred) : 1000
-    const windows = runs.map(run => {
-      const bins = new Map<number, number[]>()
-      run.points.forEach(point => {
-        if (!Number.isFinite(point.value)) return
-        const bin = Math.round(Date.parse(point.timestamp) / step)
-        bins.set(bin, [...(bins.get(bin) ?? []), point.value])
-      })
-      return new Map([...bins].map(([bin, values]) => [bin, summarize(values).mean]))
-    })
-    // Only windows sampled by every included run are comparable; never interpolate gaps.
-    const common = [...windows[0].keys()].filter(bin => windows.every(window => window.has(bin))).sort((a, b) => a - b)
-    const summaries = common.map(bin => summarize(windows.map(window => window.get(bin)!)))
-    return common.length ? [{...runs[0], artifactID: key, label: group.label, color: group.color, stepMilliseconds: step,
-      points: common.map((bin, index) => ({timestamp: new Date(bin * step).toISOString(), value: summaries[index].mean})),
-      deviation: common.map((bin, index) => ({timestamp: new Date(bin * step).toISOString(), value: summaries[index].standardDeviation}))}] : []
-  })
-}
-
-export interface ScientificSummary {
-  count: number
-  mean: number
-  standardDeviation: number
-  min: number
-  max: number
-  median: number
-  p05: number
-  p25: number
-  p75: number
-  p95: number
-  p99: number
-  coefficientOfVariation: number
-  confidence95Low: number
-  confidence95High: number
-}
-
-export function summarize(values: number[]): ScientificSummary {
-  const sorted = values.filter(Number.isFinite).sort((left, right) => left - right)
-  const count = sorted.length
-  if (!count) return {count: 0, mean: 0, standardDeviation: 0, min: 0, max: 0, median: 0, p05: 0, p25: 0, p75: 0, p95: 0, p99: 0, coefficientOfVariation: 0, confidence95Low: 0, confidence95High: 0}
-  const mean = sorted.reduce((sum, value) => sum + value, 0) / count
-  const variance = count > 1 ? sorted.reduce((sum, value) => sum + (value - mean) ** 2, 0) / (count - 1) : 0
-  const standardDeviation = Math.sqrt(variance)
-  const margin = count > 1 ? tCritical95(count - 1) * standardDeviation / Math.sqrt(count) : 0
-  return {count, mean, standardDeviation, min: sorted[0], max: sorted[count - 1], median: percentile(sorted, .5), p05: percentile(sorted, .05), p25: percentile(sorted, .25), p75: percentile(sorted, .75), p95: percentile(sorted, .95), p99: percentile(sorted, .99), coefficientOfVariation: mean === 0 ? 0 : standardDeviation / Math.abs(mean), confidence95Low: mean - margin, confidence95High: mean + margin}
-}
-
-function tCritical95(degrees: number): number {
-  const values = [0, 12.706, 4.303, 3.182, 2.776, 2.571, 2.447, 2.365, 2.306, 2.262, 2.228, 2.201, 2.179, 2.16, 2.145, 2.131, 2.12, 2.11, 2.101, 2.093, 2.086, 2.08, 2.074, 2.069, 2.064, 2.06, 2.056, 2.052, 2.048, 2.045, 2.042]
-  return degrees < values.length ? values[Math.max(1, degrees)] : degrees < 40 ? 2.021 : degrees < 60 ? 2 : degrees < 120 ? 1.98 : 1.96
-}
-
-function percentile(sorted: number[], ratio: number): number {
-  if (sorted.length === 1) return sorted[0]
-  const position = (sorted.length - 1) * ratio
-  const lower = Math.floor(position)
-  const fraction = position - lower
-  return sorted[lower] + (sorted[Math.min(lower + 1, sorted.length - 1)] - sorted[lower]) * fraction
-}
-
-function isControlMetric(metric: string): boolean {
-  return ['scheduler.pod_scheduling_latency', 'scheduler.cycle_duration', 'descheduler.cycle_duration', 'descheduler.evictions'].includes(metric)
-}
-
 function controlMetricDescription(metric: string, scope: string, reason?: string, resolution?: number): string {
   const description = metric === 'scheduler.pod_scheduling_latency' ? 'Time from pod creation to node assignment; includes queueing and scheduling.' : metric === 'scheduler.cycle_duration' ? 'Time spent in the scheduler scheduling algorithm per attempt; excludes queueing and pod startup.' : metric === 'descheduler.cycle_duration' ? 'Time spent in a descheduler loop.' : 'Successful application pod evictions.'
   return [description, scope === 'cluster' ? 'Scope: entire cluster.' : 'Scope: experiment.', resolution ? `Timestamp resolution: ${resolution} s.` : '', reason ?? ''].filter(Boolean).join(' ')
-}
-
-const serviceStatisticsMetrics = ['deployment.ready_replicas', 'cpu.cores', 'memory.working_set', 'application.p95_response_time', 'redis.operation_rps', 'redis.operation_p95_response_time']
-
-function serviceStatisticsRows(datasets: LoadedDataset[], experiment?: Experiment) {
-  return serviceStatisticsMetrics.flatMap(metric => serviceMetricStatistics(datasets, metric, experiment).rows.map(row => ({...row, metric})))
 }
 
 function ServiceStatisticsTable({datasets, experiment}: {datasets: LoadedDataset[]; experiment?: Experiment}) {
@@ -810,39 +624,18 @@ function ResultsExport({datasets, metrics, experiment, activeRun, onPrint, saved
   return <section className="results-download-panel"><div><h3>Export results</h3></div><div className="results-export-actions"><button className="button secondary" onClick={() => downloadBlob('kubephos-statistics.csv', new Blob([statisticsCSV(datasets, metrics, activeRun ? undefined : experiment)], {type: 'text/csv;charset=utf-8'}))}>Statistics CSV</button><button className="button secondary" onClick={onPrint}>Print statistics</button></div>{error && <ErrorFeedback message={error} />}{visibleFigures.length > 0 && <div className="saved-figures"><strong>Saved figures</strong><div className="dataset-downloads">{visibleFigures.map(figure => <a key={figure.id} href={`/api/v1/figures/${figure.id}/download`}><span>↓</span><span><strong>{metricTitle(figure.metric)} · {figure.format.toUpperCase()}</strong><small>{figure.sourceArtifactIds.length} runs · {formatDate(figure.createdAt)}</small></span></a>)}</div></div>}<div className="results-raw-data"><strong>Complete run data</strong><div className="dataset-downloads">{datasets.map(item => <a key={item.artifact.id} href={`/api/v1/artifacts/${item.artifact.id}/download`}><span>↓</span><span><strong>{item.label}</strong><small>Metric samples</small></span></a>)}</div></div></section>
 }
 
-export function statisticsCSV(datasets: LoadedDataset[], metrics: string[], experiment?: Experiment): string {
-  const rows: Array<Array<string | number>> = [['scope', 'strategy', 'dataset', 'metric', 'service', 'unit', 'status', 'count', 'mean', 'total', 'std', 'min', 'median', 'max', 'missing_runs']]
-  const summaryValues = (summary: ScientificSummary) => [summary.count, summary.mean, '', summary.standardDeviation, summary.min, summary.median, summary.max]
-  for (const dataset of datasets) {
-    for (const metric of metrics) {
-      const series = aggregateMetric([dataset], metric)[0]
-      const control = dataset.dataset.spec.controlMetrics?.find(item => item.metric === metric)
-      const podSummary = metric === 'scheduler.pod_scheduling_latency' ? podSchedulingStatistics(dataset) : undefined
-      if (podSummary) rows.push(['run', '', dataset.label, metric, '', 'milliseconds', 'available', ...summaryValues(podSummary), ''])
-      else if (isControlMetric(metric) && control) rows.push(['run', '', dataset.label, metric, '', metric === 'descheduler.evictions' ? 'count' : 'milliseconds', control.status, control.count ?? '', control.mean ?? '', control.total ?? '', '', '', '', '', ''])
-      else if (series) rows.push(['run', '', dataset.label, metric, '', series.unit, 'available', ...summaryValues(summarize(series.points.map(point => point.value))), ''])
-    }
-    for (const row of serviceStatisticsRows([dataset])) rows.push(['service_run', row.group, dataset.label, row.metric, row.service, row.unit, 'available', ...summaryValues(row.summary), ''])
-  }
-  if (experiment) {
-    for (const row of variantStatistics(experiment, datasets, metrics).filter(row => row.summary.count >= 2)) rows.push(['across_runs', row.variant, '', row.metric, '', row.unit, 'available', ...summaryValues(row.summary), row.missing])
-    for (const row of serviceStatisticsRows(datasets, experiment).filter(row => row.acrossRuns)) rows.push(['service_across_runs', row.group, '', row.metric, row.service, row.unit, 'available', ...summaryValues(row.summary), ''])
-  }
-  return rows.map(row => row.map(value => {const text = String(value); return /[",\r\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text}).join(',')).join('\n')
-}
-
 function StatisticsTable({datasets, metrics, experiment}: {datasets: LoadedDataset[]; metrics: string[]; experiment?: Experiment}) {
   const runPositions = new Map(experiment?.variants.flatMap(variant => variant.trials.map(trial => [trial.resultArtifactId, trial.position] as const)) ?? [])
   const orderedDatasets = [...datasets].sort((left, right) => {
     const position = (dataset: LoadedDataset) => runPositions.get(dataset.artifact.id) ?? Number(dataset.label.match(/(?:Run|Execution) (\d+)/i)?.[1] ?? 0)
     return position(left) - position(right)
   })
-  const comparison = Boolean(experiment && experiment.variants.length > 1)
+  const comparison = Boolean(experiment && (experiment.kind === 'comparison' || experiment.variants.length > 1))
   const aggregates = experiment && !comparison ? variantStatistics(experiment, datasets, metrics).filter(row => row.summary.count >= 2) : []
   const effects = experiment ? variantEffectSizes(experiment, datasets, metrics) : []
   return <>
-    {experiment && experiment.variants.length > 1 && <StrategyComparison datasets={datasets} metrics={metrics} experiment={experiment} />}
-    {!!effects.length && <section className="statistics-card"><div><h3>Difference between strategies</h3></div><div className="statistics-table-wrap"><ResponsiveTable className="effects-table"><thead><tr><th>Comparison</th><th>Metric</th><th title="Standardized effect size">Cohen's d</th><th>Difference</th><th>Executions</th></tr></thead><tbody>{effects.map(row => <tr key={row.metric}><td>{row.left} vs {row.right}</td><td>{statisticsMetricTitle(row.metric)}</td><td>{row.value.toFixed(3)}</td><td>{effectMagnitude(row.value)}</td><td>{row.leftCount} / {row.rightCount}</td></tr>)}</tbody></ResponsiveTable></div></section>}
+    {experiment && (experiment.kind === 'comparison' || experiment.variants.length > 1) && <StrategyComparison datasets={datasets} metrics={metrics} experiment={experiment} />}
+    {!!effects.length && <section className="statistics-card"><div><h3>Difference between strategies</h3></div><div className="statistics-table-wrap"><ResponsiveTable className="effects-table"><thead><tr><th>Comparison</th><th>Metric</th><th title="Standardized effect size">Cohen's d</th><th>Difference</th>{experiment?.kind !== 'comparison' && <th>Executions</th>}</tr></thead><tbody>{effects.map(row => <tr key={row.metric}><td>{row.left} vs {row.right}</td><td>{statisticsMetricTitle(row.metric)}</td><td>{row.value.toFixed(3)}</td><td>{effectMagnitude(row.value)}</td>{experiment?.kind !== 'comparison' && <td>{row.leftCount} / {row.rightCount}</td>}</tr>)}</tbody></ResponsiveTable></div></section>}
     {!!aggregates.length && <section className="statistics-card"><div><h3>Across executions</h3></div><div className="statistics-table-wrap"><ResponsiveTable className="aggregate-table"><thead><tr><th>Strategy</th><th>Metric</th><th>Executions</th><th>Executions missing</th><th>Mean across executions</th><th>Std. dev.</th><th>Min</th><th>Median</th><th>Max</th><th>Variation</th><th>95% interval</th></tr></thead><tbody>{aggregates.map(row => <tr key={`${row.variant}-${row.metric}`}><td>{row.variant}</td><td>{statisticsMetricTitle(row.metric)}</td><td>{row.summary.count}</td><td>{row.missing}</td><td>{formatMetric(row.summary.mean, row.unit)}</td><td>{formatMetric(row.summary.standardDeviation, row.unit)}</td><td>{formatMetric(row.summary.min, row.unit)}</td><td>{formatMetric(row.summary.median, row.unit)}</td><td>{formatMetric(row.summary.max, row.unit)}</td><td>{(row.summary.coefficientOfVariation * 100).toFixed(1)}%</td><td>{formatMetric(row.summary.confidence95Low, row.unit)}–{formatMetric(row.summary.confidence95High, row.unit)}</td></tr>)}</tbody></ResponsiveTable></div></section>}
     {!comparison && <><h3>Within each execution</h3>
     {orderedDatasets.map(dataset => <section className="statistics-card" key={dataset.artifact.id}><div><h3>{dataset.label}</h3></div><FormTabs label={`Statistics for ${dataset.label}`} items={[{id:"overall",title:"Overall",content:<div className="statistics-table-wrap"><ResponsiveTable className="runs-table" aria-label={`Statistics for ${dataset.label}`}><thead><tr><th>Metric</th><th>Samples / events</th><th>Mean / total</th><th>Std. dev.</th><th>Min</th><th>Median</th><th>Max</th><th>Variation</th><th>95% interval</th></tr></thead><tbody>{metrics.map(metric => <RunStatisticsRow key={metric} dataset={dataset} metric={metric} />)}</tbody></ResponsiveTable></div>},...(serviceStatisticsRows([dataset]).length?[{id:"services",title:"By service",content:<ServiceStatisticsTable datasets={[dataset]}/>}]:[])]}/></section>)}
@@ -851,8 +644,8 @@ function StatisticsTable({datasets, metrics, experiment}: {datasets: LoadedDatas
   </>
 }
 
-function StrategyComparison({datasets, metrics, experiment}: {datasets: LoadedDataset[]; metrics: string[]; experiment: Experiment}) {
-  const columns = experiment.variants.map(variant => ({
+function StrategyComparison({datasets, metrics, experiment, prepared}: {datasets: LoadedDataset[]; metrics: string[]; experiment: Experiment; prepared?: ComparisonColumns}) {
+  const columns = prepared ?? experiment.variants.map(variant => ({
     variant,
     rows: variantStatistics({...experiment, variants: [variant]}, datasets, metrics),
     available: variant.trials.filter(trial => datasets.some(dataset => dataset.artifact.id === trial.resultArtifactId)).length,
@@ -860,15 +653,15 @@ function StrategyComparison({datasets, metrics, experiment}: {datasets: LoadedDa
   const visibleMetrics = metrics.filter(metric => columns.some(column => column.rows.some(row => row.metric === metric)))
   if (!visibleMetrics.length) return null
   return <section className="statistics-card">
-    <div><h3>Strategy comparison</h3></div>
-    <div className="statistics-table-wrap"><ResponsiveTable aria-label="Strategy comparison">
-      <thead><tr><th>Metric</th>{columns.map(({variant, available}) => <th key={variant.id}>{variant.alias || variant.name}<small className="muted"> · {available}/{variant.trials.length} executions</small></th>)}</tr></thead>
+    <div><h3>{experiment.kind === 'comparison' ? 'Experiment comparison' : 'Strategy comparison'}</h3></div>
+    <div className="statistics-table-wrap"><ResponsiveTable aria-label={experiment.kind === 'comparison' ? 'Experiment comparison' : 'Strategy comparison'}>
+      <thead><tr><th>Metric</th>{columns.map(({variant, available}) => <th key={variant.id}>{variant.alias || variant.name}{experiment.kind !== 'comparison' && <small className="muted"> · {available}/{variant.trials.length} executions</small>}</th>)}</tr></thead>
       <tbody>{visibleMetrics.map(metric => <tr key={metric}>
         <td>{statisticsMetricTitle(metric)}</td>
         {columns.map(({variant, rows}) => {
           const row = rows.find(item => item.metric === metric)
           const aggregation = metric === 'descheduler.evictions' ? 'Total evictions per run' : metric === 'scheduler.pod_scheduling_latency' ? 'Mean per pod' : isControlMetric(metric) ? 'Mean per cycle' : 'Mean over time windows'
-          return <td key={variant.id} title={row ? `${aggregation}; ${row.summary.count} execution(s) with this metric${row.summary.count > 1 ? '; mean ± sample standard deviation across executions' : ''}` : 'No collected data'}>{row ? <>{formatMetric(row.summary.mean, row.unit)}{row.summary.count > 1 && <> ± {formatMetric(row.summary.standardDeviation, row.unit)}</>}</> : '—'}</td>
+          return <td key={variant.id} title={row ? experiment.kind === 'comparison' ? aggregation : `${aggregation}; ${row.summary.count} execution(s) with this metric${row.summary.count > 1 ? '; mean ± sample standard deviation across executions' : ''}` : 'No collected data'}>{row ? <>{formatMetric(row.summary.mean, row.unit)}{row.summary.count > 1 && <> ± {formatMetric(row.summary.standardDeviation, row.unit)}</>}</> : '—'}</td>
         })}
       </tr>)}</tbody>
     </ResponsiveTable></div>
@@ -891,81 +684,6 @@ function RunStatisticsRow({dataset, metric}: {dataset: LoadedDataset; metric: st
   return <tr>{name}<td>{summary.count}</td><td title="Mean over time">{formatMetric(summary.mean, unit)}</td><td>{formatMetric(summary.standardDeviation, unit)}</td><td>{formatMetric(summary.min, unit)}</td><td>{formatMetric(summary.median, unit)}</td><td>{formatMetric(summary.max, unit)}</td><td>{(summary.coefficientOfVariation * 100).toFixed(1)}%</td><td>{formatMetric(summary.confidence95Low, unit)}–{formatMetric(summary.confidence95High, unit)}</td></tr>
 }
 
-export function podSchedulingStatistics(dataset: LoadedDataset): ScientificSummary | undefined {
-  const control = dataset.dataset.spec.controlMetrics?.find(item => item.metric === 'scheduler.pod_scheduling_latency')
-  if (control?.status !== 'available') return undefined
-  const values = new Map<string, number>()
-  for (const series of dataset.dataset.spec.series.filter(item => item.metric === control.metric)) {
-    const uid = series.labels.pod_uid
-    if (!uid) return undefined
-    for (const point of series.points) {
-      if (!Number.isFinite(point.value) || point.value < 0 || values.has(uid) && values.get(uid) !== point.value) return undefined
-      values.set(uid, point.value)
-    }
-  }
-  if (!values.size || values.size !== control.count) return undefined
-  const summary = summarize([...values.values()])
-  if (control.mean === undefined || Math.abs(summary.mean - control.mean) > Math.max(1, control.mean) * 1e-6) return undefined
-  return summary
-}
-
-function metricRunValue(dataset: LoadedDataset, metric: string): number | undefined {
-  if (isControlMetric(metric)) {
-    const summary = dataset.dataset.spec.controlMetrics?.find(item => item.metric === metric)
-    return summary?.total ?? summary?.mean
-  }
-  const series = aggregateMetric([dataset], metric)[0]
-  return series?.points.length ? series.points.reduce((sum, point) => sum + point.value, 0) / series.points.length : undefined
-}
-
-export function variantStatistics(experiment: Experiment, datasets: LoadedDataset[], metrics: string[]) {
-  const byArtifact = new Map(datasets.map(item => [item.artifact.id, item]))
-  return experiment.variants.flatMap(variant => metrics.map(metric => {
-    const values: number[] = []
-    let unit = ''
-    for (const trial of variant.trials) {
-      const dataset = byArtifact.get(trial.resultArtifactId)
-      if (!dataset) continue
-      const value = metricRunValue(dataset, metric)
-      if (value === undefined) continue
-      unit ||= aggregateMetric([dataset], metric)[0]?.unit ?? (metric === 'descheduler.evictions' ? 'count' : 'milliseconds')
-      values.push(value)
-    }
-    return values.length ? {variant: variant.alias || variant.name, metric, unit, missing: variant.trials.length - values.length, summary: summarize(values)} : null
-  }).filter((item): item is {variant: string; metric: string; unit: string; missing: number; summary: ScientificSummary} => Boolean(item)))
-}
-
-export function variantEffectSizes(experiment: Experiment, datasets: LoadedDataset[], metrics: string[]) {
-  if (experiment.variants.length !== 2) return []
-  const byArtifact = new Map(datasets.map(item => [item.artifact.id, item]))
-  return metrics.map(metric => {
-    const left = variantRunMeans(experiment.variants[0], byArtifact, metric)
-    const right = variantRunMeans(experiment.variants[1], byArtifact, metric)
-    if (left.length < 2 || right.length < 2) return null
-    return {metric, left: experiment.variants[0].alias || experiment.variants[0].name, right: experiment.variants[1].alias || experiment.variants[1].name, value: cohenD(left, right), leftCount: left.length, rightCount: right.length}
-  }).filter((item): item is {metric: string; left: string; right: string; value: number; leftCount: number; rightCount: number} => Boolean(item))
-}
-
-function variantRunMeans(variant: Experiment['variants'][number], datasets: Map<string, LoadedDataset>, metric: string): number[] {
-  const values: number[] = []
-  for (const trial of variant.trials) {
-    const dataset = datasets.get(trial.resultArtifactId)
-    if (!dataset) continue
-    const value = metricRunValue(dataset, metric)
-    if (value !== undefined) values.push(value)
-  }
-  return values
-}
-
-export function cohenD(left: number[], right: number[]): number {
-  const leftSummary = summarize(left)
-  const rightSummary = summarize(right)
-  const degrees = leftSummary.count + rightSummary.count - 2
-  if (degrees <= 0) return 0
-  const pooled = Math.sqrt(((leftSummary.count - 1) * leftSummary.standardDeviation ** 2 + (rightSummary.count - 1) * rightSummary.standardDeviation ** 2) / degrees)
-  return pooled === 0 ? 0 : (rightSummary.mean - leftSummary.mean) / pooled
-}
-
 function effectMagnitude(value: number): string {
   const absolute = Math.abs(value)
   if (absolute < .2) return 'Negligible'
@@ -979,17 +697,6 @@ function formatDuration(milliseconds: number): string {
   if (seconds >= 3600) return `${(seconds / 3600).toFixed(1)}h`
   if (seconds >= 60) return `${Math.round(seconds / 60)}m`
   return `${seconds}s`
-}
-
-function plotLabel(value: string): string {
-  return value.replace(/ · (?:Run|Execution) \d+$/i, '')
-}
-
-function validateDataset(dataset: TimeSeriesDataset) {
-  if (dataset.apiVersion !== 'artifacts.kubephos.dev/v1alpha1' || dataset.kind !== 'TimeSeriesDataset' || dataset.metadata?.version !== 'v1alpha1' || !dataset.spec?.applicationRef || !dataset.spec?.namespace || !Array.isArray(dataset.spec?.series) || !dataset.spec.series.length) throw new Error('This run has no compatible metric data.')
-  for (const series of dataset.spec.series) {
-    if (!series.metric || !series.unit || !Array.isArray(series.points) || !series.points.length || series.points.some(point => !Number.isFinite(point.value) || !Number.isFinite(new Date(point.timestamp).getTime()))) throw new Error('This run contains invalid metric samples.')
-  }
 }
 
 function datasetLabel(artifact: Artifact, operations: Operation[]): string {
@@ -1060,4 +767,49 @@ function EmptyResults({experiment, runStatus}: {experiment?: Experiment; runStat
   const running = status && ['running', 'starting', 'prechecking', 'verifying'].includes(status)
   const failed = status === 'failed'
   return <div className="empty-state"><div><strong>{queued ? 'Waiting to start' : running ? 'Runs in progress' : failed ? 'No results from this experiment' : 'No results yet'}</strong>{queued ? 'Results will appear after this run starts and finishes.' : running ? 'Results and plots appear here as runs finish.' : failed ? 'Open the run above to inspect its logs and health checks.' : experiment ? 'Run this experiment to collect metrics and plots.' : 'Choose an experiment or run to explore verified data.'}</div></div>
+}
+
+function preparedComparisonHeight(data: PreparedComparison, metrics: string[]) {
+  let height = 465
+  for (const metric of metrics) {
+    const series = data.plots[metric] ?? []
+    if (series.length > 1 || series.some(item => item.deviation)) height = Math.max(height, 465 + chartLegendLayout(series.map(item => item.label), 112, 832, 37, 15).rows * 21)
+    const rows = data.services[metric]?.rows ?? []
+    if (!rows.length) continue
+    const names = [...new Set(rows.map(row => row.service))]
+    const groups = [...new Set(rows.map(row => row.groupID))].map(id => rows.find(row => row.groupID === id)!.group)
+    height = Math.max(height, 383 + Math.max(...names.map(name => name.length)) * 7 + 25 + 20 + chartLegendLayout(groups, 110, 796, 22, 14).rows * 21 + 12)
+  }
+  return height
+}
+
+function ComparisonResults({artifacts, experiment, comparison, onBack, session}: ResultsViewProps & {experiment: Experiment}) {
+  const [activeTab, setActiveTab] = useState<ResultsTab>('statistics')
+  const [revision, setRevision] = useState(0)
+  const job = useMemo(() => ({artifacts, experiment, configurations: comparison?.sourceConfigurations ?? {}}), [artifacts, experiment, comparison?.sourceConfigurations, session.user?.id])
+  const state = usePreparedComparison(job, revision)
+  const data = state.result
+  const plotMetrics = useMemo(() => data ? [...groupMetrics(Object.keys(data.plots)).values()].flat() : [], [data])
+  const height = useMemo(() => data ? preparedComparisonHeight(data, plotMetrics) : 465, [data, plotMetrics])
+  return <>
+    {onBack && <DetailBreadcrumb parent="Comparisons" current={experiment.name} back={onBack} />}
+    <div className="results-heading focused"><h2>{experiment.name}</h2><div className="results-detail-actions">{comparison?.actions}</div></div>
+    <ResourceAttribution resource={experiment} editable />
+    {comparison?.sources}
+    <ErrorFeedback message={state.error} />
+    {state.error ? <div className="results-placeholder"><button className="button secondary" onClick={() => setRevision(value => value + 1)}>Retry loading results</button></div> : !data ? <div className="results-placeholder" role="status"><span className="results-spinner" /><strong>{state.progress}</strong></div> : <div className="results-content">
+      {data.warnings.map(warning => <div key={warning} className="validation-item warning">{warning}</div>)}
+      <nav className="results-tabs" aria-label="Result sections">{(['statistics', 'charts', 'downloads'] as ResultsTab[]).map(tab => <button key={tab} className={activeTab === tab ? 'active' : ''} aria-current={activeTab === tab ? 'page' : undefined} onClick={() => setActiveTab(tab)}>{({statistics: 'Statistics', charts: 'Plots', downloads: 'Export'} as Record<ResultsTab, string>)[tab]}</button>)}</nav>
+      {activeTab === 'statistics' && <>
+        <StrategyComparison datasets={[]} metrics={data.statisticsMetrics} experiment={experiment} prepared={data.columns} />
+        {data.effects.length > 0 && <section className="statistics-card"><h3>Difference between experiments</h3><ResponsiveTable aria-label="Difference between experiments"><thead><tr><th>Comparison</th><th>Metric</th><th>Cohen's d</th><th>Difference</th></tr></thead><tbody>{data.effects.map(row => <tr key={row.metric}><td>{row.left} vs {row.right}</td><td>{statisticsMetricTitle(row.metric)}</td><td>{row.value.toFixed(3)}</td><td>{effectMagnitude(row.value)}</td></tr>)}</tbody></ResponsiveTable></section>}
+      </>}
+      {activeTab !== 'statistics' && !data.complete && <div className="results-placeholder" role="status"><span className="results-spinner" /><strong>{state.progress ?? 'Preparing plots…'}</strong></div>}
+      {activeTab === 'charts' && data.complete && <div className="chart-grid" style={{'--plot-aspect-ratio': height / 860} as CSSProperties}>{plotMetrics.map(metric => <Fragment key={metric}>
+        {!['application.p95_response_time', 'redis.operation_rps', 'redis.operation_p95_response_time'].includes(metric) && <MetricChart metric={metric} series={data.plots[metric]} omitSLO={data.omitSLO} canvasHeight={height} />}
+        {data.services[metric] && <ServiceMetricChart metric={metric} datasets={[]} prepared={data.services[metric]} canvasHeight={height} />}
+      </Fragment>)}</div>}
+      {activeTab === 'downloads' && data.complete && <section className="results-download-panel"><h3>Export results</h3><div className="results-export-actions"><button className="button secondary" onClick={() => downloadBlob('kubephos-statistics.csv', new Blob([data.csv], {type: 'text/csv;charset=utf-8'}))}>Statistics CSV</button><button className="button secondary" onClick={() => {setActiveTab('statistics'); requestAnimationFrame(() => requestAnimationFrame(() => window.print()))}}>Print statistics</button></div><div className="results-raw-data"><strong>Complete run data</strong><div className="dataset-downloads">{artifacts.map(artifact => <a key={artifact.id} href={`/api/v1/artifacts/${artifact.id}/download`}><span>↓</span><span><strong>{experiment.variants.find(variant => variant.trials.some(trial => trial.resultArtifactId === artifact.id))?.alias || artifact.name}</strong><small>Metric samples</small></span></a>)}</div></div></section>}
+    </div>}
+  </>
 }

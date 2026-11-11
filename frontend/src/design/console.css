@@ -1312,6 +1312,7 @@
 .comparison-sources { margin-block: 1rem; }
 .comparison-sources summary { cursor: pointer; font-weight: 600; margin-bottom: .75rem; }
 
+.comparison-modal .comparison-name { max-width: 24rem; }
 .modal.comparison-modal { width: min(1100px, calc(100vw - 32px)); max-width: 1100px; }
 .comparison-series-layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr); gap: 24px; align-items: start; }
 .comparison-series-layout .comparison-run-picker { margin-block: 0; }
@@ -1411,3 +1412,12 @@
 .form-tab-heading { display:flex; align-items:center; flex-wrap:wrap; gap:12px 20px; min-width:0; margin-bottom:24px; }
 .form-tab-heading > .form-tab-list { flex:1 1 240px; min-width:0; margin-bottom:0; }
 .form-tab-actions { display:flex; align-items:center; flex-wrap:wrap; gap:8px; }
+
+/* Keep resource selection compact even when the catalog or history grows. */
+.modal.resource-picker-modal { width: min(900px, calc(100vw - 32px)); }
+.resource-selection-scroll table { width: 100%; }
+.resource-selection-scroll { max-height: min(26rem, 50vh); overflow: auto; min-width: 0; }
+.resource-selection-scroll thead th { position: sticky; top: 0; z-index: 1; background: var(--card); }
+.resource-selection-scroll input[type="text"], .resource-selection-scroll input:not([type]) { min-width: 10rem; }
+.selection-toolbar { margin-bottom: 0; align-items: center; }
+.selection-count { margin-right: auto; color: var(--muted-foreground); font-size: 13px; }

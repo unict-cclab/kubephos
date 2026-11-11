@@ -10,6 +10,8 @@
 5. Run the configuration, or combine two to eight compatible configurations in a suite.
 6. Follow execution in **Experiments** and inspect **Statistics**, **Plots** and **Export**.
 
+Run names are suggested as `configuration-DD/MM/YYYY-HH:mm` and remain editable.
+
 A suite saves configuration order, repetitions, plot labels and colors. Runs execute
 sequentially. Starting an experiment freezes its complete configuration: later edits
 do not change recorded settings or results. Single configurations referenced by a
@@ -136,8 +138,11 @@ redis-benchmark execution.
 
 ### External destinations
 
-Choose **External destination**, then supply the HTTP(S) URL, Locust image,
-script and optional string parameters. Parameters are available in
+Choose **External destination**, then add one or more HTTP(S) endpoints with optional
+labels, a Locust image, script and optional string parameters. **Load profile →
+Traffic distribution** assigns fixed or time-varying weights to the endpoint labels.
+Traffic phases must cover the workload duration. Existing single-URL configurations
+continue to work. Parameters are available in
 `KUBEPHOS_PARAMETERS` and `KUBEPHOS_PARAM_<NAME>` environment variables.
 KubePhos creates only the isolated load-driver namespace and leaves the remote
 application unchanged. Per-service application metrics are unavailable without a
@@ -173,6 +178,14 @@ windows present in every included run are shown. Warmup is excluded, missing win
 are not interpolated, and a single run has no deviation band. Averaged window P95
 values are not a pooled request percentile. Individual-run statistics remain available.
 Suite labels and colors apply to aggregate plots and exports.
+
+**Comparisons** combine completed experiments without launching new runs. Each
+experiment contributes all its successful runs, even when repetition counts differ.
+Choose **Add experiments** to search by name and filter by creator; the initial
+filter is your account. Each selected experiment has an optional plot label and
+a color. Labels do not rename the source experiments. Already selected items
+cannot be added twice. Comparative configurations use the same selection flow
+with **Add configurations**.
 
 Existing datasets retain their original measurement definitions. New end-to-end
 measurements record `endToEndSource: locust`. Cluster Lens uses the same Locust

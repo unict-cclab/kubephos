@@ -2,7 +2,7 @@ import {fireEvent, render, screen, waitFor} from '@testing-library/react'
 import {beforeAll, describe, expect, it, vi} from 'vitest'
 import {request} from '../api'
 import type {ExperimentConfiguration} from '../types'
-import {ExperimentExecutionDialog} from './ExperimentExecutionDialog'
+import {ExperimentExecutionDialog, suggestedRunName} from './ExperimentExecutionDialog'
 vi.mock('../api', () => ({request: vi.fn()}))
 beforeAll(() => {
   HTMLDialogElement.prototype.showModal = function () { this.setAttribute('open', '') }
@@ -29,4 +29,15 @@ describe('unified experiment execution', () => {
   expect(screen.getByLabelText('Number of executions')).toHaveValue(3)
   expect(screen.queryByText('4 runs per configuration × 2 configurations')).not.toBeInTheDocument()
  })
+})
+
+it('suggests local date and time and preserves a manually edited name', () => {
+ expect(suggestedRunName('mubench-netmarks', new Date(2026,10,11,8,43))).toBe('mubench-netmarks-11/11/2026-08:43')
+ expect(suggestedRunName('a'.repeat(200))).toHaveLength(120)
+ render(<ExperimentExecutionDialog open configurations={[single,suite]} close={()=>{}} session={{authenticated:true}} changed={async()=>{}} onCreated={()=>{}}/>)
+ fireEvent.change(screen.getByLabelText('Start later (optional)'),{target:{value:'2026-11-20T08:43'}})
+ expect(screen.getByLabelText('Name')).toHaveValue('Baseline-20/11/2026-08:43')
+ fireEvent.change(screen.getByLabelText('Name'),{target:{value:'My run'}})
+ fireEvent.change(screen.getByLabelText('Configuration'),{target:{value:'suite'}})
+ expect(screen.getByLabelText('Name')).toHaveValue('My run')
 })

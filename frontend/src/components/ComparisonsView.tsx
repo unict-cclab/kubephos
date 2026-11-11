@@ -1,9 +1,11 @@
+import {ResourcePickerDialog, type CandidateLoader, type CandidatePage, type PickerResource} from './ResourcePickerDialog'
 import {DisabledActionHint} from './DisabledActionHint'
 import {useCallback, useEffect, useState} from 'react'
 import type {Artifact, Experiment, Operation, Session, Workspace} from '../types'
 import {request} from '../api'
+import {formatDate} from '../lib'
 import {useDetailRoute} from '../detailRoute'
-import {comparisonColors, runKey, selectableComparisonRuns, type ComparisonRun, type ComparisonSeries, type ComparisonView, type ResultComparison} from '../comparisons'
+import {comparisonColors, selectableComparisonRuns, type ComparisonView, type ResultComparison} from '../comparisons'
 import {ResourceListHeading} from './ResourceListHeading'
 import {ResourceListTable} from './ResourceListTable'
 import {ResourceAction} from './ResourceAction'
@@ -11,9 +13,10 @@ import {ErrorFeedback, useErrorState} from './ToastRegion'
 import {useDeleteConfirmation} from './ConfirmationDialog'
 import {ResultsView} from './LazyResultsView'
 import {Dialog} from './Dialog'
-import {WizardForm, WizardStep} from './WizardForm'
 import {ResponsiveTable} from './ResponsiveTable'
 import {DetailBreadcrumb} from './DetailBreadcrumb'
+
+const loadComparisonCandidates: CandidateLoader = (search, owner, offset, signal) => request<CandidatePage>(`/comparisons/candidates?${new URLSearchParams({search, owner, offset: String(offset)})}`, {}, undefined, signal)
 
 interface Props {
   experiments: Experiment[]; artifacts: Artifact[]; operations: Operation[]; workspaces: Workspace[]; session: Session
@@ -22,6 +25,7 @@ interface Props {
 export function ComparisonsView(props: Props) {
   const detail = useDetailRoute('comparisons')
   const [items, setItems] = useState<ResultComparison[]>([])
+  const [sourceCount, setSourceCount] = useState<number>()
   const [loaded, setLoaded] = useState<ComparisonView>()
   const [loading, setLoading] = useState(true)
   const [revision, setRevision] = useState(0)
@@ -34,9 +38,10 @@ export function ComparisonsView(props: Props) {
     const controller = new AbortController()
     setLoading(true); setLoaded(undefined); setError('')
     const load = async () => {
-      const response = await request<{items: ResultComparison[]}>('/comparisons', {}, undefined, controller.signal)
+      const response = await request<{items: ResultComparison[]; eligibleExperimentCount?: number}>('/comparisons', {}, undefined, controller.signal)
       if (controller.signal.aborted) return
       setItems(response.items)
+      setSourceCount(response.eligibleExperimentCount)
       if (detail.route?.kind === 'comparison') {
         const view = await request<ComparisonView>(`/comparisons/${encodeURIComponent(detail.route.id)}`, {}, undefined, controller.signal)
         if (!controller.signal.aborted) setLoaded(view)
@@ -53,73 +58,61 @@ export function ComparisonsView(props: Props) {
     finally {setBusy(false)}
   }
   const comparableExperiments=new Set(selectableComparisonRuns(props.experiments).map(run=>run.experiment.id)).size
-  const canCreateComparison=!loading&&comparableExperiments>=2
+  const canCreateComparison=!loading&&(sourceCount ?? comparableExperiments)>=2
   const creationHint=loading?'Loading comparisons…':'Requires two experiments with results.'
   const selected = items.find(item => item.id === detail.route?.id)
   const actions = (item: ResultComparison) => <><ResourceAction action="edit" label={`Edit ${item.name}`} disabled={busy} onClick={() => setEditing(item)} /><ResourceAction action="delete" label={`Delete ${item.name}`} disabled={busy} onClick={() => void remove(item)} /></>
   return <>
     {confirmationDialog}
-    {loaded ? <ResultsView key={`${loaded.comparison.id}:${loaded.comparison.updatedAt}`} {...props} artifacts={loaded.artifacts} focusedExperiment={loaded.result} onBack={detail.close} comparison={{sourceConfigurations: loaded.sourceConfigurations, actions: actions(loaded.comparison), sources: <details className="comparison-sources"><summary>Sources</summary><ResponsiveTable aria-label="Comparison source runs"><thead><tr><th>Series</th><th>Experiment</th><th>Execution</th></tr></thead><tbody>{loaded.comparison.series.flatMap(group => group.runs.map(ref => {
-      const source = loaded.sources.find(source => source.id === ref.experimentId)
-      const trial = source?.variants.flatMap(variant => variant.trials).find(trial => trial.id === ref.trialId)
-      return <tr key={runKey(ref)}><td>{group.label}</td><td><a href={`#results/instance/${encodeURIComponent(ref.experimentId)}`}>{source?.name ?? 'Experiment'}</a></td><td>{trial?.position ?? '—'}</td></tr>
-    }))}</tbody></ResponsiveTable></details>}} /> : <>
+    {loaded ? <ResultsView key={`${loaded.comparison.id}:${loaded.comparison.updatedAt}`} {...props} artifacts={loaded.artifacts} focusedExperiment={loaded.result} onBack={detail.close} comparison={{sourceConfigurations: loaded.sourceConfigurations, actions: actions(loaded.comparison), sources: <details className="comparison-sources"><summary>Sources</summary><ResponsiveTable aria-label="Comparison source experiments"><thead><tr><th>Experiment</th><th>Created</th></tr></thead><tbody>{loaded.sources.map(source => <tr key={source.id}><td><a href={`#results/instance/${encodeURIComponent(source.id)}`}>{source.name}</a></td><td>{formatDate(source.createdAt)}</td></tr>)}</tbody></ResponsiveTable></details>}} /> : <>
       {detail.route && <DetailBreadcrumb parent="Comparisons" current={selected?.name ?? 'Comparison'} back={detail.close} />}
       <ResourceListHeading title={selected?.name ?? 'Comparisons'} icon="experiments" action={selected ? actions(selected) : <DisabledActionHint disabled={!canCreateComparison} reason={creationHint}><ResourceAction action="create" label="New comparison" disabled={!canCreateComparison} title={canCreateComparison?'New comparison':creationHint} onClick={() => {if(canCreateComparison)setEditing(null)}} /></DisabledActionHint>} />
       <ErrorFeedback message={error} />
-      {loading ? <p role="status">Loading comparisons…</p> : !detail.route && <ResourceListTable open={item => detail.open('comparison', item.id)} items={items} editable label="Comparisons" searchText={item => item.name} columns={[{label: 'Name', render: item => <h3>{item.name}</h3>}, {label: 'Series', render: item => item.series.length}, {label: 'Executions', render: item => item.series.reduce((sum, series) => sum + series.runs.length, 0)}]} actions={item => <><ResourceAction action="view" label={`View ${item.name} details`} onClick={() => detail.open('comparison', item.id)} />{actions(item)}</>} empty={<><strong>No comparisons yet</strong><p>Compare results from completed experiments.</p></>} />}
+      {loading ? <p role="status">Loading comparisons…</p> : !detail.route && <ResourceListTable open={item => detail.open('comparison', item.id)} items={items} editable label="Comparisons" searchText={item => item.name} columns={[{label: 'Name', render: item => <h3>{item.name}</h3>}, {label: 'Experiments', render: item => new Set(item.series.flatMap(group => group.runs.map(run => run.experimentId))).size}]} actions={item => <><ResourceAction action="view" label={`View ${item.name} details`} onClick={() => detail.open('comparison', item.id)} />{actions(item)}</>} empty={<><strong>No comparisons yet</strong><p>Compare results from completed experiments.</p></>} />}
     </>}
-    {editing !== undefined && <ComparisonDialog key={editing?.id ?? 'new'} item={editing ?? undefined} experiments={[...props.experiments, ...(loaded?.sources ?? []).filter(source => !props.experiments.some(item => item.id === source.id))]} session={props.session} close={() => setEditing(undefined)} saved={item => {setEditing(undefined); reload(); detail.open('comparison', item.id)}} />}
+    {editing !== undefined && <ComparisonDialog loadCandidates={loadComparisonCandidates} key={editing?.id ?? 'new'} item={editing ?? undefined} experiments={[...props.experiments, ...(loaded?.sources ?? []).filter(source => !props.experiments.some(item => item.id === source.id))]} session={props.session} close={() => setEditing(undefined)} saved={item => {setEditing(undefined); reload(); detail.open('comparison', item.id)}} />}
   </>
 }
 
-export function ComparisonDialog({item, experiments, session, close, saved}: {item?: ResultComparison; experiments: Experiment[]; session: Session; close: () => void; saved: (item: ResultComparison) => void}) {
-  const runs = selectableComparisonRuns(experiments)
+export function ComparisonDialog({item, experiments, session, close, saved, loadCandidates}: {item?: ResultComparison; experiments: Experiment[]; session: Session; close: () => void; saved: (item: ResultComparison) => void; loadCandidates?: CandidateLoader}) {
+  const available = experiments.filter(experiment => selectableComparisonRuns([experiment]).length > 0)
+  const [known, setKnown] = useState<PickerResource[]>([])
+  const sources = [...available, ...known.filter(item => !available.some(source => source.id === item.id))]
+  const [adding, setAdding] = useState(false)
   const [name, setName] = useState(item?.name ?? '')
-  const [series, setSeries] = useState<ComparisonSeries[]>(() => item ? structuredClone(item.series) : [])
+  const [selected, setSelected] = useState<Array<{experimentId: string; label: string; color: string}>>(() => item ? [...new Set(item.series.flatMap(group => group.runs.map(run => run.experimentId)))].map(experimentId => {
+    const group = item.series.find(group => group.runs.some(run => run.experimentId === experimentId))!
+    return {experimentId, color: group.color, label: group.labelOverride ?? ''}
+  }) : [])
   const [pending, setPending] = useState(false)
   const [error, setError] = useErrorState()
-  const [query, setQuery] = useState('')
-  const selected = new Set(series.flatMap(group => group.runs.map(runKey)))
-  const count = selected.size
-  const toggle = (key: string) => {
-    if (selected.has(key)) {setSeries(current => current.map(group => ({...group, runs: group.runs.filter(run => runKey(run) !== key)})).filter(group => group.runs.length)); return}
-    if (count >= 80) {setError('Maximum: 80 executions.'); return}
-    const source = runs.find(run => run.key === key)!
-    const ref = {experimentId: source.experiment.id, trialId: source.trial.id}
-    const label = source.variant.alias || source.variant.name || source.experiment.name
-    const index = series.findIndex(group => group.label === label)
-    if (index < 0 && series.length >= 8) {setError('Maximum: 8 series. Use an existing series.'); return}
-    setSeries(current => index < 0 ? [...current, {label, color: source.variant.color || comparisonColors[current.length], runs: [ref]}] : current.map((group, i) => i === index ? {...group, runs: [...group.runs, ref]} : group))
+  const add = (items: PickerResource[]) => {
+    setKnown(current => [...current, ...items.filter(item => !current.some(source => source.id === item.id))])
+    setSelected(current => {
+      const next = [...current]
+      for (const item of items) if (next.length < 8 && !next.some(source => source.experimentId === item.id)) next.push({experimentId: item.id, label: '', color: comparisonColors.find(color => !next.some(item => item.color === color)) ?? comparisonColors[next.length % comparisonColors.length]})
+      return next
+    })
+    setAdding(false)
   }
-  const move = (ref: ComparisonRun, target: number) => setSeries(current => current.map((group, i) => ({...group, runs: i === target ? [...group.runs.filter(run => runKey(run) !== runKey(ref)), ref] : group.runs.filter(run => runKey(run) !== runKey(ref))})))
-  const update = (index: number, patch: Partial<ComparisonSeries>) => setSeries(current => current.map((group, i) => i === index ? {...group, ...patch} : group))
   const submit = async (event: React.FormEvent<HTMLFormElement>) => {
-    event.preventDefault(); if (pending) return
+    event.preventDefault(); if (pending || selected.length < 2) return
     setError(''); setPending(true)
     try {
-      const result = await request<ResultComparison>(item ? `/comparisons/${item.id}` : '/comparisons', {method: item ? 'PUT' : 'POST', body: JSON.stringify({name, series: series.filter(group => group.runs.length)})}, session.csrfToken)
+      const experiments = selected.map(({experimentId, color, label}) => ({experimentId, color, ...(label.trim() ? {label: label.trim()} : {})}))
+      const result = await request<ResultComparison>(item ? `/comparisons/${item.id}` : '/comparisons', {method: item ? 'PUT' : 'POST', body: JSON.stringify({name, experiments})}, session.csrfToken)
       saved(result)
     } catch (cause) {setError(cause instanceof Error ? cause.message : 'Could not save the comparison.')}
     finally {setPending(false)}
   }
-  return <Dialog open className="comparison-modal" title={item ? 'Edit comparison' : 'New comparison'} onClose={() => {if (!pending) close()}}><WizardForm onSubmit={submit} onCancel={close} pending={pending} submitLabel={item ? 'Save changes' : 'Create comparison'} submitDisabled={count < 2} error={error}>
-    <WizardStep title="Executions">
-      <div className="form-grid"><label>Name<input required maxLength={120} value={name} onChange={event => setName(event.target.value)} /></label><label>Search executions<input type="search" value={query} onChange={event => setQuery(event.target.value)} /></label></div>
-      <div className="comparison-run-picker"><ResponsiveTable aria-label="Available executions"><thead><tr><th>Select</th><th>Experiment</th><th>Configuration</th><th>Execution</th></tr></thead><tbody>{runs.filter(run => `${run.experiment.name} ${run.variant.name}`.toLowerCase().includes(query.toLowerCase())).map(run => <tr key={run.key}><td><input type="checkbox" aria-label={`Include ${run.experiment.name} · ${run.variant.name} · Execution ${run.trial.position}`} checked={selected.has(run.key)} onChange={() => toggle(run.key)} /></td><td>{run.experiment.name}</td><td>{run.variant.name}</td><td>{run.trial.position}</td></tr>)}</tbody></ResponsiveTable></div>
-      {series.flatMap(group => group.runs).filter(ref => !runs.some(run => run.key === runKey(ref))).map(ref => <div key={runKey(ref)} className="validation-item warning">Unavailable execution <button type="button" className="text-button" onClick={() => toggle(runKey(ref))}>Remove</button></div>)}
-    </WizardStep>
-    <WizardStep title="Series" blocked={count < 2}>
-      <div className="comparison-series-layout"><div><ResponsiveTable aria-label="Comparison series"><thead><tr><th>Label</th><th>Color</th><th>Executions</th><th>Actions</th></tr></thead><tbody>{series.map((group, i) => <tr key={i}><td><input aria-label={`Series ${i + 1} label`} required maxLength={80} value={group.label} onChange={event => update(i, {label: event.target.value})} /></td><td><input type="color" aria-label={`Series ${i + 1} color`} value={group.color} onChange={event => update(i, {color: event.target.value})} /></td><td>{group.runs.length}</td><td><ResourceAction action="delete" label={`Remove series ${i + 1}`} onClick={() => setSeries(current => current.filter((_, index) => index !== i))} /></td></tr>)}</tbody></ResponsiveTable>
-      <div className="form-section-actions"><button type="button" className="button secondary" disabled={series.length >= 8} onClick={() => setSeries(current => [...current, {label: `Series ${current.length + 1}`, color: comparisonColors[current.length], runs: []}])}>Add series</button></div>
-      </div><div className="comparison-run-picker"><ResponsiveTable aria-label="Execution assignment"><thead><tr><th>Experiment</th><th>Execution</th><th>Series</th></tr></thead><tbody>{series.flatMap(group => group.runs.map(ref => {
-        const run = runs.find(run => run.key === runKey(ref))
-        return <tr key={runKey(ref)}><td>{run?.experiment.name ?? 'Unavailable execution'}</td><td>{run?.trial.position ?? '—'}</td><td><select aria-label={`Series for ${run?.experiment.name ?? ref.experimentId} run ${run?.trial.position ?? ref.trialId}`} value={series.indexOf(group)} onChange={event => move(ref, Number(event.target.value))}>{series.map((option, i) => <option key={i} value={i}>{option.label || `Series ${i + 1}`}</option>)}</select></td></tr>
-      }))}</tbody></ResponsiveTable></div></div>
-    </WizardStep>
-    <WizardStep title="Review" blocked={count < 2}>
-      <ResponsiveTable aria-label="Comparison review"><thead><tr><th>Name</th><th>Series</th><th>Executions</th></tr></thead><tbody><tr><td>{name}</td><td>{series.filter(group => group.runs.length).length}</td><td>{count}</td></tr></tbody></ResponsiveTable>
-      <ResponsiveTable aria-label="Series review"><thead><tr><th>Label</th><th>Color</th><th>Executions</th></tr></thead><tbody>{series.filter(group => group.runs.length).map((group, index) => <tr key={index}><td>{group.label}</td><td><span className="comparison-color" style={{backgroundColor: group.color}} role="img" aria-label={`${group.label} plot color`} /></td><td>{group.runs.length}</td></tr>)}</tbody></ResponsiveTable>
-    </WizardStep>
-  </WizardForm></Dialog>
+  return <><Dialog open className="comparison-modal" title={item ? 'Edit comparison' : 'New comparison'} onClose={() => {if (!pending) close()}}><form className="form-stack" onSubmit={submit} aria-busy={pending}><ErrorFeedback message={error} />
+    <label className="comparison-name">Name<input required maxLength={120} value={name} onChange={event => setName(event.target.value)} /></label>
+    <div className="form-section-actions"><ResourceAction action="add" label="Add experiments" disabled={selected.length >= 8} title={selected.length >= 8 ? 'Maximum: 8 experiments.' : undefined} onClick={() => setAdding(true)} /></div>
+    {selected.length > 0 && <div className="resource-selection-scroll"><ResponsiveTable aria-label="Selected experiments"><thead><tr><th>Experiment</th><th>Created</th><th>Plot label</th><th>Plot color</th><th>Actions</th></tr></thead><tbody>{selected.map(selection => {
+      const source = sources.find(item => item.id === selection.experimentId)
+      const title = source?.name ?? 'Unavailable experiment'
+      return <tr key={selection.experimentId}><td>{title}</td><td>{source?.createdAt ? formatDate(source.createdAt) : '—'}</td><td><input type="text" aria-label={`${title} plot label`} placeholder={title} value={selection.label} maxLength={120} onChange={event => setSelected(current => current.map(item => item.experimentId === selection.experimentId ? {...item, label: event.target.value} : item))} /></td><td><input type="color" aria-label={`${title} plot color`} value={selection.color} onChange={event => setSelected(current => current.map(item => item.experimentId === selection.experimentId ? {...item, color: event.target.value} : item))} /></td><td><ResourceAction action="delete" label={`Remove ${title}`} onClick={() => setSelected(current => current.filter(item => item.experimentId !== selection.experimentId))} /></td></tr>
+    })}</tbody></ResponsiveTable></div>}
+    <div className="dialog-actions"><button type="button" className="button secondary" onClick={close} disabled={pending}>Cancel</button><button className="button primary" disabled={pending || !name.trim() || selected.length < 2 || selected.some(item => !sources.some(source => source.id === item.experimentId))}>{pending ? 'Saving…' : item ? 'Save changes' : 'Create comparison'}</button></div>
+  </form></Dialog>{adding && <ResourcePickerDialog resource="experiments" items={available} selectedIds={selected.map(item => item.experimentId)} session={session} close={() => setAdding(false)} add={add} load={loadCandidates} />}</>
 }

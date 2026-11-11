@@ -14,6 +14,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"kubephos.dev/kubephos/internal/domain"
+	"kubephos.dev/kubephos/internal/externaldestination"
 )
 
 func TestLoadSessionStartStopResume(t *testing.T) {
@@ -311,5 +312,18 @@ func TestNativeRedisLoadSkipsEnvoyAndExposesMetrics(t *testing.T) {
 	_, err = resolveLoadTargets(context.Background(), rejectingRunner{}, "config", "namespace", serviceEndpoint{Service: "redis", Port: 6379, Protocol: "tcp"}, Spec{GeographicSteps: []GeographicStep{{Type: "constant", DurationSeconds: 1}}})
 	if err == nil {
 		t.Fatal("native requests cannot use HTTP geographic proxies")
+	}
+}
+
+func TestExternalEndpointDistributionUsesLabelsWithoutNodeLookup(t *testing.T) {
+	endpoint := serviceEndpoint{External: true, URL: "https://west.example", Targets: []externaldestination.Endpoint{{Label: "West", URL: "https://west.example"}, {Label: "East", URL: "https://east.example"}}}
+	spec := Spec{GeographicSteps: []GeographicStep{{Type: "constant", DurationSeconds: 60, Weights: map[string]float64{"West": 3, "East": 1}}, {Type: "linear", DurationSeconds: 60, StartWeights: map[string]float64{"West": 1, "East": 0}, EndWeights: map[string]float64{"West": 0, "East": 1}}}}
+	targets, err := resolveLoadTargets(context.Background(), rejectingRunner{}, "config", "load", endpoint, spec)
+	if err != nil || len(targets) != 2 || targets[0].Zone != "West" || targets[1].URL != "https://east.example" {
+		t.Fatalf("external distribution: %#v %v", targets, err)
+	}
+	spec.GeographicSteps[0].Weights["missing"] = 1
+	if _, err := resolveLoadTargets(context.Background(), rejectingRunner{}, "config", "load", endpoint, spec); err == nil {
+		t.Fatal("unknown endpoint accepted")
 	}
 }

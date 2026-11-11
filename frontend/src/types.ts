@@ -410,7 +410,7 @@ export interface ExperimentConfiguration extends ResourceAttributionFields {
     /** Ambient waypoint size: replicas and per-replica cpuRequest, cpuLimit, memoryRequest, memoryLimit. */
     istioWaypoint?: Record<string, unknown>
 		destinationMode?: 'application' | 'external'
-		externalDestination?: {targetUrl: string; runtimeImage: string; script: string; parameters?: Record<string, string>}
+		externalDestination?: {endpoints?: Array<{label: string; url: string}>; targetUrl: string; runtimeImage: string; script: string; parameters?: Record<string, string>}
 		podDisruptionBudgetMinAvailable?: number
 		components: ExperimentConfigurationComponent[]
 	}

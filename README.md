@@ -87,9 +87,10 @@ and troubleshooting.
 5. Run the configuration or combine configurations in a comparison suite.
 6. Inspect **Experiments → Statistics / Plots** and export the results.
 
-**Comparisons** also lets you select completed runs from existing experiments, group
-them into series and choose labels and colors without running them again. Statistics
-and plots use the same aggregation as suites. Comparisons are private and retain
+**Comparisons** lets you select completed experiments and choose their plot labels and colors
+without running them again. Each approach includes all successful executions with
+results, even when experiments have different execution counts. Statistics and plots
+use the same aggregation as suites. Comparisons are private and retain
 references to source results: deleting a comparison leaves experiments untouched;
 deleted or inaccessible source runs must be removed from the comparison.
 

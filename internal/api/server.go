@@ -177,6 +177,7 @@ func NewServer(store *storage.Store, registry *plugins.Registry, artifactStore *
 	router.HandleFunc("POST /api/v1/experiment-instances", server.createExperimentExecution)
 	router.HandleFunc("POST /api/v1/experiment-suites", server.createExperimentSuite)
 	router.HandleFunc("GET /api/v1/comparisons", server.listComparisons)
+	router.HandleFunc("GET /api/v1/comparisons/candidates", server.listComparisonCandidates)
 	router.HandleFunc("POST /api/v1/comparisons", server.saveComparison)
 	router.HandleFunc("GET /api/v1/comparisons/{id}", server.getComparison)
 	router.HandleFunc("PUT /api/v1/comparisons/{id}", server.saveComparison)

@@ -50,3 +50,18 @@ describe('comparisons and suite regression', () => {
     expect(selectableComparisonRuns([failed]).map(run => run.trial.id)).toEqual(['b1'])
   })
 })
+
+
+it('checks metric units in linear time and ignores the number of pod series', () => {
+  const a = dataset('a', [1])
+  const b = dataset('b', [1])
+  let reads = 0
+  const series = a.dataset.spec.series[0]
+  a.dataset.spec.series = Array.from({length: 2000}, () => ({...series, get metric() {reads++; return 'cpu.cores'}}))
+  b.dataset.spec.series = [series]
+  const warnings = comparisonWarnings([a, b], {})
+  expect(warnings).toEqual([])
+  expect(reads).toBeLessThan(12000)
+  b.dataset.spec.series = [{...series, unit: 'seconds'}]
+  expect(comparisonWarnings([a, b], {}).some(message => message.includes('inconsistent units'))).toBe(true)
+})

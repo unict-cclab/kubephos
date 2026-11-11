@@ -11,13 +11,24 @@ spec:
   configurationSchema:
     type: object
     additionalProperties: false
-    required: [clusterConnectionRef, targetUrl, runtimeImage, script]
+    required: [clusterConnectionRef, runtimeImage, script]
     properties:
       clusterConnectionRef:
         type: string
         format: kubephos-artifact-ref
         x-kubephos-artifact-type: ClusterConnection
         x-kubephos-artifact-version: v1alpha1
+      endpoints:
+        type: array
+        minItems: 1
+        maxItems: 50
+        items:
+          type: object
+          additionalProperties: false
+          required: [url]
+          properties:
+            label: {type: string, maxLength: 80}
+            url: {type: string, minLength: 1, maxLength: 2048}
       targetUrl:
         type: string
         title: External endpoint

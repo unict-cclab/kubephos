@@ -1,3 +1,5 @@
+import {ValidationMessage} from './ValidationMessage'
+import {ResponsiveTable} from './ResponsiveTable'
 import {comparativeSources} from './comparativeSources'
 import {applicationSettingsSchema} from './applicationSettings'
 import {ProxyResourcesEditor} from './ProxyResourcesEditor'
@@ -212,7 +214,9 @@ export function ExperimentConfigurationDialog({open, close, clusters, workspaces
   const workspaceId = clusters.find(cluster => cluster.id === clusterResourceId)?.workspaceId ?? item?.workspaceId ?? workspaces[0]?.id ?? ''
 	const [applicationRef, setApplicationRef] = useState(item?.applicationRef ?? availableApplications[0]?.reference ?? '')
   const [destinationMode, setDestinationMode] = useState<DestinationMode>(item?.definition.destinationMode === 'external' ? 'external' : 'application')
-  const [externalTargetUrl, setExternalTargetUrl] = useState(item?.definition.externalDestination?.targetUrl ?? '')
+  const [externalEndpoints, setExternalEndpoints] = useState(item?.definition.externalDestination?.endpoints?.length ? item.definition.externalDestination.endpoints : [{label: '', url: item?.definition.externalDestination?.targetUrl ?? ''}])
+  const normalizedEndpoints = externalEndpoints.map((endpoint, index) => ({label: endpoint.label.trim() || `Endpoint ${index + 1}`, url: endpoint.url.trim()}))
+  const endpointLabelError = new Set(normalizedEndpoints.map(endpoint => endpoint.label.toLowerCase())).size !== normalizedEndpoints.length ? 'Endpoint labels must be unique.' : ''
   const [externalRuntimeImage, setExternalRuntimeImage] = useState(item?.definition.externalDestination?.runtimeImage ?? 'locustio/locust:2.42.6')
   const [externalScript, setExternalScript] = useState(item?.definition.externalDestination?.script ?? defaultExternalLocustScript)
   const [externalParameters, setExternalParameters] = useState(JSON.stringify(item?.definition.externalDestination?.parameters ?? {}, null, 2))
@@ -243,11 +247,12 @@ export function ExperimentConfigurationDialog({open, close, clusters, workspaces
   const topologyStatus = dynamicTopology && (topologyPending || topologyError) ? {message: topologyError || 'Checking application topology…', error: Boolean(topologyError)} : undefined
   const replicaAvailability = <label key={applicationRef} className="field-short">Minimum available replicas<input type="number" name="podDisruptionBudgetMinAvailable" min={nativeTCP ? 0 : 1} max={20} step={1} defaultValue={item?.definition.podDisruptionBudgetMinAvailable ?? (nativeTCP ? 0 : 1)} required /></label>
   const selectedCluster = clusters.find(item => item.id === clusterResourceId)
-  const zones = destinationMode === 'external' ? [] : applicationZones(selectedCluster)
+  const zones = destinationMode === 'external' ? normalizedEndpoints.map(endpoint => endpoint.label) : applicationZones(selectedCluster)
   const loadComponent = components.find(item => item.capability.startsWith('load.'))
   const metricsComponent = components.find(item => item.capability.startsWith('metrics.'))
   const networkComponent = components.find(item => item.capability.startsWith('chaos.'))
  const [experimentDuration,setExperimentDuration]=useState(0)
+ const [loadTimelineValid,setLoadTimelineValid]=useState(true)
  const [networkTimelineValid,setNetworkTimelineValid]=useState(true)
   const networkPlugin = compatiblePlugins.find(item => primaryCapabilities(item).some(capability => capability.startsWith('chaos.')))
   const monAgentComponent = components.find(item => item.capability.startsWith('monitoring.'))
@@ -290,7 +295,7 @@ export function ExperimentConfigurationDialog({open, close, clusters, workspaces
 	  setClusterResourceId(item.clusterResourceId)
 	  setApplicationRef(item.applicationRef)
 	  setDestinationMode(item.definition.destinationMode === 'external' ? 'external' : 'application')
-	  setExternalTargetUrl(item.definition.externalDestination?.targetUrl ?? '')
+	  setExternalEndpoints(item.definition.externalDestination?.endpoints?.length ? item.definition.externalDestination.endpoints : [{label: '', url: item.definition.externalDestination?.targetUrl ?? ''}])
 	  setExternalRuntimeImage(item.definition.externalDestination?.runtimeImage ?? 'locustio/locust:2.42.6')
 	  setExternalScript(item.definition.externalDestination?.script ?? defaultExternalLocustScript)
 	  setExternalParameters(JSON.stringify(item.definition.externalDestination?.parameters ?? {}, null, 2))
@@ -302,7 +307,7 @@ export function ExperimentConfigurationDialog({open, close, clusters, workspaces
 	}
 	setDestinationMode('application')
 	setApplicationRef(availableApplications[0]?.reference ?? '')
-	setExternalTargetUrl('')
+	setExternalEndpoints([{label: '', url: ''}])
 	setExternalRuntimeImage('locustio/locust:2.42.6')
 	setExternalScript(defaultExternalLocustScript)
 	setExternalParameters('{}')
@@ -430,7 +435,7 @@ export function ExperimentConfigurationDialog({open, close, clusters, workspaces
 		  destinationMode,
           namespace: destinationMode==='application'?String(values.get('namespace')??'').trim():undefined,
           twoPhaseStart:!deploymentMode && values.get('startMode')==='manual',
-		  externalDestination: destinationMode === 'external' ? {targetUrl: externalTargetUrl, runtimeImage: externalRuntimeImage, script: externalScript, parameters: externalParameterValues} : undefined,
+		  externalDestination: destinationMode === 'external' ? {targetUrl: normalizedEndpoints[0].url, endpoints: normalizedEndpoints, runtimeImage: externalRuntimeImage, script: externalScript, parameters: externalParameterValues} : undefined,
 		  applicationValues: destinationMode === 'application' ? readSchemaValues(form, application?.descriptor.spec?.valuesSchema ?? emptySchema, 'applicationValues', availableApplications) : {},
           applicationPlacement: destinationMode === 'application' ? JSON.parse(String(values.get('applicationPlacement') ?? 'null')) ?? undefined : undefined,
           istioProxyResources: destinationMode==='application'?JSON.parse(String(values.get('istioProxyResources')??'null'))??undefined:undefined,
@@ -446,7 +451,6 @@ export function ExperimentConfigurationDialog({open, close, clusters, workspaces
 			if (component.capability.startsWith('load.')) configuration.action = 'start'
 			if (component.capability.startsWith('load.')) configuration.interactive = false
 			if (component.capability.startsWith('load.')) configuration.scenarioId = destinationMode === 'external' ? 'external-load' : loadScenarioId
-			if (destinationMode === 'external' && component.capability.startsWith('load.')) delete configuration.geographicSteps
             return {id: `component-${index + 1}`, strategyId: component.strategyId, pluginId: component.pluginId, capability: component.capability, configuration, targets: {include: split(values.get(`include-${component.key}`)), exclude: split(values.get(`exclude-${component.key}`))}}
           })
         }
@@ -461,7 +465,7 @@ export function ExperimentConfigurationDialog({open, close, clusters, workspaces
     }
   }
   const namespaceField = <label>Namespace<input aria-label="Namespace" name="namespace" required={deploymentMode} defaultValue={item?.definition.namespace??''} maxLength={63} pattern={'[a-z0-9]([a-z0-9\\-]*[a-z0-9])?'}/></label>
-  const form = readOnly && item ? <ConfigurationReadout session={session} item={item} clusters={clusters} applications={applications} plugins={plugins} strategies={strategies} /> : <WizardForm ref={formRef} onSubmit={submit} onCancel={close} pending={pending} error={error} submitLabel={deploymentMode ? 'Deploy' : item ? 'Save changes' : 'Create configuration'} submitDisabled={topologyPending || Boolean(topologyError) || !workspaceId || !clusterResourceId || destinationMode === 'application' && !application || destinationMode === 'external' && (!externalTargetUrl || !externalRuntimeImage || !externalScript)} onChange={event => {
+  const form = readOnly && item ? <ConfigurationReadout session={session} item={item} clusters={clusters} applications={applications} plugins={plugins} strategies={strategies} /> : <WizardForm ref={formRef} onSubmit={submit} onCancel={close} pending={pending} error={error} submitLabel={deploymentMode ? 'Deploy' : item ? 'Save changes' : 'Create configuration'} submitDisabled={!loadTimelineValid || topologyPending || Boolean(topologyError) || !workspaceId || !clusterResourceId || destinationMode === 'application' && !application || destinationMode === 'external' && (Boolean(endpointLabelError) || externalEndpoints.some(endpoint => !endpoint.url.trim()) || !externalRuntimeImage || !externalScript)} onChange={event => {
         const target = event.nativeEvent.target as HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement
         if (target.name.startsWith('applicationValues.')) resolveApplicationTopology(event.currentTarget)
       }}>
@@ -490,13 +494,13 @@ export function ExperimentConfigurationDialog({open, close, clusters, workspaces
           {id: 'istio', title: 'Istio', content: <IstioSettingsEditor key={`istio-mode-${item?.id ?? 'new'}-${applicationRef}`} enabled={istioInUse} waypoint={item?.definition.istioWaypoint} dataPlane={item?.definition.istioDataPlane} disabled={selectedCluster?.spec.mode === 'multi'}><FormTabs label="Istio settings" items={[{id:'injection',title:'Injection',content:<IstioInjectionEditor key={`istio-${item?.id ?? 'new'}-${applicationRef}-${clusterResourceId}`} services={effectiveApplicationComponents} enabled={istioInjectionDefault} overrides={item?.definition.istioInjectionOverrides as Record<string, boolean> | undefined} disabled={selectedCluster?.spec.mode === 'multi'} />},{id:'proxy-resources',title:'Proxy resources',content:<ProxyResourcesEditor clusterId={clusterResourceId} session={session} key={`proxy-${item?.id??'new'}-${applicationRef}`} services={effectiveApplicationComponents} initial={item?.definition.istioProxyResources} disabled={selectedCluster?.spec.mode==='multi'}/>}]}/></IstioSettingsEditor>}
         ]} />
       </> : <FormTabs label="External destination settings" items={[
-        {id: 'target', title: 'Target', content: <div className="form-stack"><label>External endpoint<input type="url" value={externalTargetUrl} onChange={event => setExternalTargetUrl(event.target.value)} placeholder="https://api.example.com" maxLength={2048} required /></label><label>Locust runtime image<input value={externalRuntimeImage} onChange={event => setExternalRuntimeImage(event.target.value)} maxLength={512} required /></label></div>},
+        {id: 'target', title: 'Endpoints', content: <div className="form-stack"><ResponsiveTable aria-label="External endpoints"><thead><tr><th>Label</th><th>URL</th><th>Actions</th></tr></thead><tbody>{externalEndpoints.map((endpoint, index) => <tr key={index}><td><input aria-label={`Endpoint ${index + 1} label`} value={endpoint.label} placeholder={`Endpoint ${index + 1}`} maxLength={80} onChange={event => setExternalEndpoints(current => current.map((item, i) => i === index ? {...item, label: event.target.value} : item))} /></td><td><input aria-label={index === 0 ? 'External endpoint' : `External endpoint ${index + 1}`} type="url" value={endpoint.url} onChange={event => setExternalEndpoints(current => current.map((item, i) => i === index ? {...item, url: event.target.value} : item))} placeholder="https://api.example.com" maxLength={2048} required /></td><td><ResourceAction action="delete" label={`Remove endpoint ${index + 1}`} disabled={externalEndpoints.length === 1} onClick={() => setExternalEndpoints(current => current.filter((_, i) => i !== index))} /></td></tr>)}</tbody></ResponsiveTable>{endpointLabelError && <ValidationMessage message={endpointLabelError} />}<ResourceAction action="add" label="Add endpoint" disabled={externalEndpoints.length >= 50} onClick={() => setExternalEndpoints(current => [...current, {label: '', url: ''}])} /><label>Locust runtime image<input value={externalRuntimeImage} onChange={event => setExternalRuntimeImage(event.target.value)} maxLength={512} required /></label></div>},
         {id: 'script', title: 'Locustfile', content: <label>Locust file template<textarea value={externalScript} onChange={event => setExternalScript(event.target.value)} rows={14} maxLength={262144} spellCheck={false} required /></label>},
         {id: 'variables', title: 'Variables', content: <label>Locustfile variables (JSON)<textarea value={externalParameters} onChange={event => setExternalParameters(event.target.value)} rows={5} spellCheck={false} placeholder={'{"tenant":"demo"}'} /></label>}
       ]} />}
-      </WizardStep>{!deploymentMode && <><WizardStep key="load" title="Load profile">
+      </WizardStep>{!deploymentMode && <><WizardStep key="load" title="Load profile" blocked={!loadTimelineValid}>
       {destinationMode === 'application' && (application?.descriptor.spec?.interface?.loadScenarios?.length ?? 0) > 1 && <label>Load scenario<select value={loadScenarioId} onChange={event => setLoadScenarioId(event.target.value)} required>{application?.descriptor.spec?.interface?.loadScenarios?.map(item => <option key={item.id} value={item.id}>{item.id} · {item.engine ?? 'load'}</option>)}</select></label>}
-      {loadComponent && (() => {const plugin = compatiblePlugins.find(item => item.id === loadComponent.pluginId)!; return <section className="experiment-component"><LoadProfileEditor onDurationChange={setExperimentDuration} settings={<SchemaFields schema={experimentSchema(plugin.schema, loadComponent.capability)} prefix={`component-${loadComponent.key}`} values={loadComponent.configuration ?? {}} applications={applications} artifacts={[]} connections={[]} credentials={[]} />} key={`${item?.id ?? 'new'}-${loadComponent.key}`} prefix={`component-${loadComponent.key}`} zones={nativeTCP && selectedCluster?.spec.mode !== 'multi' ? [] : zones} distribution={selectedCluster?.spec.mode === 'multi' ? 'cluster' : 'zone'} values={loadComponent.configuration} /></section>})()}
+      {loadComponent && (() => {const plugin = compatiblePlugins.find(item => item.id === loadComponent.pluginId)!; return <section className="experiment-component"><LoadProfileEditor onValidityChange={setLoadTimelineValid} onDurationChange={setExperimentDuration} settings={<SchemaFields schema={experimentSchema(plugin.schema, loadComponent.capability)} prefix={`component-${loadComponent.key}`} values={loadComponent.configuration ?? {}} applications={applications} artifacts={[]} connections={[]} credentials={[]} />} key={`${item?.id ?? 'new'}-${loadComponent.key}`} prefix={`component-${loadComponent.key}`} zones={destinationMode !== 'external' && nativeTCP && selectedCluster?.spec.mode !== 'multi' ? [] : zones} distribution={destinationMode === 'external' ? 'endpoint' : selectedCluster?.spec.mode === 'multi' ? 'cluster' : 'zone'} values={loadComponent.configuration} /></section>})()}
       </WizardStep><WizardStep key="monitoring" title="Monitoring" blocked={Boolean(networkComponent)&&!networkTimelineValid}>
 <FormTabs label="Monitoring settings" items={[
  {id:'metrics',title:'Metrics',content:<>      {metricsComponent && (() => {const plugin = compatiblePlugins.find(item => item.id === metricsComponent.pluginId)!; return <section className="experiment-component"><SchemaFields schema={experimentSchema(plugin.schema, metricsComponent.capability)} prefix={`component-${metricsComponent.key}`} values={metricsComponent.configuration ?? {}} applications={applications} artifacts={[]} connections={[]} credentials={[]} /></section>})()}

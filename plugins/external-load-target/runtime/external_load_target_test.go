@@ -12,6 +12,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"kubephos.dev/kubephos/internal/domain"
+	"kubephos.dev/kubephos/internal/externaldestination"
 	"kubephos.dev/kubephos/internal/schema"
 )
 
@@ -177,5 +178,32 @@ func (runner *externalTargetRunner) Run(_ context.Context, _ string, stdin []byt
 		return "deleted", nil
 	default:
 		return "", errors.New("unexpected command: " + command)
+	}
+}
+
+func TestMultipleExternalDestinationsPreserveLabelsAndURLs(t *testing.T) {
+	spec := validSpec()
+	spec.TargetURL = ""
+	spec.Endpoints = []externaldestination.Endpoint{{Label: "West", URL: "https://west.example/v1"}, {Label: "East", URL: "https://east.example/v2"}}
+	normalized, err := normalizedSpec(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cluster clusterConnection
+	_ = json.Unmarshal(clusterArtifact(t), &cluster)
+	value, err := buildResult(stepInput{Spec: normalized, Marker: "run", Namespace: "load"}, cluster)
+	if err != nil {
+		t.Fatal(err)
+	}
+	endpoint := value.ApplicationDeployment.Spec.Endpoints[0]
+	if len(endpoint.Targets) != 2 || endpoint.Targets[1].Label != "East" || endpoint.Targets[1].URL != "https://east.example/v2" {
+		t.Fatalf("destinations lost: %#v", endpoint)
+	}
+	changed := normalized
+	changed.Endpoints = append([]externaldestination.Endpoint{}, normalized.Endpoints...)
+	changed.Endpoints[1].URL = "https://other.example"
+	other, err := buildResult(stepInput{Spec: changed, Marker: "run", Namespace: "load"}, cluster)
+	if err != nil || other.ApplicationDeployment.Spec.ApplicationRef == value.ApplicationDeployment.Spec.ApplicationRef {
+		t.Fatalf("endpoint change must affect identity: %v", err)
 	}
 }

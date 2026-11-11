@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 
 	"kubephos.dev/kubephos/internal/domain"
@@ -23,20 +24,24 @@ type comparisonView struct {
 }
 
 func validateComparison(item *domain.ResultComparison) error {
+	return validateComparisonSelection(item, false)
+}
+
+func validateComparisonSelection(item *domain.ResultComparison, wholeExperiments bool) error {
 	item.Name = strings.TrimSpace(item.Name)
 	if len(item.Name) < 1 || len(item.Name) > 120 {
 		return errors.New("Name must contain between 1 and 120 characters.")
 	}
-	if len(item.Series) < 1 || len(item.Series) > 8 {
-		return errors.New("Select between 1 and 8 series.")
+	if len(item.Series) < 1 || len(item.Series) > 80 {
+		return errors.New("Select up to 8 experiments.")
 	}
 	labels, runs := map[string]bool{}, map[string]bool{}
 	for i := range item.Series {
 		series := &item.Series[i]
 		series.Label = strings.TrimSpace(series.Label)
 		key := strings.ToLower(series.Label)
-		if len(key) < 1 || len(series.Label) > 80 || labels[key] {
-			return errors.New("Each series needs a distinct label of at most 80 characters.")
+		if len(key) < 1 || len(series.Label) > 240 || !wholeExperiments && labels[key] {
+			return errors.New("Each series needs a distinct label of at most 240 characters.")
 		}
 		labels[key] = true
 		if !regexp.MustCompile(`^#[0-9a-fA-F]{6}$`).MatchString(series.Color) {
@@ -53,8 +58,8 @@ func validateComparison(item *domain.ResultComparison) error {
 			runs[key] = true
 		}
 	}
-	if len(runs) < 2 || len(runs) > 80 {
-		return errors.New("Select between 2 and 80 completed runs.")
+	if len(runs) < 2 || len(runs) > 8000 {
+		return errors.New("Select experiments with completed results.")
 	}
 	return nil
 }
@@ -65,7 +70,12 @@ func (s *Server) listComparisons(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, "database_error", "Could not list comparisons.")
 		return
 	}
-	writeJSON(w, 200, map[string]any{"items": items})
+	count, err := s.store.CountComparisonCandidates(r.Context(), viewerID(requestUser(r)))
+	if err != nil {
+		writeError(w, 500, "database_error", "Could not load available experiments.")
+		return
+	}
+	writeJSON(w, 200, map[string]any{"items": items, "eligibleExperimentCount": count})
 }
 
 func (s *Server) comparisonSources(r *http.Request, item domain.ResultComparison) (comparisonView, error) {
@@ -161,6 +171,26 @@ func (s *Server) getComparison(w http.ResponseWriter, r *http.Request) {
 		comparisonStorageError(w, err)
 		return
 	}
+	// Older comparisons may group runs from different experiments together.
+	// Resolve them with the same whole-experiment semantics as new comparisons.
+	selections := []comparisonExperimentInput{}
+	seenSources := map[string]bool{}
+	for _, group := range item.Series {
+		for _, run := range group.Runs {
+			if !seenSources[run.ExperimentID] {
+				seenSources[run.ExperimentID] = true
+				selections = append(selections, comparisonExperimentInput{ExperimentID: run.ExperimentID, Color: group.Color, Label: group.LabelOverride})
+			}
+		}
+	}
+	if len(selections) >= 2 {
+		expanded, err := s.comparisonExperimentSeries(r, selections)
+		if err != nil {
+			writeError(w, 409, "source_unavailable", err.Error())
+			return
+		}
+		item.Series = expanded
+	}
 	view, err := s.comparisonSources(r, item)
 	if err != nil {
 		writeError(w, 409, "source_unavailable", err.Error())
@@ -171,11 +201,12 @@ func (s *Server) getComparison(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) saveComparison(w http.ResponseWriter, r *http.Request) {
 	var input struct {
-		Name   string                    `json:"name"`
-		Series []domain.ComparisonSeries `json:"series"`
+		Name        string                      `json:"name"`
+		Series      []domain.ComparisonSeries   `json:"series"`
+		Experiments []comparisonExperimentInput `json:"experiments"`
 	}
 	if err := decodeJSON(r, &input); err != nil {
-		writeError(w, 400, "invalid_request", "Could not read the comparison. Check the selected runs and series.")
+		writeError(w, 400, "invalid_request", "Could not read the comparison. Check the selected experiments.")
 		return
 	}
 	item := domain.ResultComparison{ID: r.PathValue("id"), Name: input.Name, Series: input.Series, OwnerUserID: requestUser(r).ID}
@@ -188,7 +219,19 @@ func (s *Server) saveComparison(w http.ResponseWriter, r *http.Request) {
 	} else {
 		item.ID = id.New("cmp")
 	}
-	if err := validateComparison(&item); err != nil {
+	if input.Experiments != nil {
+		if len(input.Series) > 0 {
+			writeError(w, 422, "invalid_comparison", "Select experiments only.")
+			return
+		}
+		series, err := s.comparisonExperimentSeries(r, input.Experiments)
+		if err != nil {
+			writeError(w, 422, "invalid_comparison", err.Error())
+			return
+		}
+		item.Series = series
+	}
+	if err := validateComparisonSelection(&item, input.Experiments != nil); err != nil {
 		writeError(w, 422, "invalid_comparison", err.Error())
 		return
 	}
@@ -222,4 +265,96 @@ func comparisonStorageError(w http.ResponseWriter, err error) {
 	} else {
 		writeError(w, 500, "database_error", "Could not save or read the comparison. Try again.")
 	}
+}
+
+// Expand each experiment into its own approach groups. Repeated executions are
+// averaged within a group; distinct suite configurations are never pooled.
+type comparisonExperimentInput struct {
+	Label        string `json:"label,omitempty"`
+	ExperimentID string `json:"experimentId"`
+	Color        string `json:"color"`
+}
+
+func (s *Server) comparisonExperimentSeries(r *http.Request, selections []comparisonExperimentInput) ([]domain.ComparisonSeries, error) {
+	if len(selections) < 2 || len(selections) > 8 {
+		return nil, errors.New("Select between 2 and 8 experiments.")
+	}
+	result := []domain.ComparisonSeries{}
+	seen := map[string]bool{}
+	for _, selection := range selections {
+		if seen[selection.ExperimentID] {
+			return nil, errors.New("Select each experiment only once.")
+		}
+		seen[selection.ExperimentID] = true
+		if !s.canReadResource(r, "experiments", selection.ExperimentID) {
+			return nil, errors.New("A selected experiment is unavailable.")
+		}
+		source, err := s.store.GetComparisonSource(r.Context(), selection.ExperimentID)
+		if err != nil || source.Kind == "comparison" || !comparisonSourceFinished(source.Status) {
+			return nil, errors.New("Select completed experiments with results.")
+		}
+		label := strings.TrimSpace(selection.Label)
+		if len([]rune(label)) > 120 || strings.ContainsAny(label, "\n\r\t") {
+			return nil, errors.New("Plot labels must be at most 120 characters on one line.")
+		}
+		if label != "" {
+			source.Name = label
+		}
+		groups := experimentComparisonSeries(source, selection.Color)
+		for i := range groups {
+			groups[i].LabelOverride = label
+		}
+		if len(groups) == 0 {
+			return nil, errors.New("A selected experiment has no completed results.")
+		}
+		result = append(result, groups...)
+	}
+	return result, nil
+}
+func experimentComparisonSeries(source domain.Experiment, color string) []domain.ComparisonSeries {
+	result := []domain.ComparisonSeries{}
+	for _, variant := range source.Variants {
+		label := source.Name
+		if len(source.Variants) > 1 {
+			approach := variant.Alias
+			if approach == "" {
+				approach = variant.Name
+			}
+			label += " · " + approach
+		}
+		group := domain.ComparisonSeries{Label: label, Color: color, Runs: []domain.ComparisonRun{}}
+		for _, trial := range variant.Trials {
+			if trial.Status == "succeeded" && trial.ResultArtifactID != "" {
+				group.Runs = append(group.Runs, domain.ComparisonRun{ExperimentID: source.ID, TrialID: trial.ID})
+			}
+		}
+		if len(group.Runs) > 0 {
+			result = append(result, group)
+		}
+	}
+	return result
+}
+
+func (s *Server) listComparisonCandidates(w http.ResponseWriter, r *http.Request) {
+	offset := 0
+	if raw := r.URL.Query().Get("offset"); raw != "" {
+		value, err := strconv.Atoi(raw)
+		if err != nil || value < 0 || value > 100000 {
+			writeError(w, 400, "invalid_request", "Invalid selection page.")
+			return
+		}
+		offset = value
+	}
+	search := strings.TrimSpace(r.URL.Query().Get("search"))
+	owner := strings.TrimSpace(r.URL.Query().Get("owner"))
+	if len([]rune(search)) > 120 || len(owner) > 200 {
+		writeError(w, 400, "invalid_request", "Search is too long.")
+		return
+	}
+	page, err := s.store.ListComparisonCandidates(r.Context(), viewerID(requestUser(r)), owner, search, offset)
+	if err != nil {
+		writeError(w, 500, "database_error", "Could not load available experiments.")
+		return
+	}
+	writeJSON(w, 200, page)
 }

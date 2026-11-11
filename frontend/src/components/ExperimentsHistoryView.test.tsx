@@ -53,13 +53,14 @@ describe('experiments history creation', () => {
     expect(select).toHaveValue('cfg_1')
     expect(screen.queryByRole('option', {name: 'Invalid'})).not.toBeInTheDocument()
     fireEvent.change(select, {target: {value: 'cfg_2'}})
-    expect(screen.getByRole('textbox', {name: 'Name'})).toHaveValue('Scheduler plugin run')
+    const suggestedName = (screen.getByRole('textbox', {name: 'Name'}) as HTMLInputElement).value
+    expect(suggestedName).toMatch(/^Scheduler plugin-\d{2}\/\d{2}\/\d{4}-\d{2}:\d{2}$/)
     fireEvent.change(screen.getByRole('spinbutton', {name: 'Number of executions'}), {target: {value: '2'}})
     fireEvent.click(screen.getByRole('button', {name: 'Validate and run'}))
 
     await waitFor(() => expect(request).toHaveBeenCalledWith('/experiments/start', expect.objectContaining({method: 'POST'}), 'token'))
     const body = JSON.parse((vi.mocked(request).mock.calls[0][1] as RequestInit).body as string)
-    expect(body).toMatchObject({configurationId: 'cfg_2', name: 'Scheduler plugin run', runs: 2})
+    expect(body).toMatchObject({configurationId: 'cfg_2', name: suggestedName, runs: 2})
     expect(changed).toHaveBeenCalled()
   })
 

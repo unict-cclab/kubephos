@@ -148,3 +148,18 @@ it('preserves saved legacy sinusoidal values until its range is edited', () => {
  expect(saved()).toMatchObject({minRps:0,maxRps:70})
  expect(saved()).not.toHaveProperty('baselineRps')
 })
+
+it('preserves endpoint weights when a label changes and rejects empty distributions', () => {
+  let valid = true
+  const onValidityChange = (value: boolean) => {valid = value}
+  const values = {steps: [{type: 'constant', durationSeconds: 120, rps: 10}], geographicSteps: [{type: 'constant', durationSeconds: 120, weights: {West: 3, East: 1}}]}
+  const view = render(<LoadProfileEditor prefix="external" zones={['West', 'East']} distribution="endpoint" values={values} onValidityChange={onValidityChange} />)
+  view.rerender(<LoadProfileEditor prefix="external" zones={['Primary', 'East']} distribution="endpoint" values={values} onValidityChange={onValidityChange} />)
+  fireEvent.click(screen.getByRole('tab', {name: 'Traffic distribution'}))
+  expect(screen.getByRole('spinbutton', {name: 'Primary'})).toHaveValue(3)
+  expect(screen.getByRole('spinbutton', {name: 'East'})).toHaveValue(1)
+  fireEvent.change(screen.getByRole('spinbutton', {name: 'Primary'}), {target: {value: '0'}})
+  fireEvent.change(screen.getByRole('spinbutton', {name: 'East'}), {target: {value: '0'}})
+  expect(valid).toBe(false)
+  expect(screen.getByRole('status')).toHaveTextContent('At least one destination must have a positive weight.')
+})

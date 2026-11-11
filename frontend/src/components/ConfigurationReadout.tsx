@@ -36,7 +36,7 @@ export function ConfigurationReadout({session,item,clusters,applications,plugins
  return <div className="configuration-readout">{showHeading&&<div className="readout-heading"><h3>{item.name}</h3></div>}<WizardReadout sections={[
  {id:'general',title:'General',content:general},
  {id:'application',title:external?'External destination':'Application',content:external?<FormTabs label="External destination settings" items={[
- {id:'target',title:'Target',content:<InputData value={{targetUrl:item.definition.externalDestination?.targetUrl,runtimeImage:item.definition.externalDestination?.runtimeImage}}/>},
+ {id:'target',title:'Endpoints',content:<div className="form-stack"><ReadoutTable label="External endpoints" data={{headers:['Label','URL'],rows:(item.definition.externalDestination?.endpoints?.length ? item.definition.externalDestination.endpoints : [{label:'Endpoint 1',url:item.definition.externalDestination?.targetUrl ?? '—'}]).map(endpoint=>[endpoint.label,endpoint.url])}}/><InputData value={{runtimeImage:item.definition.externalDestination?.runtimeImage}}/></div>},
  {id:'script',title:'Locustfile',content:<InputData value={{script:item.definition.externalDestination?.script}}/>},
  {id:'variables',title:'Variables',content:<InputData value={{parameters:item.definition.externalDestination?.parameters}}/>}
  ]}/>:<ApplicationSettingsReadout deploymentId={deploymentMode?item.id:undefined} application={application} item={item} session={session} networking={multi?'cilium':String(cluster?.spec.networking??'')} topology={applicationTopology}/>},
@@ -46,7 +46,7 @@ export function ConfigurationReadout({session,item,clusters,applications,plugins
   if((application?.descriptor.spec?.interface?.loadScenarios?.length??0)>1)settings.scenarioId=scenarioId
   return <FormTabs key={component.id} label="Load profile settings" items={[
    {id:'workload',title:'Workload',content:<div className="load-profile-workspace"><PhaseTables label="Workload phases" table={workloadTable(steps)}/><aside className="load-profile-live" aria-label="Live preview"><LoadProfilePreview steps={steps}/></aside></div>},
-   ...(Array.isArray(geographicSteps)&&geographicSteps.length?[{id:'distribution',title:'Traffic distribution',content:<PhaseTables label={multi?'Traffic phases by cluster':'Traffic phases by zone'} table={trafficTable(geographicSteps as Record<string,unknown>[],multi)}/>}]:[]),
+   ...(Array.isArray(geographicSteps)&&geographicSteps.length?[{id:'distribution',title:'Traffic distribution',content:<PhaseTables label={external?'Traffic phases by endpoint':multi?'Traffic phases by cluster':'Traffic phases by zone'} table={trafficTable(geographicSteps as Record<string,unknown>[],multi,external)}/>}]:[]),
    {id:'generator',title:'Generator',content:<InputData value={settings} schema={plugins.find(value=>value.id===component.pluginId)?.schema}/>}
   ]}/>
  })}</div>},

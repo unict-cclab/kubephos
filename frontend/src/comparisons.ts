@@ -1,8 +1,8 @@
 import type {Experiment, ExperimentTrial, ExperimentVariant, ResourceAttributionFields, Artifact} from './types'
-import type {LoadedDataset} from './components/ResultsView'
+import type {LoadedDataset} from './resultsData'
 
 export interface ComparisonRun {experimentId: string; trialId: string}
-export interface ComparisonSeries {label: string; color: string; runs: ComparisonRun[]}
+export interface ComparisonSeries {labelOverride?: string; label: string; color: string; runs: ComparisonRun[]}
 export interface ResultComparison extends ResourceAttributionFields {
   id: string; name: string; ownerUserId: string; series: ComparisonSeries[]; createdAt: string; updatedAt: string
 }
@@ -25,19 +25,24 @@ export function comparisonWarnings(datasets: LoadedDataset[], configurations: Re
   if (datasets.length < 2) return []
   const warnings: string[] = []
   const different = (values: unknown[]) => new Set(values.map(canonical)).size > 1
-  if (different(datasets.map(item => item.dataset.spec.stepSeconds))) warnings.push('Data resolution differs between runs. Plots use the common time windows.')
+  if (different(datasets.map(item => item.dataset.spec.stepSeconds))) warnings.push('Data resolution differs between experiments. Plots use the common time windows.')
   const durations = datasets.map(item => Math.round((Date.parse(item.dataset.spec.end) - Date.parse(item.dataset.spec.workloadStartedAt || item.dataset.spec.start)) / 1000))
-  if (durations.every(Number.isFinite) && Math.max(...durations) - Math.min(...durations) > Math.max(...datasets.map(item => item.dataset.spec.stepSeconds))) warnings.push('Run durations differ. Averaged lines cover only the time windows present in every run of that series.')
+  if (durations.every(Number.isFinite) && Math.max(...durations) - Math.min(...durations) > Math.max(...datasets.map(item => item.dataset.spec.stepSeconds))) warnings.push('Durations differ. Averaged lines cover only the time windows present in all included data.')
   const components = (id: string, prefix: string) => {
     const value = configurations[id]?.components
     return Array.isArray(value) ? value.filter(component => component && typeof component === 'object' && String(component.capability).startsWith(prefix)).map(component => ({pluginId: component.pluginId, configuration: component.configuration})) : []
   }
-  if (different(datasets.map(item => ({application: item.dataset.spec.applicationRef, values: configurations[item.artifact.id]?.applicationValues})))) warnings.push('Application settings differ between runs.')
-  if (different(datasets.map(item => ({target: item.dataset.spec.sloMilliseconds, settings: components(item.artifact.id, 'metrics.')})))) warnings.push('Monitoring settings or SLO targets differ. Violations use each run’s own target.')
-  if (different(datasets.map(item => item.dataset.spec.clusterServer))) warnings.push('Runs were collected from different clusters.')
-  if (different(datasets.map(item => components(item.artifact.id, 'load.')))) warnings.push('Load profiles differ between runs.')
-  if (different(datasets.map(item => item.dataset.spec.series.map(series => `${series.metric}:${series.unit}`).sort()))) warnings.push('Available metrics differ between runs. Missing measurements are not treated as zero.')
-  if (datasets.some(item => item.dataset.spec.series.some(series => !comparisonMetricCompatible(datasets, series.metric)))) warnings.push('Metrics with inconsistent units are excluded from this comparison.')
+  if (different(datasets.map(item => ({application: item.dataset.spec.applicationRef, values: configurations[item.artifact.id]?.applicationValues})))) warnings.push('Application settings differ between experiments.')
+  if (different(datasets.map(item => ({target: item.dataset.spec.sloMilliseconds, settings: components(item.artifact.id, 'metrics.')})))) warnings.push('Monitoring settings or SLO targets differ. Violations use each experiment’s own target.')
+  if (different(datasets.map(item => item.dataset.spec.clusterServer))) warnings.push('Experiments were collected from different clusters.')
+  if (different(datasets.map(item => components(item.artifact.id, 'load.')))) warnings.push('Load profiles differ between experiments.')
+  if (different(datasets.map(item => [...new Set(item.dataset.spec.series.map(series => `${series.metric}:${series.unit}`))].sort()))) warnings.push('Available metrics differ between experiments. Missing measurements are not treated as zero.')
+  const units = new Map<string, Set<string>>()
+  for (const item of datasets) for (const series of item.dataset.spec.series) {
+    const values = units.get(series.metric) ?? new Set<string>()
+    values.add(series.unit); units.set(series.metric, values)
+  }
+  if ([...units.values()].some(values => values.size > 1)) warnings.push('Metrics with inconsistent units are excluded from this comparison.')
   return warnings
 }
 

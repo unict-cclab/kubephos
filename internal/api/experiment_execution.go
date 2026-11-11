@@ -626,6 +626,9 @@ func (s *Server) externalDestinationPipeline(configuration domain.ExperimentConf
 		"targetUrl": definition.ExternalDestination.TargetURL, "runtimeImage": definition.ExternalDestination.RuntimeImage,
 		"script": definition.ExternalDestination.Script, "parameters": parameters,
 	}
+	if len(definition.ExternalDestination.Endpoints) > 0 {
+		targetSpec["endpoints"] = definition.ExternalDestination.Endpoints
+	}
 	bindings, failure := experimentArtifactBindings(targetSpec, preparePlugin.Manifest(), sources, configuration.ApplicationRef)
 	if failure != nil {
 		return domain.PipelineDefinition{}, failure

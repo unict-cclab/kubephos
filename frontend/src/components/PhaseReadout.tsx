@@ -35,14 +35,14 @@ export function workloadTable(phases: LoadProfileStep[]): ReadoutTableData {
   return {headers: ['Phase', 'Time interval', 'Load', ...fields.map(field => field.title)], rows: phases.map((phase, index) => [`Phase ${index + 1}`, ranges[index], phase.type === 'sinusoidal' ? 'Sinusoidal' : phase.type === 'exponential' ? 'Exponential' : 'Constant', ...fields.map(field => field.value(phase))])}
 }
 
-export function trafficTable(phases: Record<string, unknown>[], clusterMode = false): ReadoutTableData {
+export function trafficTable(phases: Record<string, unknown>[], clusterMode = false, endpointMode = false): ReadoutTableData {
   const zones = [...new Set(phases.flatMap(phase => Object.keys({...weights(phase.weights), ...weights(phase.startWeights), ...weights(phase.endWeights)})))].sort((a, b) => a.localeCompare(b, undefined, {numeric: true}))
   const ranges = intervals(phases)
   return {headers: ['Phase', 'Time interval', 'Distribution', ...zones.map(zone => `${zone} (%)`)], rows: phases.map((phase, index) => {
     const transition = phase.type === 'linear'
     const start = weights(transition ? phase.startWeights : phase.weights)
     const end = weights(phase.endWeights)
-    return [`Phase ${index + 1}`, ranges[index], transition ? 'Linear transition (start → end)' : `Fixed ${clusterMode ? 'cluster' : 'zone'} shares`, ...zones.map(zone => transition ? `${share(start, zone)} → ${share(end, zone)}` : share(start, zone))]
+    return [`Phase ${index + 1}`, ranges[index], transition ? 'Linear transition (start → end)' : `Fixed ${endpointMode ? 'endpoint' : clusterMode ? 'cluster' : 'zone'} shares`, ...zones.map(zone => transition ? `${share(start, zone)} → ${share(end, zone)}` : share(start, zone))]
   })}
 }
 function weights(value: unknown): Record<string, number> {

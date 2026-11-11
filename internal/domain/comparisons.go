@@ -8,9 +8,10 @@ type ComparisonRun struct {
 }
 
 type ComparisonSeries struct {
-	Label string          `json:"label"`
-	Color string          `json:"color"`
-	Runs  []ComparisonRun `json:"runs"`
+	LabelOverride string          `json:"labelOverride,omitempty"`
+	Label         string          `json:"label"`
+	Color         string          `json:"color"`
+	Runs          []ComparisonRun `json:"runs"`
 }
 
 type ResultComparison struct {
@@ -22,4 +23,21 @@ type ResultComparison struct {
 	Series      []ComparisonSeries `json:"series"`
 	CreatedAt   time.Time          `json:"createdAt"`
 	UpdatedAt   time.Time          `json:"updatedAt"`
+}
+
+type ComparisonCandidate struct {
+	ID            string    `json:"id"`
+	Name          string    `json:"name"`
+	OwnerUserID   string    `json:"ownerUserId"`
+	OwnerUsername string    `json:"ownerUsername"`
+	CreatedAt     time.Time `json:"createdAt"`
+}
+type ComparisonCandidateOwner struct {
+	ID       string `json:"id"`
+	Username string `json:"username"`
+}
+type ComparisonCandidatePage struct {
+	Items  []ComparisonCandidate      `json:"items"`
+	Total  int                        `json:"total"`
+	Owners []ComparisonCandidateOwner `json:"owners"`
 }

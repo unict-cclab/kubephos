@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"kubephos.dev/kubephos/internal/domain"
+	"kubephos.dev/kubephos/internal/externaldestination"
 	"kubephos.dev/kubephos/internal/plugins"
 )
 
@@ -35,11 +36,12 @@ type Invocation struct {
 }
 
 type Spec struct {
-	ClusterConnectionRef string            `json:"clusterConnectionRef"`
-	TargetURL            string            `json:"targetUrl"`
-	RuntimeImage         string            `json:"runtimeImage"`
-	Script               string            `json:"script"`
-	Parameters           map[string]string `json:"parameters,omitempty"`
+	Endpoints            []externaldestination.Endpoint `json:"endpoints,omitempty"`
+	ClusterConnectionRef string                         `json:"clusterConnectionRef"`
+	TargetURL            string                         `json:"targetUrl"`
+	RuntimeImage         string                         `json:"runtimeImage"`
+	Script               string                         `json:"script"`
+	Parameters           map[string]string              `json:"parameters,omitempty"`
 }
 
 type stepInput struct {
@@ -72,10 +74,11 @@ type workloadTarget struct {
 }
 
 type serviceEndpoint struct {
-	ID       string `json:"id"`
-	Protocol string `json:"protocol"`
-	URL      string `json:"url"`
-	External bool   `json:"external"`
+	Targets  []externaldestination.Endpoint `json:"targets,omitempty"`
+	ID       string                         `json:"id"`
+	Protocol string                         `json:"protocol"`
+	URL      string                         `json:"url"`
+	External bool                           `json:"external"`
 }
 
 type applicationDeployment struct {
@@ -132,7 +135,7 @@ func (Plugin) Manifest() plugins.Manifest {
 	return plugins.Manifest{
 		ID: pluginID, Name: "External load destination", Version: "0.1.0",
 		Description:     "Prepares an isolated Locust driver namespace and a verified external HTTP destination.",
-		Schema:          json.RawMessage(`{"type":"object","additionalProperties":false,"required":["clusterConnectionRef","targetUrl","runtimeImage","script"],"properties":{"clusterConnectionRef":{"type":"string","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ClusterConnection","x-kubephos-artifact-version":"v1alpha1"},"targetUrl":{"type":"string","title":"External endpoint","minLength":1,"maxLength":2048},"runtimeImage":{"type":"string","title":"Locust runtime image","default":"locustio/locust:2.42.6","minLength":1,"maxLength":512},"script":{"type":"string","title":"Locust file template","format":"multiline","x-kubephos-multiline":true,"minLength":1,"maxLength":262144},"parameters":{"type":"object","title":"Locust parameters","additionalProperties":true}}}`),
+		Schema:          json.RawMessage(`{"type":"object","additionalProperties":false,"required":["clusterConnectionRef","runtimeImage","script"],"properties":{"endpoints":{"type":"array","minItems":1,"maxItems":50,"items":{"type":"object","required":["url"],"additionalProperties":false,"properties":{"label":{"type":"string","maxLength":80},"url":{"type":"string","minLength":1,"maxLength":2048}}}},"clusterConnectionRef":{"type":"string","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ClusterConnection","x-kubephos-artifact-version":"v1alpha1"},"targetUrl":{"type":"string","title":"External endpoint","minLength":1,"maxLength":2048},"runtimeImage":{"type":"string","title":"Locust runtime image","default":"locustio/locust:2.42.6","minLength":1,"maxLength":512},"script":{"type":"string","title":"Locust file template","format":"multiline","x-kubephos-multiline":true,"minLength":1,"maxLength":262144},"parameters":{"type":"object","title":"Locust parameters","additionalProperties":true}}}`),
 		ArtifactInputs:  []domain.ArtifactContract{{Type: "ClusterConnection", Version: "v1alpha1"}},
 		ArtifactOutputs: []domain.ArtifactContract{{Type: "ApplicationDeployment", Version: "v1alpha1"}, {Type: "LoadScenarioSet", Version: "v1alpha1"}},
 		Capabilities:    []string{"loads.external.prepare", "loads.external.preflight", "loads.external.cleanup", "lifecycle.cleanup"},
@@ -308,11 +311,12 @@ func buildResult(input stepInput, cluster clusterConnection) (result, error) {
 	profiles := []loadScenario{profile}
 	profilesRaw, _ := json.Marshal(profiles)
 	identityRaw, _ := json.Marshal(struct {
-		TargetURL    string            `json:"targetUrl"`
-		RuntimeImage string            `json:"runtimeImage"`
-		Script       string            `json:"script"`
-		Parameters   map[string]string `json:"parameters,omitempty"`
-	}{TargetURL: normalized.TargetURL, RuntimeImage: normalized.RuntimeImage, Script: normalized.Script, Parameters: normalized.Parameters})
+		Endpoints    []externaldestination.Endpoint `json:"endpoints,omitempty"`
+		TargetURL    string                         `json:"targetUrl"`
+		RuntimeImage string                         `json:"runtimeImage"`
+		Script       string                         `json:"script"`
+		Parameters   map[string]string              `json:"parameters,omitempty"`
+	}{Endpoints: normalized.Endpoints, TargetURL: normalized.TargetURL, RuntimeImage: normalized.RuntimeImage, Script: normalized.Script, Parameters: normalized.Parameters})
 	applicationRef := "external:" + strings.TrimPrefix(digest(identityRaw), "sha256:")
 	workloadName := "kubephos-load-" + scenarioID
 	selector := map[string]string{"app.kubernetes.io/name": "kubephos-load", "kubephos.dev/load-scenario": scenarioID}
@@ -329,7 +333,7 @@ func buildResult(input stepInput, cluster clusterConnection) (result, error) {
 	value.ApplicationDeployment.Spec.Namespace = input.Namespace
 	value.ApplicationDeployment.Spec.ManifestDigest = digest(identityRaw)
 	value.ApplicationDeployment.Spec.Workloads = []workloadTarget{{ID: scenarioID, APIVersion: "apps/v1", Kind: "Deployment", Name: workloadName, Selector: selector, Traits: []string{"traffic-entrypoint"}}}
-	value.ApplicationDeployment.Spec.Endpoints = []serviceEndpoint{{ID: "external-destination", Protocol: parsed.Scheme, URL: normalized.TargetURL, External: true}}
+	value.ApplicationDeployment.Spec.Endpoints = []serviceEndpoint{{ID: "external-destination", Protocol: parsed.Scheme, URL: normalized.TargetURL, External: true, Targets: normalized.Endpoints}}
 	value.LoadScenarioSet.APIVersion = artifactAPI
 	value.LoadScenarioSet.Kind = "LoadScenarioSet"
 	value.LoadScenarioSet.Metadata.ApplicationRef = applicationRef
@@ -372,13 +376,14 @@ func normalizedSpec(spec Spec) (Spec, error) {
 	spec.TargetURL = strings.TrimSpace(spec.TargetURL)
 	spec.RuntimeImage = strings.TrimSpace(spec.RuntimeImage)
 	spec.Script = strings.TrimSpace(spec.Script)
-	if len(spec.TargetURL) > 2048 {
-		return Spec{}, errors.New("external endpoint is too long")
+	endpoints, err := externaldestination.Normalize(spec.TargetURL, spec.Endpoints)
+	if err != nil {
+		return Spec{}, err
 	}
-	target, err := url.Parse(spec.TargetURL)
-	if err != nil || (target.Scheme != "http" && target.Scheme != "https") || target.Host == "" || target.User != nil || target.Fragment != "" {
-		return Spec{}, errors.New("external endpoint must be an HTTP or HTTPS URL without credentials or fragment")
+	if len(spec.Endpoints) > 0 {
+		spec.Endpoints = endpoints
 	}
+	spec.TargetURL = endpoints[0].URL
 	if spec.RuntimeImage == "" || len(spec.RuntimeImage) > 512 || strings.ContainsAny(spec.RuntimeImage, "\n\r \t") {
 		return Spec{}, errors.New("Locust runtime image is invalid")
 	}

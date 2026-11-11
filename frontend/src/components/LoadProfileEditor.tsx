@@ -5,7 +5,7 @@ import {workloadTable, trafficTable, sinusoidalRange} from './PhaseReadout'
 import {FormTabs} from './FormTabs'
 import {ResourceAction} from './ResourceAction'
 import {ActionIcon} from './ActionIcon'
-import {useEffect, useId, useMemo, useState, type Dispatch, type SetStateAction, type ReactNode} from 'react'
+import {useEffect, useId, useMemo, useRef, useState, type Dispatch, type SetStateAction, type ReactNode} from 'react'
 import {exportChart, niceAxis, timeAxis} from '../charts'
 import {NumericInput} from './NumericInput'
 
@@ -37,7 +37,7 @@ type GeographicStep = {
   endWeights: Record<string, number>
 }
 
-export function LoadProfileEditor({prefix, zones, values = {}, distribution = 'zone', tabbed = true, settings, onDurationChange}: {onDurationChange?: (duration: number) => void; settings?: ReactNode; prefix: string; zones: string[]; values?: Record<string, unknown>; distribution?: 'zone' | 'cluster'; tabbed?: boolean}) {
+export function LoadProfileEditor({prefix, zones, values = {}, distribution = 'zone', tabbed = true, settings, onDurationChange, onValidityChange}: {onValidityChange?: (valid: boolean) => void; onDurationChange?: (duration: number) => void; settings?: ReactNode; prefix: string; zones: string[]; values?: Record<string, unknown>; distribution?: 'zone' | 'cluster' | 'endpoint'; tabbed?: boolean}) {
   const initialSteps = loadProfileSteps(values.steps)
   const initialGeography = geographicProfileSteps(values.geographicSteps, zones)
   const [activeLoad,setActiveLoad]=useState<string>()
@@ -48,10 +48,16 @@ export function LoadProfileEditor({prefix, zones, values = {}, distribution = 'z
   const [geographicSteps, setGeographicSteps] = useState<GeographicStep[]>(initialGeography.length ? initialGeography.map((step, index) => ({...step, id: initialSteps.length + index + 1})) : [newGeographicStep(2, zones, initialDuration)])
   const duration = useMemo(() => steps.reduce((total, step) => total + step.durationSeconds, 0), [steps])
   useEffect(()=>{onDurationChange?.(duration)},[duration,onDurationChange])
+  const previousZones = useRef(zones)
   const geographicDuration = useMemo(() => geographicSteps.reduce((total, step) => total + step.durationSeconds, 0), [geographicSteps])
   useEffect(() => {
-    setGeographicSteps(current => current.length === 1 ? [{...current[0], durationSeconds: duration, weights: completeWeights(current[0].weights, zones), startWeights: completeWeights(current[0].startWeights, zones), endWeights: completeWeights(current[0].endWeights, zones)}] : current.map(step => ({...step, weights: completeWeights(step.weights, zones), startWeights: completeWeights(step.startWeights, zones), endWeights: completeWeights(step.endWeights, zones)})))
+    const before = previousZones.current
+    previousZones.current = zones
+    setGeographicSteps(current => current.length === 1 ? [{...current[0], durationSeconds: duration, weights: completeWeights(current[0].weights, zones, before), startWeights: completeWeights(current[0].startWeights, zones, before), endWeights: completeWeights(current[0].endWeights, zones, before)}] : current.map(step => ({...step, weights: completeWeights(step.weights, zones, before), startWeights: completeWeights(step.startWeights, zones, before), endWeights: completeWeights(step.endWeights, zones, before)})))
   }, [duration, zones.join('|')])
+  const weightsValid = !zones.length || geographicSteps.every(step => (step.type === 'constant' ? [step.weights] : [step.startWeights, step.endWeights]).every(weights => Object.values(weights).every(value => Number.isFinite(value) && value >= 0) && Object.values(weights).some(value => value > 0)))
+  const distributionValid = !zones.length || duration === geographicDuration && weightsValid
+  useEffect(() => {onValidityChange?.(distributionValid)}, [distributionValid, onValidityChange])
   const addLoadStep = () => {
     setSteps(current => [...current, newLoadStep(sequence)])
     setActiveLoad(String(sequence))
@@ -84,10 +90,11 @@ export function LoadProfileEditor({prefix, zones, values = {}, distribution = 'z
   const geography = <div className="form-stack" data-review-skip="true"><div className="timeline-duration-summary"><div><strong>Traffic duration</strong><span>{formatDuration(geographicDuration)}</span></div><div><strong>Workload duration</strong><span>{formatDuration(duration)}</span></div></div>
       <FormTabs label="Traffic phases" selectedId={activeGeography} onSelect={setActiveGeography} items={geographicSteps.map((step,index)=>({id:String(step.id),title:`Phase ${index+1}`,content:<article className="timeline-card geographic-card">
         <div className="timeline-card-head"><h4>Phase {index + 1}</h4><TimelineActions index={index} count={geographicSteps.length} clone={() => {setGeographicSteps(current => [...current.slice(0,index+1), {...structuredClone(step),id:sequence}, ...current.slice(index+1)]);setActiveGeography(String(sequence));setSequence(value=>value+1)}} move={direction => setGeographicSteps(items => move(items, index, direction))} remove={() => setGeographicSteps(items => items.filter(item => item.id !== step.id))} /></div>
-        <div className="timeline-fields"><label>Type<select aria-label={`Geographic phase ${index + 1} type`} value={step.type} onChange={event => updateGeographicStep(setGeographicSteps, step.id, {type: event.target.value as GeographicStep['type']})}><option value="constant">Fixed distribution</option><option value="linear">Linear transition</option></select></label><Minutes label="Duration" value={step.durationSeconds} set={value => updateGeographicStep(setGeographicSteps, step.id, {durationSeconds: value})} /></div>
+        <div className="timeline-fields"><label>Type<select aria-label={`${distribution === 'endpoint' ? 'Traffic' : 'Geographic'} phase ${index + 1} type`} value={step.type} onChange={event => updateGeographicStep(setGeographicSteps, step.id, {type: event.target.value as GeographicStep['type']})}><option value="constant">Fixed distribution</option><option value="linear">Linear transition</option></select></label><Minutes label="Duration" value={step.durationSeconds} set={value => updateGeographicStep(setGeographicSteps, step.id, {durationSeconds: value})} /></div>
         {step.type === 'constant' ? <WeightGrid title="Traffic weight" zones={zones} values={step.weights} set={(zone, value) => updateGeographicStep(setGeographicSteps, step.id, {weights: {...step.weights, [zone]: value}})} /> : <div className="weight-transition"><WeightGrid title="Start weights" zones={zones} values={step.startWeights} set={(zone, value) => updateGeographicStep(setGeographicSteps, step.id, {startWeights: {...step.startWeights, [zone]: value}})} /><WeightGrid title="End weights" zones={zones} values={step.endWeights} set={(zone, value) => updateGeographicStep(setGeographicSteps, step.id, {endWeights: {...step.endWeights, [zone]: value}})} /></div>}
       </article>}))}/>
-      <ResourceAction action="add" label="Add geographic phase" onClick={addGeographicStep} />
+      <ResourceAction action="add" label={distribution === 'endpoint' ? 'Add traffic phase' : 'Add geographic phase'} onClick={addGeographicStep} />
+      {zones.length > 0 && !weightsValid && <ValidationMessage message="At least one destination must have a positive weight."/>}
       {duration !== geographicDuration && <ValidationMessage message={`Traffic distribution phases must total ${formatDuration(duration)}.`}/>}</div>
   const previewSteps = loadProfileSteps(serializedSteps)
   const preview = <LoadProfilePreview steps={previewSteps} />
@@ -95,7 +102,7 @@ export function LoadProfileEditor({prefix, zones, values = {}, distribution = 'z
   const workspace = <div className="load-profile-workspace">{workload}<aside className="load-profile-live" aria-label="Live preview">{preview}</aside></div>
   return <div className={`load-profile-editor${tabbed ? ' load-profile-editor-tabbed' : ''}`}>
     <input type="hidden" data-review-title="Workload phases" data-review-table={JSON.stringify(workloadTable(previewSteps))} name={`${prefix}.steps`} value={JSON.stringify(serializedSteps)} readOnly />
-    <input type="hidden" data-review-title={distribution === 'cluster' ? 'Traffic phases by cluster' : 'Traffic phases by zone'} data-review-table={zones.length ? JSON.stringify(trafficTable(serializedGeography, distribution === 'cluster')) : undefined} name={`${prefix}.geographicSteps`} value={JSON.stringify(serializedGeography)} readOnly />
+    <input type="hidden" data-review-title={distribution === 'endpoint' ? 'Traffic phases by endpoint' : distribution === 'cluster' ? 'Traffic phases by cluster' : 'Traffic phases by zone'} data-review-table={zones.length ? JSON.stringify(trafficTable(serializedGeography, distribution === 'cluster', distribution === 'endpoint')) : undefined} name={`${prefix}.geographicSteps`} value={JSON.stringify(serializedGeography)} readOnly />
     {tabbed ? <FormTabs label="Load profile settings" items={[
       {id: 'workload', title: 'Workload', content: workspace},
       ...(zones.length ? [{id: 'distribution', title: 'Traffic distribution', content: geography}] : []),
@@ -248,8 +255,8 @@ function newGeographicStep(id: number, zones: string[], durationSeconds: number)
   return {id, type: 'constant', durationSeconds, weights, startWeights: weights, endWeights: weights}
 }
 
-function completeWeights(values: Record<string, number>, zones: string[]): Record<string, number> {
-  return Object.fromEntries(zones.map(zone => [zone, values[zone] ?? 1]))
+function completeWeights(values: Record<string, number>, zones: string[], previous: string[] = []): Record<string, number> {
+  return Object.fromEntries(zones.map((zone, index) => [zone, values[zone] ?? (previous.length === zones.length && !zones.includes(previous[index]) ? values[previous[index]] : undefined) ?? 1]))
 }
 
 function updateLoadStep(set: Dispatch<SetStateAction<LoadStep[]>>, id: number, values: Partial<LoadStep>) {

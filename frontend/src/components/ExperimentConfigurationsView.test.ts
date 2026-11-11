@@ -58,9 +58,16 @@ describe('experiment configuration helpers', () => {
     fireEvent.change(screen.getByRole('combobox', {name: 'Destination type'}), {target: {value: 'external'}})
     await goToStep('External destination')
     fireEvent.change(screen.getByRole('textbox', {name: /^External endpoint/}), {target: {value: 'https://api.example.test/v1'}})
+    fireEvent.change(screen.getByRole('textbox', {name: 'Endpoint 1 label'}), {target: {value: 'West'}})
+    fireEvent.click(screen.getByRole('button', {name: 'Add endpoint'}))
+    fireEvent.change(screen.getByRole('textbox', {name: 'External endpoint 2'}), {target: {value: 'https://east.example.test/v2'}})
+    fireEvent.change(screen.getByRole('textbox', {name: 'Endpoint 2 label'}), {target: {value: 'East'}})
     fireEvent.click(screen.getByRole('tab', {name: 'Variables'}))
     fireEvent.change(screen.getByRole('textbox', {name: /^Locustfile variables \(JSON\)/}), {target: {value: '{"tenant":"demo"}'}})
     await waitFor(() => expect(screen.getByRole('button', {name: 'Continue'})).toBeEnabled())
+    await goToStep('Load profile')
+    fireEvent.click(screen.getByRole('tab', {name: 'Traffic distribution'}))
+    fireEvent.change(screen.getByRole('spinbutton', {name: 'West'}), {target: {value: '3'}})
     await goToStep('Review')
     fireEvent.click(screen.getByRole('button', {name: 'Create configuration'}))
 
@@ -76,10 +83,11 @@ describe('experiment configuration helpers', () => {
         podDisruptionBudgetMinAvailable: 0
       }
     })
+    expect(body.definition.externalDestination.endpoints).toEqual([{label:'West',url:'https://api.example.test/v1'},{label:'East',url:'https://east.example.test/v2'}])
     expect(body.definition.externalDestination.script).toContain('from locust import HttpUser')
     expect(body.definition.components.map((component: {capability: string}) => component.capability)).toEqual(['load.session.control', 'metrics.timeseries.collect'])
     expect(body.definition.components[0].configuration).toMatchObject({action: 'start', interactive: false, scenarioId: 'external-load'})
-    expect(body.definition.components[0].configuration).not.toHaveProperty('geographicSteps')
+    expect(body.definition.components[0].configuration.geographicSteps).toEqual([{type: 'constant', durationSeconds: 900, weights: {West: 3, East: 1}}])
     expect(close).toHaveBeenCalledOnce()
     expect(changed).toHaveBeenCalledOnce()
   })
@@ -222,6 +230,7 @@ const workspace: Workspace = {id: 'ws_default', name: 'Default', description: ''
 const cluster: ManagedResource = {id: 'cluster_ready', workspaceId: workspace.id, name: 'Development', kind: 'kubernetes-cluster', provider: 'proxmox', status: 'ready', validation: {valid: true, issues: []}, spec: {applicationPools: [{name: 'apps-a', zones: ['zone-a']}, {name: 'apps-b', zones: ['zone-b', 'zone-a']}]}, createdAt: '2026-09-12T00:00:00Z', updatedAt: '2026-09-12T00:00:00Z'}
 const application: Application = {id: 'online-boutique', reference: 'app:online-boutique', name: 'Online Boutique', description: '', origin: 'built-in', digest: 'sha256:test', descriptor: {spec: {valuesSchema: {type: 'object', properties: {replicas: {type: 'integer', title: 'Initial replicas', minimum: 1}, threads: {type: 'integer', title: 'Threads per worker', minimum: 1}, workloadProfile: {type: 'string', title: 'Work per request', enum: ['light', 'balanced', 'heavy']}}}, defaults: {replicas: 1, threads: 4, workloadProfile: 'balanced'}}}}
 const loadPlugin = plugin('load', ['load.session.control'])
+loadPlugin.schema.properties = {...loadPlugin.schema.properties, steps: {type: 'array', items: {type: 'object'}}, geographicSteps: {type: 'array', items: {type: 'object'}}}
 const metricsPlugin = plugin('metrics', ['metrics.timeseries.collect'])
 const mubenchApplication: Application = {id: 'dev.kubephos.mubench', reference: 'app:dev.kubephos.mubench', name: 'muBench', description: '', origin: 'built-in', digest: 'sha256:mubench', descriptor: {spec: {valuesSchema: {type: 'object', 'x-kubephos-dynamic-topology': true, properties: {serviceCount: {type: 'integer', title: 'Services', minimum: 2, maximum: 100}, topology: {type: 'string', title: 'Request topology', enum: ['chain', 'fan-out', 'tree']}, workers: {type: 'integer', title: 'Workers per service', minimum: 1, maximum: 32}}}, defaults: {serviceCount: 6, topology: 'chain', workers: 2}}}}
 const legacyMubenchApplication: Application = {...mubenchApplication, id: 'dev.kubephos.mubench.legacy', reference: 'app:dev.kubephos.mubench.legacy', name: 'Legacy muBench', origin: 'generated'}

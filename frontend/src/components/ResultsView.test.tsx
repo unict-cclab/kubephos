@@ -690,6 +690,21 @@ describe('suite mean curves', () => {
     expect(aggregateMetric([first], 'cpu.cores')[0].points.map(point => point.value)).toEqual([1, 3])
   })
 
+  it('plots one experiment with one execution against another with three without pooling their samples', () => {
+    const single = loaded('one', [[10, 20]])
+    const repeated = [loaded('a', [[2, 4]]), loaded('b', [[4, 6]]), loaded('c', [[6, 8]])]
+    const experiment = {kind: 'comparison', variants: [
+      {id: 'one', name: 'Experiment 1', color: '#123456', trials: [{resultArtifactId: single.artifact.id}]},
+      {id: 'many', name: 'Experiment 2', color: '#abcdef', trials: repeated.map(item => ({resultArtifactId: item.artifact.id}))}
+    ]} as Experiment
+    const curves = aggregatePlotMetric([single, ...repeated], 'cpu.cores', experiment)
+    expect(curves.map(curve => curve.label)).toEqual(['Experiment 1', 'Experiment 2'])
+    expect(curves.map(curve => curve.color)).toEqual(['#123456', '#abcdef'])
+    expect(curves.map(curve => curve.points.map(point => point.value))).toEqual([[10, 20], [4, 6]])
+    expect(curves[0].deviation).toBeUndefined()
+    expect(curves[1].deviation?.map(point => point.value)).toEqual([2, 2])
+  })
+
   it('keeps distinct approaches separate even when their labels match', () => {
     const first = loaded('r1', [[1, 3]])
     const second = loaded('r2', [[3, 7]])
@@ -739,10 +754,9 @@ it('keeps saved comparisons read-only toward experiments and preserves each sour
   const config = (sloMilliseconds: number) => ({components: [{capability: 'metrics.timeseries.collect', configuration: {sloMilliseconds}}]})
   const comparison = {id: 'cmp_paper', ownerUserId: 'alice', name: 'Paper', kind: 'comparison', status: 'succeeded', variants: [{id: 'combined', name: 'Combined', alias: 'Combined', configuration: config(250), trials: [first, second].map((item, index) => ({id: `trial-${index}`, position: index + 1, status: 'succeeded', resultArtifactId: item.artifact.id, operationId: item.artifact.operationId}))}]} as unknown as Experiment
   render(<ResultsView artifacts={[first.artifact, second.artifact]} experiments={[]} operations={[]} workspaces={[]} session={{authenticated: true, user: {id: 'alice', role: 'user'}} as Session} changed={async () => {}} openOperation={() => {}} focusedExperiment={comparison} onBack={() => {}} comparison={{sourceConfigurations: {[first.artifact.id]: config(250), [second.artifact.id]: config(500)}}} />)
-  const firstTable = await screen.findByRole('table', {name: 'Statistics for Combined · Execution 1'})
-  const secondTable = screen.getByRole('table', {name: 'Statistics for Combined · Execution 2'})
-  expect(within(firstTable).getByText('SLO violation windows').closest('tr')).toHaveTextContent('50.00%')
-  expect(within(secondTable).getByText('SLO violation windows').closest('tr')).toHaveTextContent('0.00%')
+  const table = await screen.findByRole('table', {name: 'Experiment comparison'})
+  expect(within(table).getByText('SLO violation windows').closest('tr')).toHaveTextContent('25.00%')
+  expect(screen.queryByText(/execution/i)).not.toBeInTheDocument()
   expect(screen.queryByRole('button', {name: /Share|Delete experiment|Stop experiment/})).not.toBeInTheDocument()
   fireEvent.click(screen.getByRole('button', {name: 'Plots'}))
   expect(document.querySelector('.slo-label')).not.toBeInTheDocument()
@@ -764,4 +778,19 @@ it('starts traffic only for the initialized run and keeps it restricted to the o
  view.unmount()
  render(<ResultsView {...props} session={{authenticated:true,user:{id:'viewer',role:'user'}} as Session}/>)
  expect(screen.queryByRole('button',{name:'Start'})).not.toBeInTheDocument()
+})
+
+
+it('keeps service bar groups distinct when experiment names match', () => {
+ const first = loaded('same-a', [[1, 2]])
+ const second = loaded('same-b', [[3, 4]])
+ for (const item of [first,second]) item.dataset.spec.series[0].labels = {deployment:'api'}
+ const experiment = {kind:'comparison',variants:[
+  {id:'first',name:'Same name',color:'#123456',trials:[{resultArtifactId:first.artifact.id}]},
+  {id:'second',name:'Same name',color:'#abcdef',trials:[{resultArtifactId:second.artifact.id}]}
+ ]} as Experiment
+ const rows = serviceMetricStatistics([first,second], 'cpu.cores', experiment).rows
+ expect(rows.map(row=>row.group)).toEqual(['Same name','Same name'])
+ expect(rows.map(row=>row.groupID)).toEqual(['first','second'])
+ expect(rows.map(row=>row.color)).toEqual(['#123456','#abcdef'])
 })

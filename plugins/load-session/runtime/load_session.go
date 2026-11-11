@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"kubephos.dev/kubephos/internal/domain"
+	"kubephos.dev/kubephos/internal/externaldestination"
 	"kubephos.dev/kubephos/internal/plugins"
 )
 
@@ -114,14 +115,15 @@ type applicationDeployment struct {
 }
 
 type serviceEndpoint struct {
-	ID        string `json:"id"`
-	Component string `json:"component"`
-	Service   string `json:"service"`
-	Port      int    `json:"port"`
-	Protocol  string `json:"protocol"`
-	Path      string `json:"path,omitempty"`
-	URL       string `json:"url,omitempty"`
-	External  bool   `json:"external,omitempty"`
+	Targets   []externaldestination.Endpoint `json:"targets,omitempty"`
+	ID        string                         `json:"id"`
+	Component string                         `json:"component"`
+	Service   string                         `json:"service"`
+	Port      int                            `json:"port"`
+	Protocol  string                         `json:"protocol"`
+	Path      string                         `json:"path,omitempty"`
+	URL       string                         `json:"url,omitempty"`
+	External  bool                           `json:"external,omitempty"`
 }
 
 type loadProfileSet struct {
@@ -1068,10 +1070,22 @@ func scenarioWorkload(scenarioID string) workloadTarget {
 
 func resolveLoadTargets(ctx context.Context, runner commandRunner, kubeconfig, namespace string, endpoint serviceEndpoint, spec Spec) ([]loadTarget, error) {
 	if endpoint.External {
-		if len(spec.GeographicSteps) != 0 {
-			return nil, errors.New("geographic traffic distribution is unavailable for a single external destination")
+		endpoints, err := externaldestination.Normalize(endpoint.URL, endpoint.Targets)
+		if err != nil {
+			return nil, err
 		}
-		return []loadTarget{{URL: endpoint.URL, Weight: 1}}, nil
+		known := map[string]bool{}
+		targets := []loadTarget{}
+		for _, target := range endpoints {
+			known[target.Label] = true
+			targets = append(targets, loadTarget{URL: target.URL, Zone: target.Label, Weight: 1})
+		}
+		for label := range geographicZones(spec.GeographicSteps) {
+			if !known[label] {
+				return nil, fmt.Errorf("unknown external endpoint %s", label)
+			}
+		}
+		return targets, nil
 	}
 	path := endpoint.Path
 	if path == "" {
@@ -1414,7 +1428,7 @@ def choose_target():
     if not geographic_steps:
         return choose_weighted(targets)["url"]
     elapsed = profile_elapsed()
-    zones = sorted(zone for zone in by_zone if zone != "default")
+    zones = sorted(by_zone)
     weights = zone_weights_at(elapsed, zones)
     candidates = [{"zone": zone, "weight": weights[zone]} for zone in zones if weights[zone] > 0]
     selected_zone = choose_weighted(candidates)["zone"]

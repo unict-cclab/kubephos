@@ -70,5 +70,7 @@ it('enables comparisons with two valid singles and excludes suites or invalid so
  fireEvent.click(screen.getByRole('button',{name:'New configuration'}))
  expect(screen.getByRole('button',{name:'Comparison'})).toBeEnabled()
  fireEvent.click(screen.getByRole('button',{name:'Comparison'}))
- expect(within(screen.getByRole('region',{name:'Configurations'})).getAllByRole('checkbox')).toHaveLength(2)
+ fireEvent.click(screen.getByRole('button',{name:'Add configurations'}))
+ fireEvent.change(screen.getByLabelText('Filter by user'),{target:{value:''}})
+ expect(within(screen.getByRole('dialog',{name:'Add configurations'})).getAllByRole('checkbox')).toHaveLength(2)
 })

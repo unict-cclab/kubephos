@@ -10,8 +10,6 @@ import (
 
 	"net/http"
 
-	"net/url"
-
 	"regexp"
 
 	"strings"
@@ -20,6 +18,7 @@ import (
 
 	"kubephos.dev/kubephos/internal/catalog"
 	"kubephos.dev/kubephos/internal/domain"
+	"kubephos.dev/kubephos/internal/externaldestination"
 	"kubephos.dev/kubephos/internal/id"
 	"kubephos.dev/kubephos/internal/placement"
 	"kubephos.dev/kubephos/internal/workloadresources"
@@ -65,10 +64,11 @@ type experimentConfigurationDefinitionInput struct {
 }
 
 type externalLoadDestinationInput struct {
-	TargetURL    string            `json:"targetUrl"`
-	RuntimeImage string            `json:"runtimeImage"`
-	Script       string            `json:"script"`
-	Parameters   map[string]string `json:"parameters,omitempty"`
+	Endpoints    []externaldestination.Endpoint `json:"endpoints,omitempty"`
+	TargetURL    string                         `json:"targetUrl"`
+	RuntimeImage string                         `json:"runtimeImage"`
+	Script       string                         `json:"script"`
+	Parameters   map[string]string              `json:"parameters,omitempty"`
 }
 
 type experimentConfigurationComponentInput struct {
@@ -423,7 +423,28 @@ func (s *Server) validatedExperimentConfiguration(ctx context.Context, input exp
 			loadConfiguration["action"] = "start"
 			loadConfiguration["interactive"] = false
 			loadConfiguration["scenarioId"] = "external-load"
-			delete(loadConfiguration, "geographicSteps")
+			var distribution struct {
+				GeographicSteps []struct {
+					Weights      map[string]float64 `json:"weights"`
+					StartWeights map[string]float64 `json:"startWeights"`
+					EndWeights   map[string]float64 `json:"endWeights"`
+				} `json:"geographicSteps"`
+			}
+			_ = json.Unmarshal(component.Configuration, &distribution)
+			endpoints, _ := externaldestination.Normalize(input.Definition.ExternalDestination.TargetURL, input.Definition.ExternalDestination.Endpoints)
+			known := map[string]bool{}
+			for _, endpoint := range endpoints {
+				known[endpoint.Label] = true
+			}
+			for _, phase := range distribution.GeographicSteps {
+				for _, weights := range []map[string]float64{phase.Weights, phase.StartWeights, phase.EndWeights} {
+					for label := range weights {
+						if !known[label] {
+							return domain.ExperimentConfiguration{}, &managedOperationFailure{status: http.StatusUnprocessableEntity, code: "invalid_endpoint_distribution", message: "Traffic distribution references an unknown endpoint."}
+						}
+					}
+				}
+			}
 			component.Configuration, _ = json.Marshal(loadConfiguration)
 		}
 		component.StrategyID = strings.TrimSpace(component.StrategyID)
@@ -541,10 +562,14 @@ func normalizeExternalLoadDestination(value externalLoadDestinationInput) (exter
 	value.TargetURL = strings.TrimSpace(value.TargetURL)
 	value.RuntimeImage = strings.TrimSpace(value.RuntimeImage)
 	value.Script = strings.TrimSpace(value.Script)
-	target, err := url.Parse(value.TargetURL)
-	if err != nil || (target.Scheme != "http" && target.Scheme != "https") || target.Host == "" || target.User != nil || target.Fragment != "" || len(value.TargetURL) > 2048 {
-		return externalLoadDestinationInput{}, "", "", errors.New("External endpoint must be an HTTP or HTTPS URL without credentials or fragment.")
+	endpoints, err := externaldestination.Normalize(value.TargetURL, value.Endpoints)
+	if err != nil {
+		return externalLoadDestinationInput{}, "", "", err
 	}
+	if len(value.Endpoints) > 0 {
+		value.Endpoints = endpoints
+	}
+	value.TargetURL = endpoints[0].URL
 	if value.RuntimeImage == "" || len(value.RuntimeImage) > 512 || strings.ContainsAny(value.RuntimeImage, "\n\r \t") {
 		return externalLoadDestinationInput{}, "", "", errors.New("Locust runtime image is invalid.")
 	}
