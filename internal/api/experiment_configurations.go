@@ -550,6 +550,13 @@ func (s *Server) validatedExperimentConfiguration(ctx context.Context, input exp
 			return domain.ExperimentConfiguration{}, &managedOperationFailure{status: http.StatusUnprocessableEntity, code: "invalid_istio_service", message: "Istio override refers to an unknown application service: " + service}
 		}
 	}
+	if overrides, ok := input.Definition.IstioWaypoint["serviceOverrides"].(map[string]any); ok {
+		for service := range overrides {
+			if !applicationComponents[service] {
+				return domain.ExperimentConfiguration{}, &managedOperationFailure{status: http.StatusUnprocessableEntity, code: "invalid_istio_service", message: "Waypoint override refers to an unknown application service: " + service}
+			}
+		}
+	}
 	if failure := validateIstioDataPlane(input.Definition); failure != nil {
 		return domain.ExperimentConfiguration{}, failure
 	}

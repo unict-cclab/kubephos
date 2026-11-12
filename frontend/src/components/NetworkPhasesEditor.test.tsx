@@ -62,7 +62,7 @@ it('keeps a saved neutral phase empty and makes Istio injection enabled by defau
 
 it('preserves independent Istio overrides when switching service tabs and reassigning services',()=>{
  const {container}=render(<form><IstioInjectionEditor services={[{id:'api'},{id:'web'},{id:'worker'}] as any} overrides={{api:false,web:true}}/></form>)
- fireEvent.click(screen.getByRole('tab',{name:'Service overrides'}))
+ expect(screen.getByRole('heading',{name:'Service overrides'})).toBeInTheDocument()
  expect(screen.getByLabelText('Istio injection for api')).toHaveValue('false')
  fireEvent.click(screen.getByRole('tab',{name:'web'}))
  fireEvent.change(screen.getByLabelText('Istio service web'),{target:{value:'worker'}})

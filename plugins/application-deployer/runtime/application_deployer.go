@@ -429,9 +429,15 @@ func (plugin Plugin) Execute(ctx context.Context, step domain.PlanStep, log plug
 	if ambient && cluster.Spec.Networking == "cilium" {
 		return nil, errors.New("Istio ambient mode is not available on Cilium clusters, which do not run Istio.")
 	}
+	var waypoint workloadresources.Waypoint
+	if ambient {
+		if waypoint, err = workloadresources.ParseWaypoint(input.IstioWaypoint); err != nil {
+			return nil, err
+		}
+	}
 	namespaceLabels := map[string]string{"app.kubernetes.io/managed-by": "kubephos", "istio-injection": namespaceIstioInjection(input, cluster, endpoints), "kubephos.dev/monitored": "true", "kubephos.dev/application": input.Namespace}
 	if ambient {
-		ambientNamespaceLabels(namespaceLabels)
+		ambientNamespaceLabels(namespaceLabels, waypoint.AllServices)
 	}
 	namespaceManifest, _ := json.Marshal(map[string]any{"apiVersion": "v1", "kind": "Namespace", "metadata": map[string]any{"name": input.Namespace, "annotations": map[string]string{ownershipKey: input.Marker}, "labels": namespaceLabels}})
 	namespaceAction := "apply"
@@ -442,10 +448,6 @@ func (plugin Plugin) Execute(ctx context.Context, step domain.PlanStep, log plug
 		return nil, fmt.Errorf("create isolated namespace: %w", err)
 	}
 	if ambient {
-		waypoint, err := workloadresources.ParseWaypoint(input.IstioWaypoint)
-		if err != nil {
-			return nil, err
-		}
 		if err := log("info", waypointLogMessage(waypoint)); err != nil {
 			return nil, err
 		}
@@ -456,7 +458,7 @@ func (plugin Plugin) Execute(ctx context.Context, step domain.PlanStep, log plug
 			return nil, fmt.Errorf("Istio ambient waypoint readiness: %w", err)
 		}
 		// A sized waypoint is ready only when every replica runs with its resources.
-		if !waypoint.IsDefault() {
+		if !waypoint.DefaultSize() {
 			if _, err := runner.Run(ctx, cluster.Spec.Kubeconfig, nil, "rollout", "status", "deployment/"+ambientWaypoint, "--namespace", input.Namespace, "--timeout=300s"); err != nil {
 				return nil, fmt.Errorf("Istio ambient waypoint replicas: %w", err)
 			}

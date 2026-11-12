@@ -463,18 +463,59 @@ input[type="file"]:disabled::file-selector-button { background: var(--muted); co
 .strategy-target-editor .target-editor-list { gap: 8px; padding: 8px 0 0; }
 .strategy-target-editor .target-editor-list article { padding: 8px 12px; border: 1px solid var(--border); background: transparent; }
 
-/* Istio: whether to use it comes first; ambient mode then sizes its waypoint. */
-.istio-settings > label { max-width: 360px; }
-.istio-ambient-settings { display: grid; gap: 16px; min-width: 0; margin: 0; padding: 0; border: 0; }
-.istio-ambient-settings[hidden] { display: none; }
-.waypoint-settings { display: grid; gap: 12px; max-width: 720px; padding: 16px 20px 20px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--card); }
-.waypoint-settings-title { margin: 0; font-size: 14px; font-weight: 600; }
-.waypoint-settings > label { max-width: 200px; margin: 0; }
-.waypoint-hint { margin: -4px 0 4px; color: var(--muted-foreground); font-size: 13px; line-height: 1.5; }
+/* Application step: each section opens with one line saying what it is for. */
+.application-section-intro { max-width: 72ch; margin: 0 0 20px; color: var(--muted-foreground); font-size: 14px; line-height: 1.5; }
+/* Replicas by service read as one list, with the inherited value in view. */
+.replica-service-overrides .replica-list { gap: 0; margin: 0; overflow: hidden; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--card); }
+.replica-list > article { min-height: 52px; padding: 8px 16px; border: 0; border-bottom: 1px solid var(--table-rule); border-radius: 0; background: transparent; opacity: 1; }
+.replica-list > article:last-child { border-bottom: 0; }
+.replica-list > article.enabled { background: color-mix(in srgb, var(--muted) 45%, transparent); }
+.replica-list .target-editor-row { min-height: 36px; }
+.replica-inherited { color: var(--muted-foreground); font-size: 13px; }
+/* Placement says what happens without settings, with its add action beneath. */
+.application-placement .placement-field-group > h4 { margin: 0 0 4px; }
+.application-placement .placement-field-actions { justify-content: flex-start; min-height: 0; }
+.placement-empty { margin: 0 0 10px; color: var(--muted-foreground); font-size: 13px; line-height: 1.5; }
+
+/* Istio: enabling it comes first, then the mode, then one panel with that mode's settings. */
+.istio-settings { display: grid; gap: 20px; }
+.istio-switch { display: flex; align-items: flex-start; gap: 12px; margin: 0; padding: 16px 18px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--card); font-weight: 400; cursor: pointer; }
+.istio-switch > input { flex: 0 0 16px; width: 16px; height: 16px; margin: 2px 0 0; }
+.istio-switch > span { display: grid; gap: 2px; }
+.istio-switch strong { font-size: 14px; font-weight: 600; }
+.istio-switch > span > span { color: var(--muted-foreground); font-size: 13px; line-height: 1.5; }
+.istio-switch:has(input:disabled) { cursor: not-allowed; }
+
+.istio-mode-picker { display: grid; gap: 10px; min-width: 0; margin: 0; padding: 0; border: 0; }
+.istio-mode-picker > legend { margin: 0 0 10px; padding: 0; font-size: 14px; font-weight: 550; }
+.istio-mode-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.istio-mode-option { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: start; gap: 4px 10px; margin: 0; padding: 14px 16px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--card); font-weight: 400; cursor: pointer; transition: border-color var(--duration-fast) var(--ease-out), box-shadow var(--duration-fast) var(--ease-out); }
+.istio-mode-option:hover { border-color: var(--field-border); }
+.istio-mode-option:has(input:checked) { border-color: var(--foreground); box-shadow: inset 0 0 0 1px var(--foreground); }
+.istio-mode-option:has(input:focus-visible) { outline: 2px solid var(--ring); outline-offset: 2px; }
+.istio-mode-option > input { grid-row: span 2; width: 16px; height: 16px; margin: 2px 0 0; accent-color: var(--primary); }
+.istio-mode-option > strong { font-size: 14px; font-weight: 600; }
+.istio-mode-option > span { color: var(--muted-foreground); font-size: 13px; line-height: 1.45; }
+
+.istio-mode-settings { min-width: 0; margin: 0; padding: 0; border: 0; }
+.istio-mode-settings[hidden] { display: none; }
+.istio-panel { display: grid; gap: 16px; padding: 18px 20px 20px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--card); }
+.istio-panel-head { display: grid; gap: 2px; }
+.istio-panel-head > h4 { margin: 0; font-size: 15px; font-weight: 600; }
+.istio-panel-head > p { margin: 0; color: var(--muted-foreground); font-size: 13px; line-height: 1.5; }
+.istio-panel .form-tab-list { margin-bottom: 16px; }
+.istio-hint { margin: 4px 0 0 26px; color: var(--muted-foreground); font-size: 13px; line-height: 1.5; }
+.waypoint-replicas + .istio-hint { margin: -12px 0 0; }
+.istio-injection-editor { display: grid; gap: 20px; }
+.istio-overrides { display: grid; gap: 10px; }
+.istio-overrides-title { margin: 0; font-size: 14px; font-weight: 550; }
+.waypoint-replicas { max-width: 200px; margin: 0; }
 .waypoint-resource-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px 20px; }
 .waypoint-resource { display: grid; gap: 8px; min-width: 0; }
 .waypoint-resource-label { font-size: 14px; font-weight: 550; }
-@media (max-width: 600px) { .waypoint-resource-grid { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 600px) {
+  .istio-mode-options, .waypoint-resource-grid { grid-template-columns: minmax(0, 1fr); }
+}
 
 /* Load profile ------------------------------------------------------------ */
 

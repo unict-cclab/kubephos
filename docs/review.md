@@ -14,6 +14,23 @@
   runs with a sized waypoint failed validation with "Property is not allowed".
   A test now requires `plugin.yaml` and the runtime manifest to declare the
   same configuration properties.
+- "Enable Istio" is a checkbox. In ambient mode the waypoint editor has Size and
+  Services tabs: every service uses the waypoint by default (or none, when
+  unchecked) and per-service exceptions include or exclude single services.
+  The deployer labels the matching Kubernetes Services with
+  `istio.io/use-waypoint` (`waypoint` or `none`); the namespace carries the
+  label only when every service uses the waypoint. Excluded services stay in
+  the ambient mesh but lose L7 processing and request metrics.
+- The Istio tab reads top to bottom: an "Enable Istio" switch that says what
+  the choice means, a Mode choice between Sidecar and Ambient as two described
+  cards, and one panel with that mode's settings (Sidecars, or Waypoint with
+  Size and Service overrides tabs). Injection and waypoint use show their
+  default, a hint on how to limit them to some services, and the overrides in
+  one view instead of nested tabs.
+- The Application step opens each section with one line on what it is for.
+  Initial replicas by service form one compact list showing the inherited
+  value, and empty placement says what happens without settings, with its add
+  actions beneath the heading.
 - Deploy application offers the same Istio choices, ambient included. The
   deployment pipeline installs ambient mode on the cluster before deploying
   and passes the waypoint size to the deployer; multi-cluster deployments,
