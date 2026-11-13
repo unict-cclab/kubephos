@@ -1154,7 +1154,7 @@ metadata:
 spec:
   tracing:
   - providers: [{name: jaeger}]
-    randomSamplingPercentage: 100
+    randomSamplingPercentage: 1
 `
 
 func verifySupportOwnership(ctx context.Context, runner clusterRunner, kubeconfig, marker string) error {
