@@ -55,7 +55,7 @@ export function EditorPage({title, onClose, children, className = ''}: {title: s
     }
   }, [sections])
   const page = <section className={`editor-page ${className}`} aria-labelledby={titleID}>
-    <header className="editor-page-header">
+    <header className="editor-page-header page-header">
       {onClose && <ReturnButton onClick={onClose} />}
       <h2 id={titleID} ref={heading} tabIndex={-1}>{title}</h2>
     </header>

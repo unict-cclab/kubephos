@@ -59,7 +59,7 @@ func registryWarmupImages(profile registryProfile, spec Spec) []string {
 		images = append(images, mirror.Source+"/"+mirror.Probe)
 	}
 	for _, component := range managedcomponents.Catalog() {
-		images = append(images, managedcomponents.Image(profile.Endpoint.Spec.Host, component.Name, component.Version))
+		images = append(images, managedcomponents.Image(profile.Endpoint.Spec.Host, component.Name, component.Version, profile.Credential.Spec.Project))
 	}
 	return images
 }

@@ -49,9 +49,11 @@ func (s *Store) EligibleExperimentFigureSources(ctx context.Context, experimentI
 
 func (s *Store) CreateExperimentFigure(ctx context.Context, figure domain.ExperimentFigure) (domain.ExperimentFigure, error) {
 	return scanExperimentFigure(s.pool.QueryRow(ctx, `
-    INSERT INTO experiment_figures (id, experiment_id, metric, format, source_artifact_ids, storage_key, digest, size_bytes)
+    WITH saved AS (INSERT INTO experiment_figures (id, experiment_id, metric, format, source_artifact_ids, storage_key, digest, size_bytes)
     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-    RETURNING `+figureColumns,
+    RETURNING `+figureColumns+`),
+ completed_upload AS (DELETE FROM artifact_deletions WHERE storage_key=$6 AND EXISTS(SELECT 1 FROM saved))
+ SELECT `+figureColumns+` FROM saved`,
 		figure.ID, figure.ExperimentID, figure.Metric, figure.Format, figure.SourceArtifactIDs, figure.StorageKey, figure.Digest, figure.SizeBytes,
 	))
 }

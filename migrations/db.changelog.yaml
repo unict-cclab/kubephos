@@ -399,3 +399,11 @@ databaseChangeLog:
             path: changes/056-admin-request-replies.sql
             relativeToChangelogFile: true
             splitStatements: false
+  - changeSet:
+      id: 057-telegram-notifications
+      author: kubephos
+      changes:
+        - sqlFile:
+            path: changes/057-telegram-notifications.sql
+            relativeToChangelogFile: true
+            splitStatements: false

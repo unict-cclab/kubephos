@@ -181,7 +181,7 @@ func work(configValue config.Config) error {
 	go watchInstalledPlugins(ctx, store, registry, loader)
 	go pluginimports.NewWorker(store, registry, runtime, loader, configValue.InstanceID+"-plugin-import", configValue.WorkerPoll).Run(ctx)
 	slog.Info("starting worker", "instance", configValue.InstanceID, "concurrency", configValue.WorkerConcurrency)
-	return engine.NewWorker(store, registry, artifactStore, vault, configValue.InstanceID, configValue.WorkerConcurrency, configValue.WorkerPoll).Run(ctx)
+	return engine.NewWorker(store, registry, artifactStore, vault, configValue.InstanceID, configValue.WorkerConcurrency, configValue.WorkerPoll).WithApplicationURL(configValue.PublicURL).Run(ctx)
 }
 
 func externalPluginLoader(resolver plugins.SecretResolver, connections plugins.ConnectionResolver, catalogResolver plugins.CatalogResolver, runtime plugins.ContainerRunner) func([]byte) (plugins.Plugin, error) {

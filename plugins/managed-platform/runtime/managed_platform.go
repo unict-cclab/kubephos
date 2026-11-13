@@ -98,11 +98,12 @@ type clusterConnection struct {
 		Version string `json:"version"`
 	} `json:"metadata"`
 	Spec struct {
-		Networking   string `json:"networking,omitempty"`
-		Distribution string `json:"distribution"`
-		Server       string `json:"server"`
-		Kubeconfig   string `json:"kubeconfig"`
-		RegistryHost string `json:"registryHost,omitempty"`
+		Networking      string `json:"networking,omitempty"`
+		Distribution    string `json:"distribution"`
+		Server          string `json:"server"`
+		Kubeconfig      string `json:"kubeconfig"`
+		RegistryHost    string `json:"registryHost,omitempty"`
+		RegistryProject string `json:"registryProject,omitempty"`
 	} `json:"spec"`
 }
 
@@ -381,7 +382,7 @@ func (plugin Plugin) Execute(ctx context.Context, step domain.PlanStep, log plug
 	if _, err := runner.Kubectl(ctx, cluster.Spec.Kubeconfig, nil, "rollout", "status", "deployment/custom-pod-autoscaler-operator", "-n", systemNamespace, "--timeout=5m"); err != nil {
 		return nil, fmt.Errorf("Custom Pod Autoscaler operator is not ready: %w", err)
 	}
-	support, err := supportManifest(input.Marker, cluster.Spec.RegistryHost)
+	support, err := supportManifest(input.Marker, cluster.Spec.RegistryHost, cluster.Spec.RegistryProject)
 	if err != nil {
 		return nil, err
 	}
@@ -619,12 +620,12 @@ func (plugin Plugin) Cleanup(ctx context.Context, step domain.PlanStep, _ json.R
 	return nil
 }
 
-func supportManifest(marker, registryHost string) ([]byte, error) {
+func supportManifest(marker, registryHost string, projects ...string) ([]byte, error) {
 	if !validManagedRegistryHost(registryHost) {
 		return nil, errors.New("managed Harbor address is missing from the verified cluster connection")
 	}
-	mentatImage := managedcomponents.Image(registryHost, managedcomponents.MentatName, mentatVersion)
-	clusterLensImage := managedcomponents.Image(registryHost, managedcomponents.ClusterLensName, clusterLensVersion)
+	mentatImage := managedcomponents.Image(registryHost, managedcomponents.MentatName, mentatVersion, projects...)
+	clusterLensImage := managedcomponents.Image(registryHost, managedcomponents.ClusterLensName, clusterLensVersion, projects...)
 	return renderSupportManifest(marker, mentatImage, clusterLensImage), nil
 }
 

@@ -12,6 +12,7 @@ import (
 
 	"kubephos.dev/kubephos/internal/domain"
 	"kubephos.dev/kubephos/internal/kubeconfig"
+	"kubephos.dev/kubephos/internal/managedcomponents"
 	"kubephos.dev/kubephos/internal/plugins"
 )
 
@@ -208,7 +209,7 @@ func (p Plugin) reconcile(ctx context.Context, step domain.PlanStep, spec Spec, 
 		host = registry.Endpoint.Spec.Host
 	}
 	inventory.Spec.Version = version
-	return json.Marshal(clusterResult{ClusterConnection: clusterConnection{APIVersion: clusterAPIVersion, Kind: "ClusterConnection", Metadata: clusterConnectionMetadata{Name: spec.ClusterName, Version: version}, Spec: clusterConnectionSpec{PodCIDR: spec.PodCIDR, ServiceCIDR: spec.ServiceCIDR, Networking: spec.Networking, ClusterID: spec.ClusterID, Distribution: "k3s", Server: server, Kubeconfig: config, RegistryHost: host}}, ClusterInventory: inventory})
+	return json.Marshal(clusterResult{ClusterConnection: clusterConnection{APIVersion: clusterAPIVersion, Kind: "ClusterConnection", Metadata: clusterConnectionMetadata{Name: spec.ClusterName, Version: version}, Spec: clusterConnectionSpec{PodCIDR: spec.PodCIDR, ServiceCIDR: spec.ServiceCIDR, Networking: spec.Networking, ClusterID: spec.ClusterID, Distribution: "k3s", Server: server, Kubeconfig: config, RegistryHost: host, RegistryProject: managedcomponents.ExistingProject(registry.Credential.Spec.Project)}}, ClusterInventory: inventory})
 }
 
 func validateRemovableVolumes(raw []byte, name string) error {

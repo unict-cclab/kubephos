@@ -288,3 +288,10 @@ body {
   .app-shell { display: block; }
   .app-sidebar { display: none; }
 }
+
+/* Shared back-to-title spacing follows the configuration detail header. */
+.page-header { display: grid; gap: 32px; min-width: 0; margin-bottom: 24px; }
+.detail-page > .page-header { margin-bottom: 0; }
+.page-header .detail-return { margin: 0; }
+.page-header > :is(.detail-page-heading, .results-heading, .section-heading) { margin: 0; align-items: start; }
+.page-header h2 { margin: 0; }

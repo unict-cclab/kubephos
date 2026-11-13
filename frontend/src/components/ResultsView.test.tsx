@@ -754,6 +754,7 @@ it('keeps saved comparisons read-only toward experiments and preserves each sour
   const config = (sloMilliseconds: number) => ({components: [{capability: 'metrics.timeseries.collect', configuration: {sloMilliseconds}}]})
   const comparison = {id: 'cmp_paper', ownerUserId: 'alice', name: 'Paper', kind: 'comparison', status: 'succeeded', variants: [{id: 'combined', name: 'Combined', alias: 'Combined', configuration: config(250), trials: [first, second].map((item, index) => ({id: `trial-${index}`, position: index + 1, status: 'succeeded', resultArtifactId: item.artifact.id, operationId: item.artifact.operationId}))}]} as unknown as Experiment
   render(<ResultsView artifacts={[first.artifact, second.artifact]} experiments={[]} operations={[]} workspaces={[]} session={{authenticated: true, user: {id: 'alice', role: 'user'}} as Session} changed={async () => {}} openOperation={() => {}} focusedExperiment={comparison} onBack={() => {}} comparison={{sourceConfigurations: {[first.artifact.id]: config(250), [second.artifact.id]: config(500)}}} />)
+  fireEvent.click(screen.getByRole('button', {name: 'Statistics'}))
   const table = await screen.findByRole('table', {name: 'Experiment comparison'})
   expect(within(table).getByText('SLO violation windows').closest('tr')).toHaveTextContent('25.00%')
   expect(screen.queryByText(/execution/i)).not.toBeInTheDocument()

@@ -29,6 +29,7 @@ import (
 	"kubephos.dev/kubephos/internal/resourceidentity"
 	"kubephos.dev/kubephos/internal/secrets"
 	"kubephos.dev/kubephos/internal/storage"
+	"kubephos.dev/kubephos/internal/telegram"
 	"kubephos.dev/kubephos/internal/webui"
 )
 
@@ -40,6 +41,7 @@ var locustParameterPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,63}$`)
 var plotColorPattern = regexp.MustCompile(`^#[0-9a-f]{6}$`)
 
 type Server struct {
+	telegramClient telegram.Client
 	store          *storage.Store
 	registry       *plugins.Registry
 	artifacts      *artifacts.Client
@@ -82,6 +84,15 @@ func NewServer(store *storage.Store, registry *plugins.Registry, artifactStore *
 	router.HandleFunc("GET /health/live", server.live)
 	router.HandleFunc("GET /health/ready", server.ready)
 	router.HandleFunc("GET /api/v1/auth/status", server.authStatus)
+	router.HandleFunc("GET /api/v1/administration/telegram", server.telegramStatus)
+	router.HandleFunc("PUT /api/v1/administration/telegram", server.saveTelegram)
+	router.HandleFunc("DELETE /api/v1/administration/telegram", server.deleteTelegram)
+	router.HandleFunc("GET /api/v1/account/notifications/telegram", server.telegramPreferences)
+	router.HandleFunc("PUT /api/v1/account/notifications/telegram", server.updateTelegramPreferences)
+	router.HandleFunc("POST /api/v1/account/notifications/telegram/connect", server.connectTelegram)
+	router.HandleFunc("POST /api/v1/account/notifications/telegram/disconnect", server.disconnectTelegram)
+	router.HandleFunc("POST /api/v1/account/notifications/telegram/test", server.testTelegram)
+
 	router.HandleFunc("GET /api/v1/auth/login", server.authLogin)
 	router.HandleFunc("GET /api/v1/auth/callback", server.authCallback)
 	router.HandleFunc("POST /api/v1/auth/setup", server.authSetup)

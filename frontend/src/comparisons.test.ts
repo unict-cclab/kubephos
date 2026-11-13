@@ -32,13 +32,15 @@ describe('comparisons and suite regression', () => {
   it('warns about incompatible workloads and excludes metrics with conflicting units', () => {
     const a = dataset('a1', [1, 2]); const b = dataset('a2', [3, 4])
     expect(comparisonWarnings([a, b], {})).toEqual([])
+    b.dataset.spec.end = '2026-10-01T01:00:00Z'
     b.dataset.spec.stepSeconds = 30
     b.dataset.spec.applicationRef = 'redis'
     b.dataset.spec.series[0].unit = 'millicores'
     const warnings = comparisonWarnings([a, b], {a1: {components: [{capability: 'load.kubernetes', configuration: {rps: 10}}]}, a2: {components: [{capability: 'load.kubernetes', configuration: {rps: 20}}]}})
     expect(warnings.some(message => message.includes('resolution'))).toBe(true)
     expect(warnings.some(message => message.includes('Application'))).toBe(true)
-    expect(warnings.some(message => message.includes('Load profiles'))).toBe(true)
+    expect(warnings.some(message => message.includes('Load profiles'))).toBe(false)
+    expect(warnings.some(message => message.includes('Durations differ'))).toBe(false)
     expect(comparisonMetricCompatible([a, b], 'cpu.cores')).toBe(false)
   })
   it('only offers successful runs with results from finished experiments', () => {

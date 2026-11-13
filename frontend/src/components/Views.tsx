@@ -25,6 +25,7 @@ import {SetupJourney, setupSteps} from './SetupJourney'
 import {ResourceAction} from './ResourceAction'
 import {UsersView} from './UsersView'
 import {RequestsView} from './RequestsView'
+import {TelegramAdministration} from './TelegramSettings'
 import {AdministrationView} from './AdministrationView'
 
 interface ViewProps {
@@ -96,6 +97,7 @@ export function Views(props: ViewProps) {
     {props.view === 'experiments' && <section className="view active">
       <ExperimentConfigurationsView items={props.experimentConfigurations} experiments={props.experiments} artifacts={props.artifacts} operations={props.operations} clusters={props.kubernetesClusters} workspaces={props.workspaces} applications={props.applications} plugins={props.plugins} strategies={props.strategies} session={props.session} isAdmin={props.isAdmin} changed={props.changed} openOperation={props.openOperation} openExperiment={id => {window.location.hash = `results/instance/${encodeURIComponent(id)}`} } />
     </section>}
+    {props.view === 'notifications' && props.isAdmin && <section className="view active"><TelegramAdministration session={props.session}/></section>}
     {props.view === 'administration' && props.isAdmin && <section className="view active"><AdministrationView session={props.session} changed={props.changed} /></section>}
     {props.view === 'requests' && <section className="view active"><RequestsView requests={props.adminRequests} isAdmin={props.isAdmin} session={props.session} changed={props.changed} /></section>}
     {props.view === 'users' && <section className="view active">

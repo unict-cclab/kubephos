@@ -39,7 +39,7 @@ const (
 	markerFile      = "/var/lib/kubephos/harbor.marker"
 	serviceFile     = "/etc/systemd/system/kubephos-harbor.service"
 	serviceName     = "kubephos-harbor.service"
-	development     = "kubephos-dev"
+	development     = managedcomponents.Project
 	releases        = "kubephos-releases"
 	robotMarker     = "KUBEPHOS_ROBOT="
 	caMarker        = "KUBEPHOS_CA="
@@ -521,7 +521,7 @@ func installCommand(nodeName, marker, address, adminPassword, databasePassword, 
 		"sudo systemctl enable --now "+serviceName,
 		"rm -f /tmp/kubephos-harbor.tgz",
 		waitForRegistryHealthCommand(address, adminPassword),
-		createAPICommand("development project", address, adminPassword, shellQuote(projectRequest), "projects", "/tmp/kubephos-project.json"),
+		createAPICommand("application project", address, adminPassword, shellQuote(projectRequest), "projects", "/tmp/kubephos-project.json"),
 		createAPICommand("releases project", address, adminPassword, shellQuote(releasesRequest), "projects", "/tmp/kubephos-releases.json"),
 	)
 	parts = append(parts, proxyInstallCommands(address, adminPassword)...)

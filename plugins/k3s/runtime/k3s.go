@@ -21,6 +21,7 @@ import (
 
 	"kubephos.dev/kubephos/internal/domain"
 	kubeconfigutil "kubephos.dev/kubephos/internal/kubeconfig"
+	"kubephos.dev/kubephos/internal/managedcomponents"
 	"kubephos.dev/kubephos/internal/managedregistry"
 	"kubephos.dev/kubephos/internal/placement"
 	"kubephos.dev/kubephos/internal/plugins"
@@ -123,6 +124,7 @@ type registryCredential struct {
 		Server   string `json:"server"`
 		Username string `json:"username"`
 		Password string `json:"password"`
+		Project  string `json:"project"`
 	} `json:"spec"`
 }
 
@@ -150,14 +152,15 @@ type clusterConnectionMetadata struct {
 }
 
 type clusterConnectionSpec struct {
-	PodCIDR      string `json:"podCIDR,omitempty"`
-	ServiceCIDR  string `json:"serviceCIDR,omitempty"`
-	Networking   string `json:"networking,omitempty"`
-	ClusterID    int    `json:"clusterId,omitempty"`
-	Distribution string `json:"distribution"`
-	Server       string `json:"server"`
-	Kubeconfig   string `json:"kubeconfig"`
-	RegistryHost string `json:"registryHost,omitempty"`
+	PodCIDR         string `json:"podCIDR,omitempty"`
+	ServiceCIDR     string `json:"serviceCIDR,omitempty"`
+	Networking      string `json:"networking,omitempty"`
+	ClusterID       int    `json:"clusterId,omitempty"`
+	Distribution    string `json:"distribution"`
+	Server          string `json:"server"`
+	Kubeconfig      string `json:"kubeconfig"`
+	RegistryHost    string `json:"registryHost,omitempty"`
+	RegistryProject string `json:"registryProject,omitempty"`
 }
 
 type clusterInventory struct {
@@ -432,7 +435,7 @@ func (p Plugin) Execute(ctx context.Context, step domain.PlanStep, log plugins.L
 		registryHost = registry.Endpoint.Spec.Host
 	}
 	result := clusterResult{
-		ClusterConnection: clusterConnection{APIVersion: clusterAPIVersion, Kind: "ClusterConnection", Metadata: clusterConnectionMetadata{Name: spec.ClusterName, Version: k3sVersion}, Spec: clusterConnectionSpec{PodCIDR: spec.PodCIDR, ServiceCIDR: spec.ServiceCIDR, Networking: spec.Networking, ClusterID: spec.ClusterID, Distribution: "k3s", Server: server, Kubeconfig: kubeconfig, RegistryHost: registryHost}},
+		ClusterConnection: clusterConnection{APIVersion: clusterAPIVersion, Kind: "ClusterConnection", Metadata: clusterConnectionMetadata{Name: spec.ClusterName, Version: k3sVersion}, Spec: clusterConnectionSpec{PodCIDR: spec.PodCIDR, ServiceCIDR: spec.ServiceCIDR, Networking: spec.Networking, ClusterID: spec.ClusterID, Distribution: "k3s", Server: server, Kubeconfig: kubeconfig, RegistryHost: registryHost, RegistryProject: managedcomponents.ExistingProject(registry.Credential.Spec.Project)}},
 		ClusterInventory:  inventory,
 	}
 	return json.Marshal(result)

@@ -103,7 +103,7 @@ func releaseMaintenance(configValue config.Config) error {
 	}
 	var endpoint releaseRegistryEndpoint
 	var credential releaseRegistryCredential
-	if json.Unmarshal(endpointValue, &endpoint) != nil || json.Unmarshal(credentialValue, &credential) != nil || endpoint.Kind != "RegistryEndpoint" || credential.Kind != "RegistryCredential" || endpoint.Spec.Host == "" || !strings.Contains(endpoint.Spec.CABundle, "BEGIN CERTIFICATE") || credential.Spec.Server != endpoint.Spec.Host || credential.Spec.Username == "" || credential.Spec.Password == "" || credential.Spec.Project != "kubephos-dev" {
+	if json.Unmarshal(endpointValue, &endpoint) != nil || json.Unmarshal(credentialValue, &credential) != nil || endpoint.Kind != "RegistryEndpoint" || credential.Kind != "RegistryCredential" || endpoint.Spec.Host == "" || !strings.Contains(endpoint.Spec.CABundle, "BEGIN CERTIFICATE") || credential.Spec.Server != endpoint.Spec.Host || credential.Spec.Username == "" || credential.Spec.Password == "" || !managedcomponents.ValidProject(credential.Spec.Project) {
 		return errors.New("managed Harbor endpoint and push identity are incompatible")
 	}
 	temporary, err := os.MkdirTemp("", "kubephos-release-")
@@ -120,7 +120,7 @@ func releaseMaintenance(configValue config.Config) error {
 	if err := os.WriteFile(authenticationPath, authentication, 0600); err != nil {
 		return err
 	}
-	image := managedcomponents.Image(endpoint.Spec.Host, componentName, versionTag)
+	image := managedcomponents.Image(endpoint.Spec.Host, componentName, versionTag, credential.Spec.Project)
 	digestPath := filepath.Join(temporary, "digest")
 	command := exec.CommandContext(ctx, "skopeo", "copy", "--dest-authfile", authenticationPath, "--dest-cert-dir", temporary, "--digestfile", digestPath, "docker-archive:"+archivePath, "docker://"+image)
 	output, err := command.CombinedOutput()

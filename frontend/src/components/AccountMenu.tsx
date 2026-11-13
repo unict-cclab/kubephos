@@ -1,8 +1,12 @@
 import {useEffect, useRef, useState} from 'react'
+import {Dialog} from './Dialog'
+import {TelegramPreferences} from './TelegramSettings'
+import type {Session} from '../types'
 import {ActionIcon} from './ActionIcon'
 import {useTheme} from './ThemeToggle'
 
 interface Props {
+ session?: Session
   username: string
   isAdmin: boolean
   version?: string
@@ -12,8 +16,9 @@ interface Props {
 }
 
 // Disclosure anchored to the account bar: identity, appearance and session actions.
-export function AccountMenu({username, isAdmin, version, refreshing, refresh, signOut}: Props) {
+export function AccountMenu({username, isAdmin, version, refreshing, refresh, signOut, session}: Props) {
   const [open, setOpen] = useState(false)
+  const [notificationsOpen,setNotificationsOpen]=useState(false)
   const root = useRef<HTMLDivElement>(null)
   const trigger = useRef<HTMLButtonElement>(null)
   const {dark, toggle} = useTheme()
@@ -31,7 +36,9 @@ export function AccountMenu({username, isAdmin, version, refreshing, refresh, si
   }
 
   return <div className="account-menu" ref={root} onKeyDown={event => {if (event.key === 'Escape' && open) {setOpen(false); trigger.current?.focus()}}}>
+    {notificationsOpen&&session&&<Dialog open title="Notifications" onClose={()=>setNotificationsOpen(false)}><TelegramPreferences session={session}/></Dialog>}
     {open && <div id="account-menu-panel" className="account-menu-panel" role="group" aria-label="Account">
+      {session&&<button type="button" className="account-menu-item" onClick={run(()=>setNotificationsOpen(true))}><ActionIcon name="bell"/><span>Notifications</span></button>}
       <button type="button" className="account-menu-item" aria-pressed={dark} onClick={toggle}><ActionIcon name="moon" /><span>Dark mode</span><span className="account-menu-switch" aria-hidden="true" /></button>
       <button type="button" className="account-menu-item" disabled={refreshing} onClick={run(refresh)}><ActionIcon name="refresh" /><span>{refreshing ? 'Refreshing…' : 'Refresh data'}</span></button>
       <button type="button" className="account-menu-item account-menu-sign-out" onClick={run(signOut)}><ActionIcon name="logout" /><span>Sign out</span></button>

@@ -179,7 +179,7 @@ func TestRegistryVerificationPullsEveryManagedComponent(t *testing.T) {
 	profile.Endpoint.Spec.URL = "https://registry.internal"
 	commands := strings.Join(registryWarmupImages(profile, Spec{}), "\n")
 	for _, component := range managedcomponents.Catalog() {
-		expected := managedcomponents.Image(profile.Endpoint.Spec.Host, component.Name, component.Version)
+		expected := managedcomponents.Image(profile.Endpoint.Spec.Host, component.Name, component.Version, profile.Credential.Spec.Project)
 		if !strings.Contains(commands, expected) {
 			t.Fatalf("managed component pull %q is missing", expected)
 		}

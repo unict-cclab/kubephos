@@ -36,10 +36,38 @@ compose() (
   for key in ${!KUBEPHOS_@} POSTGRES_PASSWORD COMPOSE_PROJECT_NAME; do unset "$key"; done
   docker compose --project-directory "$install_dir" --env-file "$install_dir/.env" -f "$compose_file" "$@"
 )
+# Only this installation's application repository; never prune volumes, build
+# caches, unrelated images, or anything referenced by any Docker container.
+cleanup_release_images() {
+  local image repository listing protected image_id reference created previous_id=
+  repository=$(sed -n 's/^KUBEPHOS_IMAGE=//p' "$install_dir/.env") || return 0
+  repository=${repository#\"}; repository=${repository%\"}
+  repository=${repository#\'}; repository=${repository%\'}
+  repository=${repository:-ghcr.io/unict-cclab/kubephos}
+  image=$(compose config --images app 2>> "$log_file" | while IFS= read -r candidate; do
+    if [[ ${candidate%:*} == "$repository" && $candidate != *@* ]]; then printf '%s\n' "$candidate"; break; fi
+  done) || return 0
+  [[ -n $image ]] || return 0
+  listing=$(docker image ls --no-trunc --format '{{.CreatedAt}}|{{.ID}}|{{.Repository}}:{{.Tag}}' "$repository" 2>> "$log_file" | sort -r) || return 0
+  local containers
+  containers=$(docker ps -aq 2>> "$log_file") || return 0
+  protected=
+  if [[ -n $containers ]]; then
+    # Docker IDs contain no whitespace; word splitting is intentional.
+    protected=$(docker inspect --format '{{.Image}}' $containers 2>> "$log_file") || return 0
+  fi
+  while IFS='|' read -r created image_id reference; do
+    [[ -n $image_id && $reference == "$repository":* && $reference != *':<none>' ]] || continue
+    if [[ $'\n'"$protected"$'\n' == *$'\n'"$image_id"$'\n'* ]]; then continue; fi
+    if [[ -z $previous_id ]]; then previous_id=$image_id; fi
+    [[ $image_id != "$previous_id" ]] || continue
+    docker image rm "$reference" >> "$log_file" 2>&1 || true
+  done <<< "$listing"
+}
 check_activity() {
   printf 'Checking running operations…\n'
   local active
-  active=$(compose exec -T postgres psql -v ON_ERROR_STOP=1 -U kubephos -d kubephos -Atc "SELECT (SELECT count(*) FROM operations WHERE status IN ('queued','prechecking','running','verifying')) + (SELECT count(*) FROM pipeline_runs WHERE status='running' OR (status='queued' AND scheduled_for <= now())) + (SELECT count(*) FROM experiments WHERE status='running') + (SELECT count(*) FROM plugin_import_jobs WHERE status IN ('queued','inspecting','validating','activating'))" 2>> "$log_file") || fail "Cannot verify running operations. Details: $log_file"
+  active=$(compose exec -T postgres psql -v ON_ERROR_STOP=1 -U kubephos -d kubephos -Atc "SELECT (SELECT count(*) FROM operations WHERE status IN ('queued','prechecking','running','verifying')) + (SELECT count(*) FROM pipeline_runs WHERE status='running' OR (status='queued' AND scheduled_for <= now())) + (SELECT count(*) FROM experiments WHERE status IN ('queued','initializing','initialized','running')) + (SELECT count(*) FROM plugin_import_jobs WHERE status IN ('queued','inspecting','validating','activating'))" 2>> "$log_file") || fail "Cannot verify running operations. Details: $log_file"
   [[ $active == 0 ]] || fail 'Wait for pending or running operations and imports to finish before updating.'
 }
 step 'Checking configuration…' compose config --quiet
@@ -49,6 +77,7 @@ if [[ $source_dir != "$install_dir" && -f "$source_dir/compose.yaml" ]]; then
   compose_file="$source_dir/compose.yaml"
   step 'Checking release configuration…' compose config --quiet
 fi
+step 'Cleaning unused KubePhos images…' cleanup_release_images
 if $pull_images; then step 'Downloading release images…' compose pull; fi
 compose_file="$install_dir/compose.yaml"
 check_activity
@@ -63,4 +92,5 @@ step 'Updating infrastructure services and database…' compose up -d --wait --w
 step 'Synchronizing authentication…' compose run --rm --no-deps -T auth-sync
 step 'Starting KubePhos…' compose up -d --wait --wait-timeout 180
 step 'Checking service health…' compose exec -T app kubephos doctor
+step 'Cleaning unused KubePhos images…' cleanup_release_images
 printf 'KubePhos updated.\nInstallation: %s\nDetails: %s\n' "$install_dir" "$log_file"

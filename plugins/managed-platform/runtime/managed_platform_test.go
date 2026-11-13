@@ -142,10 +142,10 @@ func TestClusterLensUsesManagedRegistry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Contains(manifest, []byte("image: "+host+"/kubephos-dev/cluster-lens:"+clusterLensVersion)) {
+	if !bytes.Contains(manifest, []byte("image: "+host+"/kubephos/cluster-lens:"+clusterLensVersion)) {
 		t.Fatal("Cluster Lens image does not use the selected managed registry")
 	}
-	if !bytes.Contains(manifest, []byte("image: "+host+"/kubephos-dev/mentat:"+mentatVersion)) {
+	if !bytes.Contains(manifest, []byte("image: "+host+"/kubephos/mentat:"+mentatVersion)) {
 		t.Fatal("Mentat image does not use the selected managed registry")
 	}
 }

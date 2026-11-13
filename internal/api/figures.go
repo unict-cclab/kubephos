@@ -102,6 +102,10 @@ func (s *Server) saveExperimentFigure(response http.ResponseWriter, request *htt
 	}
 	figureID := id.New("figure")
 	key := "/experiments/" + experimentID + "/figures/" + figureID + "." + format
+	if err := s.store.BeginArtifactUpload(request.Context(), key); err != nil {
+		writeError(response, http.StatusInternalServerError, "database_error", "Could not reserve figure storage.")
+		return
+	}
 	stored, err := s.artifacts.Put(request.Context(), key, figureID+"."+format, mediaType, value)
 	if err != nil {
 		writeError(response, http.StatusBadGateway, "artifact_error", "Could not save the figure to object storage.")

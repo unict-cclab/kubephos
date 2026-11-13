@@ -80,7 +80,7 @@ func adminReadPath(path string) bool {
 func userMutationAllowed(path string) bool {
 	// Members send requests to administrators and may edit or resolve their own;
 	// the handlers keep replying, reopening and deleting administrator-only.
-	return strings.HasPrefix(path, "/api/v1/application-deployments") || path == "/api/v1/comparisons" || strings.HasPrefix(path, "/api/v1/comparisons/") ||
+	return strings.HasPrefix(path, "/api/v1/account/notifications/telegram") || strings.HasPrefix(path, "/api/v1/application-deployments") || path == "/api/v1/comparisons" || strings.HasPrefix(path, "/api/v1/comparisons/") ||
 		path == "/api/v1/admin-requests" || strings.HasPrefix(path, "/api/v1/admin-requests/") ||
 		strings.HasPrefix(path, "/api/v1/experiment-configurations") ||
 		path == "/api/v1/experiments/start" ||

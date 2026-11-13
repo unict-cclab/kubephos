@@ -16,16 +16,19 @@ import (
 	"kubephos.dev/kubephos/internal/resourceidentity"
 	"kubephos.dev/kubephos/internal/secrets"
 	"kubephos.dev/kubephos/internal/storage"
+	"kubephos.dev/kubephos/internal/telegram"
 )
 
 type Worker struct {
-	store       *storage.Store
-	registry    *plugins.Registry
-	artifacts   *artifacts.Client
-	vault       *secrets.Vault
-	instanceID  string
-	concurrency int
-	poll        time.Duration
+	applicationURL string
+	telegramClient telegram.Client
+	store          *storage.Store
+	registry       *plugins.Registry
+	artifacts      *artifacts.Client
+	vault          *secrets.Vault
+	instanceID     string
+	concurrency    int
+	poll           time.Duration
 }
 
 func NewWorker(store *storage.Store, registry *plugins.Registry, artifactStore *artifacts.Client, vault *secrets.Vault, instanceID string, concurrency int, poll time.Duration) *Worker {
@@ -37,6 +40,10 @@ func (w *Worker) Run(ctx context.Context) error {
 		return err
 	}
 	var group sync.WaitGroup
+	group.Add(2)
+	go func() { defer group.Done(); w.pollTelegram(ctx) }()
+	go func() { defer group.Done(); w.sendTelegram(ctx) }()
+
 	group.Add(1)
 	go func() { defer group.Done(); w.runConnectivityMonitor(ctx) }()
 	group.Add(1)
@@ -44,7 +51,7 @@ func (w *Worker) Run(ctx context.Context) error {
 		defer group.Done()
 		for ctx.Err() == nil {
 			if err := w.store.ProcessArtifactDeletions(ctx, w.artifacts.Delete); err != nil && ctx.Err() == nil {
-				slog.Error("delete experiment artifacts", "error", err)
+				slog.Error("delete unused artifact objects", "error", err)
 			}
 			w.wait(ctx)
 		}
@@ -140,6 +147,10 @@ func (w *Worker) process(parent context.Context, owner string, operation domain.
 				w.fail(parent, operation.ID, step.ID, err)
 				return
 			}
+		}
+		if err := ensureBootstrapImages(runCtx, operation.PluginID, runtimeStep, log); err != nil {
+			w.fail(parent, operation.ID, step.ID, err)
+			return
 		}
 		health, err := plugin.Precheck(runCtx, runtimeStep, log)
 		if err != nil {
@@ -245,7 +256,12 @@ func (w *Worker) process(parent context.Context, owner string, operation domain.
 		w.fail(runCtx, operation.ID, "", err)
 		return
 	}
-	stored, err := w.artifacts.Put(runCtx, artifacts.OperationKey(operation.ID, "result.json"), "result.json", "application/json", artifactValue)
+	key := artifacts.OperationKey(operation.ID, "result.json")
+	if err := w.store.BeginArtifactUpload(runCtx, key); err != nil {
+		w.fail(runCtx, operation.ID, "", fmt.Errorf("reserve result storage: %w", err))
+		return
+	}
+	stored, err := w.artifacts.Put(runCtx, key, "result.json", "application/json", artifactValue)
 	if err != nil {
 		w.fail(runCtx, operation.ID, "", fmt.Errorf("store result artifact: %w", err))
 		return
@@ -392,7 +408,11 @@ func (w *Worker) persistStepOutputs(ctx context.Context, operation domain.Operat
 			}
 			storageMediaType = "application/octet-stream"
 		}
-		stored, err := w.artifacts.Put(ctx, artifacts.StepOutputKey(operation.ID, step.ID, output.Name), output.Name+".json", storageMediaType, storageValue)
+		key := artifacts.StepOutputKey(operation.ID, step.ID, output.Name)
+		if err := w.store.BeginArtifactUpload(ctx, key); err != nil {
+			return fmt.Errorf("reserve output storage: %w", err)
+		}
+		stored, err := w.artifacts.Put(ctx, key, output.Name+".json", storageMediaType, storageValue)
 		if err != nil {
 			return fmt.Errorf("store output %q: %w", output.Name, err)
 		}

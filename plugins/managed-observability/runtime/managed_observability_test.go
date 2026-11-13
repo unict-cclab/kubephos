@@ -215,7 +215,7 @@ func TestMonAgentUsesManagedRegistry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	expected := "registry.example.test/kubephos-dev/mon-agent:" + monAgentVersion
+	expected := "registry.example.test/kubephos/mon-agent:" + monAgentVersion
 	if !strings.Contains(string(manifest), expected) || strings.Contains(string(manifest), "ghcr.io/unict-cclab/mon-agent") {
 		t.Fatalf("managed mon-agent image is invalid: %s", manifest)
 	}

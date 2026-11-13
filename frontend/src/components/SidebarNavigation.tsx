@@ -38,6 +38,7 @@ function NavigationIcon({view}: {view: View}) {
     experiments: <><path d="M9 3h6m-5 0v6L5 18a2 2 0 0 0 1.8 3h10.4a2 2 0 0 0 1.8-3l-5-9V3M7 15h10"/></>,
     comparisons: <><path d="M4 18V9m8 9V4m8 14v-7M2 21h20"/></>,
     results: <><circle cx="12" cy="12" r="9"/><path d="m10 8 6 4-6 4z"/></>,
+    notifications: <><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4"/></>,
     administration: <><path d="m10 3-.7 2.4-2.4 1L4.7 5.3 2.3 9.5l1.8 1.7v2l-1.8 1.7 2.4 4.2 2.2-1.1 2.4 1L10 21h4l.7-2 2.4-1 2.2 1.1 2.4-4.2-1.8-1.7v-2l1.8-1.7-2.4-4.2-2.2 1.1-2.4-1L14 3z"/><circle cx="12" cy="12" r="3"/></>,
     users: <><circle cx="9" cy="8" r="3"/><path d="M3.5 19c.5-4 2.3-6 5.5-6s5 2 5.5 6M16 7h5M18.5 4.5v5"/></>,
     requests: <><path d="M4 5h16v11H10l-4 4v-4H4z"/><path d="M8 9h8M8 12h5"/></>

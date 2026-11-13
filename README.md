@@ -49,6 +49,10 @@ At first login, you must choose a new password before accessing the platform.
 For a custom installation path, the file is `<installation-directory>/credentials.json`.
 The saved file contains only the initial credentials, not your replacement password.
 
+Updates remove older unused images from the application's image repository,
+keeping images referenced by containers and one previous image for rollback.
+Database and object-storage volumes are preserved.
+
 To install for a server URL or select a published release:
 
 ```bash
@@ -96,6 +100,14 @@ deleted or inaccessible source runs must be removed from the comparison.
 
 An experiment records its execution configuration. Later edits to a reusable
 configuration do not rewrite the settings of completed runs.
+
+## Telegram notifications
+
+Administrators can configure a dedicated Telegram bot in **Administration → Notifications**, using the token created with [BotFather](https://t.me/BotFather).
+
+Each user can then open **Account settings → Notifications**, select **Connect Telegram**, and press **Start** in Telegram. Users choose whether to receive notifications when their experiments complete or fail. A suite sends one notification when the whole experiment finishes. **Send test** checks the connection.
+
+KubePhos needs outbound HTTPS access to Telegram; no public webhook is required. Bot credentials are encrypted, account links expire after ten minutes, and pending notifications are stored in PostgreSQL with retries. Telegram connections are instance-specific and are not included in configuration transfers.
 
 ## Development
 

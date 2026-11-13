@@ -1,9 +1,10 @@
-export type ActionIconName = 'start' | 'create' | 'view' | 'delete' | 'edit' | 'archive' | 'close' | 'up' | 'down' | 'back' | 'sort' | 'left' | 'right' | 'check' | 'download' | 'forward' | 'turn' | 'share' | 'layout' | 'menu' | 'refresh' | 'search' | 'logout' | 'settings' | 'moon' | 'file' | 'pulse' | 'stack' | 'chart'
+export type ActionIconName = 'start' | 'create' | 'view' | 'delete' | 'edit' | 'archive' | 'close' | 'up' | 'down' | 'back' | 'sort' | 'left' | 'right' | 'check' | 'download' | 'forward' | 'turn' | 'share' | 'layout' | 'menu' | 'refresh' | 'search' | 'logout' | 'settings' | 'moon' | 'file' | 'pulse' | 'stack' | 'chart' | 'bell'
 
 export function ActionIcon({name}: {name: ActionIconName}) {
   const paths = {
     start: <path d="m8 4 12 8-12 8Z" />,
     menu: <path d="M4 6h16M4 12h16M4 18h16" />,
+    bell: <path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4"/>,
     refresh: <path d="M20 11a8 8 0 1 0-2.3 5.7M20 5v6h-6" />,
     search: <><circle cx="11" cy="11" r="7" /><path d="m20 20-3.5-3.5" /></>,
     logout: <path d="M10 4H5v16h5M15 8l4 4-4 4M19 12H9" />,

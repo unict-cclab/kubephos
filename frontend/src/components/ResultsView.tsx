@@ -213,8 +213,8 @@ function ExperimentResultsView({artifacts, experiments, operations, workspaces, 
   const stopLabel = focusedExperiment?.kind === 'suite' ? 'suite' : 'experiment'
   return <>
     {confirmationDialog}
-    {focusedExperiment && onBack && <DetailBreadcrumb parent={comparison ? 'Comparisons' : 'Experiments'} current={focusedExperiment.name} back={onBack} />}
-    <div className={`results-heading ${focusedExperiment ? 'focused' : ''}`}><div><h2>{focusedExperiment?.name ?? 'Results'}</h2></div><div className="results-detail-actions">{comparison?.actions}{!comparison && focusedExperiment && <ResourceSharing kind="experiments" id={focusedExperiment.id} name={focusedExperiment.name} ownerUserId={focusedExperiment.ownerUserId} session={session} changed={changed} />}{!comparison && focusedExperiment && <span className={`status ${activeRun?.trial.status ?? displayStatus}`}>{activeRun?.trial.status ?? displayStatus}</span>}{!comparison&&focusedExperiment?.status==='initialized'&&canManageResource(session,focusedExperiment.ownerUserId)&&!stopRequested&&<button className="button primary" disabled={startingTraffic} onClick={startTraffic}>{startingTraffic?'Starting…':'Start'}</button>}{!comparison && focusedExperiment && canManageResource(session,focusedExperiment.ownerUserId) && canStop && <button className="button danger" disabled={stopping || stopRequested} onClick={stopExperiment}>{stopping || stopRequested ? `Stopping ${stopLabel}…` : `Stop ${stopLabel}`}</button>}{!comparison && focusedExperiment && canManageResource(session,focusedExperiment.ownerUserId) && <ResourceAction action="delete" label={deleting ? 'Deleting…' : `Delete ${stopLabel}`} disabled={deleting || !isTerminalExperiment(focusedExperiment.status)} title={isTerminalExperiment(focusedExperiment.status) ? undefined : `Stop this ${stopLabel} before deleting it`} onClick={removeExperiment} />}{!focusedExperiment && <div className="results-count" aria-label={`${selectable.length} datasets`}><strong>{selectable.length}</strong><span>datasets</span></div>}</div></div>
+    <header className="page-header">{focusedExperiment && onBack && <DetailBreadcrumb parent={comparison ? 'Comparisons' : 'Experiments'} current={focusedExperiment.name} back={onBack} />}
+    <div className={`results-heading ${focusedExperiment ? 'focused' : ''}`}><div><h2>{focusedExperiment?.name ?? 'Results'}</h2></div><div className="results-detail-actions">{comparison?.actions}{!comparison && focusedExperiment && <ResourceSharing kind="experiments" id={focusedExperiment.id} name={focusedExperiment.name} ownerUserId={focusedExperiment.ownerUserId} session={session} changed={changed} />}{!comparison && focusedExperiment && <span className={`status ${activeRun?.trial.status ?? displayStatus}`}>{activeRun?.trial.status ?? displayStatus}</span>}{!comparison&&focusedExperiment?.status==='initialized'&&canManageResource(session,focusedExperiment.ownerUserId)&&!stopRequested&&<button className="button primary" disabled={startingTraffic} onClick={startTraffic}>{startingTraffic?'Starting…':'Start'}</button>}{!comparison && focusedExperiment && canManageResource(session,focusedExperiment.ownerUserId) && canStop && <button className="button danger" disabled={stopping || stopRequested} onClick={stopExperiment}>{stopping || stopRequested ? `Stopping ${stopLabel}…` : `Stop ${stopLabel}`}</button>}{!comparison && focusedExperiment && canManageResource(session,focusedExperiment.ownerUserId) && <ResourceAction action="delete" label={deleting ? 'Deleting…' : `Delete ${stopLabel}`} disabled={deleting || !isTerminalExperiment(focusedExperiment.status)} title={isTerminalExperiment(focusedExperiment.status) ? undefined : `Stop this ${stopLabel} before deleting it`} onClick={removeExperiment} />}{!focusedExperiment && <div className="results-count" aria-label={`${selectable.length} datasets`}><strong>{selectable.length}</strong><span>datasets</span></div>}</div></div></header>
     {focusedExperiment && <ResourceAttribution resource={focusedExperiment} editable={Boolean(comparison)} />}
     {comparison?.sources}
     <ErrorFeedback message={actionError} />
@@ -784,7 +784,7 @@ function preparedComparisonHeight(data: PreparedComparison, metrics: string[]) {
 }
 
 function ComparisonResults({artifacts, experiment, comparison, onBack, session}: ResultsViewProps & {experiment: Experiment}) {
-  const [activeTab, setActiveTab] = useState<ResultsTab>('statistics')
+  const [activeTab, setActiveTab] = useState<ResultsTab | 'sources'>('sources')
   const [revision, setRevision] = useState(0)
   const job = useMemo(() => ({artifacts, experiment, configurations: comparison?.sourceConfigurations ?? {}}), [artifacts, experiment, comparison?.sourceConfigurations, session.user?.id])
   const state = usePreparedComparison(job, revision)
@@ -792,14 +792,15 @@ function ComparisonResults({artifacts, experiment, comparison, onBack, session}:
   const plotMetrics = useMemo(() => data ? [...groupMetrics(Object.keys(data.plots)).values()].flat() : [], [data])
   const height = useMemo(() => data ? preparedComparisonHeight(data, plotMetrics) : 465, [data, plotMetrics])
   return <>
-    {onBack && <DetailBreadcrumb parent="Comparisons" current={experiment.name} back={onBack} />}
-    <div className="results-heading focused"><h2>{experiment.name}</h2><div className="results-detail-actions">{comparison?.actions}</div></div>
+    <header className="page-header">{onBack && <DetailBreadcrumb parent="Comparisons" current={experiment.name} back={onBack} />}
+    <div className="results-heading focused"><h2>{experiment.name}</h2><div className="results-detail-actions">{comparison?.actions}</div></div></header>
     <ResourceAttribution resource={experiment} editable />
-    {comparison?.sources}
+    <nav className="results-tabs" aria-label="Result sections">{(['sources','statistics','charts','downloads'] as const).map(tab => <button key={tab} className={activeTab===tab?'active':''} aria-current={activeTab===tab?'page':undefined} onClick={()=>setActiveTab(tab)}>{({sources:'Sources',statistics:'Statistics',charts:'Plots',downloads:'Export'})[tab]}</button>)}</nav>
+    {activeTab==='sources' && <section aria-label="Sources">{comparison?.sources}</section>}
     <ErrorFeedback message={state.error} />
-    {state.error ? <div className="results-placeholder"><button className="button secondary" onClick={() => setRevision(value => value + 1)}>Retry loading results</button></div> : !data ? <div className="results-placeholder" role="status"><span className="results-spinner" /><strong>{state.progress}</strong></div> : <div className="results-content">
+    {activeTab!=='sources' && (state.error ? <div className="results-placeholder"><button className="button secondary" onClick={() => setRevision(value => value + 1)}>Retry loading results</button></div> : !data ? <div className="results-placeholder" role="status"><span className="results-spinner" /><strong>{state.progress}</strong></div> : <div className="results-content">
       {data.warnings.map(warning => <div key={warning} className="validation-item warning">{warning}</div>)}
-      <nav className="results-tabs" aria-label="Result sections">{(['statistics', 'charts', 'downloads'] as ResultsTab[]).map(tab => <button key={tab} className={activeTab === tab ? 'active' : ''} aria-current={activeTab === tab ? 'page' : undefined} onClick={() => setActiveTab(tab)}>{({statistics: 'Statistics', charts: 'Plots', downloads: 'Export'} as Record<ResultsTab, string>)[tab]}</button>)}</nav>
+
       {activeTab === 'statistics' && <>
         <StrategyComparison datasets={[]} metrics={data.statisticsMetrics} experiment={experiment} prepared={data.columns} />
         {data.effects.length > 0 && <section className="statistics-card"><h3>Difference between experiments</h3><ResponsiveTable aria-label="Difference between experiments"><thead><tr><th>Comparison</th><th>Metric</th><th>Cohen's d</th><th>Difference</th></tr></thead><tbody>{data.effects.map(row => <tr key={row.metric}><td>{row.left} vs {row.right}</td><td>{statisticsMetricTitle(row.metric)}</td><td>{row.value.toFixed(3)}</td><td>{effectMagnitude(row.value)}</td></tr>)}</tbody></ResponsiveTable></section>}
@@ -810,6 +811,6 @@ function ComparisonResults({artifacts, experiment, comparison, onBack, session}:
         {data.services[metric] && <ServiceMetricChart metric={metric} datasets={[]} prepared={data.services[metric]} canvasHeight={height} />}
       </Fragment>)}</div>}
       {activeTab === 'downloads' && data.complete && <section className="results-download-panel"><h3>Export results</h3><div className="results-export-actions"><button className="button secondary" onClick={() => downloadBlob('kubephos-statistics.csv', new Blob([data.csv], {type: 'text/csv;charset=utf-8'}))}>Statistics CSV</button><button className="button secondary" onClick={() => {setActiveTab('statistics'); requestAnimationFrame(() => requestAnimationFrame(() => window.print()))}}>Print statistics</button></div><div className="results-raw-data"><strong>Complete run data</strong><div className="dataset-downloads">{artifacts.map(artifact => <a key={artifact.id} href={`/api/v1/artifacts/${artifact.id}/download`}><span>↓</span><span><strong>{experiment.variants.find(variant => variant.trials.some(trial => trial.resultArtifactId === artifact.id))?.alias || artifact.name}</strong><small>Metric samples</small></span></a>)}</div></div></section>}
-    </div>}
+    </div>)}
   </>
 }

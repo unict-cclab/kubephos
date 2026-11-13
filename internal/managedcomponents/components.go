@@ -3,7 +3,8 @@ package managedcomponents
 import "strings"
 
 const (
-	Project            = "kubephos-dev"
+	Project            = "kubephos"
+	LegacyProject      = "kubephos-dev"
 	ClusterLensName    = "cluster-lens"
 	ClusterLensVersion = "v1.3.2"
 	MonAgentName       = "mon-agent"
@@ -26,6 +27,18 @@ func Catalog() []Component {
 	}
 }
 
-func Image(registryHost, name, version string) string {
-	return strings.TrimSuffix(registryHost, "/") + "/" + Project + "/" + name + ":" + version
+// Legacy artifacts omit the project; keep their original registry paths.
+func ExistingProject(project string) string {
+	if project == "" {
+		return LegacyProject
+	}
+	return project
+}
+func ValidProject(project string) bool { return project == Project || project == LegacyProject }
+func Image(registryHost, name, version string, projects ...string) string {
+	project := Project
+	if len(projects) > 0 {
+		project = ExistingProject(projects[0])
+	}
+	return strings.TrimSuffix(registryHost, "/") + "/" + project + "/" + name + ":" + version
 }

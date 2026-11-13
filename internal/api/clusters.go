@@ -469,6 +469,11 @@ func (s *Server) recreateKubernetesCluster(response http.ResponseWriter, request
 		writeError(response, http.StatusConflict, "recreation_unavailable", "The saved cluster workflow is unavailable.")
 		return
 	}
+	sourceRun, err = s.maintenanceCleanupRun(request.Context(), resource, sourceRun)
+	if err != nil {
+		writeError(response, 409, "cleanup_unavailable", "The original cluster service lifecycle is unavailable.")
+		return
+	}
 	if input.Mode == "multi" && canRetryClusterMesh(sourceRun) {
 		s.retryClusterMesh(response, request, resource, sourceRun, sourcePipeline)
 		return
@@ -506,6 +511,16 @@ func (s *Server) recreateKubernetesCluster(response http.ResponseWriter, request
 	}
 	for index := range provisionDefinition.Stages {
 		stage := &provisionDefinition.Stages[index]
+		if stage.ID == "kubernetes" {
+			var spec map[string]any
+			if json.Unmarshal(stage.Spec, &spec) == nil {
+				for _, key := range []string{"reconcile", "previousMachineSetRef", "previousNodeSettings"} {
+					delete(spec, key)
+				}
+				spec["nodePools"] = managedClusterNodePools(input)
+				stage.Spec, _ = json.Marshal(spec)
+			}
+		}
 		if stage.PluginID != "io.kubephos.infrastructure.proxmox.topology" {
 			continue
 		}
@@ -725,6 +740,11 @@ func (s *Server) deleteManagedPipelineResource(response http.ResponseWriter, req
 		writeError(response, http.StatusConflict, "cleanup_unavailable", "The completed managed lifecycle is unavailable.")
 		return
 	}
+	sourceRun, err = s.maintenanceCleanupRun(request.Context(), resource, sourceRun)
+	if err != nil {
+		writeError(response, 409, "cleanup_unavailable", "The original cluster service lifecycle is unavailable.")
+		return
+	}
 	// Recovery runs may reinstall only the service. Resolve its dedicated machine
 	// through the immutable artifact ID rather than the resource's display name.
 	if resource.Kind == "harbor" || resource.Kind == "nfs" {
@@ -765,7 +785,7 @@ func (s *Server) deleteManagedPipelineResource(response http.ResponseWriter, req
 	validation := domain.ValidationReport{Valid: true, CheckedAt: time.Now().UTC()}
 	for sourcePosition := len(sourceRun.Stages) - 1; sourcePosition >= 0; sourcePosition-- {
 		sourceStage := sourceRun.Stages[sourcePosition]
-		if sourceStage.OperationID == "" {
+		if sourceStage.OperationID == "" || sourceStage.StageID == "prune-machines" {
 			continue
 		}
 		source, err := s.store.GetOperation(request.Context(), sourceStage.OperationID)

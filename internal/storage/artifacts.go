@@ -26,9 +26,11 @@ func (s *Store) CreateArtifact(ctx context.Context, artifact domain.Artifact) (d
 		outputName = artifact.OutputName
 	}
 	err := s.pool.QueryRow(ctx, `
-		INSERT INTO artifacts (id, operation_id, step_id, output_name, name, artifact_type, artifact_version, media_type, storage_key, digest, size_bytes, storage_digest, stored_size_bytes, encryption_nonce, sensitive)
+		WITH saved AS (INSERT INTO artifacts (id, operation_id, step_id, output_name, name, artifact_type, artifact_version, media_type, storage_key, digest, size_bytes, storage_digest, stored_size_bytes, encryption_nonce, sensitive)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
-		RETURNING created_at, verified_at
+		RETURNING created_at, verified_at),
+ completed_upload AS (DELETE FROM artifact_deletions WHERE storage_key=$9 AND EXISTS(SELECT 1 FROM saved))
+ SELECT created_at,verified_at FROM saved
 	`, artifact.ID, artifact.OperationID, stepID, outputName, artifact.Name, artifact.Type, artifact.Version, artifact.MediaType, artifact.StorageKey, artifact.Digest, artifact.SizeBytes, artifact.StorageDigest, artifact.StoredSizeBytes, artifact.EncryptionNonce, artifact.Sensitive).Scan(&artifact.CreatedAt, &artifact.VerifiedAt)
 	return artifact, err
 }

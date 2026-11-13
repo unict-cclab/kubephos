@@ -82,10 +82,11 @@ type clusterConnection struct {
 		Version string `json:"version"`
 	} `json:"metadata"`
 	Spec struct {
-		Distribution string `json:"distribution"`
-		Server       string `json:"server"`
-		Kubeconfig   string `json:"kubeconfig"`
-		RegistryHost string `json:"registryHost"`
+		Distribution    string `json:"distribution"`
+		Server          string `json:"server"`
+		Kubeconfig      string `json:"kubeconfig"`
+		RegistryHost    string `json:"registryHost"`
+		RegistryProject string `json:"registryProject,omitempty"`
 	} `json:"spec"`
 }
 
@@ -366,7 +367,7 @@ func (plugin Plugin) Execute(ctx context.Context, step domain.PlanStep, log plug
 		return nil, err
 	}
 	prometheus := endpointByName(endpoints, "prometheus")
-	manifest, err := monAgentManifest(input.Marker, prometheus, cluster.Spec.RegistryHost)
+	manifest, err := monAgentManifest(input.Marker, prometheus, cluster.Spec.RegistryHost, cluster.Spec.RegistryProject)
 	if err != nil {
 		return nil, err
 	}
@@ -567,7 +568,7 @@ func managedValues(input stepInput, storageClass, password string) ([]byte, erro
 	return yaml.Marshal(values)
 }
 
-func monAgentManifest(marker string, prometheus serviceEndpoint, registryHost string) ([]byte, error) {
+func monAgentManifest(marker string, prometheus serviceEndpoint, registryHost string, projects ...string) ([]byte, error) {
 	if !validManagedRegistryHost(registryHost) {
 		return nil, errors.New("managed Harbor address is missing from the verified cluster connection")
 	}
@@ -584,7 +585,7 @@ func monAgentManifest(marker string, prometheus serviceEndpoint, registryHost st
 		map[string]any{"apiVersion": "apps/v1", "kind": "Deployment", "metadata": map[string]any{"name": monAgentName, "namespace": namespace, "annotations": annotations, "labels": labels}, "spec": map[string]any{
 			"replicas": 1, "selector": map[string]any{"matchLabels": labels}, "template": map[string]any{"metadata": map[string]any{"labels": labels}, "spec": map[string]any{
 				"serviceAccountName": monAgentName, "nodeSelector": map[string]string{"kubephos.dev/role": "management"}, "containers": []any{map[string]any{
-					"name": monAgentName, "image": managedcomponents.Image(registryHost, managedcomponents.MonAgentName, monAgentVersion), "imagePullPolicy": "IfNotPresent",
+					"name": monAgentName, "image": managedcomponents.Image(registryHost, managedcomponents.MonAgentName, monAgentVersion, projects...), "imagePullPolicy": "IfNotPresent",
 					"env": []any{
 						map[string]any{"name": "PROMETHEUS_URL", "value": fmt.Sprintf("http://%s.%s.svc:%d", prometheus.ServiceName, namespace, prometheus.Port)},
 						map[string]any{"name": "SCRAPE_PERIOD_SECONDS", "value": "30"},

@@ -101,7 +101,7 @@ func releaseManagedComponentRollout(configValue config.Config) error {
 	if err := os.WriteFile(authenticationPath, authentication, 0600); err != nil {
 		return err
 	}
-	tagImage := managedcomponents.Image(endpoint.Spec.Host, spec.Name, spec.Version)
+	tagImage := managedcomponents.Image(endpoint.Spec.Host, spec.Name, spec.Version, credential.Spec.Project)
 	manifest, err := exec.CommandContext(ctx, "skopeo", "inspect", "--raw", "--authfile", authenticationPath, "--cert-dir", temporary, "docker://"+tagImage).Output()
 	if err != nil {
 		return fmt.Errorf("managed %s image %s is not available in Harbor: %w", spec.Name, spec.Version, err)
@@ -240,6 +240,13 @@ func readManagedWorkload(ctx context.Context, kubeconfigPath string, spec manage
 }
 
 func managedWorkloadImageAllowed(current, target, host string, spec managedRolloutSpec) bool {
+	if strings.HasPrefix(current, strings.TrimSuffix(host, "/")+"/"+managedcomponents.LegacyProject+"/") {
+		current = strings.Replace(current, "/"+managedcomponents.LegacyProject+"/", "/"+managedcomponents.Project+"/", 1)
+	}
+	if strings.HasPrefix(target, strings.TrimSuffix(host, "/")+"/"+managedcomponents.LegacyProject+"/") {
+		target = strings.Replace(target, "/"+managedcomponents.LegacyProject+"/", "/"+managedcomponents.Project+"/", 1)
+	}
+
 	if current == target || current == managedcomponents.Image(host, spec.Name, spec.Version) {
 		return true
 	}

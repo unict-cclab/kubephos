@@ -1,7 +1,8 @@
-export type SectionIconKind = 'overview' | 'infrastructure' | 'kubernetes' | 'catalog' | 'application' | 'scheduler' | 'descheduler' | 'autoscaler' | 'configurations' | 'experiments' | 'suites' | 'activity'
+export type SectionIconKind = 'overview' | 'infrastructure' | 'kubernetes' | 'catalog' | 'application' | 'scheduler' | 'descheduler' | 'autoscaler' | 'configurations' | 'experiments' | 'suites' | 'activity' | 'notifications'
 
 export function SectionIcon({kind}: {kind: SectionIconKind}) {
   const shapes: Record<SectionIconKind, React.ReactNode> = {
+    notifications: <path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4"/>,
     overview: <><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></>,
     infrastructure: <><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 8h10M7 12h10M7 16h4"/></>,
     kubernetes: <><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3"/><path d="M12 3v6m0 6v6M3 12h6m6 0h6"/></>,

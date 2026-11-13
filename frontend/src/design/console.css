@@ -1309,8 +1309,6 @@
 
 .code-copy-status { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 
-.comparison-sources { margin-block: 1rem; }
-.comparison-sources summary { cursor: pointer; font-weight: 600; margin-bottom: .75rem; }
 
 .comparison-modal .comparison-name { max-width: 24rem; }
 .modal.comparison-modal { width: min(1100px, calc(100vw - 32px)); max-width: 1100px; }

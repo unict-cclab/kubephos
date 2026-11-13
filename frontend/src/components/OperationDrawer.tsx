@@ -123,8 +123,8 @@ export function OperationDetailsPage({operationID, session, plugins, close, open
   const progressNodes = operation ? operationProgressNodes(operation) : []
   if (!operationID) return null
   return <div className="detail-page operation-detail-page">
-    <DetailBreadcrumb parent="Back" current="Activity" back={close} />
-    <div className="detail-page-heading"><h2>{operation?.title ?? 'Loading…'}</h2>{operation && <div className="detail-page-actions operation-heading-actions"><Status value={operation.status} />{canQueue && <button className="button primary" disabled={pending} onClick={queue}>Confirm plan and start</button>}{canCleanup && <button className="button danger" disabled={pending} onClick={prepareCleanup}>Prepare cleanup</button>}{canCancel && <button className="button danger" disabled={pending} onClick={cancel}>Cancel</button>}</div>}</div>
+    <header className="page-header"><DetailBreadcrumb parent="Back" current="Activity" back={close} />
+    <div className="detail-page-heading"><h2>{operation?.title ?? 'Loading…'}</h2>{operation && <div className="detail-page-actions operation-heading-actions"><Status value={operation.status} />{canQueue && <button className="button primary" disabled={pending} onClick={queue}>Confirm plan and start</button>}{canCleanup && <button className="button danger" disabled={pending} onClick={prepareCleanup}>Prepare cleanup</button>}{canCancel && <button className="button danger" disabled={pending} onClick={cancel}>Cancel</button>}</div>}</div></header>
     {operation && <>
       {operation.error && <ErrorFeedback message={operation.error}/>}
       <div className="operation-live-layout">
@@ -196,8 +196,8 @@ export function PipelineRunLogsPage({runID, close, notify}: {runID: string; clos
 
   const progressNodes = run?.stages.map(stage => ({id: stage.stageId, title: stage.title, status: stage.status, detail: stage.error || undefined})) ?? []
   return <div className="detail-page operation-detail-page pipeline-log-page">
-    <DetailBreadcrumb parent="Experiment" current="Execution logs" back={close} />
-    <div className="detail-page-heading"><div><h2>{run?.name ?? 'Loading…'}</h2></div>{run && <Status value={run.phase ?? run.status} />}</div>
+    <header className="page-header"><DetailBreadcrumb parent="Experiment" current="Execution logs" back={close} />
+    <div className="detail-page-heading"><div><h2>{run?.name ?? 'Loading…'}</h2></div>{run && <Status value={run.phase ?? run.status} />}</div></header>
     {run && <div className="operation-live-layout">
       <section className="operation-page-section"><div className="operation-section-heading"><h3>Progress</h3></div><ExecutionProgressGraph nodes={progressNodes} label={`${run.name} execution progress`} /></section>
       <div className="operation-log-stack">

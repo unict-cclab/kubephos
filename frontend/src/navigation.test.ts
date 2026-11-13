@@ -2,7 +2,7 @@ import {expect,it} from 'vitest'
 import {currentSection,isNavigableView,navigationTargets,visibleNavigation} from './navigation'
 it('groups resource destinations without changing their base routes',()=>{
  expect(visibleNavigation(true).map(group=>[group.label,group.items.map(item=>item.label)])).toEqual([
- ['', ['Overview']],['Infrastructure',['Proxmox connections','VM templates','Harbor','NFS','Kubernetes clusters']],['',['Deployments']],['',['Catalog']],['Experiments',['Configurations','Runs','Comparisons']],['Administration',['Users','Requests','Import and export']]
+ ['', ['Overview']],['Infrastructure',['Proxmox connections','VM templates','Harbor','NFS','Kubernetes clusters']],['',['Deployments']],['',['Catalog']],['Experiments',['Configurations','Runs','Comparisons']],['Administration',['Users','Requests','Notifications','Import and export']]
  ])
  const infrastructure=visibleNavigation(true)[1].items
  expect(infrastructure.slice(0,4).map(item=>item.hash)).toEqual(['infrastructure/connections','infrastructure/templates','infrastructure/harbor','infrastructure/nfs'])

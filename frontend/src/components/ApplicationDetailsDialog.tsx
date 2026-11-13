@@ -89,7 +89,7 @@ export function ApplicationDetailsPage({application, close, canDelete, remove}: 
     link.click()
     URL.revokeObjectURL(url)
   }
-  return <div className="detail-page"><DetailBreadcrumb parent="Catalog" current={application.name} back={close} /><div className="detail-page-heading"><div><h2>{application.name}</h2></div><div className="detail-page-actions">{canDelete && <ResourceAction action="delete" label={`Delete ${application.name} from catalog`} onClick={() => remove(application)} />}</div></div><ResourceAttribution resource={application} editable /><article className="detail-page-card">
+  return <div className="detail-page"><header className="page-header"><DetailBreadcrumb parent="Catalog" current={application.name} back={close} /><div className="detail-page-heading"><div><h2>{application.name}</h2></div><div className="detail-page-actions">{canDelete && <ResourceAction action="delete" label={`Delete ${application.name} from catalog`} onClick={() => remove(application)} />}</div></div></header><ResourceAttribution resource={application} editable /><article className="detail-page-card">
     <ErrorFeedback message={manifestError}/>
     <FormTabs key={application.reference} label="Application details" onSelect={id=>{
       if(id==='deployment'&&!manifest&&!manifestLoading)void loadPreview()

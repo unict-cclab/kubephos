@@ -7,7 +7,7 @@ export interface ResourceAttributionFields {
 
 export type Role = 'admin' | 'user'
 export type IstioDataPlane = 'sidecar' | 'ambient'
-export type View = 'deployments' | 'overview' | 'infrastructure' | 'kubernetes' | 'experiments' | 'results' | 'catalog' | 'users' | 'administration' | 'comparisons' | 'requests'
+export type View = 'deployments' | 'overview' | 'infrastructure' | 'kubernetes' | 'experiments' | 'results' | 'catalog' | 'users' | 'administration' | 'comparisons' | 'requests' | 'notifications'
 
 // A message a user sends to the administrators.
 export interface AdminRequest {

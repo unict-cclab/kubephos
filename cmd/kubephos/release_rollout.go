@@ -135,7 +135,7 @@ func releaseClusterLensRollout(configValue config.Config) error {
 	if err := os.WriteFile(authenticationPath, authentication, 0600); err != nil {
 		return err
 	}
-	tagImage := managedcomponents.Image(endpoint.Spec.Host, managedcomponents.ClusterLensName, managedcomponents.ClusterLensVersion)
+	tagImage := managedcomponents.Image(endpoint.Spec.Host, managedcomponents.ClusterLensName, managedcomponents.ClusterLensVersion, credential.Spec.Project)
 	manifest, err := exec.CommandContext(ctx, "skopeo", "inspect", "--raw", "--authfile", authenticationPath, "--cert-dir", temporary, "docker://"+tagImage).Output()
 	if err != nil {
 		return fmt.Errorf("managed Cluster Lens %s image is not available in Harbor: %w", managedcomponents.ClusterLensVersion, err)
@@ -206,6 +206,7 @@ func releaseClusterLensRollout(configValue config.Config) error {
 }
 
 func managedPreviousClusterLensImage(image, host string) bool {
+	image = strings.Replace(image, "/"+managedcomponents.Project+"/", "/"+managedcomponents.LegacyProject+"/", 1)
 	for _, version := range []string{"v1.3.0", "v1.1.0", "v1.2.0", "v1.2.1", "v1.2.2", "v1.2.3", "v1.2.4", "v1.2.5", "v1.2.6", "v1.2.7", "v1.2.8"} {
 		tag := host + "/kubephos-dev/cluster-lens:" + version
 		if image == tag {

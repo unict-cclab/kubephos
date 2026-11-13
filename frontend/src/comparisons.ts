@@ -26,8 +26,6 @@ export function comparisonWarnings(datasets: LoadedDataset[], configurations: Re
   const warnings: string[] = []
   const different = (values: unknown[]) => new Set(values.map(canonical)).size > 1
   if (different(datasets.map(item => item.dataset.spec.stepSeconds))) warnings.push('Data resolution differs between experiments. Plots use the common time windows.')
-  const durations = datasets.map(item => Math.round((Date.parse(item.dataset.spec.end) - Date.parse(item.dataset.spec.workloadStartedAt || item.dataset.spec.start)) / 1000))
-  if (durations.every(Number.isFinite) && Math.max(...durations) - Math.min(...durations) > Math.max(...datasets.map(item => item.dataset.spec.stepSeconds))) warnings.push('Durations differ. Averaged lines cover only the time windows present in all included data.')
   const components = (id: string, prefix: string) => {
     const value = configurations[id]?.components
     return Array.isArray(value) ? value.filter(component => component && typeof component === 'object' && String(component.capability).startsWith(prefix)).map(component => ({pluginId: component.pluginId, configuration: component.configuration})) : []
@@ -35,7 +33,6 @@ export function comparisonWarnings(datasets: LoadedDataset[], configurations: Re
   if (different(datasets.map(item => ({application: item.dataset.spec.applicationRef, values: configurations[item.artifact.id]?.applicationValues})))) warnings.push('Application settings differ between experiments.')
   if (different(datasets.map(item => ({target: item.dataset.spec.sloMilliseconds, settings: components(item.artifact.id, 'metrics.')})))) warnings.push('Monitoring settings or SLO targets differ. Violations use each experiment’s own target.')
   if (different(datasets.map(item => item.dataset.spec.clusterServer))) warnings.push('Experiments were collected from different clusters.')
-  if (different(datasets.map(item => components(item.artifact.id, 'load.')))) warnings.push('Load profiles differ between experiments.')
   if (different(datasets.map(item => [...new Set(item.dataset.spec.series.map(series => `${series.metric}:${series.unit}`))].sort()))) warnings.push('Available metrics differ between experiments. Missing measurements are not treated as zero.')
   const units = new Map<string, Set<string>>()
   for (const item of datasets) for (const series of item.dataset.spec.series) {
