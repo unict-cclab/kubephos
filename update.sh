@@ -39,7 +39,7 @@ compose() (
 # Only this installation's application repository; never prune volumes, build
 # caches, unrelated images, or anything referenced by any Docker container.
 cleanup_release_images() {
-  local image repository listing protected image_id reference created previous_id=
+  local image repository listing protected image_id reference _created previous_id=
   repository=$(sed -n 's/^KUBEPHOS_IMAGE=//p' "$install_dir/.env") || return 0
   repository=${repository#\"}; repository=${repository%\"}
   repository=${repository#\'}; repository=${repository%\'}
@@ -50,13 +50,14 @@ cleanup_release_images() {
   [[ -n $image ]] || return 0
   listing=$(docker image ls --no-trunc --format '{{.CreatedAt}}|{{.ID}}|{{.Repository}}:{{.Tag}}' "$repository" 2>> "$log_file" | sort -r) || return 0
   local containers
+  local -a container_ids=()
   containers=$(docker ps -aq 2>> "$log_file") || return 0
   protected=
   if [[ -n $containers ]]; then
-    # Docker IDs contain no whitespace; word splitting is intentional.
-    protected=$(docker inspect --format '{{.Image}}' $containers 2>> "$log_file") || return 0
+    mapfile -t container_ids <<< "$containers"
+    protected=$(docker inspect --format '{{.Image}}' "${container_ids[@]}" 2>> "$log_file") || return 0
   fi
-  while IFS='|' read -r created image_id reference; do
+  while IFS='|' read -r _created image_id reference; do
     [[ -n $image_id && $reference == "$repository":* && $reference != *':<none>' ]] || continue
     if [[ $'\n'"$protected"$'\n' == *$'\n'"$image_id"$'\n'* ]]; then continue; fi
     if [[ -z $previous_id ]]; then previous_id=$image_id; fi
