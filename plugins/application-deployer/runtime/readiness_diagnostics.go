@@ -82,6 +82,92 @@ func workloadReadinessSummary(raw string) (string, int, error) {
 	return summary, unhealthy, nil
 }
 
+// The scheduler reports why no node accepts a pod. When every node is excluded by
+// placement constraints (node selector, affinity, taints), waiting cannot help on
+// a fixed cluster, so the deployment fails after a short grace period instead of
+// the full readiness timeout. A shortage of CPU or memory can still resolve while
+// other pods terminate, so it gets a longer grace period.
+var (
+	schedulingCheckInterval    = 10 * time.Second
+	unschedulablePlacementWait = 30 * time.Second
+	unschedulableCapacityWait  = 2 * time.Minute
+)
+
+type unschedulablePod struct {
+	Name     string
+	Message  string
+	Capacity bool
+}
+
+func unschedulablePods(raw string) ([]unschedulablePod, error) {
+	var list struct {
+		Items []struct {
+			Metadata struct {
+				Name              string `json:"name"`
+				DeletionTimestamp string `json:"deletionTimestamp"`
+			} `json:"metadata"`
+			Status struct {
+				Phase      string                                           `json:"phase"`
+				Conditions []struct{ Type, Status, Reason, Message string } `json:"conditions"`
+			} `json:"status"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal([]byte(raw), &list); err != nil {
+		return nil, err
+	}
+	pods := []unschedulablePod{}
+	for _, pod := range list.Items {
+		if pod.Status.Phase != "Pending" || pod.Metadata.DeletionTimestamp != "" {
+			continue
+		}
+		for _, condition := range pod.Status.Conditions {
+			if condition.Type != "PodScheduled" || condition.Status != "False" || condition.Reason != "Unschedulable" {
+				continue
+			}
+			capacity := strings.Contains(condition.Message, "Insufficient ") || strings.Contains(condition.Message, "Too many pods")
+			pods = append(pods, unschedulablePod{Name: pod.Metadata.Name, Message: diagnosticText(condition.Message), Capacity: capacity})
+		}
+	}
+	return pods, nil
+}
+
+// schedulingTracker remembers since when each pod has been unschedulable.
+type schedulingTracker struct {
+	since map[string]time.Time
+}
+
+func newSchedulingTracker() *schedulingTracker {
+	return &schedulingTracker{since: map[string]time.Time{}}
+}
+
+// observe returns an error for the first pod unschedulable beyond its grace period.
+func (tracker *schedulingTracker) observe(pods []unschedulablePod, now time.Time) error {
+	current := map[string]bool{}
+	sort.Slice(pods, func(i, j int) bool { return pods[i].Name < pods[j].Name })
+	var failure error
+	for _, pod := range pods {
+		current[pod.Name] = true
+		first, seen := tracker.since[pod.Name]
+		if !seen {
+			tracker.since[pod.Name] = now
+			continue
+		}
+		wait, advice := unschedulablePlacementWait, "no node satisfies its node selector, affinity or tolerations; check the placement settings and node labels"
+		if pod.Capacity {
+			wait, advice = unschedulableCapacityWait, "no node has enough free capacity; reduce the CPU or memory requests or add capacity"
+		}
+		if failure == nil && now.Sub(first) >= wait {
+			failure = fmt.Errorf("pod %s cannot be scheduled after %s: %s (%s)", pod.Name, now.Sub(first).Round(time.Second), advice, pod.Message)
+		}
+	}
+	for name := range tracker.since {
+		if !current[name] {
+			delete(tracker.since, name)
+		}
+	}
+	return failure
+}
+
 type readinessContainerStatus struct {
 	Name  string `json:"name"`
 	State struct {

@@ -26,6 +26,28 @@ func scanComparison(row pgx.Row) (domain.ResultComparison, error) {
 
 const comparisonColumns = `c.id,c.name,c.owner_user_id,u.username,c.series,c.created_at,c.updated_at`
 
+// ExistingExperimentIDs reports which of the given experiments still exist, so
+// comparisons can flag sources deleted after they were saved.
+func (s *Store) ExistingExperimentIDs(ctx context.Context, ids []string) (map[string]bool, error) {
+	existing := make(map[string]bool, len(ids))
+	if len(ids) == 0 {
+		return existing, nil
+	}
+	rows, err := s.pool.Query(ctx, `SELECT id FROM experiments WHERE id = ANY($1)`, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		existing[id] = true
+	}
+	return existing, rows.Err()
+}
+
 // A direct lookup avoids the pagination of the experiment history endpoint.
 func (s *Store) GetComparisonSource(ctx context.Context, id string) (domain.Experiment, error) {
 	var item domain.Experiment

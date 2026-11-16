@@ -122,3 +122,44 @@ it('starts the exact initialized run from the list and hides play for viewers, s
     expect(screen.queryByRole('button',{name:'Start Prepared'})).not.toBeInTheDocument()
   }
 })
+
+describe('experiments history bulk deletion', () => {
+  beforeEach(() => {
+    window.location.hash = '#results'
+    vi.mocked(request).mockReset()
+  })
+
+  it('deletes the selected completed runs together and keeps active runs unselectable', async () => {
+    vi.mocked(request).mockResolvedValue(undefined as never)
+    const changed = vi.fn().mockResolvedValue(undefined)
+    const run = (id: string, name: string, status: string) => ({id, kind: 'instance', name, status, createdAt: '2026-09-17T00:00:00Z', updatedAt: '2026-09-17T00:00:00Z', variants: []}) as unknown as Experiment
+    render(<ExperimentsHistoryView experiments={[run('exp_a', 'First', 'succeeded'), run('exp_b', 'Second', 'failed'), run('exp_c', 'Active', 'running')]} configurations={[]} artifacts={[]} operations={[]} workspaces={[]} session={{authenticated: true, csrfToken: 'token', user: {id: 'admin', username: 'admin', role: 'admin'}}} changed={changed} openOperation={() => {}} />)
+    expect(screen.queryAllByRole('checkbox', {name: /^Select /})).toHaveLength(0)
+    fireEvent.click(screen.getByRole('button', {name: 'Select'}))
+    expect(screen.getByText('Select the completed runs to delete.')).toBeInTheDocument()
+    expect(screen.getByRole('button', {name: 'Delete run'})).toBeDisabled()
+    expect(screen.queryByRole('checkbox', {name: 'Select Active'})).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('checkbox', {name: 'Select all runs'}))
+    expect(screen.getByText('2 selected')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', {name: 'Delete 2 runs'}))
+    expect(screen.getByText('Delete 2 runs and their executions, logs and collected artifacts?')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', {name: 'Delete'}))
+    await waitFor(() => expect(changed).toHaveBeenCalled())
+    expect(request).toHaveBeenCalledWith('/experiments/exp_a', {method: 'DELETE'}, 'token')
+    expect(request).toHaveBeenCalledWith('/experiments/exp_b', {method: 'DELETE'}, 'token')
+    expect(request).not.toHaveBeenCalledWith('/experiments/exp_c', expect.anything(), expect.anything())
+    await waitFor(() => expect(screen.queryAllByRole('checkbox', {name: /^Select /})).toHaveLength(0))
+  })
+
+  it('leaves selection mode with Cancel and selects a row by clicking it', () => {
+    const run = (id: string, name: string) => ({id, kind: 'instance', name, status: 'succeeded', createdAt: '2026-09-17T00:00:00Z', updatedAt: '2026-09-17T00:00:00Z', variants: []}) as unknown as Experiment
+    render(<ExperimentsHistoryView experiments={[run('exp_a', 'First'), run('exp_b', 'Second')]} configurations={[]} artifacts={[]} operations={[]} workspaces={[]} session={{authenticated: true, csrfToken: 'token', user: {id: 'admin', username: 'admin', role: 'admin'}}} changed={async () => {}} openOperation={() => {}} />)
+    fireEvent.click(screen.getByRole('button', {name: 'Select'}))
+    fireEvent.click(screen.getByRole('heading', {name: 'First'}))
+    expect(screen.getByRole('checkbox', {name: 'Select First'})).toBeChecked()
+    expect(window.location.hash).toBe('#results')
+    fireEvent.click(screen.getByRole('button', {name: 'Cancel'}))
+    expect(screen.queryAllByRole('checkbox', {name: /^Select /})).toHaveLength(0)
+    expect(screen.getByRole('button', {name: 'Select'})).toBeInTheDocument()
+  })
+})

@@ -52,6 +52,8 @@ func TestUserMutationAllowed(t *testing.T) {
 		"/api/v1/experiment-suites",
 		"/api/v1/experiments/experiment-1/cancel",
 		"/api/v1/catalog/applications/application-1/resolve",
+		"/api/v1/kubernetes-clusters/cluster-1/live-dashboard",
+		"/api/v1/experiments/experiment-1/live-dashboard",
 	}
 	for _, path := range allowed {
 		if !userMutationAllowed(path) {
@@ -62,6 +64,7 @@ func TestUserMutationAllowed(t *testing.T) {
 		"/api/v1/catalog/applications",
 		"/api/v1/catalog/applications/application-1",
 		"/api/v1/kubernetes-clusters/cluster-1/recreate",
+		"/api/v1/kubernetes-clusters/live-dashboard/recreate",
 		"/api/v1/users",
 	}
 	for _, path := range denied {

@@ -54,6 +54,37 @@ export function ExperimentsHistoryView(props: Props) {
   const [starting, setStarting] = useState<string | null>(null)
   const [error, setError] = useErrorState()
   const [owner, setOwner] = useState('')
+  // Completed runs the user manages can be deleted together. Checkboxes appear
+  // only after choosing Select, so the list stays calm otherwise.
+  const [selecting, setSelecting] = useState(false)
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+  const stopSelecting = () => {setSelecting(false); setSelectedIds(new Set())}
+  const [deletingSelected, setDeletingSelected] = useState(false)
+  const deletable = (item: Experiment) => canManageResource(props.session, item.ownerUserId) && isTerminalExperiment(item.status)
+  const selectedRuns = props.experiments.filter(item => selectedIds.has(item.id) && deletable(item))
+  const removeSelected = async () => {
+    const targets = selectedRuns
+    if (!targets.length || !await confirmDelete(targets.length === 1 ? experimentDeletionMessage(targets[0]) : `Delete ${targets.length} runs and their executions, logs and collected artifacts?`)) return
+    setDeletingSelected(true)
+    setError('')
+    const failed: Experiment[] = []
+    for (const item of targets) {
+      try {
+        await request(`/experiments/${item.id}`, {method: 'DELETE'}, props.session.csrfToken)
+      } catch {
+        failed.push(item)
+      }
+    }
+    // Runs that could not be deleted stay selected, so the action can be retried.
+    setSelectedIds(new Set(failed.map(item => item.id)))
+    if (!failed.length) setSelecting(false)
+    try {
+      await props.changed()
+    } finally {
+      setDeletingSelected(false)
+    }
+    if (failed.length) setError(`Could not delete ${failed.length === 1 ? 'run' : `${failed.length} runs`}: ${failed.map(item => item.name).join(', ')}.`)
+  }
   const remove = async (item: Experiment) => {
     if (!await confirmDelete(experimentDeletionMessage(item))) return
     setDeleting(item.id)
@@ -85,12 +116,14 @@ export function ExperimentsHistoryView(props: Props) {
   if (selected) return <ResultsView artifacts={props.artifacts} experiments={props.experiments} operations={props.operations} workspaces={props.workspaces} session={props.session} changed={props.changed} openOperation={props.openOperation} openPipelineRun={props.openPipelineRun} focusedExperiment={selected} onBack={detail.close} />
 
   const items = props.experiments.filter(item => (!owner || item.ownerUserId === owner) && (filter === 'all' || (filter === 'active' ? ['queued', 'running', 'initializing', 'initialized'].includes(item.status) : ['succeeded', 'failed', 'canceled'].includes(item.status))))
+  const ownerFilter = canFilterByOwner(props.experiments, owner) ? <OwnerFilter items={props.experiments} value={owner} onChange={setOwner} /> : null
+  const selectAction = !selecting && items.some(deletable) ? <button type="button" className="button secondary compact" onClick={() => setSelecting(true)}>Select</button> : null
   return <>
     {confirmationDialog}
     <ResourceListHeading title="Runs" icon="experiments" action={<>{Boolean(props.session.user) && <DisabledActionHint disabled={!runnable.length} reason="Requires a valid configuration."><ResourceAction action="create" label="New run" disabled={!runnable.length} title={runnable.length ? 'New run' : 'Requires a valid configuration.'} onClick={launch} /></DisabledActionHint>}</>} />
     {error && <ErrorFeedback message={error} />}
     <div className="history-filters" role="group" aria-label="Filter experiments">{(['all', 'active', 'completed'] as Filter[]).map(value => <button key={value} type="button" className={filter === value ? 'active' : ''} aria-pressed={filter === value} onClick={() => setFilter(value)}>{value === 'all' ? 'All' : value === 'active' ? 'In progress' : 'Completed'}</button>)}</div>
-    <ResourceListTable open={item => detail.open('instance', item.id)} filters={canFilterByOwner(props.experiments, owner) ? <OwnerFilter items={props.experiments} value={owner} onChange={setOwner} /> : undefined} empty={<><strong>{filter === 'all' && !owner ? 'No runs yet' : 'No matching runs'}</strong><p>{filter === 'all' && !owner ? 'Run an experiment from a validated configuration to start collecting results.' : 'Choose another status or owner filter.'}</p></>} searchText={item => `${item.name} ${ownerLabel(item)} ${item.kind} ${experimentDisplayStatus(item)}`} items={items} label="Runs" columns={[
+    <ResourceListTable selection={selecting ? {selected: new Set(selectedRuns.map(item => item.id)), onChange: setSelectedIds, selectable: deletable, itemLabel: item => item.name, hint: 'Select the completed runs to delete.', cancel: stopSelecting, actions: <button type="button" className="button danger compact" disabled={deletingSelected || !selectedRuns.length} onClick={() => void removeSelected()}>{deletingSelected ? 'Deleting…' : selectedRuns.length > 1 ? `Delete ${selectedRuns.length} runs` : 'Delete run'}</button>} : undefined} open={selecting ? undefined : item => detail.open('instance', item.id)} filters={ownerFilter || selectAction ? <>{ownerFilter}{selectAction}</> : undefined} empty={<><strong>{filter === 'all' && !owner ? 'No runs yet' : 'No matching runs'}</strong><p>{filter === 'all' && !owner ? 'Run an experiment from a validated configuration to start collecting results.' : 'Choose another status or owner filter.'}</p></>} searchText={item => `${item.name} ${ownerLabel(item)} ${item.kind} ${experimentDisplayStatus(item)}`} items={items} label="Runs" columns={[
       {label: 'Name', render: item => <><h3>{item.name}</h3><small>{item.kind === 'suite' ? `Comparative · ${item.variants.length} configurations` : item.variants[0]?.name ?? props.configurations.find(value => value.id === item.configurationId)?.name ?? 'Single experiment'}</small></>},
       {label: 'Executions', render: item => {const trials = item.variants.flatMap(variant => variant.trials); return `${trials.filter(trial => ['succeeded', 'failed', 'canceled'].includes(trial.status)).length}/${trials.length}`}},
       {label: 'Status', render: item => <span className={`status ${experimentDisplayStatus(item)}`}>{experimentDisplayStatus(item)}</span>}

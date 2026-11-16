@@ -11,10 +11,17 @@ import (
 	"kubephos.dev/kubephos/internal/workloadresources"
 )
 
+// packageResourcesField keeps the CPU and memory declared by the application
+// package as the starting point for explicit settings.
+const packageResourcesField = "packageResources"
+
 // applyResourceSettings replaces package CPU and memory with explicit settings.
-// Other resource types stay intact. Unconfigured containers, including init
-// containers and auxiliary jobs, receive no CPU or memory defaults.
+// Other resource types stay intact. Unless packageResources is enabled,
+// unconfigured containers, including init containers and auxiliary jobs,
+// receive no CPU or memory defaults; when it is enabled, the package values are
+// kept and explicit settings replace only the fields they name.
 func applyResourceSettings(manifest []byte, descriptor catalog.Descriptor, values map[string]any) ([]byte, error) {
+	keepPackage, _ := values[packageResourcesField].(bool)
 	services := []string{}
 	targets := map[string]map[string]any{}
 	for _, component := range descriptor.Spec.Interface.Components {
@@ -84,12 +91,14 @@ func applyResourceSettings(manifest []byte, descriptor catalog.Descriptor, value
 				if resources == nil {
 					resources = map[string]any{}
 				}
-				for _, kind := range []string{"requests", "limits"} {
-					if entries, ok := resources[kind].(map[string]any); ok {
-						delete(entries, "cpu")
-						delete(entries, "memory")
-						if len(entries) == 0 {
-							delete(resources, kind)
+				if !keepPackage {
+					for _, kind := range []string{"requests", "limits"} {
+						if entries, ok := resources[kind].(map[string]any); ok {
+							delete(entries, "cpu")
+							delete(entries, "memory")
+							if len(entries) == 0 {
+								delete(resources, kind)
+							}
 						}
 					}
 				}
@@ -103,7 +112,7 @@ func applyResourceSettings(manifest []byte, descriptor catalog.Descriptor, value
 					}
 					resources[kind] = current
 				}
-				// Validate the explicitly configured CPU and memory.
+				// Validate the effective CPU and memory, including retained package values.
 				effective := map[string]any{}
 				for _, field := range []struct{ kind, suffix string }{{"requests", "Request"}, {"limits", "Limit"}} {
 					entries, _ := resources[field.kind].(map[string]any)

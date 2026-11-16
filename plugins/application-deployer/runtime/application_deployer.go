@@ -935,11 +935,29 @@ func verifyWorkloads(ctx context.Context, runner commandRunner, kubeconfig, name
 	lastSnapshot := ""
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
+	scheduling := newSchedulingTracker()
+	schedulingTicker := time.NewTicker(schedulingCheckInterval)
+	defer schedulingTicker.Stop()
 	for {
 		select {
 		case <-done:
 			close(results)
 			goto completed
+		case <-schedulingTicker.C:
+			pods, err := runner.Run(ctx, kubeconfig, nil, "get", "pods", "-n", namespace, "-o", "json")
+			if err != nil {
+				continue
+			}
+			pending, err := unschedulablePods(pods)
+			if err != nil {
+				continue
+			}
+			if err := scheduling.observe(pending, time.Now()); err != nil {
+				if logErr := log("warning", "Stopping the readiness wait early: "+err.Error()); logErr != nil {
+					return logErr
+				}
+				return workloadReadinessFailure(ctx, runner, kubeconfig, namespace, err)
+			}
 		case <-ticker.C:
 			pods, err := runner.Run(ctx, kubeconfig, nil, "get", "pods", "-n", namespace, "-o", "json")
 			if err != nil {

@@ -7,7 +7,8 @@ function Badge({count}: {count?: number}) {
   return count ? <span className="app-nav-badge">{count}<span className="visually-hidden"> open</span></span> : null
 }
 
-export function SidebarNavigation({sections, view, navigate, badges = {}}: {sections: SidebarSection[]; view: View; navigate: (view: View,hash?:string) => void; badges?: Partial<Record<View, number>>}) {
+// A collapsed sidebar keeps one icon per section; opening a group expands the sidebar first.
+export function SidebarNavigation({sections, view, navigate, badges = {}, collapsed = false, expandSidebar}: {sections: SidebarSection[]; view: View; navigate: (view: View,hash?:string) => void; badges?: Partial<Record<View, number>>; collapsed?: boolean; expandSidebar?: () => void}) {
  const [hash,setHash]=useState(window.location.hash.replace(/^#/,''))
  useEffect(()=>{const update=()=>setHash(window.location.hash.replace(/^#/,''));window.addEventListener('hashchange',update);return()=>window.removeEventListener('hashchange',update)},[])
  // Only the group holding the current page stays open after navigation, so the sidebar never outgrows the viewport.
@@ -17,11 +18,13 @@ export function SidebarNavigation({sections, view, navigate, badges = {}}: {sect
  return <nav className="app-nav app-nav-direct" aria-label="Main navigation">{sections.map(section=>{
   const grouped=Boolean(section.label)
   const current=section.items.some(item=>item.view===view)
-  const open=expanded[section.id]??false
+  const open=!collapsed&&(expanded[section.id]??false)
   const first=section.items[0]
   const iconView=section.id==='experiments'?'experiments':section.id==='administration'?'administration':first.view
-  return <div className={`app-nav-section${current?' is-open':''}`} key={section.id}>
-   <button type="button" className={`app-nav-link app-nav-section-link${!grouped&&current?' active':''}`} aria-expanded={grouped?open:undefined} aria-controls={grouped?`nav-${section.id}`:undefined} aria-current={!grouped&&current?'page':undefined} onClick={()=>grouped?setExpanded(previous=>({...previous,[section.id]:!open})):navigate(first.view)}><NavigationIcon view={iconView}/><span>{section.label||first.label}</span>{(!grouped||!open)&&<Badge count={section.items.reduce((total,item)=>total+(badges[item.view]??0),0)}/>}{grouped&&<svg className={`app-nav-chevron${open?' expanded':''}`} width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true"><path d="m9 5 7 7-7 7"/></svg>}</button>
+  const label=section.label||first.label
+  const toggle=()=>{if(collapsed){expandSidebar?.();setExpanded(previous=>({...previous,[section.id]:true}))}else setExpanded(previous=>({...previous,[section.id]:!open}))}
+  return <div className={`app-nav-section${current?' is-open':''}${grouped&&current&&collapsed?' is-current':''}`} key={section.id}>
+   <button type="button" title={collapsed?label:undefined} className={`app-nav-link app-nav-section-link${!grouped&&current?' active':''}`} aria-expanded={grouped?open:undefined} aria-controls={grouped&&!collapsed?`nav-${section.id}`:undefined} aria-current={!grouped&&current?'page':undefined} onClick={()=>grouped?toggle():navigate(first.view)}><NavigationIcon view={iconView}/><span>{label}</span>{(!grouped||!open)&&<Badge count={section.items.reduce((total,item)=>total+(badges[item.view]??0),0)}/>}{grouped&&<svg className={`app-nav-chevron${open?' expanded':''}`} width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true"><path d="m9 5 7 7-7 7"/></svg>}</button>
    {grouped&&<div id={`nav-${section.id}`} className="app-nav-pages" hidden={!open}>{section.items.map(item=>{const active=view===item.view&&(!item.hash||hash===item.hash||hash==='infrastructure'&&item.hash==='infrastructure/connections');return <button type="button" key={item.hash??item.view} className={`app-nav-link${active?' active':''}`} aria-current={active?'page':undefined} onClick={()=>item.hash?navigate(item.view,item.hash):navigate(item.view)}><span>{item.label}</span><Badge count={badges[item.view]}/></button>})}</div>}
   </div>
  })}</nav>

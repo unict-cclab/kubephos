@@ -60,6 +60,28 @@ minimum >= 0 and maximum > minimum. Period and phase offset retain their meaning
 Existing baseline/amplitude profiles keep their original curve until their range
 is edited.
 
+While a run waits for its workloads, a pod the scheduler rejects on every node
+ends the wait early instead of after the ten-minute readiness timeout. Placement
+constraints that no node satisfies (node selector, affinity, taints) fail the run
+after 30 seconds; a shortage of CPU or memory fails it after two minutes, because
+terminating pods can still free capacity. The error names the pod and the
+scheduler's reason.
+
+To delete several runs at once, choose **Select** in **Runs**, tick the completed
+runs (or click their rows) and delete them together. Active runs and runs you do
+not manage cannot be selected; **Cancel** or Escape leaves the selection.
+
+To follow a run live, choose **Live dashboard** in the header of a run in progress.
+KubePhos installs or updates the dashboard in the cluster's managed Grafana, in the
+KubePhos folder, then opens it on the run's namespace from its start, refreshing
+every ten seconds: load generator throughput, failures, response-time percentiles
+and SLO compliance, per-service Istio metrics, ready replicas and scaling events,
+pod phases (including Pending and unschedulable pods), and CPU, memory and node
+usage. This works on clusters created before the dashboard existed. **Live
+experiment** in the cluster details opens the same dashboard on the namespace
+currently receiving load. Single clusters only; the KubePhos host must reach the
+cluster's Grafana port, as for the other cluster dashboards.
+
 Multi cluster provisioning uses Cilium ClusterMesh. Running experiments on a
 multi cluster group awaits the multicluster deployment integration.
 
@@ -80,6 +102,11 @@ CPU and memory requests/limits are optional across the catalog. Empty fields omi
 these settings from application containers, init containers and auxiliary jobs.
 Service overrides inherit the shared values. Kubernetes admission policies may
 supply namespace defaults; a limit without a request becomes the request.
+
+Online Boutique also offers **Use upstream requests and limits**. When enabled, every
+container keeps the CPU and memory requests and limits of the pinned upstream
+manifests, and explicit values replace only the fields they set. A request above the
+upstream limit of the same resource is rejected; set the limit as well.
 
 **Application → Placement** shows the generated manifest's default node selector
 and tolerations, alongside the shared custom settings. Defaults remain read-only
@@ -187,6 +214,10 @@ filter is your account. Each selected experiment has an optional plot label and
 a color. Labels do not rename the source experiments. Already selected items
 cannot be added twice. Comparative configurations use the same selection flow
 with **Add configurations**.
+
+A comparison keeps referring to its source experiments. When one of them is
+deleted or no longer shared with you, the list marks the comparison, and its page
+names the missing experiments with **Edit comparison** to remove them.
 
 Existing datasets retain their original measurement definitions. New end-to-end
 measurements record `endToEndSource: locust`. Cluster Lens uses the same Locust

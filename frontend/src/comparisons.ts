@@ -3,8 +3,11 @@ import type {LoadedDataset} from './resultsData'
 
 export interface ComparisonRun {experimentId: string; trialId: string}
 export interface ComparisonSeries {labelOverride?: string; label: string; color: string; runs: ComparisonRun[]}
+// A source experiment deleted, or no longer shared, after the comparison was saved.
+export interface UnavailableComparisonSource {experimentId: string; label: string; reason: 'deleted' | 'unshared'}
 export interface ResultComparison extends ResourceAttributionFields {
   id: string; name: string; ownerUserId: string; series: ComparisonSeries[]; createdAt: string; updatedAt: string
+  unavailableSources?: UnavailableComparisonSource[]
 }
 export interface ComparisonView {
   comparison: ResultComparison; result: Experiment; sources: Experiment[]; artifacts: Artifact[]; sourceConfigurations: Record<string, Record<string, unknown>>

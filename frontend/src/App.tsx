@@ -20,6 +20,8 @@ import {CommandPalette, isPaletteShortcut, paletteShortcut} from './components/C
 
 type Modal = 'connection' | 'machineTemplate' | 'infrastructureService' | 'kubernetesCluster' | 'application' | null
 
+const navigationCollapsedKey = 'kubephos.navigation.collapsed'
+
 export default function App() {
   return <NotificationProvider><PlatformApp /></NotificationProvider>
 }
@@ -35,6 +37,28 @@ function PlatformApp() {
   const {notify} = useNotifications()!
   const [clusterActions, setClusterActions] = useState<Record<string, ClusterAction>>({})
   const [mobileNavigationOpen, setMobileNavigationOpen] = useState(false)
+  // Narrow windows start with the sidebar collapsed to icons; an explicit choice is remembered.
+  const [navigationCollapsed, setNavigationCollapsed] = useState(() => {
+    try {
+      const saved = window.localStorage.getItem(navigationCollapsedKey)
+      if (saved !== null) return saved === 'true'
+    } catch { /* Storage can be unavailable; fall back to the window width. */ }
+    return window.matchMedia?.('(min-width: 721px) and (max-width: 1099px)').matches ?? false
+  })
+  const collapseNavigation = (collapsed: boolean) => {
+    setNavigationCollapsed(collapsed)
+    try { window.localStorage.setItem(navigationCollapsedKey, String(collapsed)) } catch { /* The choice applies to this page only. */ }
+  }
+  // Phones use the top bar and its sheet instead of the icon rail.
+  const [wideViewport, setWideViewport] = useState(() => window.matchMedia?.('(min-width: 721px)').matches ?? true)
+  useEffect(() => {
+    const query = window.matchMedia?.('(min-width: 721px)')
+    if (!query) return
+    const update = () => setWideViewport(query.matches)
+    query.addEventListener('change', update)
+    return () => query.removeEventListener('change', update)
+  }, [])
+  const railCollapsed = navigationCollapsed && wideViewport
   const [paletteOpen, setPaletteOpen] = useState(false)
   const mobileNavigationButton = useRef<HTMLButtonElement>(null)
   const [serviceKind, setServiceKind] = useState<'harbor' | 'nfs'>('harbor')
@@ -189,15 +213,16 @@ function PlatformApp() {
   return <>
     {confirmationDialog}
     {paletteOpen && <CommandPalette items={navigationTargets(isAdmin)} close={() => setPaletteOpen(false)} select={navigate} />}
-    <div className="app-shell">
+    <div className={`app-shell${railCollapsed ? ' is-nav-collapsed' : ''}`}>
       <aside className="app-sidebar">
         <div className="app-sidebar-head">
           <button className="app-brand" type="button" onClick={() => navigate('overview')} aria-label="KubePhos home"><span className="brand-mark">K</span><strong>KubePhos</strong></button>
+          <button className="app-nav-collapse icon-button" type="button" aria-label={navigationCollapsed ? 'Expand navigation' : 'Collapse navigation'} title={navigationCollapsed ? 'Expand navigation' : 'Collapse navigation'} aria-controls="main-navigation" aria-expanded={!navigationCollapsed} onClick={() => collapseNavigation(!navigationCollapsed)}><ActionIcon name="sidebar" /></button>
           <button ref={mobileNavigationButton} className="app-nav-toggle icon-button" type="button" aria-label={mobileNavigationOpen ? 'Close navigation' : 'Open navigation'} aria-controls="main-navigation" aria-expanded={mobileNavigationOpen} onClick={() => setMobileNavigationOpen(value => !value)}><ActionIcon name={mobileNavigationOpen ? 'close' : 'menu'} /></button>
         </div>
         <div id="main-navigation" className={`app-sidebar-body${mobileNavigationOpen ? ' is-open' : ''}`} onKeyDown={event => {if (event.key === 'Escape' && mobileNavigationOpen) closeMobileNavigation()}}>
-          <button type="button" className="app-jump" onClick={() => setPaletteOpen(true)}><ActionIcon name="search" /><span>Jump to…</span><kbd>{paletteShortcut()}</kbd></button>
-          <SidebarNavigation sections={navigationSections} view={view} navigate={navigate} badges={isAdmin ? {requests: data.adminRequests.filter(item => item.status === 'open').length} : {}} />
+          <button type="button" className="app-jump" title={railCollapsed ? 'Jump to…' : undefined} aria-label={railCollapsed ? 'Jump to…' : undefined} onClick={() => setPaletteOpen(true)}><ActionIcon name="search" /><span>Jump to…</span><kbd>{paletteShortcut()}</kbd></button>
+          <SidebarNavigation sections={navigationSections} view={view} navigate={navigate} collapsed={railCollapsed} expandSidebar={() => collapseNavigation(false)} badges={isAdmin ? {requests: data.adminRequests.filter(item => item.status === 'open').length} : {}} />
           <AccountMenu session={session} username={session.user?.username ?? 'Account'} isAdmin={isAdmin} version={data.system?.version} refreshing={refreshing} refresh={() => void load(false)} signOut={() => void logout()} />
         </div>
       </aside>
