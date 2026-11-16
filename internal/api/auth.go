@@ -87,6 +87,8 @@ func userMutationAllowed(path string) bool {
 		path == "/api/v1/experiment-instances" ||
 		path == "/api/v1/experiment-suites" ||
 		strings.HasPrefix(path, "/api/v1/experiments") ||
+		// Opening the live dashboard installs it in Grafana; the handler checks cluster assignment.
+		strings.HasPrefix(path, "/api/v1/kubernetes-clusters/") && strings.HasSuffix(path, "/live-dashboard") ||
 		strings.HasPrefix(path, "/api/v1/catalog/applications/") && strings.HasSuffix(path, "/resolve")
 }
 

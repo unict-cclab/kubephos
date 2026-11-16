@@ -22,9 +22,9 @@ function waypointRows(settings: Record<string, unknown> = {}): string[][] {
  ]
 }
 
-export function ResourceSettingsReadout({value={},label='Resources',defaults}:{defaults?:ReactNode;value?:Record<string,unknown>;label?:string}) {
+export function ResourceSettingsReadout({value={},label='Resources',defaults,fallback='—'}:{defaults?:ReactNode;value?:Record<string,unknown>;label?:string;fallback?:string}) {
  const [section,setSection]=useState('common')
- const rows=(settings:Record<string,unknown>,common:Record<string,unknown>={})=>['CPU','Memory'].map(name=>[name,...['Request','Limit'].map(kind=>String(settings[`${name.toLowerCase()}${kind}`]??common[`${name.toLowerCase()}${kind}`]??'—'))])
+ const rows=(settings:Record<string,unknown>,common:Record<string,unknown>={})=>['CPU','Memory'].map(name=>[name,...['Request','Limit'].map(kind=>String(settings[`${name.toLowerCase()}${kind}`]??common[`${name.toLowerCase()}${kind}`]??fallback))])
  const overrides=value.resourceOverrides&&typeof value.resourceOverrides==='object'?value.resourceOverrides as Record<string,Record<string,unknown>>:{}
  return <FormTabs selectedId={section} onSelect={setSection} label={`${label} settings`} items={[
  {id:'common',title:'Common settings',content:<ReadoutTable label={label} data={{headers:['Resource','Request','Limit'],rows:rows(value)}}/>},
@@ -42,11 +42,11 @@ export function ApplicationSettingsReadout({application,item,session,networking,
  const replicas=Boolean(schema.properties?.initialReplicas)
  const tcp=Boolean(application?.descriptor.spec?.interface?.endpoints?.length)&&application!.descriptor.spec!.interface!.endpoints!.every(endpoint=>endpoint.protocol==='tcp')
  const istio=networking!=='cilium'&&(item.definition.istioInjection??!tcp)
- const parameterValues=Object.fromEntries(Object.entries(values).filter(([name])=>!['initialReplicas','replicaOverrides','cpuRequest','cpuLimit','memoryRequest','memoryLimit','resourceOverrides'].includes(name)))
+ const parameterValues=Object.fromEntries(Object.entries(values).filter(([name])=>!['initialReplicas','replicaOverrides','packageResources','cpuRequest','cpuLimit','memoryRequest','memoryLimit','resourceOverrides'].includes(name)))
  return <FormTabs label="Application settings" items={[
  ...(hasConfigurableFields(parameters,values)||!replicas?[{id:'parameters',title:'Parameters',content:<InputData value={{...parameterValues,...(!replicas?{podDisruptionBudgetMinAvailable:item.definition.podDisruptionBudgetMinAvailable??(tcp?0:1)}:{})}} schema={parameters}/>}]:[]),
  ...(replicas?[{id:'replicas',title:'Replicas',content:<div className="form-stack"><InputData value={{initialReplicas:values.initialReplicas??1,podDisruptionBudgetMinAvailable:item.definition.podDisruptionBudgetMinAvailable??(tcp?0:1)}}/>{Object.keys(replicaOverrides).length>0&&<ReadoutTable label="Initial replicas by service" data={{headers:['Service','Initial replicas'],rows:Object.entries(replicaOverrides).map(([id,value])=>[id,String(value)])}}/>}</div>}]:[]),
- ...(Object.keys(resources.properties??{}).length?[{id:'resources',title:'Resources',content:<ResourceSettingsReadout value={values}/>}]:[]),
+ ...(Object.keys(resources.properties??{}).length?[{id:'resources',title:'Resources',content:resources.properties?.packageResources?<div className="form-stack"><ReadoutTable label="Resource defaults" data={{headers:['Field','Value'],rows:[['Use upstream requests and limits',values.packageResources===true?'Yes':'No']]}}/><ResourceSettingsReadout value={values} fallback={values.packageResources===true?'Upstream':'—'}/></div>:<ResourceSettingsReadout value={values}/>}]:[]),
  ...(topology?[{id:'topology',title:'Topology',content:topology}]:[]),
  {id:'placement',title:'Placement',content:<PlacementReadout deploymentId={deploymentId} networking={networking} value={item.definition.applicationPlacement} application={application} session={session} values={item.definition.applicationValues}/>},
  {id:'istio',title:'Istio',content:item.definition.istioDataPlane==='ambient'?<ReadoutTable label="Istio settings" data={{headers:['Field','Value'],rows:[['Use Istio','Yes'],['Data plane','Ambient (whole namespace)'],...waypointRows(item.definition.istioWaypoint)]}}/>:!istio&&!Object.values(item.definition.istioInjectionOverrides??{}).some(Boolean)?<ReadoutTable label="Istio settings" data={{headers:['Field','Value'],rows:[['Use Istio',networking==='cilium'?'No (Cilium networking)':'No']]}}/>:<FormTabs label="Istio settings" items={[{id:'injection',title:'Injection',content:<IstioInjectionReadout enabled={istio} overrides={item.definition.istioInjectionOverrides}/>},{id:'proxy-resources',title:'Proxy resources',content:<ResourceSettingsReadout defaults={<ProxyResourceDefaults clusterId={item.clusterResourceId} session={session} disabled={networking==='cilium'}/>} label="Proxy resources" value={item.definition.istioProxyResources}/>}]}/>}

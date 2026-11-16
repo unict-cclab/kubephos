@@ -226,6 +226,15 @@ input[type="file"]:disabled::file-selector-button { background: var(--muted); co
 .list-person-avatar { display: grid; width: 22px; height: 22px; flex: 0 0 22px; place-items: center; border-radius: 50%; background: var(--secondary); color: var(--muted-foreground); font-size: 11px; font-weight: 600; text-transform: uppercase; }
 
 .list-toolbar > input[type="search"] { max-width: 420px; }
+/* Bulk selection: a narrow checkbox column and a bar with the shared actions. */
+.resource-list-table :is(th, td).resource-list-select { width: 44px; padding-right: 0; }
+.resource-list-select input[type="checkbox"] { width: 16px; height: 16px; margin: 0; cursor: pointer; }
+.list-bulk-bar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px 16px; margin: 0 0 12px; padding: 10px 12px 10px 16px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--muted); font-size: 13px; animation: list-bulk-in var(--duration-fast) var(--ease-out); }
+.resource-list-table tbody tr.is-selected { background: var(--muted); }
+.list-bulk-bar > strong { font-weight: 600; }
+.list-bulk-actions { display: flex; align-items: center; gap: 8px; }
+@keyframes list-bulk-in { from { opacity: 0; transform: translateY(-4px); } }
+@media (prefers-reduced-motion: reduce) { .list-bulk-bar { animation: none; } }
 /* On phones the search shrinks first, so search, count and display options share one row. */
 @media (max-width: 600px) { .list-toolbar > input[type="search"] { flex: 1 1 0; max-width: none; } }
 
@@ -556,10 +565,10 @@ input[type="file"]:disabled::file-selector-button { background: var(--muted); co
 
 /* Admin requests ---------------------------------------------------------- */
 
-/* Members follow their requests on the left and write a new one in a card that
-   stays in view on the right; narrow screens put the form first. */
+/* Members write a new request first, in a full-width card, and follow their
+   requests below it in reading order. */
 .request-page-intro { max-width: 640px; margin: -8px 0 32px; color: var(--muted-foreground); font-size: 15px; line-height: 1.5; }
-.request-page { display: grid; grid-template-columns: minmax(0, 1fr) minmax(300px, 360px); align-items: start; gap: 32px; }
+.request-page { display: grid; grid-template-columns: minmax(0, 1fr); gap: 40px; }
 .request-feed { min-width: 0; }
 .request-feed > .request-list + .request-group-title, .request-feed > .request-list + .request-history { margin-top: 28px; }
 /* Resolved requests fold away, so a long history never crowds the open ones. */
@@ -573,32 +582,29 @@ input[type="file"]:disabled::file-selector-button { background: var(--muted); co
 .request-more { justify-self: start; margin-top: 8px; }
 .request-group-title { display: flex; align-items: center; gap: 8px; margin: 0 0 10px; color: var(--muted-foreground); font-size: 12px; font-weight: 550; letter-spacing: .06em; text-transform: uppercase; }
 .request-group-title > span { color: var(--muted-foreground); font: 500 12px/1 var(--font-mono); letter-spacing: 0; }
-.request-composer { position: sticky; top: 24px; display: grid; gap: 14px; padding: 20px; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--card); box-shadow: var(--shadow-sm); }
+.request-composer { display: grid; gap: 14px; padding: 20px; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--card); box-shadow: var(--shadow-sm); }
 .request-composer-title { margin: 0; font-size: 16px; font-weight: 600; letter-spacing: -.01em; }
 .request-composer-hint { margin: -6px 0 0; color: var(--muted-foreground); font-size: 13px; line-height: 1.5; }
 .request-composer > label { margin: 0; }
-.request-composer textarea { min-height: 140px; resize: vertical; }
-.request-composer-footer { display: flex; align-items: center; justify-content: space-between; gap: 8px 16px; }
-.request-composer > .button { width: 100%; }
+.request-composer textarea { min-height: 112px; resize: vertical; }
+.request-composer-footer { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 16px; }
+.request-composer-footer > .button { margin-left: auto; }
 .request-composer-count { color: var(--muted-foreground); font: 500 12px/1 var(--font-mono); }
 /* Open requests used out of the limit, one pip each. */
 .request-slots { display: inline-flex; align-items: center; gap: 8px; color: var(--muted-foreground); font-size: 13px; }
 .request-slots-pips { display: inline-flex; gap: 4px; }
 .request-slots-pips > span { width: 8px; height: 8px; border-radius: 50%; background: var(--border); }
 .request-slots-pips > .is-used { background: var(--foreground); }
-@media (max-width: 1100px) {
-  .request-page { grid-template-columns: minmax(0, 1fr); }
-  .request-composer { position: static; order: -1; }
-}
+@media (max-width: 600px) { .request-composer-footer > .button { width: 100%; } }
 .request-section-title { margin: 0 0 16px; font-size: 16px; font-weight: 600; letter-spacing: -.01em; }
 /* The inbox filters by status on the left and by requester on the right. */
-.request-inbox-toolbar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px 16px; max-width: 880px; margin-bottom: 20px; }
+.request-inbox-toolbar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px 16px; margin-bottom: 20px; }
 .request-inbox-toolbar > .history-filters { margin: 0; }
 .request-search { flex: 0 1 280px; min-width: 0; }
 @media (max-width: 600px) { .request-search { flex-basis: 100%; } }
 .request-filter-count { margin-left: 4px; color: var(--muted-foreground); font: 500 12px/1 var(--font-mono); }
 
-.request-list { display: grid; gap: 12px; max-width: 880px; margin: 0; padding: 0; list-style: none; }
+.request-list { display: grid; gap: 12px; margin: 0; padding: 0; list-style: none; }
 .request-card { display: grid; gap: 12px; padding: 16px 20px; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--card); }
 .request-card-head { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 14px; color: var(--muted-foreground); font-size: 13px; }
 .request-card-head time { font: 500 12px/1 var(--font-mono); }
@@ -617,7 +623,7 @@ input[type="file"]:disabled::file-selector-button { background: var(--muted); co
 .request-edit textarea { min-height: 96px; resize: vertical; }
 .request-edit-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
 .request-edit-actions > .request-composer-count { margin-right: auto; }
-.request-empty { max-width: 880px; }
+.request-empty { max-width: none; }
 
 /* Service override picker ------------------------------------------------- */
 
@@ -675,6 +681,33 @@ kbd { padding: 1px 6px; border: 1px solid var(--input); border-radius: 5px; back
 
 .loading-indicator { border-color: var(--border); border-top-color: var(--foreground); }
 .connection-notice { border-radius: var(--radius-lg); background: var(--amber-background); }
+
+/* Live dashboard actions: the cluster card shares the link style. */
+button.dashboard-link { width: 100%; font: inherit; text-align: left; cursor: pointer; }
+button.dashboard-link:disabled { cursor: progress; opacity: .75; }
+.dashboard-link-error { grid-column: 1 / -1; margin: 0; color: var(--error-foreground); font-size: 13px; }
+
+/* Comparisons whose source experiments were deleted or unshared: an amber chip
+   in lists, and a notice with the fix where the plots would be. */
+.comparison-name-cell { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+.comparison-source-badge { display: inline-flex; align-items: center; gap: 5px; padding: 2px 8px 2px 6px; border: 1px solid color-mix(in srgb, var(--amber) 35%, transparent); border-radius: var(--radius-full); background: var(--amber-background); color: var(--amber); font-size: 12px; font-weight: 550; line-height: 18px; white-space: nowrap; text-decoration: none; }
+.comparison-source-badge > svg { width: 13px; height: 13px; flex: 0 0 13px; }
+.source-alert-banner { display: flex; align-items: center; gap: 10px; margin: 0 0 16px; padding: 10px 14px; border: 1px solid color-mix(in srgb, var(--amber) 30%, transparent); border-radius: var(--radius-md); background: var(--amber-background); color: var(--foreground); font-size: 13px; }
+.source-alert-banner > svg { flex: 0 0 16px; color: var(--amber); }
+.source-alert { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 16px; max-width: 760px; margin: 8px 0 24px; padding: 20px 22px; border: 1px solid color-mix(in srgb, var(--amber) 30%, var(--border)); border-radius: var(--radius-lg); background: linear-gradient(180deg, var(--amber-background), var(--card) 70%); box-shadow: var(--shadow-sm); }
+.source-alert-icon { display: grid; width: 36px; height: 36px; place-items: center; border-radius: 50%; background: color-mix(in srgb, var(--amber) 16%, transparent); color: var(--amber); }
+.source-alert-icon > svg { width: 18px; height: 18px; }
+.source-alert-body { display: grid; gap: 10px; min-width: 0; }
+.source-alert-body > h3 { margin: 4px 0 0; font-size: 16px; font-weight: 600; letter-spacing: -.01em; }
+.source-alert-body > p { margin: 0; color: var(--muted-foreground); font-size: 14px; line-height: 1.55; }
+.source-alert-list { display: grid; gap: 6px; margin: 4px 0 0; padding: 0; list-style: none; }
+.source-alert-list > li { display: flex; align-items: center; gap: 10px; min-width: 0; padding: 8px 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--card); font-size: 13px; }
+.source-alert-list strong { min-width: 0; overflow: hidden; font-weight: 550; text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--muted-foreground) 60%, transparent); text-overflow: ellipsis; white-space: nowrap; }
+.source-alert-swatch { width: 10px; height: 10px; flex: 0 0 10px; border-radius: 3px; background: var(--border); }
+.source-alert-reason { margin-left: auto; color: var(--amber); font-size: 12px; font-weight: 550; white-space: nowrap; }
+.source-alert-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
+tr.is-unavailable > td:first-child { color: var(--muted-foreground); text-decoration: line-through; }
+@media (max-width: 600px) { .source-alert { grid-template-columns: minmax(0, 1fr); padding: 16px; } }
 
 /* Code previews own their scroll area, independent of their surrounding page. */
 .code-block { width: 100%; min-width: 0; max-width: 100%; margin: 0; overflow: hidden; border: 1px solid var(--code-border, var(--border)); border-radius: var(--radius-sm); background: var(--code-background, var(--muted)); color: var(--code-foreground, var(--foreground)); }

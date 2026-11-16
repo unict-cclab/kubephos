@@ -64,11 +64,87 @@ func validateComparisonSelection(item *domain.ResultComparison, wholeExperiments
 	return nil
 }
 
+// A source is unavailable when its experiment was deleted, or when it is no
+// longer shared with the comparison owner. Its saved label still names it.
+type unavailableComparisonSource struct {
+	ExperimentID string `json:"experimentId"`
+	Label        string `json:"label"`
+	Reason       string `json:"reason"`
+}
+
+type comparisonListItem struct {
+	domain.ResultComparison
+	UnavailableSources []unavailableComparisonSource `json:"unavailableSources,omitempty"`
+}
+
+func (s *Server) unavailableComparisonSources(r *http.Request, items []domain.ResultComparison) (map[string][]unavailableComparisonSource, error) {
+	ids := []string{}
+	seen := map[string]bool{}
+	for _, item := range items {
+		for _, series := range item.Series {
+			for _, run := range series.Runs {
+				if !seen[run.ExperimentID] {
+					seen[run.ExperimentID] = true
+					ids = append(ids, run.ExperimentID)
+				}
+			}
+		}
+	}
+	existing, err := s.store.ExistingExperimentIDs(r.Context(), ids)
+	if err != nil {
+		return nil, err
+	}
+	readable := map[string]bool{}
+	result := map[string][]unavailableComparisonSource{}
+	for _, item := range items {
+		reported := map[string]bool{}
+		for _, series := range item.Series {
+			for _, run := range series.Runs {
+				if reported[run.ExperimentID] {
+					continue
+				}
+				reason := ""
+				if !existing[run.ExperimentID] {
+					reason = "deleted"
+				} else {
+					allowed, checked := readable[run.ExperimentID]
+					if !checked {
+						allowed = s.canReadResource(r, "experiments", run.ExperimentID)
+						readable[run.ExperimentID] = allowed
+					}
+					if !allowed {
+						reason = "unshared"
+					}
+				}
+				if reason == "" {
+					continue
+				}
+				reported[run.ExperimentID] = true
+				label := series.Label
+				if series.LabelOverride != "" {
+					label = series.LabelOverride
+				}
+				result[item.ID] = append(result[item.ID], unavailableComparisonSource{ExperimentID: run.ExperimentID, Label: label, Reason: reason})
+			}
+		}
+	}
+	return result, nil
+}
+
 func (s *Server) listComparisons(w http.ResponseWriter, r *http.Request) {
-	items, err := s.store.ListResultComparisons(r.Context(), requestUser(r).ID)
+	comparisons, err := s.store.ListResultComparisons(r.Context(), requestUser(r).ID)
 	if err != nil {
 		writeError(w, 500, "database_error", "Could not list comparisons.")
 		return
+	}
+	unavailable, err := s.unavailableComparisonSources(r, comparisons)
+	if err != nil {
+		writeError(w, 500, "database_error", "Could not check comparison sources.")
+		return
+	}
+	items := make([]comparisonListItem, 0, len(comparisons))
+	for _, item := range comparisons {
+		items = append(items, comparisonListItem{ResultComparison: item, UnavailableSources: unavailable[item.ID]})
 	}
 	count, err := s.store.CountComparisonCandidates(r.Context(), viewerID(requestUser(r)))
 	if err != nil {

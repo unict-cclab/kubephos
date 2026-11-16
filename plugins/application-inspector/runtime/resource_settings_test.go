@@ -134,3 +134,30 @@ func TestBuiltinApplicationsOmitUnconfiguredResources(t *testing.T) {
 		})
 	}
 }
+
+func TestPackageResourcesKeepUpstreamValuesAndApplyExplicitFields(t *testing.T) {
+	result, err := applyResourceSettings([]byte(resourceManifest), resourceDescriptor(), map[string]any{"packageResources": true, "resourceOverrides": map[string]any{"service": map[string]any{"memoryLimit": "512Mi"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc map[string]any
+	if err := yaml.Unmarshal(result, &doc); err != nil {
+		t.Fatal(err)
+	}
+	pod := doc["spec"].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)
+	resources := pod["containers"].([]any)[0].(map[string]any)["resources"].(map[string]any)
+	want := map[string]any{"requests": map[string]any{"cpu": "100m", "memory": "64Mi"}, "limits": map[string]any{"cpu": "2", "memory": "512Mi", "ephemeral-storage": "1Gi"}}
+	if !reflect.DeepEqual(resources, want) {
+		t.Fatalf("resources = %#v", resources)
+	}
+	initResources := pod["initContainers"].([]any)[0].(map[string]any)["resources"].(map[string]any)
+	if initResources["requests"].(map[string]any)["cpu"] != "10m" {
+		t.Fatal("package init container resources were removed")
+	}
+}
+
+func TestPackageResourcesRejectExplicitRequestAboveUpstreamLimit(t *testing.T) {
+	if _, err := applyResourceSettings([]byte(resourceManifest), resourceDescriptor(), map[string]any{"packageResources": true, "memoryRequest": "1Gi"}); err == nil || !strings.Contains(err.Error(), "memory request cannot exceed its limit") {
+		t.Fatalf("err = %v", err)
+	}
+}

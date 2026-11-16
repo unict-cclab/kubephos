@@ -193,6 +193,22 @@ function RequestComposer({requests, session, changed}: Props) {
     <ResourceListHeading title="Ask an admin" />
     <p className="request-page-intro">Ask the administrators for access, capacity or help, and follow each request here. You can edit a request while it is open, or mark it resolved if you solve it yourself.</p>
     <div className="request-page">
+      <form className="request-composer" onSubmit={send} aria-labelledby="request-composer-title">
+        <h3 id="request-composer-title" className="request-composer-title">New request</h3>
+        <p className="request-composer-hint">{full
+          ? `You have ${maxOpenRequests} open requests. You can send a new one when one of them is resolved.`
+          : 'Put everything in one message: an administrator resolves it and may reply once.'}</p>
+        <label>Message<textarea name="message" rows={4} maxLength={maxTextLength} required disabled={full} value={message} placeholder="I need access to the edge cluster for my experiments." onChange={event => setMessage(event.target.value)} /></label>
+        <div className="request-composer-footer">
+          <span className="request-slots">
+            <span className="request-slots-pips" aria-hidden="true">{Array.from({length: maxOpenRequests}, (_, index) => <span key={index} className={index < open ? 'is-used' : undefined} />)}</span>
+            {open} of {maxOpenRequests} open requests
+          </span>
+          <span className="request-composer-count" aria-live="polite">{message.length}/{maxTextLength}</span>
+          <button className="button primary" type="submit" disabled={sending || full}>{sending ? 'Sending…' : 'Send request'}</button>
+        </div>
+        {error && <ErrorFeedback message={error} />}
+      </form>
       <section className="request-feed" aria-labelledby="request-feed-title">
         <h3 id="request-feed-title" className="request-section-title">Your requests</h3>
         {openItems.length > 0 && <>
@@ -205,22 +221,6 @@ function RequestComposer({requests, session, changed}: Props) {
         </details>}
         {!requests.length && <div className="empty-state request-empty"><strong>No requests yet</strong><p>Requests you send appear here with their status and any reply.</p></div>}
       </section>
-      <form className="request-composer" onSubmit={send} aria-labelledby="request-composer-title">
-        <h3 id="request-composer-title" className="request-composer-title">New request</h3>
-        <p className="request-composer-hint">{full
-          ? `You have ${maxOpenRequests} open requests. You can send a new one when one of them is resolved.`
-          : 'Put everything in one message: an administrator resolves it and may reply once.'}</p>
-        <label>Message<textarea name="message" rows={6} maxLength={maxTextLength} required disabled={full} value={message} placeholder="I need access to the edge cluster for my experiments." onChange={event => setMessage(event.target.value)} /></label>
-        <div className="request-composer-footer">
-          <span className="request-slots">
-            <span className="request-slots-pips" aria-hidden="true">{Array.from({length: maxOpenRequests}, (_, index) => <span key={index} className={index < open ? 'is-used' : undefined} />)}</span>
-            {open} of {maxOpenRequests} open requests
-          </span>
-          <span className="request-composer-count" aria-live="polite">{message.length}/{maxTextLength}</span>
-        </div>
-        {error && <ErrorFeedback message={error} />}
-        <button className="button primary" type="submit" disabled={sending || full}>{sending ? 'Sending…' : 'Send request'}</button>
-      </form>
     </div>
   </>
 }

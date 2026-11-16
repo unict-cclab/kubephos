@@ -28,6 +28,7 @@
   /* Layout */
   --control-height: 40px;
   --sidebar-width: 248px;
+  --sidebar-collapsed-width: 64px;
   --content-width: 1240px;
   --frame-gap: 8px;
 

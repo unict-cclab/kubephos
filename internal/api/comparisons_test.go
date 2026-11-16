@@ -147,10 +147,26 @@ func TestComparisonIsolationAndSourcePermissions(t *testing.T) {
 	if w := call(s.getComparison, "GET", "/comparisons/"+saved.ID, saved.ID, "bob", ""); w.Code != 409 || strings.Contains(w.Body.String(), "Original") {
 		t.Fatalf("revoked source exposed: %d %s", w.Code, w.Body.String())
 	}
+	unavailable := func(reason string) {
+		t.Helper()
+		w := call(s.listComparisons, "GET", "/comparisons", "", "bob", "")
+		var listed struct {
+			Items []comparisonListItem `json:"items"`
+		}
+		if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &listed) != nil || len(listed.Items) != 1 {
+			t.Fatalf("list: %d %s", w.Code, w.Body.String())
+		}
+		sources := listed.Items[0].UnavailableSources
+		if len(sources) != 1 || sources[0].ExperimentID != "source" || sources[0].Reason != reason || sources[0].Label == "" {
+			t.Fatalf("unavailable sources = %#v, want %s", sources, reason)
+		}
+	}
+	unavailable("unshared")
 	exec(`DELETE FROM experiments WHERE id='source'`)
 	if w := call(s.getComparison, "GET", "/comparisons/"+saved.ID, saved.ID, "bob", ""); w.Code != 409 {
 		t.Fatalf("missing source: %d", w.Code)
 	}
+	unavailable("deleted")
 }
 
 func TestWholeExperimentComparisonKeepsApproachesAndAllSuccessfulExecutions(t *testing.T) {

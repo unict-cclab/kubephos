@@ -55,7 +55,7 @@ export function ResourceDetailsPage({resource, close, connections, workspaces, r
     </div>
 
     {cluster && <section className="details-section"><div className="details-heading"><strong>Topology</strong></div><Topology resource={resource} /></section>}
-    <ClusterDashboards key={resource.id} resource={resource} /></>}
+    <ClusterDashboards key={resource.id} resource={resource} session={session} /></>}
     {tab === 'access' && <>{resource.kind === 'kubernetes-cluster' && resource.status === 'ready' && session.user?.role === 'admin' && <section className="details-section"><div className="details-heading"><strong>Kubernetes access</strong></div><a className="button secondary compact" href={`/api/v1/kubernetes-clusters/${resource.id}/kubeconfig`}>Download kubeconfig</a></section>}{session.user?.role === 'admin' && <ClusterSSHAccess resource={resource} resources={resources} />}<AccessPanel key={resource.id} resource={resource} session={session} /></>}
     {tab === 'activity' && <ResourceActivity key={resource.deletionPipelineRunId ?? resource.recreationPipelineRunId ?? resource.pipelineRunId ?? resource.id} resource={resource} initialRun={run} openOperation={openOperation} openPipelineRun={openPipelineRun} />}
     {tab === 'configuration' && (cluster ? <ClusterConfiguration spec={resource.spec} references={references} /> : hasInputData(resource.spec) && <section className="details-section"><div className="details-heading"><strong>Resource settings</strong></div><InputData value={resource.spec} references={references} /></section>)}

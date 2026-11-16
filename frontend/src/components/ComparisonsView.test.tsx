@@ -66,3 +66,27 @@ it('does not count an experiment whose executions have no collected results',asy
  await screen.findByText('No comparisons yet')
  expect(screen.getByRole('button',{name:'New comparison'})).toBeDisabled()
 })
+
+const withDeletedSource = {id: 'cmp', name: 'Paper', ownerUserId: 'alice', createdAt: '2026-09-17T00:00:00Z', updatedAt: '2026-09-17T00:00:00Z', series: [{label: 'Experiment 1', color: '#123456', runs: [{experimentId: 'first', trialId: 't-first'}]}, {label: 'Removed baseline', color: '#d55e00', runs: [{experimentId: 'gone', trialId: 't-gone'}]}], unavailableSources: [{experimentId: 'gone', label: 'Removed baseline', reason: 'deleted'}]} as ResultComparison
+
+it('marks comparisons whose source experiments were deleted', async () => {
+ vi.mocked(request).mockResolvedValue({items: [withDeletedSource]} as never)
+ render(<ComparisonsView experiments={experiments} artifacts={[]} operations={[]} workspaces={[]} session={session} changed={async () => {}} openOperation={() => {}} />)
+ expect(await screen.findByText('1 experiment deleted')).toBeInTheDocument()
+ expect(screen.getByRole('status')).toHaveTextContent('1 comparison includes experiments that are no longer available.')
+})
+
+it('explains a deleted source on the comparison page and offers to edit it', async () => {
+ window.location.hash = '#comparisons/comparison/cmp'
+ vi.mocked(request).mockImplementation((async (path: string) => {
+  if (path === '/comparisons') return {items: [withDeletedSource]}
+  throw new Error('A source experiment is unavailable or is no longer shared with you. Edit the comparison to remove its runs.')
+ }) as never)
+ render(<ComparisonsView experiments={experiments} artifacts={[]} operations={[]} workspaces={[]} session={session} changed={async () => {}} openOperation={() => {}} />)
+ const notice = await screen.findByRole('alert')
+ expect(notice).toHaveTextContent('An experiment in this comparison was deleted')
+ expect(notice).toHaveTextContent('Removed baseline')
+ expect(screen.queryByText(/Edit the comparison to remove its runs/)).not.toBeInTheDocument()
+ fireEvent.click(screen.getByRole('button', {name: 'Edit comparison'}))
+ expect(screen.getByRole('button', {name: 'Remove Removed baseline'})).toBeInTheDocument()
+})

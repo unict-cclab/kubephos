@@ -167,6 +167,7 @@ func NewServer(store *storage.Store, registry *plugins.Registry, artifactStore *
 	router.HandleFunc("POST /api/v1/kubernetes-clusters/{id}/reconfigure", server.reconfigureKubernetesCluster)
 	router.HandleFunc("GET /api/v1/kubernetes-clusters/{id}/kubeconfig", server.downloadKubeconfig)
 	router.HandleFunc("GET /api/v1/kubernetes-clusters/{id}/ssh-key", server.downloadClusterSSHKey)
+	router.HandleFunc("POST /api/v1/kubernetes-clusters/{id}/live-dashboard", server.clusterLiveDashboard)
 	router.HandleFunc("POST /api/v1/managed-resources/{id}/access", server.revealManagedResourceAccess)
 	router.HandleFunc("GET /api/v1/sharing/users", server.sharingUsers)
 	for _, kind := range []string{"experiments", "experiment-configurations"} {
@@ -219,6 +220,7 @@ func NewServer(store *storage.Store, registry *plugins.Registry, artifactStore *
 	router.HandleFunc("GET /api/v1/experiments/{id}/configuration-snapshot", server.getExperimentConfigurationSnapshot)
 	router.HandleFunc("POST /api/v1/experiments/{id}/cancel", server.cancelExperiment)
 	router.HandleFunc("POST /api/v1/experiments/{id}/start-traffic", server.startExperimentTraffic)
+	router.HandleFunc("POST /api/v1/experiments/{id}/live-dashboard", server.experimentLiveDashboard)
 	router.HandleFunc("DELETE /api/v1/experiments/{id}", server.deleteExperiment)
 	router.HandleFunc("GET /api/v1/experiments/{id}/figures", server.listExperimentFigures)
 	router.HandleFunc("POST /api/v1/experiments/{id}/figures", server.saveExperimentFigure)

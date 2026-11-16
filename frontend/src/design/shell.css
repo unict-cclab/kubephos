@@ -75,6 +75,23 @@ body {
 .app-nav-pages[hidden] { display: none; }
 .app-nav-pages .app-nav-link { min-height: 36px; font-size: 13px; }
 
+/* Collapsed sidebar: an icon rail that leaves the width to the page. Labels stay
+   available as tooltips and to assistive technology through aria-label/title. */
+.app-nav-collapse { width: 32px; height: 32px; min-height: 32px; flex: 0 0 32px; color: var(--muted-foreground); }
+@media (min-width: 721px) {
+  .app-shell { transition: grid-template-columns var(--duration-base) var(--ease-out); }
+  .app-shell.is-nav-collapsed { grid-template-columns: var(--sidebar-collapsed-width) minmax(0, 1fr); }
+  .is-nav-collapsed .app-sidebar { padding-inline: 10px; }
+  .is-nav-collapsed .app-sidebar-head { flex-direction: column; }
+  .is-nav-collapsed .app-brand { padding: 4px; }
+  .is-nav-collapsed :is(.app-brand strong, .app-jump > span, .app-jump kbd, .app-nav-section-link > span:not(.app-nav-badge), .app-nav-chevron, .app-version, .account-identity) { display: none; }
+  .is-nav-collapsed :is(.app-jump, .app-nav-link) { position: relative; justify-content: center; padding-inline: 0; }
+  .is-nav-collapsed .app-nav-section.is-current > .app-nav-section-link { background: var(--card); color: var(--foreground); box-shadow: inset 0 0 0 1px var(--border); }
+  .is-nav-collapsed .app-nav-badge { position: absolute; top: 2px; right: 2px; min-width: 16px; padding: 0 4px; font-size: 10px; line-height: 16px; }
+  .is-nav-collapsed .app-account { flex-direction: column; padding: 6px; }
+  .is-nav-collapsed .account-menu-panel { right: auto; width: 220px; }
+}
+
 /* Account: a quiet identity card, with the running version anchored above it. */
 .app-version { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 8px; margin: 0 0 12px; padding: 0 4px; color: var(--muted-foreground); font: 400 13px/1.5 var(--font-sans); }
 .app-version strong { color: var(--foreground); font-weight: 600; overflow-wrap: anywhere; }
@@ -274,6 +291,7 @@ body {
   .app-sidebar { height: auto; max-height: 100vh; padding: 10px 16px; border-bottom: 1px solid var(--sidebar-border); background: var(--background); }
   .app-main { min-height: 0; margin: 0; border-radius: 0; box-shadow: none; }
   .app-nav-toggle { display: inline-flex; }
+  .app-nav-collapse { display: none; }
   .app-sidebar-body { display: none; overflow-y: auto; padding-bottom: 6px; }
   .app-sidebar-body.is-open { display: flex; }
   .app-nav { flex: none; overflow: visible; }

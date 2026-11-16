@@ -209,32 +209,37 @@ spec:
         description: Grace period before liveness checks can restart workloads with longer startup times.
         minimum: 0
         maximum: 300
-      cpuRequest:
+      packageResources:
         x-kubephos-order: 5
+        type: boolean
+        title: Use upstream requests and limits
+        description: Start from the CPU and memory requests and limits declared in the upstream Online Boutique manifests. Explicit values below replace only the fields they set.
+      cpuRequest:
+        x-kubephos-order: 6
         type: string
         title: CPU request per service (optional)
         minLength: 1
         maxLength: 16
       memoryRequest:
-        x-kubephos-order: 6
+        x-kubephos-order: 7
         type: string
         title: Memory request per service (optional)
         minLength: 1
         maxLength: 16
       cpuLimit:
-        x-kubephos-order: 7
+        x-kubephos-order: 8
         type: string
         title: CPU limit per service (optional)
         minLength: 1
         maxLength: 16
       memoryLimit:
-        x-kubephos-order: 8
+        x-kubephos-order: 9
         type: string
         title: Memory limit per service (optional)
         minLength: 1
         maxLength: 16
       resourceOverrides:
-        x-kubephos-order: 9
+        x-kubephos-order: 10
         type: object
         title: Resource overrides by service
         additionalProperties: true
@@ -243,6 +248,7 @@ spec:
     replicaOverrides: {}
     workloadProbeTimeoutSeconds: 5
     workloadLivenessInitialDelaySeconds: 60
+    packageResources: false
   overlays:
     - target: {apiVersion: apps/v1, kind: Deployment, name: emailservice}
       operations:

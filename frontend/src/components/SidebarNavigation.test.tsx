@@ -39,3 +39,17 @@ it('keeps only the group of the current page open after navigation',()=>{
  expect(screen.getByRole('button',{name:'Experiments'})).toHaveAttribute('aria-expanded','false')
  expect(screen.getByRole('button',{name:'Administration'})).toHaveAttribute('aria-expanded','true')
 })
+
+it('expands a collapsed sidebar before opening a group',()=>{
+ const navigate=vi.fn(),expandSidebar=vi.fn()
+ const {rerender}=render(<SidebarNavigation sections={visibleNavigation(true)} view="catalog" navigate={navigate} collapsed expandSidebar={expandSidebar}/>)
+ const infra=screen.getByRole('button',{name:'Infrastructure'})
+ expect(infra).toHaveAttribute('title','Infrastructure')
+ fireEvent.click(infra)
+ expect(expandSidebar).toHaveBeenCalled()
+ expect(screen.queryByRole('button',{name:'VM templates'})).not.toBeInTheDocument()
+ rerender(<SidebarNavigation sections={visibleNavigation(true)} view="catalog" navigate={navigate} expandSidebar={expandSidebar}/>)
+ expect(screen.getByRole('button',{name:'VM templates'})).toBeVisible()
+ fireEvent.click(screen.getByRole('button',{name:'Catalog'}))
+ expect(navigate).toHaveBeenCalledWith('catalog')
+})
