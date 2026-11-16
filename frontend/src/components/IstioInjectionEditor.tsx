@@ -14,7 +14,6 @@ export function IstioInjectionEditor({services, enabled: initialEnabled = true, 
   <input type="hidden" name="istioInjectionOverrides" value={JSON.stringify(disabled?{}:overrides)} data-review-title="Istio injection" data-review-table={JSON.stringify({headers:['Service','Istio injection'],rows:[['Application default',!disabled&&enabled?'Enabled':'Disabled'],...Object.entries(disabled?{}:overrides).map(([id,value])=>[id,value?'Enabled':'Disabled'])]})}/>
   <div>
    <label className="checkbox-field"><input data-review-skip="true" type="checkbox" checked={!disabled&&enabled} disabled={disabled} onChange={event=>setEnabled(event.target.checked)}/><span>Enable Istio injection</span></label>
-   {!disabled&&<p className="istio-hint">Turn this off to inject sidecars only into some services, then add them under Service overrides.</p>}
   </div>
   {!disabled&&<div className="istio-overrides">
    <h5 className="istio-overrides-title">Service overrides</h5>

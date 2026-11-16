@@ -41,26 +41,29 @@ export function figureDimensions(sourceWidth: number, sourceHeight: number, cont
 
 export async function exportChart(id: string, metric: string, format: 'pdf' | 'png', onGenerated?: (value: Uint8Array) => Promise<void>) {
   const source = document.getElementById(id) as SVGSVGElement | null
-  if (!source) return
-  const serialized = new XMLSerializer().serializeToString(source)
+  if (!source) throw new Error('The plot is no longer available. Reopen it and try again.')
+  const snapshot = source.cloneNode(true) as SVGSVGElement
+  // Let React paint the export indicator before preparing the figure.
+  await new Promise<void>(resolve => setTimeout(resolve, 30))
   const name = `kubephos-${metric.replaceAll(/[^a-zA-Z0-9]+/g, '-').toLowerCase()}`
   if (format === 'pdf') {
-    const pdf = svgToPDF(source)
+    const pdf = await svgToPDFAsync(snapshot)
     if (onGenerated) await onGenerated(pdf)
     else downloadBlob(`${name}.pdf`, new Blob([pdf.buffer as ArrayBuffer], {type: 'application/pdf'}))
     return
   }
+  const serialized = new XMLSerializer().serializeToString(snapshot)
   const image = new Image()
   const url = URL.createObjectURL(new Blob([serialized], {type: 'image/svg+xml'}))
   try {
     await new Promise<void>((resolve, reject) => { image.onload = () => resolve(); image.onerror = () => reject(new Error('Could not render chart')); image.src = url })
-    const [,, sourceWidth, sourceHeight] = (source.getAttribute('viewBox') ?? '0 0 700 525').split(/\s+/).map(Number)
-    const dimensions = figureDimensions(sourceWidth, sourceHeight, source.getAttribute('data-export-size') === 'content')
+    const [,, sourceWidth, sourceHeight] = (snapshot.getAttribute('viewBox') ?? '0 0 700 525').split(/\s+/).map(Number)
+    const dimensions = figureDimensions(sourceWidth, sourceHeight, snapshot.getAttribute('data-export-size') === 'content')
     const canvas = document.createElement('canvas')
     canvas.width = dimensions.pixelWidth
     canvas.height = dimensions.pixelHeight
     const context = canvas.getContext('2d')
-    if (!context) return
+    if (!context) throw new Error('Could not prepare the PNG. Try again.')
     context.fillStyle = '#ffffff'
     context.fillRect(0, 0, canvas.width, canvas.height)
     context.drawImage(image, 0, 0, canvas.width, canvas.height)
@@ -78,6 +81,23 @@ export async function exportChart(id: string, metric: string, format: 'pdf' | 'p
 }
 
 export function svgToPDF(source: SVGSVGElement): Uint8Array {
+  const steps = svgToPDFSteps(source)
+  let next = steps.next()
+  while (!next.done) next = steps.next()
+  return next.value
+}
+
+export async function svgToPDFAsync(source: SVGSVGElement): Promise<Uint8Array> {
+  const steps = svgToPDFSteps(source)
+  let next = steps.next()
+  while (!next.done) {
+    await new Promise<void>(resolve => setTimeout(resolve, 0))
+    next = steps.next()
+  }
+  return next.value
+}
+
+function* svgToPDFSteps(source: SVGSVGElement): Generator<void, Uint8Array> {
   const [,, svgWidth, svgHeight] = (source.getAttribute('viewBox') ?? '0 0 700 525').split(/\s+/).map(Number)
   const {pageWidth, pageHeight} = figureDimensions(svgWidth, svgHeight, source.getAttribute('data-export-size') === 'content')
   const scale = pageWidth / svgWidth
@@ -103,7 +123,9 @@ export function svgToPDF(source: SVGSVGElement): Uint8Array {
     const dash = inherited(element, 'stroke-dasharray').split(/\s+/).filter(Boolean).map(Number).filter(Number.isFinite)
     commands.push(dash.length ? `[${dash.map(value => sx(value).toFixed(3)).join(' ')}] 0 d` : '[] 0 d')
   }
+  let processed = 0
   for (const element of source.querySelectorAll('rect,line,path,circle,polygon,text')) {
+    if (++processed % 100 === 0) yield
     const tag = element.tagName.toLowerCase()
     if (tag === 'text') {
       const x = sx(number(Number(element.getAttribute('x'))))

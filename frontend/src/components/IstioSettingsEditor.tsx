@@ -12,9 +12,9 @@ const waypointResources: {field: string; label: string; kind: 'cpu' | 'memory'}[
   {field: 'memoryRequest', label: 'Memory request', kind: 'memory'},
   {field: 'memoryLimit', label: 'Memory limit', kind: 'memory'},
 ]
-const modes: {value: IstioDataPlane; title: string; description: string}[] = [
-  {value: 'sidecar', title: 'Sidecar', description: 'A proxy runs next to each service you choose, with its own resources.'},
-  {value: 'ambient', title: 'Ambient', description: 'No sidecars: ztunnel carries traffic and a shared waypoint handles HTTP.'},
+const modes: {value: IstioDataPlane; title: string}[] = [
+  {value: 'sidecar', title: 'Sidecar'},
+  {value: 'ambient', title: 'Ambient'},
 ]
 
 // The first choice is whether the run enables Istio at all; its options follow only when it does.
@@ -28,12 +28,11 @@ export function IstioSettingsEditor({dataPlane: initialDataPlane = 'sidecar', en
   const switchId = useId()
   const using = !disabled && enabled
   const ambient = using && dataPlane === 'ambient'
-  const summary = disabled ? 'Multi-cluster runs use Cilium networking, which does not run Istio.' : using ? 'The application runs in the Istio service mesh, which reports request metrics between its services.' : 'The application runs without a service mesh: no sidecars, no waypoint and no Istio request metrics.'
   return <div className="istio-settings">
     <input type="hidden" name="istioDataPlane" value={ambient ? 'ambient' : 'sidecar'} />
     <label className="istio-switch">
-      <input type="checkbox" checked={using} disabled={disabled} aria-labelledby={`${switchId}-title`} aria-describedby={`${switchId}-summary`} onChange={event => setEnabled(event.target.checked)} />
-      <span><strong id={`${switchId}-title`}>Enable Istio</strong><span id={`${switchId}-summary`}>{summary}</span></span>
+      <input type="checkbox" checked={using} disabled={disabled} title={disabled?'Multi-cluster uses Cilium.':undefined} aria-labelledby={`${switchId}-title`} onChange={event => setEnabled(event.target.checked)} />
+      <span><strong id={`${switchId}-title`}>Enable Istio</strong></span>
     </label>
     {using && <fieldset className="istio-mode-picker">
       <legend>Mode</legend>
@@ -41,7 +40,6 @@ export function IstioSettingsEditor({dataPlane: initialDataPlane = 'sidecar', en
         {modes.map(mode => <label key={mode.value} className="istio-mode-option">
           <input type="radio" name="istioModeChoice" data-review-skip="true" value={mode.value} checked={dataPlane === mode.value} onChange={() => setDataPlane(mode.value)} />
           <strong>{mode.title}</strong>
-          <span>{mode.description}</span>
         </label>)}
       </div>
     </fieldset>}
@@ -50,7 +48,7 @@ export function IstioSettingsEditor({dataPlane: initialDataPlane = 'sidecar', en
     </fieldset>
     <fieldset className="istio-mode-settings" disabled={!using || ambient} hidden={!using || ambient}>
       <section className="istio-panel">
-        <header className="istio-panel-head"><h4>Sidecars</h4><p>Choose which services get a sidecar and how many resources each proxy may use.</p></header>
+        <header className="istio-panel-head"><h4>Sidecars</h4></header>
         {children}
       </section>
     </fieldset>
@@ -79,7 +77,6 @@ function WaypointEditor({initial = {}, services}: {initial?: Record<string, unkn
   ]
   const size = <div className="form-stack">
     <label className="waypoint-replicas">Replicas<input type="number" data-review-skip="true" min={1} max={maxWaypointReplicas} step={1} inputMode="numeric" placeholder="1" value={replicas} onChange={event => setReplicas(event.target.value)} /></label>
-    <p className="istio-hint">Waypoint pods that share the namespace's request traffic, from 1 to {maxWaypointReplicas}.</p>
     <div className="waypoint-resource-grid" data-review-skip="true">
       {waypointResources.map(({field, label, kind}) => <div key={field} className="waypoint-resource">
         <span className="waypoint-resource-label">{label} per replica</span>
@@ -90,7 +87,6 @@ function WaypointEditor({initial = {}, services}: {initial?: Record<string, unkn
   const routing = <div className="form-stack">
     <div>
       <label className="checkbox-field"><input data-review-skip="true" type="checkbox" checked={allServices} onChange={event => setAllServices(event.target.checked)} /><span>Route every service through the waypoint</span></label>
-      <p className="istio-hint">Turn this off to use the waypoint only for some services, then add them below. Services that bypass it stay in the ambient mesh but lose HTTP processing and request metrics.</p>
     </div>
     <FormTabs label="Waypoint service overrides" selectedId={selected} onSelect={setSelected} actions={<ServiceOverridePicker services={services} taken={id => overrides[id] !== undefined} onAdd={id => {setOverrides(current => ({...current, [id]: !allServices})); setSelected(id)}} />} items={Object.entries(overrides).map(([id, use]) => ({id, title: id, content: <div className="istio-service-heading">
       <label>Service<select data-review-skip="true" aria-label={`Waypoint service ${id}`} value={id} onChange={event => {const target = event.target.value; setOverrides(current => {const copy = {...current}; delete copy[id]; copy[target] = use; return copy}); setSelected(target)}}>
@@ -106,7 +102,7 @@ function WaypointEditor({initial = {}, services}: {initial?: Record<string, unkn
   </div>
   return <section className="istio-panel" data-review-group="Istio waypoint">
     <input type="hidden" name="istioWaypoint" value={JSON.stringify(Object.keys(settings).length ? settings : null)} data-review-title="Istio waypoint" data-review-table={JSON.stringify({headers: ['Field', 'Value'], rows: summary})} />
-    <header className="istio-panel-head"><h4>Waypoint</h4><p>The whole namespace joins the ambient mesh. KubePhos installs ambient mode on the cluster the first time it is used.</p></header>
+    <header className="istio-panel-head"><h4>Waypoint</h4></header>
     <FormTabs label="Waypoint settings" items={[{id: 'size', title: 'Size', content: size}, {id: 'services', title: 'Service overrides', content: routing}]} />
   </section>
 }

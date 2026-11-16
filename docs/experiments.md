@@ -52,7 +52,8 @@ the same start time; setup and readiness checks do not consume phase time.
 New zone and cluster links are bidirectional by default; disable **Bidirectional**
 to configure one direction. Existing links retain their saved direction. Latency
 is added per direction, so a symmetric link with X ms adds approximately 2X ms
-to the round-trip time.
+to the round-trip time. Bandwidth limits are entered in Mbps (megabits per second),
+including decimal values. Existing limits keep their original effective bandwidth.
 Workload, traffic distribution and network phases can be cloned independently.
 Sinusoidal workload phases use minimum and maximum requests per second, with
 minimum >= 0 and maximum > minimum. Period and phase offset retain their meaning.
@@ -257,3 +258,23 @@ protected. Edits saved during provisioning are followed by the active deployment
 including changes submitted before its namespace exists. A failed deployment
 retains its settings and namespace reservation; **Retry** performs ownership-checked
 cleanup before deploying again, on every member of a multi cluster group.
+
+### Placement replay
+
+Open an individual execution to see its Placement tab, with nodes grouped by
+cluster and zone. Placement is not aggregated under All executions. Use the timeline or playback controls to follow scheduled replicas;
+select a service to isolate its placement.
+
+The Plots tab also includes a placement heatmap: each row is a zone, each sample
+counts scheduled replicas across all application services. Under All executions,
+the heatmap averages counts across runs aligned to workload start, using their
+shared duration and coarsest resolution. A window needs observations in every run.
+The discrete color scale shows replica-count bands in the legend. Gray means
+missing samples, rather than zero replicas. PDF and PNG exports are available.
+
+New metric datasets retain sampled pod placement from kube-state-metrics at the
+configured data resolution (at most 1,441 snapshots per execution). The replay
+shows gaps when no matching samples are available; it does not infer movements
+between observations. Runs collected before this feature remain readable but
+have no placement replay. Placement collection is optional: unavailable evidence
+does not discard the execution's other metrics.

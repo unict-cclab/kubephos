@@ -1,12 +1,11 @@
+import {ChartExportActions} from './ChartExportActions'
 import {ValidationMessage} from './ValidationMessage'
-import {ErrorFeedback} from './ToastRegion'
-import {useErrorState} from './ToastRegion'
 import {workloadTable, trafficTable, sinusoidalRange} from './PhaseReadout'
 import {FormTabs} from './FormTabs'
 import {ResourceAction} from './ResourceAction'
 import {ActionIcon} from './ActionIcon'
 import {useEffect, useId, useMemo, useRef, useState, type Dispatch, type SetStateAction, type ReactNode} from 'react'
-import {exportChart, niceAxis, timeAxis} from '../charts'
+import {niceAxis, timeAxis} from '../charts'
 import {NumericInput} from './NumericInput'
 
 export type LoadProfileStep = {
@@ -113,7 +112,6 @@ export function LoadProfileEditor({prefix, zones, values = {}, distribution = 'z
 
 export function LoadProfilePreview({steps, progressSeconds, progressLabel}: {steps: LoadProfileStep[]; progressSeconds?: number; progressLabel?: string}) {
   const svgID = `input-load-${useId()}`
-  const [exportError, setExportError] = useErrorState()
   const width = 700
   const height = 525
   const plot = {left: 112, right: 28, top: 28, bottom: 82}
@@ -127,10 +125,8 @@ export function LoadProfilePreview({steps, progressSeconds, progressLabel}: {ste
   const points = samples.map((point, index) => `${index ? 'L' : 'M'}${x(point.seconds).toFixed(2)} ${y(point.rps).toFixed(2)}`).join(' ')
   const progress = progressSeconds === undefined ? undefined : Math.min(duration, Math.max(0, progressSeconds))
   const progressRps = progress === undefined ? 0 : rpsAt(steps, progress)
-  const output = (format: 'pdf' | 'png') => exportChart(svgID, 'input-load-profile', format).then(() => setExportError('')).catch(cause => setExportError(cause instanceof Error ? cause.message : 'Could not export input load profile.'))
   return <figure className="metric-card input-load-card" aria-label="Input load preview">
-    <div className="metric-card-header"><div><h3>Input load profile</h3><span>{formatDuration(duration)}</span></div><div className="chart-export-actions"><button className="button secondary compact" type="button" onClick={() => void output('pdf')}>PDF</button><button className="button secondary compact" type="button" onClick={() => void output('png')}>PNG</button></div></div>
-    {exportError && <ErrorFeedback message={exportError}/>}
+    <div className="metric-card-header"><div><h3>Input load profile</h3><span>{formatDuration(duration)}</span></div><ChartExportActions chartID={svgID} metric="input-load-profile" /></div>
     <div className="chart-wrap"><svg id={svgID} viewBox={`0 0 ${width} ${height}`} xmlns="http://www.w3.org/2000/svg" role="img" aria-label={`Load profile lasting ${formatDuration(duration)} with a peak of ${formatRps(maximum)} requests per second`}>
       <rect x={plot.left} y={plot.top} width={width - plot.left - plot.right} height={height - plot.top - plot.bottom} className="axis" fill="none" stroke="#111" strokeWidth="2" />
       {xAxis.ticks.map(tick => <g key={`x-${tick}`}><line x1={x(tick * 60)} y1={height - plot.bottom} x2={x(tick * 60)} y2={height - plot.bottom + 7} className="tick-line" stroke="#111" strokeWidth="1.5" /><text x={x(tick * 60)} y={height - plot.bottom + 28} textAnchor="middle" className="tick" fontSize="17" fill="#111" fontFamily="Arial, Helvetica, DejaVu Sans, sans-serif">{tick.toLocaleString('en-US', {maximumFractionDigits: 2})}</text></g>)}

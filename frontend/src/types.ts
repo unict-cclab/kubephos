@@ -287,6 +287,14 @@ export interface ControlMetricSummary {
   reason?: string
 }
 
+export interface PlacementHistory {
+  status: 'available' | 'unavailable'
+  source: string
+  stepSeconds: number
+  nodes: {name: string; zone?: string; cluster: string}[]
+  snapshots: {timestamp: string; observed: boolean; pods: {uid: string; name: string; service: string; node: string; cluster: string}[]}[]
+}
+
 export interface TimeSeriesDataset {
   apiVersion: string
   kind: 'TimeSeriesDataset'
@@ -298,6 +306,7 @@ export interface TimeSeriesDataset {
     start: string
     end: string
     stepSeconds: number
+    placement?: PlacementHistory
     endToEndSource?: 'locust'
     workloadStartedAt?: string
     controlMetrics?: ControlMetricSummary[]

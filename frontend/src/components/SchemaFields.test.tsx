@@ -137,7 +137,8 @@ describe('SchemaFields', () => {
     const {container} = render(<form><SchemaFields schema={schema} applications={[]} artifacts={[]} connections={[]} credentials={[]} /></form>)
     const field = screen.getByRole('spinbutton', {name: 'Response time SLO (optional, ms)'})
     expect(field).toHaveValue(null)
-    expect(screen.getByText('Leave empty to disable SLO plots.')).toBeInTheDocument()
+    expect(screen.queryByText('Leave empty to disable SLO plots.')).not.toBeInTheDocument()
+    expect(field).not.toHaveAttribute('aria-describedby')
     expect(readSchemaValues(container.querySelector('form')!, schema, 'schema', [])).toEqual({})
   })
 
@@ -267,4 +268,16 @@ it('validates saved JSON before edits and checks array size constraints inline',
  expect(screen.getByLabelText('Items')).toBeValid()
  fireEvent.change(screen.getByLabelText('Items'),{target:{value:'[1,2,3]'}})
  expect(screen.getByText('Up to 2 items.')).toBeVisible()
+})
+
+it('omits field descriptions while keeping validation messages linked to their control',()=>{
+ render(<form><SchemaFields schema={{type:'object',properties:{nodes:{type:'integer',title:'Nodes',description:'Technical help text.',minimum:1}}}} values={{nodes:2}} applications={[]} artifacts={[]} connections={[]} credentials={[]}/></form>)
+ const field=screen.getByRole('spinbutton',{name:'Nodes'})
+ expect(screen.queryByText('Technical help text.')).not.toBeInTheDocument()
+ fireEvent.change(field,{target:{value:'0'}})
+ expect(field).toBeInvalid()
+ expect(field).toHaveAccessibleDescription('Minimum: 1.')
+ fireEvent.change(field,{target:{value:'2'}})
+ expect(field).toBeValid()
+ expect(field).not.toHaveAttribute('aria-describedby')
 })

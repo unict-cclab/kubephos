@@ -168,12 +168,10 @@ function SchemaField({name, prefix, property, value, required, onValue, formValu
     return <label className="wide">{title}<textarea className={strategyConfig ? 'strategy-config-editor' : undefined} name={fieldName} rows={strategyConfig ? 20 : 5} required={required} defaultValue={value === undefined && property.default === undefined ? '' : String(value ?? property.default)} minLength={property.minLength} maxLength={property.maxLength} onChange={event => onValue(event.target.value)} /></label>
   }
   const numeric = property.type === 'integer' || property.type === 'number'
-  const descriptionID = property.description ? `${fieldName}-description`.replaceAll('.', '-') : undefined
   return <label className={wide}>{title}<ValidatedInput
     name={fieldName}
     error={schemaStringError(value,property,required)}
     aria-label={title}
-    aria-describedby={descriptionID}
     type={numeric ? 'number' : property.writeOnly ? 'password' : 'text'}
     required={required}
     defaultValue={value === undefined && property.default === undefined ? '' : String(value ?? property.default)}
@@ -183,7 +181,7 @@ function SchemaField({name, prefix, property, value, required, onValue, formValu
     minLength={property.minLength}
     maxLength={property.maxLength}
     onChange={event => onValue(schemaValue(event.target.value, property))}
-  />{property.description && <small id={descriptionID}>{property.description}</small>}</label>
+  /></label>
 }
 
 function schemaValues(schema: JsonSchema, values: Record<string, unknown>, applications: Application[]): Record<string, unknown> {

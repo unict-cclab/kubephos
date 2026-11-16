@@ -1,15 +1,18 @@
+import {ChartExportActions} from './ChartExportActions'
 import {usePreparedComparison} from '../usePreparedComparison'
 import type {ComparisonColumns, PreparedComparison} from '../comparisonPreparation'
 import {responseTimeSLO, addDerivedMetrics, serviceMetricStatistics, aggregateMetric, aggregatePlotMetric, summarize, isControlMetric, serviceStatisticsMetrics, serviceStatisticsRows, statisticsCSV, podSchedulingStatistics, variantStatistics, variantEffectSizes, validateDataset, plotLabel, type LoadedDataset, type AggregateSeries, type ScientificSummary} from '../resultsData'
 export {serviceMetricStatistics, aggregateMetric, aggregatePlotMetric, summarize, statisticsCSV, podSchedulingStatistics, variantStatistics, cohenD} from '../resultsData'
 export type {LoadedDataset, AggregateSeries} from '../resultsData'
+import {PlacementReplay} from './PlacementReplay'
+import {PlacementHeatmap} from './PlacementHeatmap'
 import {FormTabs} from './FormTabs'
 import {ErrorFeedback, useErrorState} from './ToastRegion'
 import {ResponsiveTable} from './ResponsiveTable'
 import {ResourceSharing, canManageResource} from './ResourceSharing'
 import {ResourceAction} from './ResourceAction'
 import {ActionIcon} from './ActionIcon'
-import {downloadBlob, exportChart, niceAxis, timeAxis} from '../charts'
+import {downloadBlob, niceAxis, timeAxis} from '../charts'
 export {figureDimensions, niceAxis, setPNGResolution, svgToPDF} from '../charts'
 import {useDeleteConfirmation} from './ConfirmationDialog'
 import {useEffect, useMemo, useRef, useState, Fragment, type FormEvent, type CSSProperties} from 'react'
@@ -37,7 +40,7 @@ export interface ResultsViewProps {
   comparison?: {sourceConfigurations: Record<string, Record<string, unknown>>; actions?: React.ReactNode; sources?: React.ReactNode}
 }
 
-type ResultsTab = 'statistics' | 'charts' | 'downloads'
+type ResultsTab = 'statistics' | 'charts' | 'placement' | 'downloads'
 
 export function ResultsView(props: ResultsViewProps) {
   return props.comparison && props.focusedExperiment ? <ComparisonResults {...props} experiment={props.focusedExperiment} /> : <ExperimentResultsView {...props} />
@@ -260,9 +263,10 @@ function ExperimentResultsView({artifacts, experiments, operations, workspaces, 
             <div><h3>{activeRun ? `${activeRun.variant.name} · Execution ${activeRun.trial.position}` : focusedExperiment ? 'Aggregated results' : experiment?.name ?? displayed[0].label}</h3><p>{displayed.length} execution{displayed.length === 1 ? '' : 's'} · {metrics.length} metric{metrics.length === 1 ? '' : 's'}</p></div>
             <div className="results-heading-actions">{!focusedExperiment && <button className="button primary" disabled={selected.length < 2} onClick={() => setSaving(true)}>Save comparison</button>}</div>
           </div>}
-          <nav className="results-tabs" aria-label="Result sections">{(['statistics', 'charts', 'downloads'] as ResultsTab[]).map(tab => <button key={tab} className={activeTab === tab ? 'active' : ''} aria-current={activeTab === tab ? 'page' : undefined} onClick={() => setActiveTab(tab)}>{({statistics: 'Statistics', charts: 'Plots', downloads: 'Export'} as Record<ResultsTab, string>)[tab]}</button>)}</nav>
-          {activeTab === 'charts' && <div className="chart-grid" style={{'--plot-aspect-ratio': plotHeight / 860} as CSSProperties}>{visibleMetrics.map(metric => <Fragment key={metric}>{!['application.p95_response_time', 'redis.operation_rps', 'redis.operation_p95_response_time'].includes(metric) && <MetricChart omitSLO={Boolean(comparison) && new Set(displayed.map(item => item.dataset.spec.sloMilliseconds)).size > 1} metric={metric} series={aggregatePlotMetric(displayed, metric, activeRun ? undefined : experiment)} canvasHeight={plotHeight} />}{serviceStatisticsMetrics.includes(metric) && <ServiceMetricChart metric={metric} datasets={displayed} experiment={activeRun ? undefined : experiment} canvasHeight={plotHeight} />}</Fragment>)}</div>}
+          <nav className="results-tabs" aria-label="Result sections">{(['statistics', 'charts', ...(!comparison && activeRun ? ['placement'] : []), 'downloads'] as ResultsTab[]).map(tab => <button key={tab} className={activeTab === tab ? 'active' : ''} aria-current={activeTab === tab ? 'page' : undefined} onClick={() => setActiveTab(tab)}>{({statistics: 'Statistics', charts: 'Plots', placement: 'Placement', downloads: 'Export'} as Record<ResultsTab, string>)[tab]}</button>)}</nav>
+          {activeTab === 'charts' && <div className="chart-grid" style={{'--plot-aspect-ratio': plotHeight / 860} as CSSProperties}>{!comparison && focusedExperiment && (activeRun || focusedExperiment.kind !== 'suite') && <PlacementHeatmap datasets={(activeRun ? displayed.filter(item => item.artifact.id === activeRun.trial.resultArtifactId) : displayed).map(item => item.dataset)} canvasHeight={plotHeight} />}{visibleMetrics.map(metric => <Fragment key={metric}>{!['application.p95_response_time', 'redis.operation_rps', 'redis.operation_p95_response_time'].includes(metric) && <MetricChart omitSLO={Boolean(comparison) && new Set(displayed.map(item => item.dataset.spec.sloMilliseconds)).size > 1} metric={metric} series={aggregatePlotMetric(displayed, metric, activeRun ? undefined : experiment)} canvasHeight={plotHeight} />}{serviceStatisticsMetrics.includes(metric) && <ServiceMetricChart metric={metric} datasets={displayed} experiment={activeRun ? undefined : experiment} canvasHeight={plotHeight} />}</Fragment>)}</div>}
           {activeTab === 'statistics' && <><StatisticsTable datasets={displayed} metrics={statisticsMetrics} experiment={activeRun ? undefined : experiment} /></>}
+          {activeRun && activeTab === 'placement' && <PlacementReplay datasets={displayed.filter(item => item.artifact.id === activeRun.trial.resultArtifactId)} />}
           {activeTab === 'downloads' && <ResultsExport savedFigures={!comparison} datasets={displayed} metrics={statisticsMetrics} experiment={experiment} activeRun={Boolean(activeRun)} onPrint={() => {setActiveTab('statistics'); setPrintPending(true)}} />}
         </>}
       </div>
@@ -381,7 +385,7 @@ function SaveExperimentDialog({open, close, selected, operations, workspaces, se
   return <Dialog open={open} onClose={close} title="Save experiment">
     <form onSubmit={submit}>
       <label>Name<input name="name" maxLength={120} placeholder="Default vs custom strategy" required autoFocus /></label>
-      <div className="trial-mapping"><span className="field-description">Shared names group repeated executions.</span>{selected.map(artifact => <label key={artifact.id}><span>{operations.find(item => item.id === artifact.operationId)?.title ?? artifact.name}</span><input name={`variant-${artifact.id}`} maxLength={80} defaultValue={operations.find(item => item.id === artifact.operationId)?.title ?? artifact.name} required /></label>)}</div>
+      <div className="trial-mapping">{selected.map(artifact => <label key={artifact.id}><span>{operations.find(item => item.id === artifact.operationId)?.title ?? artifact.name}</span><input name={`variant-${artifact.id}`} maxLength={80} defaultValue={operations.find(item => item.id === artifact.operationId)?.title ?? artifact.name} required /></label>)}</div>
       <ErrorFeedback message={error} />
       <div className="modal-actions"><button className="button secondary" type="button" onClick={close}>Cancel</button><button className="button primary" disabled={pending}>{pending ? 'Saving…' : 'Save experiment'}</button></div>
     </form>
@@ -455,7 +459,7 @@ function MetricChart({metric, series, canvasHeight, omitSLO = false}: {metric: s
   const y = (value: number) => plotBottom - (value / yAxis.upper) * (plotBottom - padding.top)
   const chartID = `chart-${metric.replaceAll(/[^a-zA-Z0-9]/g, '-')}`
   return <article className="metric-card">
-    <div className="metric-card-header"><div><h3>{metricTitle(metric)}</h3></div><div className="chart-export-actions"><button className="button secondary compact" type="button" onClick={() => exportChart(chartID, metric, 'pdf')}>PDF</button><button className="button secondary compact" type="button" onClick={() => exportChart(chartID, metric, 'png')}>PNG</button></div></div>
+    <div className="metric-card-header"><div><h3>{metricTitle(metric)}</h3></div><ChartExportActions chartID={chartID} metric={metric} /></div>
     <div className="chart-wrap"><svg id={chartID} viewBox={`0 0 ${width} ${height}`} xmlns="http://www.w3.org/2000/svg" role="img" aria-label={`${metricTitle(metric)} comparison chart`}>
       <rect width={width} height={height} fill="#ffffff" />
       <rect x={padding.left} y={padding.top} width={plotRight - padding.left} height={plotBottom - padding.top} className="axis" fill="none" stroke="#111" strokeWidth="2" />
@@ -503,7 +507,7 @@ function ServiceMetricChart({metric, datasets, experiment, canvasHeight, prepare
   const serviceX = (index: number) => left + band * (index + .5)
   const chartID = `chart-${metric.replaceAll(/[^a-zA-Z0-9]/g, '-')}-by-service`
   return <article className="metric-card">
-    <div className="metric-card-header"><div><h3>{title}</h3></div><div className="chart-export-actions"><button className="button secondary compact" type="button" onClick={() => exportChart(chartID, `${metric}-by-service`, 'pdf')}>PDF</button><button className="button secondary compact" type="button" onClick={() => exportChart(chartID, `${metric}-by-service`, 'png')}>PNG</button></div></div>
+    <div className="metric-card-header"><div><h3>{title}</h3></div><ChartExportActions chartID={chartID} metric={`${metric}-by-service`} /></div>
     <div className="chart-wrap"><svg className="service-metric-chart" id={chartID} viewBox={`0 0 ${width} ${height}`} xmlns="http://www.w3.org/2000/svg" role="img" aria-label={`${title}: mean and standard deviation`}>
       <rect width={width} height={height} fill="#ffffff" />
       {axis.ticks.map(tick => <g key={tick}><line x1={left} y1={y(tick)} x2={right} y2={y(tick)} stroke="#e5e7eb" /><text x={left - 12} y={y(tick) + 5} textAnchor="end" className="tick" fontSize="14" fill="#111" fontFamily="Arial, Helvetica, DejaVu Sans, sans-serif">{formatAxisValue(tick, unit)}</text></g>)}

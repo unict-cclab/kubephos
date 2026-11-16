@@ -273,9 +273,16 @@ func (c *Client) realmURL(base, suffix string) string {
 	return base + "/realms/" + url.PathEscape(c.config.Realm) + suffix
 }
 
+type responseStatusError struct {
+	status  int
+	message string
+}
+
+func (e *responseStatusError) Error() string { return e.message }
+
 func responseError(response *http.Response) error {
 	body, _ := io.ReadAll(io.LimitReader(response.Body, 4096))
-	return fmt.Errorf("keycloak returned %s: %s", response.Status, strings.TrimSpace(string(body)))
+	return &responseStatusError{status: response.StatusCode, message: fmt.Sprintf("keycloak returned %s: %s", response.Status, strings.TrimSpace(string(body)))}
 }
 
 // UpdateUserEmail leaves roles, required actions and other identity fields intact.

@@ -45,7 +45,7 @@ spec:
       - id: redis-cart
         workload: {apiVersion: apps/v1, kind: Deployment, name: redis-cart}
         selector: {app: redis-cart}
-        traits: [schedulable, stateful, deschedulable]
+        traits: [scalable, schedulable, stateful, deschedulable]
         index: 3
       - id: emailservice
         workload: {apiVersion: apps/v1, kind: Deployment, name: emailservice}
