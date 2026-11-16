@@ -20,7 +20,7 @@ describe('configuration readout', () => {
     fireEvent.click(screen.getByRole('tab', {name: 'Network'}))
     const network = within(screen.getByRole('tabpanel', {name: 'Network'}))
     expect(network.getByRole('columnheader', {name: 'Jitter (ms)'})).toBeInTheDocument()
-    expect(network.getByRole('columnheader', {name: 'Bandwidth (B/s)'})).toBeInTheDocument()
+    expect(network.getByRole('columnheader', {name: 'Bandwidth (Mbps)'})).toBeInTheDocument()
     expect(network.getByRole('columnheader', {name: 'Packet loss (%)'})).toBeInTheDocument()
     expect(network.queryByRole('columnheader', {name: 'Correlation (%)'})).not.toBeInTheDocument()
     expect(network.getAllByRole('cell', {name: '—'})).toHaveLength(3)

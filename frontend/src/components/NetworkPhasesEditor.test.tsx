@@ -73,3 +73,23 @@ it('preserves independent Istio overrides when switching service tabs and reassi
  fireEvent.click(screen.getByRole('button',{name:'Remove Istio override for api'}))
  expect(screen.getByLabelText('Istio injection for worker')).toHaveValue('true')
 })
+
+it('converts fractional Mbps once, preserves legacy limits and clones edited phase bandwidth',async()=>{
+ const profile={durationSeconds:60,enableBandwidth:true,bandwidthBytesPerSecond:9000,linkOverrides:[]}
+ const {container}=render(<form><NetworkInjectionEditor prefix="network" zones={['cloud','edge']} durationSeconds={120} values={{phases:[profile,{...profile,bandwidthBytesPerSecond:12500000}]}}/></form>)
+ const phases=()=>JSON.parse(new FormData(container.querySelector('form')!).get('network.phases') as string)
+ expect(within(screen.getByRole('tabpanel')).getByRole('spinbutton',{name:'Bandwidth (Mbps)'})).toHaveValue(0.072)
+ expect(phases()[0].bandwidthBytesPerSecond).toBe(9000)
+ fireEvent.change(within(screen.getByRole('tabpanel')).getByRole('spinbutton',{name:'Bandwidth (Mbps)'}),{target:{value:'100.5'}})
+ await waitFor(()=>expect(phases()[0].bandwidthBytesPerSecond).toBe(12562500))
+ fireEvent.click(screen.getByRole('tab',{name:'Phase 2'}))
+ expect(within(screen.getByRole('tabpanel')).getByRole('spinbutton',{name:'Bandwidth (Mbps)'})).toHaveValue(100)
+ fireEvent.click(screen.getByRole('tab',{name:'Phase 1'}))
+ expect(within(screen.getByRole('tabpanel')).getByRole('spinbutton',{name:'Bandwidth (Mbps)'})).toHaveValue(100.5)
+ fireEvent.click(within(screen.getByRole('tabpanel')).getByRole('button',{name:'Clone'}))
+ await waitFor(()=>expect(phases()).toHaveLength(3))
+ expect(phases().map((p:any)=>p.bandwidthBytesPerSecond)).toEqual([12562500,12500000,12562500])
+ const summary=JSON.parse((container.querySelector('[name="network.phases"]') as HTMLInputElement).dataset.reviewTable!)
+ expect(summary.headers).toContain('Bandwidth (Mbps)')
+ expect(summary.rows[0][4]).toBe('100.5')
+})

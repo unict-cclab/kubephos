@@ -476,7 +476,6 @@
   :root[data-theme] .flow-row.available .flow-node span,
   :root[data-theme] .artifact-row:hover { border-color: var(--success-foreground); }
   :root[data-theme] .managed-feedback { border-left: 3px solid var(--success-foreground); background: var(--success-background); }
-  :root[data-theme] .field-hint { border-left: 3px solid var(--success-foreground); padding-inline: 10px; background: var(--success-background); }
   :root[data-theme] .health-dot.healthy { background: var(--success-foreground); box-shadow: 0 0 0 3px var(--success-background); }
   :root[data-theme] .terminal-status > span.connected { box-shadow: 0 0 0 3px var(--success-background); }
 }
@@ -541,8 +540,6 @@
 
 @media screen {
   .resource-sharing-modal { width: min(560px, calc(100vw - 32px)); }
-  .resource-sharing-modal .modal-header > div { min-width: 0; }
-  .resource-sharing-modal .modal-header h2 { min-width: 0; overflow-wrap: anywhere; }
   .resource-sharing-fields { display: grid; gap: 20px; min-width: 0; }
   .resource-sharing-fields > label { min-width: 0; margin: 0; }
   .resource-sharing-modal .sharing-recipients { min-width: 0; margin: 0; padding: 0; border: 0; }
@@ -1230,7 +1227,6 @@
   .state-transfer-panel label { display: grid; gap: 8px; font-weight: 600; margin: 0; min-width: 0; }
   .state-transfer-panel input { width: 100%; min-width: 0; font-weight: 400; }
   .state-transfer-panel input[type=file] { height: auto; padding: 10px; }
-  .state-transfer-panel .state-transfer-hint { margin: 0; color: var(--muted-foreground); }
   .state-transfer-panel .button { justify-self: start; }
   .state-transfer-review { margin-top: 32px; display: grid; gap: 20px; }
   .state-transfer-review h4 { margin: 0; font-weight: 600; }

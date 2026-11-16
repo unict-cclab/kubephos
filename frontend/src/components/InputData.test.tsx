@@ -54,7 +54,8 @@ it('uses schema titles and order, omits internal fields, and masks write-only va
 it('gives structured values their own row and keeps multiline configuration readable', () => {
   const {container} = render(<InputData value={{latencyMilliseconds: 20, nested: {bandwidthBytesPerSecond: 1250}, configFile: 'kind: Policy\ninterval: 10'}} />)
   expect(screen.getByText('Latency (ms)')).toBeInTheDocument()
-  expect(screen.getByText('Bandwidth (B/s)')).toBeInTheDocument()
+  expect(screen.getByText('Bandwidth (Mbps)')).toBeInTheDocument()
+  expect(screen.getByText('0.01')).toBeInTheDocument()
   expect(container.querySelectorAll('.input-data-field-wide')).toHaveLength(2)
   expect(container.querySelector('pre')).toHaveTextContent('kind: Policy')
 })

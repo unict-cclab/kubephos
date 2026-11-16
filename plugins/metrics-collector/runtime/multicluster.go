@@ -110,6 +110,7 @@ func (p Plugin) Execute(ctx context.Context, step domain.PlanStep, log plugins.L
 			return nil, err
 		}
 		labelCluster(value.Dataset.Spec.Series, peer.Name)
+		dataset.Spec.Placement = mergePlacement(dataset.Spec.Placement, value.Dataset.Spec.Placement)
 		dataset.Spec.Series = append(dataset.Spec.Series, value.Dataset.Spec.Series...)
 		summaries = append(summaries, value.Dataset.Spec.ControlMetrics)
 		names = append(names, peer.Name)

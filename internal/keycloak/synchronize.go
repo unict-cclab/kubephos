@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"time"
 )
 
 // SynchronizeConfiguration updates only managed client settings, preserving the
@@ -21,13 +22,9 @@ func (c *Client) SynchronizeConfiguration(ctx context.Context, username, passwor
 	if username == "" || password == "" {
 		return errors.New("Keycloak administrator credentials are required for configuration synchronization")
 	}
-	var token tokenResponse
-	if err = c.form(ctx, c.config.InternalURL+"/realms/master/protocol/openid-connect/token", url.Values{"grant_type": {"password"}, "client_id": {"admin-cli"}, "username": {username}, "password": {password}}, &token); err != nil {
-		// Do not include an identity server response that could echo credentials.
-		return errors.New("cannot authenticate Keycloak configuration administrator; check its username and password")
-	}
-	if token.AccessToken == "" {
-		return ErrUnauthorized
+	token, err := c.configurationAdminToken(ctx, username, password, 2*time.Second)
+	if err != nil {
+		return err
 	}
 	for _, client := range []struct {
 		id, secret  string
@@ -100,4 +97,45 @@ func (c *Client) configurationJSON(ctx context.Context, token, method, endpoint 
 		return json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(target)
 	}
 	return nil
+}
+
+// PostgreSQL can be recreated while Keycloak still holds old pooled connections.
+// Retry temporary availability failures, never rejected credentials or raw responses.
+func (c *Client) configurationAdminToken(ctx context.Context, username, password string, delay time.Duration) (tokenResponse, error) {
+	for attempt := 0; attempt < 10; attempt++ {
+		var token tokenResponse
+		err := c.form(ctx, c.config.InternalURL+"/realms/master/protocol/openid-connect/token", url.Values{"grant_type": {"password"}, "client_id": {"admin-cli"}, "username": {username}, "password": {password}}, &token)
+		if err == nil {
+			if token.AccessToken == "" {
+				return token, errors.New("Keycloak returned an incomplete administrator session")
+			}
+			return token, nil
+		}
+		if ctx.Err() != nil {
+			return tokenResponse{}, errors.New("Keycloak synchronization was interrupted or timed out")
+		}
+		var status *responseStatusError
+		var network *url.Error
+		transient := errors.As(err, &network)
+		if errors.As(err, &status) {
+			if status.status == 400 || status.status == 401 {
+				return tokenResponse{}, errors.New("cannot authenticate Keycloak configuration administrator; check its username and password")
+			}
+			transient = status.status >= 500 || status.status == http.StatusTooManyRequests
+		}
+		if !transient {
+			return tokenResponse{}, errors.New("could not authenticate with Keycloak; check the identity service")
+		}
+		if attempt == 9 {
+			break
+		}
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return tokenResponse{}, errors.New("Keycloak synchronization was interrupted or timed out")
+		case <-timer.C:
+		}
+	}
+	return tokenResponse{}, errors.New("Keycloak is temporarily unavailable; retry the update once the identity service is ready")
 }

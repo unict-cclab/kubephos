@@ -42,7 +42,7 @@ export function TelegramAdministration({session}: {session: Session}) {
   {bot&&<>
    {bot.configured&&<p><strong>Bot</strong> <a href={`https://t.me/${bot.username}`} target="_blank" rel="noreferrer">@{bot.username}</a></p>}
    <label>Bot token<ValidatedInput aria-label="Bot token" type="password" autoComplete="new-password" value={token} onChange={event=>setToken(event.target.value)} required={!bot.configured} maxLength={181} pattern="[0-9]{5,20}:[A-Za-z0-9_-]{20,160}" placeholder={bot.configured?'Unchanged':undefined}/></label>
-   <p>Create a dedicated bot with <a href="https://t.me/BotFather" target="_blank" rel="noreferrer">BotFather</a>.</p>
+   <a href="https://t.me/BotFather" target="_blank" rel="noreferrer">Create bot</a>
    <label className="checkbox-field"><input type="checkbox" checked={enabled} disabled={pending} onChange={event=>setEnabled(event.target.checked)}/>Enable Telegram</label>
    {bot.lastError&&<p role="status">{bot.lastError}</p>}
    <div className="dialog-actions">{bot.configured&&<button type="button" className="button danger" disabled={pending} onClick={()=>void remove()}>Remove integration</button>}<button className="button primary" disabled={pending}>{pending?'Saving…':'Save'}</button></div>

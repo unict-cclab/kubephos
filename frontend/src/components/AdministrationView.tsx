@@ -127,7 +127,6 @@ export function AdministrationView({session, changed}: {session: Session; change
           <fieldset disabled={pending !== null}>
             <label>Archive password<ValidatedInput aria-label="Archive password" type="password" autoComplete="new-password" minLength={12} maxLength={1024} required value={exportPassword} onChange={event => setExportPassword(event.target.value)} /></label>
             <label>Confirm password<ValidatedInput aria-label="Confirm password" error={confirmation&&confirmation!==exportPassword?'Passwords do not match.':''} type="password" autoComplete="new-password" minLength={12} maxLength={1024} required value={confirmation} onChange={event => setConfirmation(event.target.value)} /></label>
-            <p className="state-transfer-hint">At least 12 characters. Keep this password for import.</p>
             <button className="button primary" type="submit">{pending === 'export' ? 'Exporting…' : 'Export state'}</button>
           </fieldset>
         </form>

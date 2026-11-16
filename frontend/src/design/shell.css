@@ -294,4 +294,4 @@ body {
 .detail-page > .page-header { margin-bottom: 0; }
 .page-header .detail-return { margin: 0; }
 .page-header > :is(.detail-page-heading, .results-heading, .section-heading) { margin: 0; align-items: start; }
-.page-header h2 { margin: 0; }
+.page-header h2 { min-width: 0; margin: 0; white-space: normal; overflow-wrap: anywhere; }

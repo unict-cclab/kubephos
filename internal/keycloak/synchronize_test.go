@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestSynchronizeChangesURLsAndSecretsWithoutReplacingIdentitySettings(t *testing.T) {
@@ -87,5 +88,61 @@ func TestSynchronizeRejectsInvalidOriginsBeforeContactingKeycloak(t *testing.T) 
 		if err := c.SynchronizeConfiguration(context.Background(), "admin", "password"); err == nil {
 			t.Fatalf("accepted %s", origin)
 		}
+	}
+}
+
+func TestConfigurationAdminTokenRetriesTemporaryFailuresOnly(t *testing.T) {
+	for _, tc := range []struct {
+		name                        string
+		status, failures, wantCalls int
+		success                     bool
+	}{
+		{"database reconnect", 500, 2, 3, true},
+		{"rate limit", 429, 1, 2, true},
+		{"unavailable", 503, 20, 10, false},
+		{"wrong password", 401, 20, 1, false},
+		{"invalid grant", 400, 20, 1, false},
+		{"forbidden", 403, 20, 1, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			calls := 0
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls++
+				if calls <= tc.failures {
+					w.WriteHeader(tc.status)
+					w.Write([]byte("private-password-and-server-detail"))
+					return
+				}
+				w.Write([]byte(`{"access_token":"test-token"}`))
+			}))
+			defer server.Close()
+			c := New(Config{InternalURL: server.URL})
+			token, err := c.configurationAdminToken(context.Background(), "admin", "private-password", time.Millisecond)
+			if (err == nil) != tc.success || calls != tc.wantCalls {
+				t.Fatalf("calls=%d token=%v err=%v", calls, token.AccessToken != "", err)
+			}
+			if err != nil && (strings.Contains(err.Error(), "private-password") || strings.Contains(err.Error(), "server-detail")) {
+				t.Fatal("credential or response leaked", err)
+			}
+			if !tc.success && tc.status >= 500 && strings.Contains(err.Error(), "password") {
+				t.Fatal("server failure described as bad credentials", err)
+			}
+		})
+	}
+}
+
+func TestConfigurationAdminTokenStopsRetryOnCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { calls++; w.WriteHeader(503); cancel() }))
+	defer server.Close()
+	c := New(Config{InternalURL: server.URL})
+	started := time.Now()
+	if _, err := c.configurationAdminToken(ctx, "admin", "password", time.Hour); err == nil {
+		t.Fatal("expected cancellation")
+	}
+	if calls != 1 || time.Since(started) > time.Second {
+		t.Fatal("cancellation did not stop retries")
 	}
 }

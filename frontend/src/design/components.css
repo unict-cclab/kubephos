@@ -159,7 +159,11 @@ input[type="file"]:disabled::file-selector-button { background: var(--muted); co
 /* Inline feedback grows below each field without shifting adjacent controls. */
 .field-validation-error { display: block; margin: 0; color: var(--error-foreground); font-size: 12px; font-weight: 400; line-height: 1.4; text-align: left; overflow-wrap: anywhere; }
 /* Keep the controls level when a single field displays validation feedback. */
-:is(.field-row, .schema-fields, .capacity-grid, .pool-row) { align-items: start; }
+:is(.field-row, .schema-fields, .capacity-grid, .pool-row, .timeline-fields, .weight-grid-fields, .effect-fields, .override-values, .waypoint-resource-grid, .waypoint-resource, .runtime-registry-row, .schema-list-row) { align-items: start; }
+:is(.runtime-registry-row, .schema-list-row) > button { align-self: start; margin-top: 28px; }
+.form-disclosure, .form-disclosure > summary { min-width: 0; }
+.form-disclosure > summary strong { min-width: 0; overflow-wrap: anywhere; }
+.form-disclosure > summary > :is(svg,span) { flex-shrink: 0; }
 
 /* Surfaces ---------------------------------------------------------------- */
 
@@ -169,6 +173,17 @@ input[type="file"]:disabled::file-selector-button { background: var(--muted); co
   background: var(--card);
   box-shadow: none;
 }
+
+/* Dialogs may be opened from compact table cells or toolbars. Their text must
+   not inherit the single-line layout of those controls. */
+.modal { white-space: normal; overflow-wrap: anywhere; text-align: left; }
+.modal .modal-content, .modal-body { min-width: 0; max-width: 100%; }
+.modal-header { min-width: 0; align-items: flex-start; }
+.modal-header > div { flex: 1; min-width: 0; }
+.modal-header h2 { white-space: normal; overflow-wrap: anywhere; }
+.modal-content > .modal-actions { min-width: 0; flex-wrap: wrap; }
+.modal-actions > .button { white-space: normal; overflow-wrap: anywhere; }
+.service-override-option > span:first-child { min-width: 0; overflow-wrap: anywhere; }
 
 /* Tables ------------------------------------------------------------------ */
 
@@ -439,7 +454,7 @@ input[type="file"]:disabled::file-selector-button { background: var(--muted); co
 .service-resources .service-resource-grid { margin-block: 0; }
 .service-resource-grid { align-items: start; }
 .service-resource-grid > :nth-child(3n + 1) { align-self: start; padding-top: 8px; }
-.service-resource-grid > strong { align-self: center; }
+.service-resource-grid > strong { align-self: start; }
 .resource-quantity { display: grid; grid-template-columns: minmax(70px, 1fr) minmax(105px, .8fr); align-items: start; gap: 8px; }
 .resource-quantity > .field-validation-error { grid-column: 1 / -1; }
 .resource-quantity > :is(input, select), .resource-quantity-value > input { width: 100%; min-width: 0; }
@@ -451,20 +466,21 @@ input[type="file"]:disabled::file-selector-button { background: var(--muted); co
 .network-link-settings[hidden] { display: none; }
 .istio-injection-editor .form-disclosure-body { gap: 12px; padding-bottom: 16px; }
 .istio-injection-editor .form-section-actions { margin-bottom: 0; }
-.istio-service-heading { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; align-items: end; gap: 16px; }
+.istio-service-heading { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; align-items: start; gap: 16px; }
 @media (max-width: 600px) {
   .istio-service-heading { grid-template-columns: minmax(0, 1fr) auto; }
   .istio-service-heading > label:first-child { grid-column: 1 / -1; }
 }
 
-.strategy-target-editor { padding: 0; background: transparent; }
-.strategy-target-editor > .target-editor-heading { margin: 0; padding: 12px 0; }
+.strategy-target-editor { min-width: 0; padding: 0; background: transparent; }
+.strategy-target-editor > .target-editor-heading { min-width: 0; margin: 0; padding: 12px 16px; gap: 12px; grid-template-columns: minmax(0, 1fr) auto 12px; }
+.strategy-target-editor > .target-editor-heading strong { min-width: 0; overflow-wrap: anywhere; }
+.strategy-target-editor > .target-editor-heading::after { justify-self: center; }
 .strategy-target-editor .target-editor-heading > span { padding: 0; background: transparent; color: var(--muted-foreground); font-weight: 400; }
-.strategy-target-editor .target-editor-list { gap: 8px; padding: 8px 0 0; }
+.strategy-target-editor .target-editor-list { gap: 8px; margin: 0; padding: 8px 16px 16px; }
 .strategy-target-editor .target-editor-list article { padding: 8px 12px; border: 1px solid var(--border); background: transparent; }
 
 /* Application step: each section opens with one line saying what it is for. */
-.application-section-intro { max-width: 72ch; margin: 0 0 20px; color: var(--muted-foreground); font-size: 14px; line-height: 1.5; }
 /* Replicas by service read as one list, with the inherited value in view. */
 .replica-service-overrides .replica-list { gap: 0; margin: 0; overflow: hidden; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--card); }
 .replica-list > article { min-height: 52px; padding: 8px 16px; border: 0; border-bottom: 1px solid var(--table-rule); border-radius: 0; background: transparent; opacity: 1; }
@@ -483,7 +499,6 @@ input[type="file"]:disabled::file-selector-button { background: var(--muted); co
 .istio-switch > input { flex: 0 0 16px; width: 16px; height: 16px; margin: 2px 0 0; }
 .istio-switch > span { display: grid; gap: 2px; }
 .istio-switch strong { font-size: 14px; font-weight: 600; }
-.istio-switch > span > span { color: var(--muted-foreground); font-size: 13px; line-height: 1.5; }
 .istio-switch:has(input:disabled) { cursor: not-allowed; }
 
 .istio-mode-picker { display: grid; gap: 10px; min-width: 0; margin: 0; padding: 0; border: 0; }
@@ -493,19 +508,16 @@ input[type="file"]:disabled::file-selector-button { background: var(--muted); co
 .istio-mode-option:hover { border-color: var(--field-border); }
 .istio-mode-option:has(input:checked) { border-color: var(--foreground); box-shadow: inset 0 0 0 1px var(--foreground); }
 .istio-mode-option:has(input:focus-visible) { outline: 2px solid var(--ring); outline-offset: 2px; }
-.istio-mode-option > input { grid-row: span 2; width: 16px; height: 16px; margin: 2px 0 0; accent-color: var(--primary); }
+.istio-mode-option > input { width: 16px; height: 16px; margin: 2px 0 0; accent-color: var(--primary); }
+.istio-service-heading > button { align-self: start; margin-top: 28px; }
 .istio-mode-option > strong { font-size: 14px; font-weight: 600; }
-.istio-mode-option > span { color: var(--muted-foreground); font-size: 13px; line-height: 1.45; }
 
 .istio-mode-settings { min-width: 0; margin: 0; padding: 0; border: 0; }
 .istio-mode-settings[hidden] { display: none; }
 .istio-panel { display: grid; gap: 16px; padding: 18px 20px 20px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--card); }
 .istio-panel-head { display: grid; gap: 2px; }
 .istio-panel-head > h4 { margin: 0; font-size: 15px; font-weight: 600; }
-.istio-panel-head > p { margin: 0; color: var(--muted-foreground); font-size: 13px; line-height: 1.5; }
 .istio-panel .form-tab-list { margin-bottom: 16px; }
-.istio-hint { margin: 4px 0 0 26px; color: var(--muted-foreground); font-size: 13px; line-height: 1.5; }
-.waypoint-replicas + .istio-hint { margin: -12px 0 0; }
 .istio-injection-editor { display: grid; gap: 20px; }
 .istio-overrides { display: grid; gap: 10px; }
 .istio-overrides-title { margin: 0; font-size: 14px; font-weight: 550; }
@@ -674,6 +686,10 @@ kbd { padding: 1px 6px; border: 1px solid var(--input); border-radius: 5px; back
 /* Feedback ---------------------------------------------------------------- */
 
 .loading-indicator { border-color: var(--border); border-top-color: var(--foreground); }
+.chart-export-button { display: inline-flex; align-items: center; justify-content: center; gap: 5px; }
+.chart-export-indicator { display: inline-flex; align-items: center; width: 12px; height: 12px; }
+.chart-export-indicator .loading-indicator { width: 12px; height: 12px; border-width: 2px; }
+@media (prefers-reduced-motion: reduce) { .chart-export-indicator .loading-indicator { animation: none; } }
 .connection-notice { border-radius: var(--radius-lg); background: var(--amber-background); }
 
 /* Code previews own their scroll area, independent of their surrounding page. */
@@ -683,3 +699,18 @@ kbd { padding: 1px 6px; border: 1px solid var(--input); border-radius: 5px; back
 .code-block pre code { font: inherit; white-space: inherit; }
 .code-preview-panel { min-width: 0; gap: 12px; }
 .code-preview-panel > :is(.details-heading, .details-copy) { margin: 0; }
+
+.placement-controls { display: flex; flex-wrap: wrap; gap: 16px; align-items: start; margin-bottom: 20px; }
+.placement-controls label { flex: 1 1 200px; max-width: 360px; min-width: 0; }
+.placement-timeline { display: flex; flex-wrap: wrap; align-items: center; gap: 16px; margin-bottom: 24px; }
+.placement-timeline input[type="range"] { flex: 1 1 240px; min-width: 0; width: auto; }
+.placement-timeline output { font-variant-numeric: tabular-nums; min-width: 5ch; }
+.placement-zones { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr)); gap: 20px; }
+.placement-zone { min-width: 0; }
+.placement-zone h4 { margin: 0 0 12px; overflow-wrap: anywhere; }
+.placement-nodes { display: grid; gap: 12px; }
+.placement-node { padding: 16px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--card); min-width: 0; }
+.placement-node h5 { font-size: inherit; font-weight: 600; margin: 0 0 12px; overflow-wrap: anywhere; }
+.placement-replicas { display: flex; flex-wrap: wrap; gap: 8px; }
+.placement-service { display: inline-flex; align-items: center; gap: 12px; padding: 6px 10px; border: 1px solid var(--border); border-radius: 6px; overflow-wrap: anywhere; max-width: 100%; }
+.placement-service > span { color: var(--muted-foreground); font-variant-numeric: tabular-nums; }

@@ -3,14 +3,14 @@ import {describe, expect, it} from 'vitest'
 import {NetworkInjectionEditor} from './NetworkInjectionEditor'
 import {WizardForm, WizardReview, WizardStep} from './WizardForm'
 
-const labels = ['One-way latency (ms)', 'Jitter (ms)', 'Bandwidth (B/s)', 'Packet loss (%)']
+const labels = ['One-way latency (ms)', 'Jitter (ms)', 'Bandwidth (Mbps)', 'Packet loss (%)']
 
 describe('network injection units', () => {
   it.each(['zone', 'cluster'] as const)('labels directed %s links and retains backend units when editing', distribution => {
     const {container} = render(<form><NetworkInjectionEditor prefix="network" zones={['a', 'b']} distribution={distribution} /></form>)
     expect(screen.queryByRole('spinbutton', {name: 'Correlation (%)'})).not.toBeInTheDocument()
     for (const name of labels) expect(screen.getByRole('spinbutton', {name})).toBeInTheDocument()
-    fireEvent.change(screen.getByRole('spinbutton', {name: 'Bandwidth (B/s)'}), {target: {value: '12500000'}})
+    fireEvent.change(screen.getByRole('spinbutton', {name: 'Bandwidth (Mbps)'}), {target: {value: '100'}})
     fireEvent.change(screen.getByRole('spinbutton', {name: 'One-way latency (ms)'}), {target: {value: '75'}})
     const data = new FormData(container.querySelector('form')!)
     expect(JSON.parse(String(data.get('network.linkOverrides')))).toEqual([{sourceZone: 'a', targetZone: 'b', bidirectional: true, latencyMilliseconds: 75, bandwidthBytesPerSecond: 12500000}])
@@ -22,7 +22,7 @@ describe('network injection units', () => {
     const effects = within(container.querySelector('.effect-grid') as HTMLElement)
     for (const name of labels) expect(effects.getByRole('spinbutton', {name})).toBeInTheDocument()
     expect(effects.getByRole('spinbutton', {name: 'One-way latency (ms)'})).toHaveValue(75)
-    expect(effects.getByRole('spinbutton', {name: 'Bandwidth (B/s)'})).toHaveValue(12500000)
+    expect(effects.getByRole('spinbutton', {name: 'Bandwidth (Mbps)'})).toHaveValue(100)
     const data = new FormData(container.querySelector('form')!)
     expect(data.get('network.bandwidthBytesPerSecond')).toBe('12500000')
   })
@@ -58,7 +58,8 @@ it('adds unused directed pairs, prevents self-links and disables adding when all
 
 it('uses integer steps for integer backend fields and allows fractional packet loss', () => {
   render(<NetworkInjectionEditor prefix="network" zones={['a', 'b']} />)
-  for (const name of ['One-way latency (ms)', 'Jitter (ms)', 'Bandwidth (B/s)']) expect(screen.getByRole('spinbutton', {name})).toHaveAttribute('step', '1')
+  for (const name of ['One-way latency (ms)', 'Jitter (ms)']) expect(screen.getByRole('spinbutton', {name})).toHaveAttribute('step', '1')
+  expect(screen.getByRole('spinbutton', {name: 'Bandwidth (Mbps)'})).toHaveAttribute('step', 'any')
   expect(screen.getByRole('spinbutton', {name: 'Packet loss (%)'})).toHaveAttribute('step', '0.1')
 })
 
@@ -88,7 +89,7 @@ it('reviews only enabled shared effects while retaining inactive values for edit
   fireEvent.click(screen.getByRole('button', {name: 'Continue'}))
   const review = within(container.querySelector('.wizard-review') as HTMLElement)
   expect(await review.findByText('75')).toBeVisible()
-  expect(review.queryByText('Bandwidth (B/s)')).not.toBeInTheDocument()
+  expect(review.queryByText('Bandwidth (Mbps)')).not.toBeInTheDocument()
   expect(review.queryByText('9000')).not.toBeInTheDocument()
   expect(new FormData(container.querySelector('form')!).get('network.bandwidthBytesPerSecond')).toBe('9000')
 })
@@ -136,4 +137,30 @@ it('preserves saved shared profiles with explicit link exceptions',()=>{
  expect(new FormData(container.querySelector('form')!).get('network.linkOverrides')).toBe('[]')
  fireEvent.click(screen.getByRole('checkbox',{name:'Link overrides'}))
  expect(JSON.parse(String(new FormData(container.querySelector('form')!).get('network.linkOverrides')))).toEqual([link])
+})
+
+it('validates Mbps bounds, retains exact byte limits and submits shared edits in bytes',()=>{
+ const {container}=render(<form><NetworkInjectionEditor prefix="network" zones={['a','b']} values={{enableBandwidth:true,bandwidthBytesPerSecond:1,linkOverrides:[]}}/></form>)
+ const field=screen.getByRole('spinbutton',{name:'Bandwidth (Mbps)'}) as HTMLInputElement
+ const data=()=>new FormData(container.querySelector('form')!)
+ expect(field).toHaveValue(0.000008)
+ expect(field.checkValidity()).toBe(true)
+ expect(data().get('network.bandwidthBytesPerSecond')).toBe('1')
+ for(const value of ['0','-1','8000000.1','']){
+  fireEvent.change(field,{target:{value}})
+  expect(field.checkValidity()).toBe(false)
+ }
+ fireEvent.change(field,{target:{value:'100.5'}})
+ expect(field.checkValidity()).toBe(true)
+ expect(data().get('network.bandwidthBytesPerSecond')).toBe('12562500')
+})
+
+it('shows converted Mbps in the wizard review while submitting bytes',async()=>{
+ const {container}=render(<WizardForm onCancel={()=>{}} submitLabel="Save"><WizardStep title="Network"><NetworkInjectionEditor prefix="network" zones={['a','b']} values={{enableBandwidth:true,bandwidthBytesPerSecond:12562500,linkOverrides:[]}}/></WizardStep><WizardStep title="Review"><WizardReview/></WizardStep></WizardForm>)
+ fireEvent.click(screen.getByRole('button',{name:'Continue'}))
+ const review=within(container.querySelector('.wizard-review') as HTMLElement)
+ expect(await review.findByText('Bandwidth (Mbps)')).toBeVisible()
+ expect(review.getByText('100.5')).toBeVisible()
+ expect(review.queryByText('12562500')).not.toBeInTheDocument()
+ expect(new FormData(container.querySelector('form')!).get('network.bandwidthBytesPerSecond')).toBe('12562500')
 })

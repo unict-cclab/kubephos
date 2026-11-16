@@ -3,6 +3,8 @@ package applicationinspector
 import (
 	"context"
 	"encoding/json"
+	"gopkg.in/yaml.v3"
+	"os"
 	"strings"
 	"testing"
 
@@ -287,5 +289,69 @@ func TestWorkloadTraitsAddsLegacyDeschedulingToStatelessTargets(t *testing.T) {
 	explicit := workloadTraits([]string{"schedulable", "scalable"}, false)
 	if !contains(stateless, "deschedulable") || contains(stateful, "deschedulable") || contains(entrypoint, "deschedulable") || contains(explicit, "deschedulable") {
 		t.Fatalf("unexpected descheduling traits: stateless=%v stateful=%v entrypoint=%v explicit=%v", stateless, stateful, entrypoint, explicit)
+	}
+}
+
+func TestOnlineBoutiqueRedisUsesGlobalReplicasAndServiceOverride(t *testing.T) {
+	raw, err := os.ReadFile("../../../catalog/applications/online-boutique/application.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	app, err := catalog.Parse(raw, "built-in")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var descriptor catalog.Descriptor
+	if err = json.Unmarshal(app.Descriptor, &descriptor); err != nil {
+		t.Fatal(err)
+	}
+	var fixture strings.Builder
+	for _, component := range descriptor.Spec.Interface.Components {
+		if contains(component.Traits, "scalable") {
+			fixture.WriteString("apiVersion: apps/v1\nkind: Deployment\nmetadata: {name: " + component.Workload.Name + "}\nspec: {replicas: 1}\n---\n")
+		}
+	}
+	manifest := []byte(fixture.String())
+	for _, test := range []struct {
+		name            string
+		values          map[string]any
+		redis, frontend int
+	}{
+		{"global", map[string]any{"initialReplicas": 2}, 2, 2},
+		{"override", map[string]any{"initialReplicas": 3, "replicaOverrides": map[string]any{"redis-cart": 2}}, 2, 3},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			result, err := applyReplicaSettings(manifest, descriptor, test.values)
+			if err != nil {
+				t.Fatal(err)
+			}
+			decoder := yaml.NewDecoder(strings.NewReader(string(result)))
+			for _, component := range descriptor.Spec.Interface.Components {
+				if !contains(component.Traits, "scalable") {
+					continue
+				}
+				expected := struct {
+					name     string
+					replicas int
+				}{component.Workload.Name, test.frontend}
+				if component.ID == "redis-cart" {
+					expected.replicas = test.redis
+				}
+				var document struct {
+					Metadata struct {
+						Name string `yaml:"name"`
+					} `yaml:"metadata"`
+					Spec struct {
+						Replicas int `yaml:"replicas"`
+					} `yaml:"spec"`
+				}
+				if err = decoder.Decode(&document); err != nil {
+					t.Fatal(err)
+				}
+				if document.Metadata.Name != expected.name || document.Spec.Replicas != expected.replicas {
+					t.Fatalf("unexpected workload: %+v", document)
+				}
+			}
+		})
 	}
 }
