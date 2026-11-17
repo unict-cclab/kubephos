@@ -97,3 +97,25 @@ describe('Istio settings editor', () => {
     expect(values().get('istioWaypoint')).toBeNull()
   })
 })
+
+it('places the ambient waypoint with a node selector and tolerations', () => {
+  const values = renderEditor({dataPlane: 'ambient'})
+  fireEvent.click(screen.getByRole('tab', {name: 'Placement'}))
+  fireEvent.click(screen.getByRole('button', {name: 'Add node selector'}))
+  fireEvent.change(screen.getByLabelText('Node selector key 1'), {target: {value: 'kubernetes.io/hostname'}})
+  fireEvent.change(screen.getByLabelText('Node selector value 1'), {target: {value: 'fg-01-control-plane-1'}})
+  fireEvent.click(screen.getByRole('button', {name: 'Add toleration'}))
+  fireEvent.change(screen.getByLabelText('Toleration key 1'), {target: {value: 'node-role.kubernetes.io/control-plane'}})
+  fireEvent.change(screen.getByLabelText('Toleration operator 1'), {target: {value: 'Exists'}})
+  fireEvent.change(screen.getByLabelText('Toleration effect 1'), {target: {value: 'NoSchedule'}})
+  expect(waypoint(values)).toMatchObject({
+    nodeSelector: {'kubernetes.io/hostname': 'fg-01-control-plane-1'},
+    tolerations: [{key: 'node-role.kubernetes.io/control-plane', operator: 'Exists', effect: 'NoSchedule'}],
+  })
+  expect(waypoint(values).replicas).toBeUndefined()
+})
+
+it('reopens a placed waypoint with its node selector and tolerations', () => {
+  const values = renderEditor({dataPlane: 'ambient', waypoint: {nodeSelector: {'kubephos.dev/role': 'management'}, tolerations: [{key: 'dedicated', operator: 'Equal', value: 'mesh', effect: 'NoSchedule'}]}})
+  expect(waypoint(values)).toEqual({nodeSelector: {'kubephos.dev/role': 'management'}, tolerations: [{key: 'dedicated', operator: 'Equal', value: 'mesh', effect: 'NoSchedule'}]})
+})

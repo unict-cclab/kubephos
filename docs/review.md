@@ -10,6 +10,13 @@
   The deployer overlays the Deployment Istio generates through a ConfigMap in
   `infrastructure.parametersRef` and waits for every replica; without these
   settings the waypoint manifest is unchanged.
+- The waypoint editor has a Placement tab with the node selector and toleration
+  fields of application placement (`nodeSelector`, `tolerations` in
+  `definition.istioWaypoint`), validated with the same rules. A selector such
+  as `kubernetes.io/hostname` pins the waypoint to a node; a tainted node, such
+  as the control plane, also needs a matching toleration. The deployer adds them
+  to the same Deployment overlay and waits for the replicas, so a selector that
+  no node satisfies fails the deployment instead of leaving the waypoint pending.
 - The deployer's `plugin.yaml` now accepts `istioWaypoint`; it was missing, so
   runs with a sized waypoint failed validation with "Property is not allowed".
   A test now requires `plugin.yaml` and the runtime manifest to declare the

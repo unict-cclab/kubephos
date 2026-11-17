@@ -12,6 +12,14 @@ const managed = (key: string) => /^(kubephos\.dev|kubernetes\.io|node-role\.kube
 const managedTaint = (key: string) => managed(key) || /^(node\.kubernetes\.io|node\.cloudprovider\.kubernetes\.io)\//.test(key)
 const effects = ['NoSchedule', 'PreferNoSchedule', 'NoExecute']
 
+// One-line summaries for review and readout tables.
+export function describeNodeSelector(value: Record<string,string> = {}): string {
+  return Object.entries(value).map(([key,label]) => `${key}=${label}`).join(', ') || 'None (any node)'
+}
+export function describeTolerations(value: PodToleration[] = []): string {
+  return value.map(item => [item.key || '(any key)', item.operator ?? 'Equal', item.value, item.effect || 'all effects'].filter(Boolean).join(' ')).join('; ') || 'None'
+}
+
 export function KeyValueFields({label, value = {}, onChange, protectManaged = false,validate,empty}: {empty?:string;validate?:(key:string,value:string)=>string;label: string; value?: Record<string,string>; onChange: (value: Record<string,string>) => void; protectManaged?: boolean}) {
   const [rows, setRows] = useState(() => Object.entries(value).map(([key,value]) => ({key,value})))
   const update = (next: typeof rows) => {setRows(next); onChange(Object.fromEntries(next.filter(row => row.key).map(row => [row.key,row.value])))}
