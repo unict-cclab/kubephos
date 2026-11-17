@@ -44,7 +44,7 @@ func TestBuiltInApplicationPackageContracts(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			manifest, err = materializeManifest(manifest, descriptor)
+			manifest, err = materializeManifest(manifest, descriptor, nil)
 			if err != nil {
 				t.Fatal(err)
 			}

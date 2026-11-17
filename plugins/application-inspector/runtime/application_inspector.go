@@ -236,7 +236,7 @@ func (Plugin) Precheck(ctx context.Context, step domain.PlanStep, log plugins.Lo
 	if err != nil {
 		return domain.HealthReport{Status: domain.HealthUnhealthy, Summary: err.Error(), Checks: map[string]string{"images": "invalid"}}, nil
 	}
-	manifest, err = materializeManifest(manifest, input.Descriptor)
+	manifest, err = materializeManifest(manifest, input.Descriptor, input.Values)
 	if err != nil {
 		return domain.HealthReport{Status: domain.HealthUnhealthy, Summary: err.Error(), Checks: map[string]string{"manifest": "invalid"}}, nil
 	}
@@ -284,7 +284,7 @@ func (Plugin) Execute(ctx context.Context, step domain.PlanStep, log plugins.Log
 	if err != nil {
 		return nil, err
 	}
-	applicationManifest, err := materializeManifest(manifest, input.Descriptor)
+	applicationManifest, err := materializeManifest(manifest, input.Descriptor, input.Values)
 	if err != nil {
 		return nil, err
 	}
@@ -874,7 +874,13 @@ func applyOverlayOperation(current any, tokens []string, operation string, value
 	}
 }
 
-func materializeManifest(manifest []byte, descriptor catalog.Descriptor) ([]byte, error) {
+// materializeManifest keeps the declared package resources and appends the
+// additional manifests, rendering templated ones with the resolved values (the
+// descriptor defaults when no values are given).
+func materializeManifest(manifest []byte, descriptor catalog.Descriptor, values map[string]any) ([]byte, error) {
+	if values == nil {
+		values = descriptor.Spec.Defaults
+	}
 	excluded := map[string]bool{}
 	for _, resource := range descriptor.Spec.ExcludeResources {
 		excluded[resource.APIVersion+"|"+resource.Kind+"|"+resource.Name] = false
@@ -928,7 +934,11 @@ func materializeManifest(manifest []byte, descriptor catalog.Descriptor) ([]byte
 		}
 	}
 	for _, additional := range descriptor.Spec.AdditionalManifests {
-		additionalDecoder := yaml.NewDecoder(strings.NewReader(additional.Content))
+		content, err := catalog.RenderAdditionalManifest(additional, values)
+		if err != nil {
+			return nil, err
+		}
+		additionalDecoder := yaml.NewDecoder(strings.NewReader(content))
 		for {
 			var document yaml.Node
 			err := additionalDecoder.Decode(&document)

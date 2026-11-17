@@ -83,3 +83,18 @@ it('reveals an invalid label in its wizard step and nested tabs before submittin
  expect(screen.getByRole('textbox',{name:'Label key 1'})).toBeVisible()
  expect((screen.getByLabelText('Label key 1') as HTMLInputElement).validity.valid).toBe(false)
 })
+
+it('keeps the new pool name field focused while its name is typed', () => {
+ render(<ClusterMaintenance resource={resource} runs={[]} session={session} />)
+ fireEvent.click(screen.getByRole('button',{name:'Edit'}))
+ fireEvent.click(screen.getByRole('button',{name:'Node pools'}))
+ fireEvent.click(screen.getByRole('tab',{name:'Pools'}))
+ fireEvent.click(screen.getByRole('button',{name:'Add pool'}))
+ const field = screen.getByLabelText('Pool 2 name') as HTMLInputElement
+ field.focus()
+ for (const value of ['g', 'gp', 'gpu']) fireEvent.change(screen.getByLabelText('Pool 2 name'), {target: {value}})
+ // Keying the pool settings by name remounted them on every keystroke and dropped the focus.
+ expect(screen.getByLabelText('Pool 2 name')).toBe(field)
+ expect(document.activeElement).toBe(field)
+ expect(field.value).toBe('gpu')
+})

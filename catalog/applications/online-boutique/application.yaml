@@ -104,6 +104,8 @@ spec:
     - {apiVersion: v1, kind: ServiceAccount, name: loadgenerator}
   additionalManifests:
     - id: node-proxy
+      # Rendered with the application settings: ingressConnections chooses how nginx reaches frontend.
+      template: true
       content: |
         apiVersion: v1
         kind: ConfigMap
@@ -111,18 +113,54 @@ spec:
           name: node-proxy
         data:
           default.conf.template: |
+        {{- if eq .Values.ingressConnections "persistent" }}
+            # Persistent connections to every frontend pod, chosen per request (round robin),
+            # like an Envoy gateway. The headless Service lists the pods; nginx reads them
+            # again every 5 s, so new replicas get traffic as soon as they are ready.
+            resolver ${NGINX_LOCAL_RESOLVERS} valid=5s ipv6=off;
+            upstream frontend_pods {
+              zone frontend_pods 64k;
+              server frontend-pods.${POD_NAMESPACE}.svc.cluster.local:8080 resolve;
+              keepalive {{ .Values.ingressIdleConnections }};
+              keepalive_requests 100000;
+              keepalive_timeout 60s;
+            }
+        {{- end }}
             server {
               listen 8080;
               location / {
                 proxy_http_version 1.1;
+        {{- if eq .Values.ingressConnections "persistent" }}
+                proxy_set_header Connection "";
+                proxy_set_header Host $host;
+        {{- end }}
                 proxy_set_header X-Real-IP $remote_addr;
                 proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
                 proxy_set_header X-Forwarded-Proto $scheme;
                 proxy_set_header X-Kubephos-Proxy-Node ${NODE_NAME};
                 proxy_set_header X-Kubephos-Proxy-Zone ${NODE_ZONE};
+        {{- if eq .Values.ingressConnections "persistent" }}
+                proxy_pass http://frontend_pods;
+        {{- else }}
                 proxy_pass http://frontend:80;
+        {{- end }}
               }
             }
+        {{- if eq .Values.ingressConnections "persistent" }}
+        ---
+        apiVersion: v1
+        kind: Service
+        metadata:
+          name: frontend-pods
+        spec:
+          clusterIP: None
+          selector:
+            app: frontend
+          ports:
+            - name: http
+              port: 8080
+              targetPort: 8080
+        {{- end }}
         ---
         apiVersion: apps/v1
         kind: DaemonSet
@@ -150,6 +188,14 @@ spec:
                     - name: http
                       containerPort: 8080
                   env:
+        {{- if eq .Values.ingressConnections "persistent" }}
+                    - name: NGINX_ENTRYPOINT_LOCAL_RESOLVERS
+                      value: "true"
+                    - name: POD_NAMESPACE
+                      valueFrom:
+                        fieldRef:
+                          fieldPath: metadata.namespace
+        {{- end }}
                     - name: NODE_NAME
                       valueFrom:
                         fieldRef:
@@ -243,12 +289,29 @@ spec:
         type: object
         title: Resource overrides by service
         additionalProperties: true
+      ingressConnections:
+        x-kubephos-order: 11
+        type: string
+        title: Ingress proxy connections to frontend
+        description: "persistent: each node proxy keeps connections open to every frontend pod and picks a pod for each request, like an Envoy gateway. per-request: a new connection for every request, balanced by kube-proxy (behaviour before this setting existed)."
+        enum: [persistent, per-request]
+      ingressIdleConnections:
+        x-kubephos-order: 12
+        x-kubephos-advanced: true
+        x-kubephos-visible-when: {property: ingressConnections, values: [persistent]}
+        type: integer
+        title: Idle connections kept per ingress proxy
+        description: Upper bound of idle connections each node proxy keeps open towards the frontend pods.
+        minimum: 1
+        maximum: 1024
   defaults:
     initialReplicas: 1
     replicaOverrides: {}
     workloadProbeTimeoutSeconds: 5
     workloadLivenessInitialDelaySeconds: 60
     packageResources: false
+    ingressConnections: persistent
+    ingressIdleConnections: 64
   overlays:
     - target: {apiVersion: apps/v1, kind: Deployment, name: emailservice}
       operations:
