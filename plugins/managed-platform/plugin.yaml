@@ -3,8 +3,8 @@ kind: Plugin
 metadata:
   id: io.kubephos.platform.managed
   name: Managed Kubernetes platform
-  version: 0.2.10
-  description: Installs and verifies the managed service mesh, chaos, autoscaling and cluster support baseline, including cluster-admin Headlamp.
+  version: 0.3.0
+  description: Installs and verifies the selected managed service mesh, chaos, autoscaling, logging, tracing and console components on top of the cluster support baseline.
 spec:
   protocol: v1alpha1
   commands:
@@ -29,6 +29,19 @@ spec:
         format: kubephos-artifact-ref
         x-kubephos-artifact-type: ClusterConnection
         x-kubephos-artifact-version: v1alpha1
+      components:
+        type: array
+        title: Cluster components
+        maxItems: 32
+        items:
+          type: string
+          pattern: ^[a-z0-9][a-z0-9-]{0,63}$
+      reconcile:
+        type: boolean
+      ownershipMarker:
+        type: string
+        pattern: ^[0-9a-f]{32}$
+        x-kubephos-hidden: true
   runtime:
     executable: managed-platform-plugin
     timeout: 30m

@@ -2,7 +2,8 @@ import {ProxyResourceDefaults} from './ProxyResourceDefaults'
 import {IstioInjectionReadout} from './IstioInjectionEditor'
 import {useState} from 'react'
 import type {ReactNode} from 'react'
-import type {Application,ExperimentConfiguration,Session} from '../types'
+import type {Application,ExperimentConfiguration,PodToleration,Session} from '../types'
+import {describeNodeSelector,describeTolerations} from './PlacementFields'
 import {applicationSettingsSchema} from './applicationSettings'
 import {hasConfigurableFields} from './SchemaFields'
 import {FormTabs} from './FormTabs'
@@ -17,6 +18,8 @@ function waypointRows(settings: Record<string, unknown> = {}): string[][] {
  return [
   ['Waypoint replicas', settings.replicas === undefined ? '1 (Istio default)' : String(settings.replicas)],
   ['CPU request per replica', value('cpuRequest')], ['CPU limit per replica', value('cpuLimit')], ['Memory request per replica', value('memoryRequest')], ['Memory limit per replica', value('memoryLimit')],
+  ['Node selector', describeNodeSelector(settings.nodeSelector as Record<string, string> | undefined)],
+  ['Tolerations', describeTolerations(settings.tolerations as PodToleration[] | undefined)],
   ['Every service uses the waypoint', settings.allServices === false ? 'No' : 'Yes'],
   ...overrides.map(([id, use]) => [id, use ? 'Uses the waypoint' : 'Bypasses the waypoint']),
  ]

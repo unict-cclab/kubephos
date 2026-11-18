@@ -279,11 +279,5 @@ func ambientReady(ctx context.Context, runner clusterRunner, kubeconfig string) 
 
 // ambientChartSet adds the managed istiod chart, which ambient mode upgrades in place.
 func ambientChartSet() []chartSpec {
-	set := append([]chartSpec{}, ambientCharts...)
-	for _, chart := range managedCharts {
-		if chart.ID == "istiod" {
-			set = append(set, chart)
-		}
-	}
-	return set
+	return append(append([]chartSpec{}, ambientCharts...), istiodChart)
 }

@@ -58,7 +58,8 @@
   input:not([type="checkbox"]):not([type="radio"]):not([type="color"]), select { min-height: var(--control-height); border-radius: var(--radius-sm); padding: 6px 12px; background: transparent; color: var(--ink); border-color: var(--field-border); font-size: 14px; line-height: 20px; box-shadow: 0 1px 2px rgb(0 0 0 / .05); }
   textarea { padding: 12px; border-color: var(--field-border); border-radius: var(--radius-sm); background: transparent; color: var(--ink); font-size: 14px; line-height: 1.5; }
   :root[data-theme="dark"] :is(input:not([type="checkbox"]):not([type="radio"]):not([type="color"]), textarea, select) { background-color: var(--surface); }
-  input::placeholder, textarea::placeholder { color: var(--muted-foreground); opacity: 1; font-weight: 400; }
+  /* Placeholders are lighter than entered text, so a suggestion never reads as a value. */
+  input::placeholder, textarea::placeholder { color: color-mix(in srgb, var(--muted-foreground) 60%, transparent); opacity: 1; font-weight: 400; }
   input:focus, select:focus, textarea:focus { border-color: var(--ring); box-shadow: 0 0 0 3px var(--focus-ring); outline: none; }
   input[type="checkbox"], input[type="radio"] { accent-color: var(--primary); }
   input:disabled, select:disabled, textarea:disabled { background: var(--surface-soft); opacity: .75; }
@@ -1415,3 +1416,10 @@
 .resource-selection-scroll input[type="text"], .resource-selection-scroll input:not([type]) { min-width: 10rem; }
 .selection-toolbar { margin-bottom: 0; align-items: center; }
 .selection-count { margin-right: auto; color: var(--muted-foreground); font-size: 13px; }
+
+/* Cluster components: one bordered list, matching the sharing recipient list. */
+.cluster-component-list { display: grid; margin-top: 16px; border: 1px solid var(--line); border-radius: 8px; }
+.cluster-component-list .checkbox-field { align-items: flex-start; gap: 12px; margin: 0; padding: 12px 14px; }
+.cluster-component-list .checkbox-field + .checkbox-field { border-top: 1px solid var(--line); }
+.cluster-component-list .checkbox-field > span { display: grid; gap: 2px; min-width: 0; }
+.cluster-component-list small { color: var(--muted-foreground); font-size: 13px; }

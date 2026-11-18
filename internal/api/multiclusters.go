@@ -65,6 +65,7 @@ func (s *Server) createMultiCluster(response http.ResponseWriter, request *http.
 		member.WorkspaceID, member.ConnectionID = input.WorkspaceID, input.ConnectionID
 		member.TemplateID, member.HarborID, member.NFSID = input.TemplateID, input.HarborID, input.NFSID
 		member.ScrapeInterval, member.Retention = input.ScrapeInterval, input.Retention
+		member.Components = input.Components
 		member.Mode, member.Networking = "single", "cilium"
 		member.ControlPlaneZones = []string{member.Name}
 		member.ManagementPool.Zones = []string{member.Name}
@@ -127,6 +128,7 @@ func (s *Server) createMultiCluster(response http.ResponseWriter, request *http.
 	input.Networking = "cilium"
 	input.ManagedProfile = "2026.10.multicluster"
 	input.Members = nil
+	input.Components = preparedMembers[0].Input.Components
 	for _, prepared := range preparedMembers {
 		input.Members = append(input.Members, prepared.Input)
 	}

@@ -43,21 +43,23 @@ type Invocation struct {
 }
 
 type Spec struct {
-	PreviousNodeSettings  map[string]placement.PoolSettings `json:"previousNodeSettings,omitempty"`
-	Networking            string                            `json:"networking,omitempty"`
-	ClusterID             int                               `json:"clusterId,omitempty"`
-	PodCIDR               string                            `json:"podCIDR,omitempty"`
-	ServiceCIDR           string                            `json:"serviceCIDR,omitempty"`
-	Reconcile             bool                              `json:"reconcile,omitempty"`
-	PreviousMachineSetRef string                            `json:"previousMachineSetRef,omitempty"`
-	MachineSetRef         string                            `json:"machineSetRef"`
-	MachineAccessRef      string                            `json:"machineAccessRef"`
-	ClusterName           string                            `json:"clusterName"`
-	ControlPlanes         int                               `json:"controlPlanes"`
-	ControlPlaneZones     []string                          `json:"controlPlaneZones,omitempty"`
-	NodePools             []NodePool                        `json:"nodePools,omitempty"`
-	RegistryEndpointRef   string                            `json:"registryEndpointRef,omitempty"`
-	RegistryCredentialRef string                            `json:"registryCredentialRef,omitempty"`
+	PreviousNodeSettings map[string]placement.PoolSettings `json:"previousNodeSettings,omitempty"`
+	Networking           string                            `json:"networking,omitempty"`
+	// Components lists the selected cluster components; nil means the full set.
+	Components            []string   `json:"components,omitempty"`
+	ClusterID             int        `json:"clusterId,omitempty"`
+	PodCIDR               string     `json:"podCIDR,omitempty"`
+	ServiceCIDR           string     `json:"serviceCIDR,omitempty"`
+	Reconcile             bool       `json:"reconcile,omitempty"`
+	PreviousMachineSetRef string     `json:"previousMachineSetRef,omitempty"`
+	MachineSetRef         string     `json:"machineSetRef"`
+	MachineAccessRef      string     `json:"machineAccessRef"`
+	ClusterName           string     `json:"clusterName"`
+	ControlPlanes         int        `json:"controlPlanes"`
+	ControlPlaneZones     []string   `json:"controlPlaneZones,omitempty"`
+	NodePools             []NodePool `json:"nodePools,omitempty"`
+	RegistryEndpointRef   string     `json:"registryEndpointRef,omitempty"`
+	RegistryCredentialRef string     `json:"registryCredentialRef,omitempty"`
 }
 
 type NodePool struct {
@@ -215,7 +217,7 @@ func (Plugin) Manifest() plugins.Manifest {
 	return plugins.Manifest{
 		ID: pluginID, Name: "Kubernetes cluster bootstrap", Version: "0.4.1",
 		Description:     "Builds a managed K3s cluster from a verified machine topology.",
-		Schema:          json.RawMessage(`{"type":"object","additionalProperties":false,"required":["machineSetRef","machineAccessRef","clusterName","controlPlanes"],"properties":{"machineSetRef":{"type":"string","title":"Machine topology","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"MachineSet","x-kubephos-artifact-version":"v1alpha1"},"machineAccessRef":{"type":"string","title":"Machine access","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"MachineAccess","x-kubephos-artifact-version":"v1alpha1"},"clusterName":{"type":"string","title":"Cluster name","pattern":"^[a-z0-9][a-z0-9-]{0,31}$","default":"development"},"controlPlanes":{"type":"integer","title":"Control plane nodes","enum":[1,3],"default":1},"controlPlaneZones":{"type":"array","title":"Control plane zones","minItems":1,"maxItems":12,"items":{"type":"string","pattern":"^[a-z0-9][a-z0-9-]{0,31}$"}},"nodePools":{"type":"array","title":"Node pools","maxItems":12,"items":{"type":"object","additionalProperties":false,"required":["name","role","count","zones"],"properties":{"name":{"type":"string","pattern":"^[a-z0-9][a-z0-9-]{0,31}$"},"role":{"type":"string","enum":["management","application"]},"count":{"type":"integer","minimum":1,"maximum":12},"zones":{"type":"array","minItems":1,"maxItems":12,"items":{"type":"string","pattern":"^[a-z0-9][a-z0-9-]{0,31}$"}},"labels":{"type":"object","additionalProperties":true},"taints":{"type":"array","items":{"type":"object"}}}}},"registryEndpointRef":{"type":"string","title":"Managed registry","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"RegistryEndpoint","x-kubephos-artifact-version":"v1alpha1"},"registryCredentialRef":{"type":"string","title":"Registry pull credential","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"RegistryCredential","x-kubephos-artifact-version":"v1alpha1"},"reconcile":{"type":"boolean"},"previousMachineSetRef":{"type":"string","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"MachineSet","x-kubephos-artifact-version":"v1alpha1"},"networking":{"type":"string","enum":["flannel","cilium"]},"clusterId":{"type":"integer","minimum":1,"maximum":255},"podCIDR":{"type":"string"},"serviceCIDR":{"type":"string"},"previousNodeSettings":{"type":"object","x-kubephos-hidden":true}}}`),
+		Schema:          json.RawMessage(`{"type":"object","additionalProperties":false,"required":["machineSetRef","machineAccessRef","clusterName","controlPlanes"],"properties":{"machineSetRef":{"type":"string","title":"Machine topology","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"MachineSet","x-kubephos-artifact-version":"v1alpha1"},"machineAccessRef":{"type":"string","title":"Machine access","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"MachineAccess","x-kubephos-artifact-version":"v1alpha1"},"clusterName":{"type":"string","title":"Cluster name","pattern":"^[a-z0-9][a-z0-9-]{0,31}$","default":"development"},"controlPlanes":{"type":"integer","title":"Control plane nodes","enum":[1,3],"default":1},"controlPlaneZones":{"type":"array","title":"Control plane zones","minItems":1,"maxItems":12,"items":{"type":"string","pattern":"^[a-z0-9][a-z0-9-]{0,31}$"}},"nodePools":{"type":"array","title":"Node pools","maxItems":12,"items":{"type":"object","additionalProperties":false,"required":["name","role","count","zones"],"properties":{"name":{"type":"string","pattern":"^[a-z0-9][a-z0-9-]{0,31}$"},"role":{"type":"string","enum":["management","application"]},"count":{"type":"integer","minimum":1,"maximum":12},"zones":{"type":"array","minItems":1,"maxItems":12,"items":{"type":"string","pattern":"^[a-z0-9][a-z0-9-]{0,31}$"}},"labels":{"type":"object","additionalProperties":true},"taints":{"type":"array","items":{"type":"object"}}}}},"registryEndpointRef":{"type":"string","title":"Managed registry","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"RegistryEndpoint","x-kubephos-artifact-version":"v1alpha1"},"registryCredentialRef":{"type":"string","title":"Registry pull credential","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"RegistryCredential","x-kubephos-artifact-version":"v1alpha1"},"reconcile":{"type":"boolean"},"previousMachineSetRef":{"type":"string","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"MachineSet","x-kubephos-artifact-version":"v1alpha1"},"networking":{"type":"string","enum":["flannel","cilium"]},"components":{"type":"array","maxItems":32,"items":{"type":"string","pattern":"^[a-z0-9][a-z0-9-]{0,63}$"}},"clusterId":{"type":"integer","minimum":1,"maximum":255},"podCIDR":{"type":"string"},"serviceCIDR":{"type":"string"},"previousNodeSettings":{"type":"object","x-kubephos-hidden":true}}}`),
 		ArtifactInputs:  []domain.ArtifactContract{{Type: "MachineSet", Version: "v1alpha1"}, {Type: "MachineAccess", Version: "v1alpha1"}, {Type: "RegistryEndpoint", Version: "v1alpha1"}, {Type: "RegistryCredential", Version: "v1alpha1"}},
 		ArtifactOutputs: []domain.ArtifactContract{{Type: "ClusterConnection", Version: "v1alpha1"}, {Type: "ClusterInventory", Version: "v1alpha1"}},
 		Capabilities:    []string{"cluster.bootstrap", "cluster.preflight", "cluster.cleanup", "lifecycle.cleanup", "lifecycle.cleanup.compatible"},

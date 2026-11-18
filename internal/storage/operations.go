@@ -437,19 +437,24 @@ func (s *Store) ResetFailedManagedResourceDeletion(ctx context.Context, resource
 }
 
 func (s *Store) CreateManagedResourceRecreation(ctx context.Context, resourceID, expectedRunID string, desiredSpec json.RawMessage, pipeline domain.Pipeline, run domain.PipelineRun) error {
-	return s.createManagedResourceRecreation(ctx, resourceID, expectedRunID, desiredSpec, pipeline, run, false, false)
+	return s.createManagedResourceRecreation(ctx, resourceID, expectedRunID, desiredSpec, pipeline, run, false, nil)
 }
 
 // Preserve infrastructure services and their original ownership during node maintenance.
 func (s *Store) CreateManagedClusterMaintenance(ctx context.Context, resourceID, expectedRunID string, desiredSpec json.RawMessage, pipeline domain.Pipeline, run domain.PipelineRun) error {
-	return s.createManagedResourceRecreation(ctx, resourceID, expectedRunID, desiredSpec, pipeline, run, false, true)
+	return s.createManagedResourceRecreation(ctx, resourceID, expectedRunID, desiredSpec, pipeline, run, false, []string{"storage", "observability", "platform"})
+}
+
+// Reuse the machines, Kubernetes and services of a ready cluster while its platform components change.
+func (s *Store) CreateManagedClusterComponentChange(ctx context.Context, resourceID, expectedRunID string, desiredSpec json.RawMessage, pipeline domain.Pipeline, run domain.PipelineRun) error {
+	return s.createManagedResourceRecreation(ctx, resourceID, expectedRunID, desiredSpec, pipeline, run, false, []string{"machines", "kubernetes", "storage", "observability"})
 }
 
 func (s *Store) RetryManagedClusterMesh(ctx context.Context, resourceID, expectedRunID string, desiredSpec json.RawMessage, pipeline domain.Pipeline, run domain.PipelineRun) error {
-	return s.createManagedResourceRecreation(ctx, resourceID, expectedRunID, desiredSpec, pipeline, run, true, false)
+	return s.createManagedResourceRecreation(ctx, resourceID, expectedRunID, desiredSpec, pipeline, run, true, nil)
 }
 
-func (s *Store) createManagedResourceRecreation(ctx context.Context, resourceID, expectedRunID string, desiredSpec json.RawMessage, pipeline domain.Pipeline, run domain.PipelineRun, reuseCompleted, reuseServices bool) error {
+func (s *Store) createManagedResourceRecreation(ctx context.Context, resourceID, expectedRunID string, desiredSpec json.RawMessage, pipeline domain.Pipeline, run domain.PipelineRun, reuseCompleted bool, reusedStages []string) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return err
@@ -508,21 +513,21 @@ func (s *Store) createManagedResourceRecreation(ctx context.Context, resourceID,
 	if err := insertPipelineLifecycle(ctx, tx, &pipeline, &run); err != nil {
 		return err
 	}
-	if reuseServices {
+	if len(reusedStages) > 0 {
 		command, err := tx.Exec(ctx, `
    UPDATE pipeline_run_stages current SET status=old.status, operation_id=old.operation_id,
      spec=old.spec, started_at=old.started_at, completed_at=old.completed_at
    FROM pipeline_run_stages old JOIN operations op ON op.id=old.operation_id
    WHERE current.run_id=$1 AND old.run_id=$2 AND current.stage_id=old.stage_id
-     AND current.stage_id IN ('storage','observability','platform')
+     AND current.stage_id = ANY($4)
      AND current.plugin_id=old.plugin_id AND old.status='succeeded'
      AND op.status='succeeded' AND op.workspace_id=$3
-  `, run.ID, expectedRunID, pipeline.WorkspaceID)
+  `, run.ID, expectedRunID, pipeline.WorkspaceID, reusedStages)
 		if err != nil {
 			return err
 		}
 		var required int64
-		if err := tx.QueryRow(ctx, `SELECT count(*) FROM pipeline_run_stages WHERE run_id=$1 AND stage_id IN ('storage','observability','platform')`, run.ID).Scan(&required); err != nil {
+		if err := tx.QueryRow(ctx, `SELECT count(*) FROM pipeline_run_stages WHERE run_id=$1 AND stage_id = ANY($2)`, run.ID, reusedStages).Scan(&required); err != nil {
 			return err
 		}
 		if command.RowsAffected() != required {

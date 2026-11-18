@@ -15,6 +15,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"text/template"
 	"unicode/utf8"
 
 	"gopkg.in/yaml.v3"
@@ -114,6 +115,30 @@ type LoadScenario struct {
 type AdditionalManifest struct {
 	ID      string `json:"id" yaml:"id"`
 	Content string `json:"content" yaml:"content"`
+	// Template renders Content as a Go text/template with the resolved application
+	// values under .Values, so a setting can change an additional resource.
+	Template bool `json:"template,omitempty" yaml:"template,omitempty"`
+}
+
+// RenderAdditionalManifest returns the manifest content for the given resolved
+// values. Plain manifests are returned unchanged; a value a template reads must
+// exist, so a misspelled setting fails instead of rendering an empty string.
+func RenderAdditionalManifest(manifest AdditionalManifest, values map[string]any) (string, error) {
+	if !manifest.Template {
+		return manifest.Content, nil
+	}
+	parsed, err := template.New(manifest.ID).Option("missingkey=error").Parse(manifest.Content)
+	if err != nil {
+		return "", fmt.Errorf("additional manifest %s template is invalid: %w", manifest.ID, err)
+	}
+	var rendered bytes.Buffer
+	if err := parsed.Execute(&rendered, map[string]any{"Values": values}); err != nil {
+		return "", fmt.Errorf("additional manifest %s cannot be rendered: %w", manifest.ID, err)
+	}
+	if rendered.Len() > maxDescriptorBytes {
+		return "", fmt.Errorf("additional manifest %s renders more than %d bytes", manifest.ID, maxDescriptorBytes)
+	}
+	return rendered.String(), nil
 }
 
 type StorageClassMapping struct {
@@ -383,6 +408,31 @@ func validate(descriptor Descriptor, origin string) error {
 	}
 	if err := validateOverlays(descriptor); err != nil {
 		return err
+	}
+	return validateTemplatedManifests(descriptor)
+}
+
+// validateTemplatedManifests renders every templated additional manifest with the
+// declared defaults, so a broken template or unknown value fails at catalog load.
+func validateTemplatedManifests(descriptor Descriptor) error {
+	for position, manifest := range descriptor.Spec.AdditionalManifests {
+		if !manifest.Template {
+			continue
+		}
+		path := fmt.Sprintf("spec.additionalManifests[%d]", position)
+		rendered, err := RenderAdditionalManifest(manifest, descriptor.Spec.Defaults)
+		if err != nil {
+			return fmt.Errorf("%s: %w", path, err)
+		}
+		decoder := yaml.NewDecoder(strings.NewReader(rendered))
+		for {
+			var document map[string]any
+			if err := decoder.Decode(&document); errors.Is(err, io.EOF) {
+				break
+			} else if err != nil {
+				return fmt.Errorf("%s does not render valid YAML with the defaults: %w", path, err)
+			}
+		}
 	}
 	return nil
 }

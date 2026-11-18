@@ -457,8 +457,9 @@ func (plugin Plugin) Execute(ctx context.Context, step domain.PlanStep, log plug
 		if _, err := runner.Run(ctx, cluster.Spec.Kubeconfig, nil, "wait", "--for=condition=Programmed", "gateway/"+ambientWaypoint, "--namespace", input.Namespace, "--timeout=180s"); err != nil {
 			return nil, fmt.Errorf("Istio ambient waypoint readiness: %w", err)
 		}
-		// A sized waypoint is ready only when every replica runs with its resources.
-		if !waypoint.DefaultSize() {
+		// A sized or placed waypoint is ready only when every replica runs with its settings
+		// (a node selector no node satisfies shows up here, as replicas that never start).
+		if !waypoint.DefaultDeployment() {
 			if _, err := runner.Run(ctx, cluster.Spec.Kubeconfig, nil, "rollout", "status", "deployment/"+ambientWaypoint, "--namespace", input.Namespace, "--timeout=300s"); err != nil {
 				return nil, fmt.Errorf("Istio ambient waypoint replicas: %w", err)
 			}

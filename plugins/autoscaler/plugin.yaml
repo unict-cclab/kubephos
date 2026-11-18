@@ -44,5 +44,6 @@ spec:
     outputs:
       - {type: StrategyDeployment, version: v1alpha1}
   targeting: {requiredTrait: scalable}
+  requiredComponents: [cpa-operator]
   capabilities: [autoscaler.kubernetes.install, autoscaler.kubernetes.preflight, autoscaler.kubernetes.cleanup, lifecycle.cleanup]
   permissions: [cluster.admin]

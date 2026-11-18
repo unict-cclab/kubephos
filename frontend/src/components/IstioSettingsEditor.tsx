@@ -1,6 +1,7 @@
 import {useId, useState, type ReactNode} from 'react'
-import type {ApplicationComponent, IstioDataPlane} from '../types'
+import type {ApplicationComponent, IstioDataPlane, PodToleration} from '../types'
 import {FormTabs} from './FormTabs'
+import {describeNodeSelector, describeTolerations, KeyValueFields, TolerationFields} from './PlacementFields'
 import {ResourceAction} from './ResourceAction'
 import {ResourceQuantityInput} from './ResourceQuantityInput'
 import {ServiceOverridePicker} from './ServiceOverridePicker'
@@ -22,7 +23,10 @@ const modes: {value: IstioDataPlane; title: string}[] = [
 // whole namespace and configures its waypoint. Settings of the mode not chosen stay mounted inside
 // disabled fieldsets, so they leave the submitted form but return if that mode is chosen again.
 // Experiment configurations and long-lived application deployments offer the same choices.
-export function IstioSettingsEditor({dataPlane: initialDataPlane = 'sidecar', enabled: initialEnabled = true, waypoint, services = [], disabled = false, children}: {dataPlane?: IstioDataPlane; enabled?: boolean; waypoint?: Record<string, unknown>; services?: ApplicationComponent[]; disabled?: boolean; children: ReactNode}) {
+// `available` lists the data planes the cluster installs; only those are offered.
+export function IstioSettingsEditor({dataPlane: requestedDataPlane = 'sidecar', enabled: initialEnabled = true, waypoint, services = [], disabled = false, available = ['sidecar', 'ambient'], children}: {dataPlane?: IstioDataPlane; enabled?: boolean; waypoint?: Record<string, unknown>; services?: ApplicationComponent[]; disabled?: boolean; available?: IstioDataPlane[]; children: ReactNode}) {
+  const offered = modes.filter(mode => available.includes(mode.value))
+  const initialDataPlane = available.includes(requestedDataPlane) ? requestedDataPlane : offered[0]?.value ?? 'sidecar'
   const [enabled, setEnabled] = useState(initialEnabled || initialDataPlane === 'ambient')
   const [dataPlane, setDataPlane] = useState<IstioDataPlane>(initialDataPlane)
   const switchId = useId()
@@ -37,7 +41,7 @@ export function IstioSettingsEditor({dataPlane: initialDataPlane = 'sidecar', en
     {using && <fieldset className="istio-mode-picker">
       <legend>Mode</legend>
       <div className="istio-mode-options">
-        {modes.map(mode => <label key={mode.value} className="istio-mode-option">
+        {offered.map(mode => <label key={mode.value} className="istio-mode-option">
           <input type="radio" name="istioModeChoice" data-review-skip="true" value={mode.value} checked={dataPlane === mode.value} onChange={() => setDataPlane(mode.value)} />
           <strong>{mode.title}</strong>
         </label>)}
@@ -55,23 +59,30 @@ export function IstioSettingsEditor({dataPlane: initialDataPlane = 'sidecar', en
   </div>
 }
 
-// The ambient waypoint: its replicas and per-replica proxy resources, and which services use it.
-// Empty sizes keep Istio's defaults; services follow the namespace default unless overridden.
+// The ambient waypoint: its replicas and per-replica proxy resources, the nodes it runs on, and
+// which services use it. Empty sizes keep Istio's defaults, an empty placement lets the scheduler
+// choose (as for any pod), and services follow the namespace default unless overridden.
 function WaypointEditor({initial = {}, services}: {initial?: Record<string, unknown>; services: ApplicationComponent[]}) {
   const [replicas, setReplicas] = useState(initial.replicas === undefined ? '' : String(initial.replicas))
   const [resources, setResources] = useState<Record<string, string>>(Object.fromEntries(waypointResources.map(({field}) => [field, typeof initial[field] === 'string' ? initial[field] as string : ''])))
   const [allServices, setAllServices] = useState(initial.allServices !== false)
   const [overrides, setOverrides] = useState<Record<string, boolean>>({...(initial.serviceOverrides as Record<string, boolean> | undefined)})
+  const [nodeSelector, setNodeSelector] = useState<Record<string, string>>({...(initial.nodeSelector as Record<string, string> | undefined)})
+  const [tolerations, setTolerations] = useState<PodToleration[]>(Array.isArray(initial.tolerations) ? initial.tolerations as PodToleration[] : [])
   const [selected, setSelected] = useState<string>()
   const settings = {
     ...(replicas !== '' ? {replicas: Number(replicas)} : {}),
     ...Object.fromEntries(Object.entries(resources).filter(([, value]) => value !== '')),
+    ...(Object.keys(nodeSelector).length ? {nodeSelector} : {}),
+    ...(tolerations.length ? {tolerations} : {}),
     ...(!allServices ? {allServices: false} : {}),
     ...(Object.keys(overrides).length ? {serviceOverrides: overrides} : {}),
   }
   const summary = [
     ['Replicas', replicas || '1 (Istio default)'],
     ...waypointResources.map(({field, label}) => [`${label} per replica`, resources[field] || 'Istio default']),
+    ['Node selector', describeNodeSelector(nodeSelector)],
+    ['Tolerations', describeTolerations(tolerations)],
     ['Every service uses the waypoint', allServices ? 'Yes' : 'No'],
     ...Object.entries(overrides).map(([id, use]) => [id, use ? 'Uses the waypoint' : 'Bypasses the waypoint']),
   ]
@@ -83,6 +94,12 @@ function WaypointEditor({initial = {}, services}: {initial?: Record<string, unkn
         <ResourceQuantityInput label={`Waypoint ${label.toLowerCase()} per replica`} kind={kind} placeholder="Istio default" value={resources[field]} onChange={value => setResources(current => ({...current, [field]: value}))} />
       </div>)}
     </div>
+  </div>
+  // Same fields as application placement: a selector such as kubernetes.io/hostname pins a node,
+  // and a node with taints (the control plane, for example) also needs matching tolerations.
+  const placement = <div className="form-stack" data-review-skip="true">
+    <KeyValueFields label="Node selector" value={nodeSelector} empty="No node selector: the scheduler can use any node without taints." onChange={setNodeSelector} />
+    <TolerationFields value={tolerations} empty="No tolerations: nodes with taints are excluded." onChange={setTolerations} />
   </div>
   const routing = <div className="form-stack">
     <div>
@@ -103,6 +120,6 @@ function WaypointEditor({initial = {}, services}: {initial?: Record<string, unkn
   return <section className="istio-panel" data-review-group="Istio waypoint">
     <input type="hidden" name="istioWaypoint" value={JSON.stringify(Object.keys(settings).length ? settings : null)} data-review-title="Istio waypoint" data-review-table={JSON.stringify({headers: ['Field', 'Value'], rows: summary})} />
     <header className="istio-panel-head"><h4>Waypoint</h4></header>
-    <FormTabs label="Waypoint settings" items={[{id: 'size', title: 'Size', content: size}, {id: 'services', title: 'Service overrides', content: routing}]} />
+    <FormTabs label="Waypoint settings" items={[{id: 'size', title: 'Size', content: size}, {id: 'placement', title: 'Placement', content: placement}, {id: 'services', title: 'Service overrides', content: routing}]} />
   </section>
 }

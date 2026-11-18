@@ -403,6 +403,10 @@ func (s *Server) experimentInstancePipeline(ctx context.Context, configuration d
 	return s.experimentPipelineForCluster(ctx, configuration, definition, cluster, clusterConnection, observability, domain.Artifact{})
 }
 func (s *Server) experimentPipelineForCluster(ctx context.Context, configuration domain.ExperimentConfiguration, definition experimentConfigurationDefinitionInput, cluster domain.ManagedResource, clusterConnection, observability, platform domain.Artifact) (domain.PipelineDefinition, *managedOperationFailure) {
+	// The cluster's components may have changed since the configuration was saved.
+	if failure := s.validateClusterComponents(cluster, definition); failure != nil {
+		return domain.PipelineDefinition{}, failure
+	}
 	if definition.DestinationMode == "external" {
 		return s.externalDestinationPipeline(configuration, definition, clusterConnection, observability)
 	}
@@ -566,8 +570,8 @@ func (s *Server) experimentPipelineForCluster(ctx context.Context, configuration
 	if definition.Namespace != "" {
 		deploySpec["applicationNamespace"] = definition.Namespace
 	}
-	if definition.IstioInjection != nil {
-		deploySpec["istioInjection"] = *definition.IstioInjection
+	if injection := defaultIstioInjection(cluster, definition); injection != nil {
+		deploySpec["istioInjection"] = *injection
 	}
 	if len(definition.IstioInjectionOverrides) > 0 {
 		deploySpec["istioInjectionOverrides"] = definition.IstioInjectionOverrides

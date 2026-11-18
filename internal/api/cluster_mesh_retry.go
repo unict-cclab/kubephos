@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"errors"
 	"net/http"
 
@@ -53,20 +54,10 @@ func (s *Server) retryClusterMesh(w http.ResponseWriter, r *http.Request, resour
 	resolution.Stages = append([]domain.ResolvedPipelineStage(nil), resolution.Stages...)
 	resolution.Stages[last] = mesh
 	pipeline := domain.Pipeline{ID: id.New("pipe"), WorkspaceID: resource.WorkspaceID, Name: "retry-mesh-" + id.New("attempt"), Definition: definition, Resolution: resolution}
-	produced := map[string]map[string]string{}
-	for _, stage := range source.Stages[:last] {
-		operation, err := s.store.GetOperation(ctx, stage.OperationID)
-		if err != nil || operation.Status != domain.OperationSucceeded || operation.WorkspaceID != resource.WorkspaceID {
-			writeError(w, 409, "retry_unavailable", "A completed cluster stage is unavailable.")
-			return
-		}
-		outputs := map[string]string{}
-		for _, artifact := range operation.Artifacts {
-			if artifact.OutputName != "" {
-				outputs[artifact.OutputName] = artifact.ID
-			}
-		}
-		produced[stage.StageID] = outputs
+	produced, err := s.completedStageOutputs(ctx, resource.WorkspaceID, source.Stages[:last])
+	if err != nil {
+		writeError(w, 409, "retry_unavailable", "A completed cluster stage is unavailable.")
+		return
 	}
 	resolved, err := workflows.ResolveStage(pipeline, last, produced)
 	if err != nil {
@@ -100,4 +91,23 @@ func (s *Server) retryClusterMesh(w http.ResponseWriter, r *http.Request, resour
 		return
 	}
 	writeJSON(w, http.StatusAccepted, updated)
+}
+
+// completedStageOutputs returns the artifacts each completed stage produced, by output name.
+func (s *Server) completedStageOutputs(ctx context.Context, workspaceID string, stages []domain.PipelineRunStage) (map[string]map[string]string, error) {
+	produced := map[string]map[string]string{}
+	for _, stage := range stages {
+		operation, err := s.store.GetOperation(ctx, stage.OperationID)
+		if err != nil || operation.Status != domain.OperationSucceeded || operation.WorkspaceID != workspaceID {
+			return nil, errors.New("stage " + stage.StageID + " has no completed operation")
+		}
+		outputs := map[string]string{}
+		for _, artifact := range operation.Artifacts {
+			if artifact.OutputName != "" {
+				outputs[artifact.OutputName] = artifact.ID
+			}
+		}
+		produced[stage.StageID] = outputs
+	}
+	return produced, nil
 }

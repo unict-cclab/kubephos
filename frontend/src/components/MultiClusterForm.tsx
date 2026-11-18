@@ -13,6 +13,7 @@ import {NumericInput} from './NumericInput'
 import {ResourceAction} from './ResourceAction'
 import {WizardForm, WizardStep, WizardReview} from './WizardForm'
 import {FormTabs} from './FormTabs'
+import {ClusterComponentsFields} from './ClusterComponentsFields'
 
 type Capacity = {cores: number; memoryMiB: number; diskGiB: number}
 type Pool = {taints?: NodeTaint[]; name: string; count: number; labels: string | Record<string,string>; capacity: Capacity}
@@ -62,7 +63,7 @@ export function MultiClusterForm({open, close, workspaces, templates, services, 
         offset += count(item)
         return result
       })
-      await request('/kubernetes-clusters', {method: 'POST', body: JSON.stringify({mode: 'multi', name, workspaceId: workspaceID, connectionId: connectionID, templateId: selectedTemplate?.id, harborId: form.get('harborId'), nfsId: form.get('nfsId'), scrapeInterval: form.get('scrapeInterval'), retention: form.get('retention'), members: prepared})}, common.session.csrfToken)
+      await request('/kubernetes-clusters', {method: 'POST', body: JSON.stringify({mode: 'multi', name, workspaceId: workspaceID, connectionId: connectionID, templateId: selectedTemplate?.id, harborId: form.get('harborId'), nfsId: form.get('nfsId'), scrapeInterval: form.get('scrapeInterval'), retention: form.get('retention'), components: form.has('components') ? form.getAll('components') : undefined, members: prepared})}, common.session.csrfToken)
       close(); await common.onDone('Cluster creation started.')
     } catch (cause) {setError(cause instanceof Error ? cause.message : 'Could not create the clusters.')} finally {setPending(false)}
   }
@@ -105,6 +106,7 @@ export function MultiClusterForm({open, close, workspaces, templates, services, 
         ]} />
         {count(item) > 12 && <ErrorFeedback message="Maximum: 12 nodes per cluster."/>}
       </WizardStep>)}
+      <WizardStep title="Components"><ClusterComponentsFields networking="cilium" /></WizardStep>
       <WizardStep title="Review"><WizardReview /></WizardStep>
     </WizardForm>
   </Dialog>

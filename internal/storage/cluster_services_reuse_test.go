@@ -10,7 +10,10 @@ import (
 	"testing"
 )
 
-func TestMaintenanceReusesOnlySuccessfulOriginalServices(t *testing.T) {
+// reuseFixture stores a provisioned cluster whose five stages succeeded, and builds
+// replacement lifecycles for it.
+func reuseFixture(t *testing.T) (context.Context, *Store, func(string, ...any), func(string) (domain.Pipeline, domain.PipelineRun)) {
+	t.Helper()
 	ctx := context.Background()
 	store, err := Open(ctx, testutil.Database(t))
 	if err != nil {
@@ -39,6 +42,11 @@ func TestMaintenanceReusesOnlySuccessfulOriginalServices(t *testing.T) {
 		}
 		return p, r
 	}
+	return ctx, store, exec, makeRun
+}
+
+func TestMaintenanceReusesOnlySuccessfulOriginalServices(t *testing.T) {
+	ctx, store, exec, makeRun := reuseFixture(t)
 	// A service that failed or changed ownership is not silently adopted.
 	exec(`UPDATE operations SET status='failed' WHERE id='owner-storage'`)
 	p, r := makeRun("invalid")
@@ -63,6 +71,24 @@ func TestMaintenanceReusesOnlySuccessfulOriginalServices(t *testing.T) {
 		}
 		if stage.OperationID != "owner-"+stage.StageID || stage.Status != "succeeded" {
 			t.Fatal("service reinstallation queued", stage)
+		}
+	}
+}
+
+func TestComponentChangeReusesEverythingButThePlatform(t *testing.T) {
+	ctx, store, _, makeRun := reuseFixture(t)
+	p, r := makeRun("components")
+	if err := store.CreateManagedClusterComponentChange(ctx, "cluster", "provision", json.RawMessage(`{"components":["prometheus"]}`), p, r); err != nil {
+		t.Fatal(err)
+	}
+	got, err := store.GetPipelineRun(ctx, r.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, stage := range got.Stages {
+		reused := stage.OperationID == "owner-"+stage.StageID && stage.Status == "succeeded"
+		if reused == (stage.StageID == "platform") {
+			t.Fatalf("stage %s reused=%v", stage.StageID, reused)
 		}
 	}
 }

@@ -2,10 +2,14 @@ package catalog
 
 import (
 	"encoding/json"
+	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 
 	"kubephos.dev/kubephos/internal/domain"
 )
@@ -364,5 +368,78 @@ func TestApplicationReferenceRejectsVersion(t *testing.T) {
 func TestApplicationDescriptorRejectsVersion(t *testing.T) {
 	if _, err := Parse([]byte(strings.Replace(validDescriptor, "metadata:\n", "metadata:\n  version: 1.0.0\n", 1)), "imported"); err == nil {
 		t.Fatal("expected version field rejection")
+	}
+}
+
+func TestOnlineBoutiqueIngressConnectionsRenderBothModes(t *testing.T) {
+	apps, err := LoadDirectory("../../catalog/applications")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var descriptor Descriptor
+	for _, app := range apps {
+		if app.ID == "dev.kubephos.online-boutique" {
+			if err := json.Unmarshal(app.Descriptor, &descriptor); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	var proxy AdditionalManifest
+	for _, manifest := range descriptor.Spec.AdditionalManifests {
+		if manifest.ID == "node-proxy" {
+			proxy = manifest
+		}
+	}
+	if !proxy.Template {
+		t.Fatal("the Online Boutique node proxy must be rendered from the application settings")
+	}
+	values := func(changes map[string]any) map[string]any {
+		result := map[string]any{}
+		for key, value := range descriptor.Spec.Defaults {
+			result[key] = value
+		}
+		for key, value := range changes {
+			result[key] = value
+		}
+		return result
+	}
+	documents := func(rendered string) []map[string]any {
+		result := []map[string]any{}
+		decoder := yaml.NewDecoder(strings.NewReader(rendered))
+		for {
+			var document map[string]any
+			if err := decoder.Decode(&document); errors.Is(err, io.EOF) {
+				return result
+			} else if err != nil {
+				t.Fatalf("rendered node proxy is not valid YAML: %v\n%s", err, rendered)
+			}
+			if len(document) > 0 {
+				result = append(result, document)
+			}
+		}
+	}
+	persistent, err := RenderAdditionalManifest(proxy, values(map[string]any{"ingressIdleConnections": 32}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(documents(persistent)) != 4 {
+		t.Fatalf("persistent mode must add the headless frontend Service:\n%s", persistent)
+	}
+	for _, expected := range []string{"keepalive 32;", "proxy_set_header Connection \"\";", "proxy_pass http://frontend_pods;", "frontend-pods.${POD_NAMESPACE}.svc.cluster.local:8080 resolve", "resolver ${NGINX_LOCAL_RESOLVERS}", "NGINX_ENTRYPOINT_LOCAL_RESOLVERS", "clusterIP: None"} {
+		if !strings.Contains(persistent, expected) {
+			t.Fatalf("persistent mode is missing %q:\n%s", expected, persistent)
+		}
+	}
+	perRequest, err := RenderAdditionalManifest(proxy, values(map[string]any{"ingressConnections": "per-request"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(documents(perRequest)) != 3 || !strings.Contains(perRequest, "proxy_pass http://frontend:80;") {
+		t.Fatalf("per-request mode must keep the original proxy:\n%s", perRequest)
+	}
+	for _, unexpected := range []string{"upstream", "keepalive", "frontend-pods", "dataplane-mode", "NGINX_LOCAL_RESOLVERS"} {
+		if strings.Contains(perRequest, unexpected) {
+			t.Fatalf("per-request mode must not contain %q:\n%s", unexpected, perRequest)
+		}
 	}
 }

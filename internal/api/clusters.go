@@ -28,6 +28,7 @@ import (
 	"kubephos.dev/kubephos/internal/placement"
 
 	kubeconfigutil "kubephos.dev/kubephos/internal/kubeconfig"
+	"kubephos.dev/kubephos/internal/managedcomponents"
 	"kubephos.dev/kubephos/internal/plugins"
 
 	"kubephos.dev/kubephos/internal/schema"
@@ -92,6 +93,27 @@ func (s *Server) persistManagedCluster(response http.ResponseWriter, request *ht
 	writeJSON(response, http.StatusAccepted, resource)
 }
 
+// freshPlatformSpec drops the reconcile settings of a component change, so a recreated
+// cluster installs its saved components from scratch with a new ownership marker.
+func freshPlatformSpec(raw json.RawMessage) json.RawMessage {
+	var spec map[string]any
+	if json.Unmarshal(raw, &spec) != nil || spec == nil {
+		return raw
+	}
+	delete(spec, "reconcile")
+	delete(spec, "ownershipMarker")
+	value, _ := json.Marshal(spec)
+	return value
+}
+
+// listClusterComponents returns the selectable components and the default set per networking mode.
+func (s *Server) listClusterComponents(response http.ResponseWriter, _ *http.Request) {
+	writeJSON(response, http.StatusOK, map[string]any{
+		"items":    managedcomponents.ClusterCatalog(),
+		"defaults": map[string][]string{"flannel": managedcomponents.DefaultClusterComponents(""), "cilium": managedcomponents.DefaultClusterComponents("cilium")},
+	})
+}
+
 type preparedManagedCluster struct {
 	Input         managedKubernetesClusterInput
 	Connection    domain.ProviderConnection
@@ -123,6 +145,12 @@ func (s *Server) prepareManagedCluster(response http.ResponseWriter, request *ht
 		writeError(response, http.StatusUnprocessableEntity, "invalid_observability", "Select a supported Prometheus scrape interval and retention.")
 		return nil
 	}
+	components, err := managedcomponents.ResolveClusterComponents(input.Components, input.Networking)
+	if err != nil {
+		writeError(response, http.StatusUnprocessableEntity, "invalid_components", err.Error())
+		return nil
+	}
+	input.Components = components
 
 	if !shortResourceNamePattern.MatchString(input.Name) {
 		writeError(response, http.StatusUnprocessableEntity, "invalid_name", "Cluster name must be a lowercase label with at most 32 characters.")
@@ -273,7 +301,7 @@ func (s *Server) prepareManagedCluster(response http.ResponseWriter, request *ht
 	}
 	topologySpec, _ := json.Marshal(map[string]any{"connectionRef": connection.ID, "machineTemplateRef": template.ArtifactID, "node": templateSpec.Node, "templateVMID": templateSpec.VMID, "baseVMID": input.BaseVMID, "addressStart": input.AddressStart, "prefixLength": input.PrefixLength, "gateway": input.Gateway, "dnsServer": input.DNSServer, "namePrefix": input.Name, "machineNames": managedClusterMachineNames(input), "machineNodes": machineNodes, "machineCount": totalMachines, "cores": input.ControlPlaneCapacity.Cores, "memoryMiB": input.ControlPlaneCapacity.MemoryMiB, "diskGiB": input.ControlPlaneCapacity.DiskGiB, "machineProfiles": machineProfiles, "sshUser": templateSpec.SSHUser, "cleanupAfterTest": false})
 	nodePools := managedClusterNodePools(input)
-	clusterSpec, _ := json.Marshal(map[string]any{"machineSetRef": "", "machineAccessRef": "", "clusterName": input.Name, "controlPlanes": input.ControlPlanes, "controlPlaneZones": input.ControlPlaneZones, "nodePools": nodePools, "registryEndpointRef": harbor.ArtifactID, "registryCredentialRef": registryCredential.ID})
+	clusterSpec, _ := json.Marshal(map[string]any{"machineSetRef": "", "machineAccessRef": "", "clusterName": input.Name, "controlPlanes": input.ControlPlanes, "controlPlaneZones": input.ControlPlaneZones, "nodePools": nodePools, "registryEndpointRef": harbor.ArtifactID, "registryCredentialRef": registryCredential.ID, "components": input.Components})
 	if input.Networking == "cilium" {
 		var spec map[string]any
 		json.Unmarshal(clusterSpec, &spec)
@@ -284,7 +312,7 @@ func (s *Server) prepareManagedCluster(response http.ResponseWriter, request *ht
 		clusterSpec, _ = json.Marshal(spec)
 	}
 	storageSpec, _ := json.Marshal(map[string]any{"clusterConnectionRef": "", "sharedStorageEndpointRef": nfs.ArtifactID, "storageClassName": "shared-storage"})
-	platformSpec, _ := json.Marshal(map[string]any{"clusterConnectionRef": ""})
+	platformSpec, _ := json.Marshal(map[string]any{"clusterConnectionRef": "", "components": input.Components})
 	observabilitySpec, _ := json.Marshal(map[string]any{"clusterConnectionRef": "", "storageClassCapabilityRef": "", "scrapeInterval": input.ScrapeInterval, "retention": input.Retention})
 	definition := domain.PipelineDefinition{Stages: []domain.PipelineStage{
 		{ID: "machines", PluginID: topologyPlugin.Manifest().ID, Title: "Provision cluster machines", Spec: topologySpec},
@@ -520,6 +548,9 @@ func (s *Server) recreateKubernetesCluster(response http.ResponseWriter, request
 				spec["nodePools"] = managedClusterNodePools(input)
 				stage.Spec, _ = json.Marshal(spec)
 			}
+		}
+		if stage.ID == "platform" || strings.HasSuffix(stage.ID, "-platform") {
+			stage.Spec = freshPlatformSpec(stage.Spec)
 		}
 		if stage.PluginID != "io.kubephos.infrastructure.proxmox.topology" {
 			continue

@@ -6,10 +6,11 @@ import {ReadoutTable} from './ReadoutTable'
 import {WizardReadout} from './WizardReadout'
 import {FormTabs} from './FormTabs'
 import type {NodeTaint} from '../types'
+import {clusterComponentTitle, useClusterComponentCatalog} from '../clusterComponents'
 type Spec=Record<string,unknown>
 const record=(value:unknown):Spec=>value&&typeof value==='object'&&!Array.isArray(value)?value as Spec:{}
 export function ClusterGeneralReadout({spec,references={}}:{spec:Spec;references?:Record<string,string>}) {
- const grouped=new Set(['machineNodes','controlPlaneZones','controlPlaneCapacity','controlPlanes','managementPool','applicationPools','scrapeInterval','retention','members','sharedSSHKey','managedProfile'])
+ const grouped=new Set(['machineNodes','controlPlaneZones','controlPlaneCapacity','controlPlanes','managementPool','applicationPools','scrapeInterval','retention','members','sharedSSHKey','managedProfile','components'])
  const networkKeys=['baseVMID','addressStart','addressPrefix','prefixLength','gateway','dnsServer','networking']
  const fields=Object.fromEntries(Object.entries(spec).filter(([key])=>!grouped.has(key)))
  const generalKeys=['name','connectionId','templateId','harborId','nfsId',...Object.keys(fields).filter(key=>!['name','connectionId','templateId','harborId','nfsId',...networkKeys].includes(key))]
@@ -35,12 +36,18 @@ export function ClusterPoolsReadout({spec,references={},renderPool,actions}:{spe
 export function ClusterVMReadout({spec}:{spec:Spec}) {
  return <ReadoutTable label="VM placement" data={{headers:['VM name','Proxmox server'],rows:Object.entries(record(spec.machineNodes)).sort(([a],[b])=>a.localeCompare(b,undefined,{numeric:true})).map(([name,node])=>[name,String(node)])}}/>
 }
+export function ClusterComponentsReadout({spec}:{spec:Spec}) {
+ const {catalog}=useClusterComponentCatalog()
+ const components=Array.isArray(spec.components)?spec.components.map(String):[]
+ return <ReadoutTable label="Cluster components" data={{headers:['Component'],rows:components.map(id=>[clusterComponentTitle(catalog,id)])}}/>
+}
 export function ClusterConfigurationReadout({spec,references}:{spec:Spec;references:Record<string,string>}) {
  const members:Spec[]=spec.mode==='multi'&&Array.isArray(spec.members)?spec.members.map(value=>({...record(value),networking:'cilium'})):[]
  const memberTabs=(label:string,render:(member:Spec)=>ReactNode)=>members.length?<FormTabs label={label} items={members.map((member,index)=>({id:String(index),title:String(member.name),content:render(member)}))}/>:render(spec)
  return <WizardReadout label="Cluster configuration sections" sections={[
  {id:'general',title:'General',content:memberTabs('Cluster settings',member=><ClusterGeneralReadout spec={member} references={references}/>)},
  {id:'pools',title:'Node pools',content:memberTabs('Cluster pools',member=><ClusterPoolsReadout spec={member} references={references}/>)},
- {id:'placement',title:'VM placement',content:memberTabs('Cluster VM placement',member=><ClusterVMReadout spec={member}/>)}
+ {id:'placement',title:'VM placement',content:memberTabs('Cluster VM placement',member=><ClusterVMReadout spec={member}/>)},
+ {id:'components',title:'Components',content:<ClusterComponentsReadout spec={spec}/>}
  ]}/>
 }

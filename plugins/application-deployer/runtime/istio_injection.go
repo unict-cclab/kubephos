@@ -252,9 +252,10 @@ func selects(selector, labels map[string]any) bool {
 
 const waypointSettingsName = ambientWaypoint + "-settings"
 
-// waypointManifest returns the namespace waypoint. When it is sized, a ConfigMap
-// referenced through infrastructure.parametersRef overlays the Deployment Istio
-// generates, so the replicas and proxy resources survive its reconciliation.
+// waypointManifest returns the namespace waypoint. When it is sized or placed, a
+// ConfigMap referenced through infrastructure.parametersRef overlays the Deployment
+// Istio generates, so replicas, proxy resources, node selector and tolerations
+// survive its reconciliation.
 func waypointManifest(namespace, marker string, settings workloadresources.Waypoint) []byte {
 	metadata := func(name string, labels map[string]string) map[string]any {
 		return map[string]any{"name": name, "namespace": namespace, "annotations": map[string]string{ownershipKey: marker}, "labels": labels}
@@ -265,7 +266,7 @@ func waypointManifest(namespace, marker string, settings workloadresources.Waypo
 		"metadata": metadata(ambientWaypoint, map[string]string{"app.kubernetes.io/managed-by": "kubephos", "istio.io/waypoint-for": "service"}),
 		"spec":     spec,
 	}
-	if settings.DefaultSize() {
+	if settings.DefaultDeployment() {
 		value, _ := json.Marshal(gateway)
 		return value
 	}
@@ -273,8 +274,18 @@ func waypointManifest(namespace, marker string, settings workloadresources.Waypo
 	if settings.Replicas > 0 {
 		overlay["replicas"] = settings.Replicas
 	}
+	podSpec := map[string]any{}
 	if len(settings.Resources) > 0 {
-		overlay["template"] = map[string]any{"spec": map[string]any{"containers": []map[string]any{{"name": "istio-proxy", "resources": settings.Resources}}}}
+		podSpec["containers"] = []map[string]any{{"name": "istio-proxy", "resources": settings.Resources}}
+	}
+	if len(settings.NodeSelector) > 0 {
+		podSpec["nodeSelector"] = settings.NodeSelector
+	}
+	if len(settings.Tolerations) > 0 {
+		podSpec["tolerations"] = settings.Tolerations
+	}
+	if len(podSpec) > 0 {
+		overlay["template"] = map[string]any{"spec": podSpec}
 	}
 	deployment, _ := json.Marshal(map[string]any{"spec": overlay})
 	spec["infrastructure"] = map[string]any{"parametersRef": map[string]string{"group": "", "kind": "ConfigMap", "name": waypointSettingsName}}
@@ -286,13 +297,22 @@ func waypointManifest(namespace, marker string, settings workloadresources.Waypo
 }
 
 func waypointLogMessage(settings workloadresources.Waypoint) string {
-	if settings.DefaultSize() {
-		return "Starting the Istio ambient waypoint for the namespace"
+	message := "Starting the Istio ambient waypoint for the namespace"
+	if !settings.DefaultSize() {
+		replicas := max(settings.Replicas, 1)
+		unit := "replicas"
+		if replicas == 1 {
+			unit = "replica"
+		}
+		message += fmt.Sprintf(" with %d %s", replicas, unit)
 	}
-	replicas := max(settings.Replicas, 1)
-	unit := "replicas"
-	if replicas == 1 {
-		unit = "replica"
+	if len(settings.NodeSelector) > 0 {
+		labels := make([]string, 0, len(settings.NodeSelector))
+		for key, value := range settings.NodeSelector {
+			labels = append(labels, key+"="+value)
+		}
+		slices.Sort(labels)
+		message += " on nodes with " + strings.Join(labels, ", ")
 	}
-	return fmt.Sprintf("Starting the Istio ambient waypoint for the namespace with %d %s", replicas, unit)
+	return message
 }

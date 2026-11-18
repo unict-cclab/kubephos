@@ -20,6 +20,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"kubephos.dev/kubephos/internal/domain"
+	"kubephos.dev/kubephos/internal/managedcomponents"
 	"kubephos.dev/kubephos/internal/schema"
 )
 
@@ -52,7 +53,9 @@ type descriptor struct {
 		} `yaml:"targeting"`
 		Permissions  []string `yaml:"permissions"`
 		Capabilities []string `yaml:"capabilities"`
-		Runtime      struct {
+		// RequiredComponents names managed cluster components, such as chaos-mesh.
+		RequiredComponents []string `yaml:"requiredComponents"`
+		Runtime            struct {
 			Executable string `yaml:"executable"`
 			Image      string `yaml:"image"`
 			Timeout    string `yaml:"timeout"`
@@ -340,6 +343,11 @@ func loadDefinition(value []byte, baseDirectory string, resolver SecretResolver,
 		}
 		credentialSchemas = append(credentialSchemas, CredentialSchema{Kind: value.Kind, Name: value.Name, Description: value.Description, Schema: raw})
 	}
+	for _, component := range definition.Spec.RequiredComponents {
+		if !managedcomponents.KnownClusterComponent(component) {
+			return nil, fmt.Errorf("required cluster component %q is unknown", component)
+		}
+	}
 	secretKinds := map[string]bool{}
 	for _, permission := range definition.Spec.Permissions {
 		if strings.HasPrefix(permission, "secrets.read:") {
@@ -352,19 +360,20 @@ func loadDefinition(value []byte, baseDirectory string, resolver SecretResolver,
 	}
 	plugin := &Process{
 		manifest: Manifest{
-			ID:                definition.Metadata.ID,
-			Provider:          definition.Spec.Provider,
-			Name:              definition.Metadata.Name,
-			Version:           definition.Metadata.Version,
-			Description:       definition.Metadata.Description,
-			Schema:            schemaDefinition,
-			CredentialSchemas: credentialSchemas,
-			ArtifactInputs:    definition.Spec.Artifacts.Inputs,
-			ArtifactOutputs:   definition.Spec.Artifacts.Outputs,
-			Targeting:         targeting,
-			Capabilities:      definition.Spec.Capabilities,
-			Permissions:       definition.Spec.Permissions,
-			Runtime:           runtimeManifest,
+			ID:                 definition.Metadata.ID,
+			Provider:           definition.Spec.Provider,
+			Name:               definition.Metadata.Name,
+			Version:            definition.Metadata.Version,
+			Description:        definition.Metadata.Description,
+			Schema:             schemaDefinition,
+			CredentialSchemas:  credentialSchemas,
+			ArtifactInputs:     definition.Spec.Artifacts.Inputs,
+			ArtifactOutputs:    definition.Spec.Artifacts.Outputs,
+			Targeting:          targeting,
+			Capabilities:       definition.Spec.Capabilities,
+			RequiredComponents: definition.Spec.RequiredComponents,
+			Permissions:        definition.Spec.Permissions,
+			Runtime:            runtimeManifest,
 		},
 		executable:  executable,
 		image:       image,

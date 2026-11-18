@@ -5,6 +5,11 @@ import type {Application, ExperimentConfiguration, ManagedResource, Plugin, Work
 import {isTerminalExperiment} from '../lib'
 import {applicationZones, configurableSchema, ExperimentConfigurationDialog, ExperimentConfigurationsView, experimentPlugins, primaryCapabilities} from './ExperimentConfigurationsView'
 
+// Requests sent by the form itself; the cluster component catalog loads independently.
+function formRequests(fetch: {mock: {calls: unknown[][]}}) {
+  return fetch.mock.calls.filter(([path]) => path !== '/api/v1/cluster-components') as [string, RequestInit & {body: string}][]
+}
+
 beforeAll(() => {
   HTMLDialogElement.prototype.showModal = function () { this.setAttribute('open', '') }
   HTMLDialogElement.prototype.close = function () { this.removeAttribute('open') }
@@ -47,7 +52,7 @@ describe('experiment configuration helpers', () => {
   })
 
   it('saves an external destination with its Locust template and parameters', async () => {
-    const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({id: 'cfg_external'}), {status: 201, headers: {'Content-Type': 'application/json'}}))
+    const fetch = vi.fn().mockImplementation(async () => new Response(JSON.stringify({id: 'cfg_external'}), {status: 201, headers: {'Content-Type': 'application/json'}}))
     vi.stubGlobal('fetch', fetch)
     const changed = vi.fn().mockResolvedValue(undefined)
     const close = vi.fn()
@@ -71,8 +76,8 @@ describe('experiment configuration helpers', () => {
     await goToStep('Review')
     fireEvent.click(screen.getByRole('button', {name: 'Create configuration'}))
 
-    await waitFor(() => expect(fetch).toHaveBeenCalledOnce())
-    const body = JSON.parse(fetch.mock.calls[0][1].body)
+    await waitFor(() => expect(formRequests(fetch)).toHaveLength(1))
+    const body = JSON.parse(formRequests(fetch)[0][1].body)
     expect(body).toMatchObject({
       name: 'External API',
       applicationRef: '',
@@ -110,18 +115,18 @@ describe('experiment configuration helpers', () => {
 
   it('updates muBench workload targets when its topology values change', async () => {
 	const workloadTargets = [...Array.from({length: 4}, (_, index) => ({id: `s${index}`, apiVersion: 'apps/v1', kind: 'Deployment', name: `s${index}`, traits: ['scalable', 'schedulable'], index, dependencies: index < 3 ? [`s${index + 1}`] : []})), {id: 'node-proxy', apiVersion: 'apps/v1', kind: 'DaemonSet', name: 'node-proxy', traits: ['traffic-entrypoint'], index: 0, dependencies: ['s0']}]
-	const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({workloadTargets}), {status: 200, headers: {'Content-Type': 'application/json'}}))
+	const fetch = vi.fn().mockImplementation(async () => new Response(JSON.stringify({workloadTargets}), {status: 200, headers: {'Content-Type': 'application/json'}}))
 	vi.stubGlobal('fetch', fetch)
 	render(createElement(ExperimentConfigurationDialog, {open: true, close: () => {}, items: [], experiments: [], clusters: [cluster], workspaces: [workspace], applications: [mubenchApplication], plugins: [loadPlugin, metricsPlugin], strategies: [], session: {authenticated: true, csrfToken: 'csrf'}, isAdmin: true, changed: async () => {}, openOperation: () => {}}))
     await goToStep('Application')
 
 	fireEvent.change(screen.getByRole('spinbutton', {name: 'Services'}), {target: {value: '4'}})
 	expect(screen.getByRole('button', {name: 'Continue'})).toBeDisabled()
-	await waitFor(() => expect(fetch).toHaveBeenCalledOnce())
+	await waitFor(() => expect(formRequests(fetch)).toHaveLength(1))
 	await waitFor(() => expect(screen.getByRole('button', {name: 'Continue'})).toBeEnabled())
 	expect(screen.queryByText(/configurable services/)).not.toBeInTheDocument()
 	expect(screen.queryByText('Checking application topology…')).not.toBeInTheDocument()
-	expect(JSON.parse(fetch.mock.calls[0][1].body)).toMatchObject({serviceCount: 4, topology: 'chain'})
+	expect(JSON.parse(formRequests(fetch)[0][1].body)).toMatchObject({serviceCount: 4, topology: 'chain'})
 	expect(screen.getByRole('button', {name: 'Continue'})).toBeEnabled()
   })
 
@@ -134,7 +139,7 @@ describe('experiment configuration helpers', () => {
       }}, defaults: {models: ['Qwen-small', 'Qwen-coder'], initialReplicas: 1, replicaOverrides: {}, resourceOverrides: {m2: {cpuLimit: '1'}}},
       interface: {components: [{id: 'm1', traits: ['scalable', 'schedulable']}, {id: 'm2', traits: ['scalable', 'schedulable']}]},
     }}}
-    const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({workloadTargets: [{id: 'm1', apiVersion: 'apps/v1', kind: 'Deployment', name: 'm1', traits: ['scalable', 'schedulable'], index: 2}]}), {status: 200, headers: {'Content-Type': 'application/json'}}))
+    const fetch = vi.fn().mockImplementation(async () => new Response(JSON.stringify({workloadTargets: [{id: 'm1', apiVersion: 'apps/v1', kind: 'Deployment', name: 'm1', traits: ['scalable', 'schedulable'], index: 2}]}), {status: 200, headers: {'Content-Type': 'application/json'}}))
     vi.stubGlobal('fetch', fetch)
     render(createElement(ExperimentConfigurationDialog, {open: true, close: () => {}, items: [], experiments: [], clusters: [cluster], workspaces: [workspace], applications: [localaiApplication], plugins: [loadPlugin, metricsPlugin], strategies: [], session: {authenticated: true, csrfToken: 'csrf'}, isAdmin: true, changed: async () => {}, openOperation: () => {}}))
     await goToStep('Application')
@@ -143,8 +148,8 @@ describe('experiment configuration helpers', () => {
     expect(screen.getByRole('tab', {name: 'm2'})).toHaveAttribute('aria-selected','true')
     fireEvent.click(screen.getByRole('tab', {name: 'Parameters'}))
     fireEvent.click(screen.getByRole('button', {name: 'Remove m2'}))
-    await waitFor(() => expect(fetch).toHaveBeenCalledOnce())
-    expect(JSON.parse(fetch.mock.calls[0][1].body)).toMatchObject({models: ['Qwen-small'], resourceOverrides: {}})
+    await waitFor(() => expect(formRequests(fetch)).toHaveLength(1))
+    expect(JSON.parse(formRequests(fetch)[0][1].body)).toMatchObject({models: ['Qwen-small'], resourceOverrides: {}})
     await waitFor(() => expect(screen.queryByRole('button', {name: 'Remove resource override for m2'})).not.toBeInTheDocument())
   })
 
@@ -195,7 +200,7 @@ describe('experiment configuration helpers', () => {
       {id: 's1', apiVersion: 'apps/v1', kind: 'Deployment', name: 's1', traits: ['scalable', 'schedulable'], index: 1, dependencies: []},
       {id: 'node-proxy', apiVersion: 'apps/v1', kind: 'DaemonSet', name: 'node-proxy', traits: ['traffic-entrypoint'], index: 0, dependencies: ['s0']}
     ]
-    const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({workloadTargets}), {status: 200, headers: {'Content-Type': 'application/json'}}))
+    const fetch = vi.fn().mockImplementation(async () => new Response(JSON.stringify({workloadTargets}), {status: 200, headers: {'Content-Type': 'application/json'}}))
     vi.stubGlobal('fetch', fetch)
     const item: ExperimentConfiguration = {id: 'cfg_dynamic', workspaceId: workspace.id, clusterResourceId: cluster.id, name: 'Dynamic application', description: '', applicationRef: mubenchApplication.reference, applicationDigest: mubenchApplication.digest, definition: {applicationValues: {serviceCount: 2, topology: 'chain', workers: 3}, components: []}, validation: {valid: true, issues: []}, createdAt: '2026-09-12T00:00:00Z', updatedAt: '2026-09-12T00:00:00Z'}
     window.location.hash = `experiments/configuration/${item.id}`
@@ -205,7 +210,7 @@ describe('experiment configuration helpers', () => {
     const graph = await screen.findByRole('img', {name: 'Application component topology'})
     expect(graph.querySelectorAll('.application-topology-node')).toHaveLength(3)
     expect(fetch).toHaveBeenCalledWith('/api/v1/catalog/applications/dev.kubephos.mubench/resolve', expect.objectContaining({method: 'POST'}))
-    expect(JSON.parse(fetch.mock.calls[0][1].body)).toMatchObject({serviceCount: 2, topology: 'chain', workers: 3})
+    expect(JSON.parse(formRequests(fetch)[0][1].body)).toMatchObject({serviceCount: 2, topology: 'chain', workers: 3})
     window.location.hash = ''
   })
 
@@ -269,7 +274,7 @@ it('discards an obsolete topology failure when switching to an external destinat
   await goToStep('Application')
   fireEvent.change(screen.getByRole('spinbutton', {name: 'Services'}), {target: {value: '4'}})
   expect(screen.getByRole('button', {name: 'Continue'})).toBeDisabled()
-  await waitFor(() => expect(vi.mocked(fetch)).toHaveBeenCalledOnce())
+  await waitFor(() => expect(formRequests(vi.mocked(fetch))).toHaveLength(1))
   fireEvent.click(screen.getByRole('button', {name: 'General'}))
   fireEvent.change(screen.getByRole('combobox', {name: 'Destination type'}), {target: {value: 'external'}})
   rejectPreview(new Error('Obsolete preview failure'))

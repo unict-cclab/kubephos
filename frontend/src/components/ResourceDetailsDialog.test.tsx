@@ -1,11 +1,17 @@
 import {fireEvent, render, screen, within} from '@testing-library/react'
 import {createElement} from 'react'
-import {afterEach, describe, expect, it, vi} from 'vitest'
+import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest'
 import {request} from '../api'
 import type {ManagedResource, Pipeline, PipelineRun, Session} from '../types'
 import {ResourceDetailsPage} from './ResourceDetailsDialog'
 
 vi.mock('../api', () => ({request: vi.fn()}))
+
+const componentCatalog = {defaults: {}, items: [{id: 'prometheus', dashboards: [{name: 'Grafana', port: 32000}]}, {id: 'headlamp', dashboards: [{name: 'Headlamp', port: 30003}]}]}
+// Serves the cluster component catalog and the given responses by path.
+function serve(responses: Record<string, unknown> = {}) {
+  vi.mocked(request).mockImplementation((async (path: string) => path === '/cluster-components' ? componentCatalog : responses[path]) as typeof request)
+}
 
 const resource: ManagedResource = {
   id: 'cluster_01',
@@ -28,6 +34,7 @@ const resource: ManagedResource = {
 }
 
 describe('resource detail', () => {
+  beforeEach(() => serve())
   afterEach(() => vi.clearAllMocks())
 
   it('shows only form values for infrastructure resources', () => {
@@ -43,10 +50,10 @@ describe('resource detail', () => {
     expect(screen.queryByText('Environment')).not.toBeInTheDocument()
   })
 
-  it('separates dashboards, access, activity and configuration', () => {
+  it('separates dashboards, access, activity and configuration', async () => {
     render(createElement(ResourceDetailsPage, {resource, close: () => {}, connections: [], workspaces: [], resources: [resource], runs: [], session: {authenticated: true} as Session, openOperation: () => {}}))
 
-    expect(screen.getByRole('link', {name: /Grafana/})).toBeInTheDocument()
+    expect(await screen.findByRole('link', {name: /Grafana/})).toBeInTheDocument()
     expect(screen.getByRole('link', {name: /Headlamp/})).toHaveAttribute('href', 'http://192.0.2.10:30003')
     expect(screen.getByText('Topology')).toBeInTheDocument()
     const topology = within(screen.getByRole('table', {name: 'Cluster topology'}))
@@ -105,7 +112,7 @@ describe('resource detail', () => {
   })
 
   it('renders credential-free access returned as null without crashing', async () => {
-    vi.mocked(request).mockResolvedValueOnce({items: [{name: 'Prometheus', url: 'http://192.0.2.10:32090', service: 'prometheus', credentials: null}]})
+    serve({'/managed-resources/cluster_01/access': {items: [{name: 'Prometheus', url: 'http://192.0.2.10:32090', service: 'prometheus', credentials: null}]}})
     render(createElement(ResourceDetailsPage, {resource, close: () => {}, connections: [], workspaces: [], resources: [resource], runs: [], session: {authenticated: true, csrfToken: 'csrf', user: {id: 'admin', username: 'admin', role: 'admin'}} as Session, openOperation: () => {}}))
 
     fireEvent.click(screen.getByRole('button', {name: 'Access'}))

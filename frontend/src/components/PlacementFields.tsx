@@ -12,12 +12,24 @@ const managed = (key: string) => /^(kubephos\.dev|kubernetes\.io|node-role\.kube
 const managedTaint = (key: string) => managed(key) || /^(node\.kubernetes\.io|node\.cloudprovider\.kubernetes\.io)\//.test(key)
 const effects = ['NoSchedule', 'PreferNoSchedule', 'NoExecute']
 
+// One-line summaries for review and readout tables.
+export function describeNodeSelector(value: Record<string,string> = {}): string {
+  return Object.entries(value).map(([key,label]) => `${key}=${label}`).join(', ') || 'None (any node)'
+}
+export function describeTolerations(value: PodToleration[] = []): string {
+  return value.map(item => [item.key || '(any key)', item.operator ?? 'Equal', item.value, item.effect || 'all effects'].filter(Boolean).join(' ')).join('; ') || 'None'
+}
+
 export function KeyValueFields({label, value = {}, onChange, protectManaged = false,validate,empty}: {empty?:string;validate?:(key:string,value:string)=>string;label: string; value?: Record<string,string>; onChange: (value: Record<string,string>) => void; protectManaged?: boolean}) {
   const [rows, setRows] = useState(() => Object.entries(value).map(([key,value]) => ({key,value})))
   const update = (next: typeof rows) => {setRows(next); onChange(Object.fromEntries(next.filter(row => row.key).map(row => [row.key,row.value])))}
   return <div className="placement-fields" aria-label={label}>{empty&&!rows.length&&<p className="placement-empty">{empty}</p>}<div className="placement-field-actions"><button type="button" className="button secondary compact" disabled={rows.length>=64} onClick={() => update([...rows,{key:'',value:''}])}>Add {label.toLowerCase()}</button></div>
     {rows.map((row,index) => <div className="placement-pair" key={index}>
-      <label>Key<ValidatedInput aria-label={`${label} key ${index+1}`} placeholder={label.toLowerCase().includes('node selector')?'kubephos.dev/pool':undefined} value={row.key} required pattern={keyPattern} onChange={event => update(rows.map((item,i) => i===index?{...item,key:event.target.value}:item))} error={rows.some((item,i) => i!==index && item.key===row.key)?'Duplicate key.':protectManaged && managed(row.key)?'This key is reserved.':validate?.(row.key,row.value)??''} /></label>
+      <label>Key<ValidatedInput aria-label={`${label} key ${index+1}`} placeholder={label.toLowerCase().includes('node selector')?'kubephos.dev/pool':undefined} onKeyDown={event=>{
+        // Tab in an empty key accepts the suggested placeholder, like an autocomplete.
+        const suggestion=event.currentTarget.placeholder
+        if(event.key==='Tab'&&!event.shiftKey&&!row.key&&suggestion){event.preventDefault();update(rows.map((item,i) => i===index?{...item,key:suggestion}:item))}
+      }} value={row.key} required pattern={keyPattern} onChange={event => update(rows.map((item,i) => i===index?{...item,key:event.target.value}:item))} error={rows.some((item,i) => i!==index && item.key===row.key)?'Duplicate key.':protectManaged && managed(row.key)?'This key is reserved.':validate?.(row.key,row.value)??''} /></label>
       <label>Value<ValidatedInput aria-label={`${label} value ${index+1}`} value={row.value} pattern={`(${namePattern})?`} maxLength={63} onChange={event => update(rows.map((item,i) => i===index?{...item,value:event.target.value}:item))} /></label>
       <ResourceAction action="delete" label={`Remove ${label.toLowerCase()} ${index+1}`} onClick={() => update(rows.filter((_,i) => i!==index))} />
     </div>)}

@@ -101,7 +101,7 @@ spec:
 	}
 	descriptor.Spec.ExcludeResources = []catalog.Workload{{APIVersion: "apps/v1", Kind: "Deployment", Name: "loadgenerator"}}
 	descriptor.Spec.AdditionalManifests = []catalog.AdditionalManifest{{ID: "gateway", Content: "apiVersion: apps/v1\nkind: DaemonSet\nmetadata:\n  name: node-proxy\nspec:\n  template:\n    metadata:\n      labels:\n        app: node-proxy\n"}}
-	application, err := materializeManifest(manifest, descriptor)
+	application, err := materializeManifest(manifest, descriptor, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -111,8 +111,32 @@ spec:
 	if strings.Count(string(application), `index: "1"`) != 2 || strings.Count(string(application), `index: "0"`) != 2 || strings.Count(string(application), `kubephos.dev/component: api`) != 2 || strings.Count(string(application), `kubephos.dev/component: node-proxy`) != 2 {
 		t.Fatalf("topology indexes were not attached to workloads: %s", application)
 	}
-	if _, err := materializeManifest([]byte("apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: api\n"), descriptor); err == nil {
+	if _, err := materializeManifest([]byte("apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: api\n"), descriptor, nil); err == nil {
 		t.Fatal("expected a missing exclusion to fail")
+	}
+}
+
+func TestMaterializeManifestRendersTemplatedAdditionalManifests(t *testing.T) {
+	descriptor := catalog.Descriptor{}
+	descriptor.Spec.Interface.Group = "test-app"
+	descriptor.Spec.Defaults = map[string]any{"mode": "plain"}
+	descriptor.Spec.AdditionalManifests = []catalog.AdditionalManifest{{ID: "proxy", Template: true, Content: "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: proxy\ndata:\n  mode: {{ .Values.mode }}\n{{- if eq .Values.mode \"pooled\" }}\n---\napiVersion: v1\nkind: Service\nmetadata:\n  name: pods\n{{- end }}\n"}}
+	plain, err := materializeManifest(nil, descriptor, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(plain), "mode: plain") || strings.Contains(string(plain), "name: pods") {
+		t.Fatalf("defaults were not rendered: %s", plain)
+	}
+	pooled, err := materializeManifest(nil, descriptor, map[string]any{"mode": "pooled"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(pooled), "mode: pooled") || !strings.Contains(string(pooled), "name: pods") {
+		t.Fatalf("selected values were not rendered: %s", pooled)
+	}
+	if _, err := materializeManifest(nil, descriptor, map[string]any{}); err == nil {
+		t.Fatal("expected a value missing from the settings to fail")
 	}
 }
 

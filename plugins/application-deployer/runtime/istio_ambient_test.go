@@ -202,3 +202,52 @@ spec:
 		t.Fatal("an exception without a Kubernetes Service was accepted")
 	}
 }
+
+func TestPlacedWaypointOverlaysNodeSelectorAndTolerations(t *testing.T) {
+	settings, err := workloadresources.ParseWaypoint(map[string]any{
+		"nodeSelector": map[string]any{"kubernetes.io/hostname": "fg-01-control-plane-1"},
+		"tolerations":  []any{map[string]any{"key": "node-role.kubernetes.io/control-plane", "operator": "Exists", "effect": "NoSchedule"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var list struct {
+		Items []struct {
+			Kind string            `json:"kind"`
+			Data map[string]string `json:"data"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(waypointManifest("run", "marker", settings), &list); err != nil {
+		t.Fatal(err)
+	}
+	if len(list.Items) != 2 || list.Items[0].Kind != "ConfigMap" {
+		t.Fatalf("a placed waypoint needs its settings ConfigMap: %+v", list)
+	}
+	var overlay struct {
+		Spec struct {
+			Replicas *int `json:"replicas"`
+			Template struct {
+				Spec struct {
+					Containers   []any             `json:"containers"`
+					NodeSelector map[string]string `json:"nodeSelector"`
+					Tolerations  []struct {
+						Key, Operator, Effect string
+					} `json:"tolerations"`
+				} `json:"spec"`
+			} `json:"template"`
+		} `json:"spec"`
+	}
+	if err := json.Unmarshal([]byte(list.Items[0].Data["deployment"]), &overlay); err != nil {
+		t.Fatal(err)
+	}
+	spec := overlay.Spec.Template.Spec
+	if overlay.Spec.Replicas != nil || len(spec.Containers) != 0 {
+		t.Fatalf("placement alone must keep Istio's replicas and resources: %s", list.Items[0].Data["deployment"])
+	}
+	if spec.NodeSelector["kubernetes.io/hostname"] != "fg-01-control-plane-1" || len(spec.Tolerations) != 1 || spec.Tolerations[0].Key != "node-role.kubernetes.io/control-plane" || spec.Tolerations[0].Operator != "Exists" {
+		t.Fatalf("unexpected placement overlay: %s", list.Items[0].Data["deployment"])
+	}
+	if message := waypointLogMessage(settings); message != "Starting the Istio ambient waypoint for the namespace on nodes with kubernetes.io/hostname=fg-01-control-plane-1" {
+		t.Fatalf("unexpected log message: %s", message)
+	}
+}
