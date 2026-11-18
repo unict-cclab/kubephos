@@ -3,10 +3,10 @@ import type {ManagedResource} from '../types'
 import {ActionIcon} from './ActionIcon'
 
 export function ClusterSSHAccess({resource, resources = []}: {resource: ManagedResource; resources?: ManagedResource[]}) {
-  if (resource.kind !== 'kubernetes-cluster' || resource.status !== 'ready') return null
+  if (!['kubernetes-cluster','vm'].includes(resource.kind) || resource.status !== 'ready') return null
   const multi = resource.spec.mode === 'multi'
   const shared = multi && resource.spec.sharedSSHKey === true
-  const downloadURL = `/api/v1/kubernetes-clusters/${encodeURIComponent(resource.id)}/ssh-key`
+  const downloadURL = `/api/v1/${resource.kind === 'vm' ? 'infrastructure-services' : 'kubernetes-clusters'}/${encodeURIComponent(resource.id)}/ssh-key`
   const templateUser = resources.find(item => item.id === resource.spec.templateId)?.spec.sshUser
   const members = multi && !shared && Array.isArray(resource.spec.members)
     ? resource.spec.members.filter((member): member is Record<string, unknown> => !!member && typeof member === 'object')

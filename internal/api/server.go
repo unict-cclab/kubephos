@@ -160,6 +160,7 @@ func NewServer(store *storage.Store, registry *plugins.Registry, artifactStore *
 	router.HandleFunc("POST /api/v1/infrastructure-services", server.createInfrastructureService)
 	router.HandleFunc("GET /api/v1/infrastructure-services/{id}", server.getInfrastructureService)
 	router.HandleFunc("DELETE /api/v1/infrastructure-services/{id}", server.deleteInfrastructureService)
+	router.HandleFunc("GET /api/v1/infrastructure-services/{id}/ssh-key", server.downloadClusterSSHKey)
 	router.HandleFunc("GET /api/v1/kubernetes-clusters", server.listKubernetesClusters)
 	router.HandleFunc("POST /api/v1/kubernetes-clusters", server.createKubernetesCluster)
 	router.HandleFunc("GET /api/v1/kubernetes-clusters/{id}", server.getKubernetesCluster)

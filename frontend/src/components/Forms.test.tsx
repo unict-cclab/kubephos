@@ -231,7 +231,7 @@ it('keeps Cloud image URL visible on the template step and retains it while navi
   expect(screen.getByLabelText('Cloud image URL')).toHaveValue('https://example.org/image.img')
 })
 
-it.each(['harbor','nfs'] as const)('submits the selected Proxmox server for %s',async kind=>{
+it.each(['harbor','nfs','vm'] as const)('submits the selected Proxmox server for %s',async kind=>{
  const fetch=vi.fn().mockImplementation((path:string)=>Promise.resolve(new Response(JSON.stringify(path.endsWith('/nodes')?{items:[{name:'pve',online:true},{name:'pve-2',online:true}]}:path.includes('provisioning-suggestions')?{vmid:200,address:'192.0.2.20',prefixLength:24,gateway:'192.0.2.1',dnsServer:'1.1.1.1'}:{id:'created'}),{status:200})))
  vi.stubGlobal('fetch',fetch)
  render(<InfrastructureServiceDialog open close={()=>{}} workspaces={[workspace]} templates={[machineTemplate]} initialKind={kind} session={{authenticated:true,csrfToken:'csrf'}} applications={[]} artifacts={[]} connections={[connection]} credentials={[]} onDone={async()=>{}}/>)
@@ -239,7 +239,7 @@ it.each(['harbor','nfs'] as const)('submits the selected Proxmox server for %s',
  fireEvent.change(screen.getByRole('textbox',{name:'Name'}),{target:{value:kind+'-service'}})
  fireEvent.change(screen.getByRole('combobox',{name:'Proxmox server'}),{target:{value:'pve-2'}})
  fireEvent.click(screen.getByRole('button',{name:'Review'}))
- fireEvent.click(screen.getByRole('button',{name:kind==='harbor'?'Create Harbor':'Create NFS'}))
+ fireEvent.click(screen.getByRole('button',{name:kind==='vm'?'Create VM':kind==='harbor'?'Create Harbor':'Create NFS'}))
  await waitFor(()=>expect(fetch).toHaveBeenCalledWith('/api/v1/infrastructure-services',expect.objectContaining({method:'POST',body:expect.any(String)})))
  const created=fetch.mock.calls.find(call=>call[0]==='/api/v1/infrastructure-services')!
  expect(JSON.parse(created[1].body)).toMatchObject({node:'pve-2',templateId:machineTemplate.id,kind})

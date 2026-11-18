@@ -13,6 +13,34 @@ import (
 	"time"
 )
 
+func TestVMSSHProbeRecognizesServiceAndHonorsTimeout(t *testing.T) {
+	for _, tc := range []struct{ banner, want string }{{"SSH-2.0-OpenSSH_9.6\r\n", "reachable"}, {"HTTP/1.1 200 OK\r\n", "unavailable"}, {"", "unavailable"}} {
+		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		go func() {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			defer conn.Close()
+			if tc.banner != "" {
+				_, _ = io.WriteString(conn, tc.banner)
+			} else {
+				time.Sleep(100 * time.Millisecond)
+			}
+		}()
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+		report := SSH(ctx, "VM", listener.Addr().String())
+		cancel()
+		listener.Close()
+		if report.Status != tc.want {
+			t.Fatalf("banner %q: got %s", tc.banner, report.Status)
+		}
+	}
+}
+
 func TestHTTPProbesValidateServiceAndDoNotFollowCredentialRedirects(t *testing.T) {
 	redirected := false
 	destination := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { redirected = true; w.WriteHeader(200) }))

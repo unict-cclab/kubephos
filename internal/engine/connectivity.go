@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/url"
 	"strings"
 	"sync"
@@ -68,7 +69,7 @@ func (w *Worker) checkConnectivity(ctx context.Context) {
 			})
 		}
 	}
-	for _, kind := range []string{"kubernetes-cluster", "harbor", "nfs"} {
+	for _, kind := range []string{"kubernetes-cluster", "harbor", "nfs", "vm"} {
 		resources, err := w.store.ListManagedResources(ctx, kind)
 		if err != nil {
 			if ctx.Err() == nil {
@@ -180,6 +181,15 @@ func (w *Worker) readConnectivityArtifact(ctx context.Context, artifact domain.A
 	return raw, nil
 }
 func (w *Worker) probeResource(ctx context.Context, resource domain.ManagedResource) domain.Connectivity {
+	if resource.Kind == "vm" {
+		var spec struct {
+			Address string `json:"address"`
+		}
+		if json.Unmarshal(resource.Spec, &spec) != nil || net.ParseIP(spec.Address) == nil {
+			return connectivityReport(probe.Result(resource.Name, "unknown", "The saved VM address is unavailable."))
+		}
+		return connectivityReport(probe.SSH(ctx, resource.Name, net.JoinHostPort(spec.Address, "22")))
+	}
 	unknown := func() domain.Connectivity {
 		return connectivityReport(probe.Result(resource.Name, "unknown", "Could not read the saved service access configuration."))
 	}

@@ -36,7 +36,7 @@ func TestManagedResourceCreationWithConnectivitySchema(t *testing.T) {
 			t.Fatal(err)
 		}
 	})
-	for _, kind := range []string{"kubernetes-cluster", "harbor", "nfs"} {
+	for _, kind := range []string{"kubernetes-cluster", "harbor", "nfs", "vm"} {
 		t.Run("pipeline-backed "+kind, func(t *testing.T) {
 			pipeline := domain.Pipeline{ID: "pipe-" + kind, WorkspaceID: "ws_default", Name: "Create " + kind, Hash: hash, Validation: domain.ValidationReport{Valid: true}, Resolution: domain.PipelineResolution{Result: domain.ArtifactContract{Type: "ClusterConnection", Version: "v1alpha1"}}}
 			run := domain.PipelineRun{ID: "run-" + kind, PipelineID: pipeline.ID, WorkspaceID: pipeline.WorkspaceID, Name: pipeline.Name, PipelineHash: hash, ResultType: "ClusterConnection", ResultVersion: "v1alpha1"}

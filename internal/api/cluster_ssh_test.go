@@ -40,7 +40,7 @@ func TestClusterSSHKeyDownload(t *testing.T) {
 	exec(`INSERT INTO pipeline_runs(id,pipeline_id,workspace_id,name,status,pipeline_hash,result_type,result_version) VALUES('run_ssh','pipe_ssh','ws_default','ssh','succeeded',repeat('a',64),'MachineAccess','v1alpha1')`)
 	exec(`INSERT INTO managed_resources(id,workspace_id,name,kind,provider,plugin_id,plugin_version,spec,pipeline_id,pipeline_run_id) VALUES('cluster_ssh','ws_default','test','kubernetes-cluster','proxmox','test','v1','{}','pipe_ssh','run_ssh')`)
 	keys := []string{}
-	for i, stage := range []string{"machines", "c1-machines", "c2-machines"} {
+	for i, stage := range []string{"machines", "c1-machines", "c2-machines", "machine"} {
 		_, private, _ := ed25519.GenerateKey(rand.Reader)
 		block, err := ssh.MarshalPrivateKey(private, "")
 		if err != nil {
@@ -98,6 +98,14 @@ func TestClusterSSHKeyDownload(t *testing.T) {
 	check("?cluster=west", keys[1])
 	if w := call("?cluster=other"); w.Code != 400 {
 		t.Fatal("invalid shared-key member accepted")
+	}
+	exec(`INSERT INTO managed_resources(id,workspace_id,name,kind,provider,plugin_id,plugin_version,spec,pipeline_id,pipeline_run_id) VALUES('vm_ssh','ws_default','standalone','vm','proxmox','test','v1','{}','pipe_ssh','run_ssh')`)
+	r := httptest.NewRequest("GET", "/api/v1/infrastructure-services/vm_ssh/ssh-key", nil)
+	r.SetPathValue("id", "vm_ssh")
+	w := httptest.NewRecorder()
+	server.downloadClusterSSHKey(w, r)
+	if w.Code != 200 || w.Body.String() != keys[3] || !strings.Contains(w.Header().Get("Cache-Control"), "no-store") {
+		t.Fatal("VM did not return its own protected machine key", w.Code)
 	}
 	exec(`UPDATE pipeline_runs SET status='failed' WHERE id='run_ssh'`)
 	if w := call("?cluster=east"); w.Code != 409 {

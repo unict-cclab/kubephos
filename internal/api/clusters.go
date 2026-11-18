@@ -402,7 +402,7 @@ func pipelineRunForManagedPipeline(pipeline domain.Pipeline, name string) domain
 
 func (s *Server) deleteInfrastructureService(response http.ResponseWriter, request *http.Request) {
 	resource, err := s.store.GetManagedResource(request.Context(), request.PathValue("id"))
-	if errors.Is(err, storage.ErrNotFound) || err == nil && resource.Kind != "harbor" && resource.Kind != "nfs" {
+	if errors.Is(err, storage.ErrNotFound) || err == nil && !infrastructureServiceKind(resource.Kind) {
 		writeError(response, http.StatusNotFound, "not_found", "Infrastructure service not found.")
 		return
 	}

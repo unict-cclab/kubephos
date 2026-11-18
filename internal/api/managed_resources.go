@@ -167,10 +167,10 @@ func (s *Server) deleteMachineTemplate(response http.ResponseWriter, request *ht
 
 func (s *Server) listInfrastructureServices(response http.ResponseWriter, request *http.Request) {
 	kind := strings.TrimSpace(request.URL.Query().Get("kind"))
-	kinds := []string{"harbor", "nfs"}
+	kinds := []string{"harbor", "nfs", "vm"}
 	if kind != "" {
-		if kind != "harbor" && kind != "nfs" {
-			writeError(response, http.StatusUnprocessableEntity, "invalid_kind", "Service kind must be harbor or nfs.")
+		if !infrastructureServiceKind(kind) {
+			writeError(response, http.StatusUnprocessableEntity, "invalid_kind", "Resource kind must be harbor, nfs or vm.")
 			return
 		}
 		kinds = []string{kind}
@@ -190,7 +190,7 @@ func (s *Server) listInfrastructureServices(response http.ResponseWriter, reques
 
 func (s *Server) getInfrastructureService(response http.ResponseWriter, request *http.Request) {
 	resource, err := s.store.GetManagedResource(request.Context(), request.PathValue("id"))
-	if errors.Is(err, storage.ErrNotFound) || err == nil && resource.Kind != "harbor" && resource.Kind != "nfs" {
+	if errors.Is(err, storage.ErrNotFound) || err == nil && !infrastructureServiceKind(resource.Kind) {
 		writeError(response, http.StatusNotFound, "not_found", "Infrastructure service not found.")
 		return
 	}
@@ -231,8 +231,8 @@ func (s *Server) createInfrastructureService(response http.ResponseWriter, reque
 	input.Address = strings.TrimSpace(input.Address)
 	input.Gateway = strings.TrimSpace(input.Gateway)
 	input.DNSServer = strings.TrimSpace(input.DNSServer)
-	if input.Kind != "harbor" && input.Kind != "nfs" {
-		writeError(response, http.StatusUnprocessableEntity, "invalid_kind", "Service kind must be harbor or nfs.")
+	if !infrastructureServiceKind(input.Kind) {
+		writeError(response, http.StatusUnprocessableEntity, "invalid_kind", "Resource kind must be harbor, nfs or vm.")
 		return
 	}
 	if input.Name == "" || len(input.Name) > 32 || !shortResourceNamePattern.MatchString(input.Name) {
@@ -287,13 +287,13 @@ func (s *Server) createInfrastructureService(response http.ResponseWriter, reque
 		return
 	}
 	if input.Cores == 0 {
-		input.Cores = map[string]int{"harbor": 4, "nfs": 2}[input.Kind]
+		input.Cores = map[string]int{"harbor": 4, "nfs": 2, "vm": 2}[input.Kind]
 	}
 	if input.MemoryMiB == 0 {
-		input.MemoryMiB = map[string]int{"harbor": 8192, "nfs": 4096}[input.Kind]
+		input.MemoryMiB = map[string]int{"harbor": 8192, "nfs": 4096, "vm": 2048}[input.Kind]
 	}
 	if input.DiskGiB == 0 {
-		input.DiskGiB = map[string]int{"harbor": 100, "nfs": 200}[input.Kind]
+		input.DiskGiB = map[string]int{"harbor": 100, "nfs": 200, "vm": max(32, templateSpec.DiskGiB)}[input.Kind]
 	}
 	if input.Cores < 1 || input.Cores > 32 || input.MemoryMiB < 512 || input.MemoryMiB > 131072 || input.DiskGiB < templateSpec.DiskGiB || input.DiskGiB > 2048 {
 		writeError(response, http.StatusUnprocessableEntity, "invalid_capacity", "Capacity is outside the supported range or smaller than the template disk.")
@@ -304,12 +304,16 @@ func (s *Server) createInfrastructureService(response http.ResponseWriter, reque
 		writeError(response, http.StatusUnprocessableEntity, "capability_unavailable", err.Error())
 		return
 	}
-	serviceCapability := map[string]string{"harbor": "registry.oci.provision", "nfs": "storage.shared.provision"}[input.Kind]
-	servicePlugin, err := s.pluginForCapability("", serviceCapability)
-	if err != nil {
-		writeError(response, http.StatusUnprocessableEntity, "capability_unavailable", err.Error())
-		return
+	resourcePlugin := topologyPlugin
+	if input.Kind != "vm" {
+		serviceCapability := map[string]string{"harbor": "registry.oci.provision", "nfs": "storage.shared.provision"}[input.Kind]
+		resourcePlugin, err = s.pluginForCapability("", serviceCapability)
+		if err != nil {
+			writeError(response, http.StatusUnprocessableEntity, "capability_unavailable", err.Error())
+			return
+		}
 	}
+
 	topologySpec, _ := json.Marshal(map[string]any{
 		"connectionRef": connection.ID, "machineTemplateRef": template.ArtifactID, "node": templateSpec.Node,
 		"templateVMID": templateSpec.VMID, "baseVMID": input.VMID, "namePrefix": input.Name, "machineCount": 1,
@@ -324,37 +328,24 @@ func (s *Server) createInfrastructureService(response http.ResponseWriter, reque
 		return
 	}
 	defer release()
-	serviceSpec := map[string]any{"machineSetRef": "", "machineAccessRef": ""}
-	if input.Kind == "harbor" {
-		serviceSpec["registryName"] = input.Name
-	} else {
-		serviceSpec["storageName"] = input.Name
-	}
-	serviceRaw, _ := json.Marshal(serviceSpec)
-	resultOutput := map[string]string{"harbor": "registry-endpoint", "nfs": "shared-storage-endpoint"}[input.Kind]
-	definition := domain.PipelineDefinition{
-		Stages: []domain.PipelineStage{
-			{ID: "machine", PluginID: topologyPlugin.Manifest().ID, Title: "Provision dedicated machine", Spec: topologySpec},
-			{ID: "service", PluginID: servicePlugin.Manifest().ID, Title: "Install and verify " + input.Kind, Spec: serviceRaw, Bindings: []domain.PipelineBinding{
-				{Path: "/machineSetRef", FromStage: "machine", FromOutput: "machine-set"},
-				{Path: "/machineAccessRef", FromStage: "machine", FromOutput: "machine-access"},
-			}},
-		},
-		Result: domain.PipelineOutput{Stage: "service", Output: resultOutput},
-	}
+	definition := infrastructureMachineDefinition(input.Kind, input.Name, topologyPlugin.Manifest().ID, resourcePlugin.Manifest().ID, topologySpec)
+
 	validated, failure := s.validatedManagedPipeline(request.Context(), input.WorkspaceID, definition)
 	if failure != nil {
 		failure.write(response)
 		return
 	}
 	resourceID := id.New("svc")
+	if input.Kind == "vm" {
+		resourceID = id.New("vm")
+	}
 	pipeline := domain.Pipeline{ID: id.New("pipe"), WorkspaceID: input.WorkspaceID, Name: "managed-" + input.Kind + "-" + resourceID, Description: "", Definition: validated.Definition, Resolution: validated.Resolution, Validation: validated.Validation, Hash: validated.Hash}
 	run := domain.PipelineRun{ID: id.New("run"), PipelineID: pipeline.ID, WorkspaceID: input.WorkspaceID, Name: "Provision " + input.Name, PipelineHash: pipeline.Hash, ResultType: pipeline.Resolution.Result.Type, ResultVersion: pipeline.Resolution.Result.Version}
 	for position, stage := range pipeline.Definition.Stages {
 		run.Stages = append(run.Stages, domain.PipelineRunStage{ID: run.ID + "_" + stage.ID, RunID: run.ID, Position: position + 1, StageID: stage.ID, PluginID: stage.PluginID, Title: stage.Title, Status: domain.StepPending})
 	}
 	managedSpec, _ := json.Marshal(input)
-	manifest := servicePlugin.Manifest()
+	manifest := resourcePlugin.Manifest()
 	resource, err := s.store.CreateManagedPipelineResource(request.Context(), domain.ManagedResource{ID: resourceID, WorkspaceID: input.WorkspaceID, Name: input.Name, Kind: input.Kind, Provider: connection.Provider, ConnectionID: connection.ID, PluginID: manifest.ID, PluginVersion: manifest.Version, PluginDigest: manifest.Runtime.Digest, Spec: managedSpec}, pipeline, run, []domain.ManagedResourceDependency{{ResourceID: resourceID, DependsOnID: template.ID, Relation: "machine-template"}})
 	if err != nil {
 		var databaseError *pgconn.PgError
@@ -461,4 +452,32 @@ func (s *Server) getKubernetesCluster(response http.ResponseWriter, request *htt
 		return
 	}
 	writeJSON(response, http.StatusOK, withInstalledComponents(resource))
+}
+
+func infrastructureServiceKind(kind string) bool {
+	return kind == "harbor" || kind == "nfs" || kind == "vm"
+}
+
+func infrastructureMachineDefinition(kind, name, topologyPluginID, servicePluginID string, topologySpec json.RawMessage) domain.PipelineDefinition {
+	definition := domain.PipelineDefinition{
+		Stages: []domain.PipelineStage{{ID: "machine", PluginID: topologyPluginID, Title: "Provision dedicated machine", Spec: topologySpec}},
+		Result: domain.PipelineOutput{Stage: "machine", Output: "machine-set"},
+	}
+	if kind == "vm" {
+		definition.Stages[0].Title = "Provision VM"
+		return definition
+	}
+	spec := map[string]any{"machineSetRef": "", "machineAccessRef": ""}
+	if kind == "harbor" {
+		spec["registryName"] = name
+	} else {
+		spec["storageName"] = name
+	}
+	raw, _ := json.Marshal(spec)
+	definition.Stages = append(definition.Stages, domain.PipelineStage{
+		ID: "service", PluginID: servicePluginID, Title: "Install and verify " + kind, Spec: raw,
+		Bindings: []domain.PipelineBinding{{Path: "/machineSetRef", FromStage: "machine", FromOutput: "machine-set"}, {Path: "/machineAccessRef", FromStage: "machine", FromOutput: "machine-access"}},
+	})
+	definition.Result = domain.PipelineOutput{Stage: "service", Output: map[string]string{"harbor": "registry-endpoint", "nfs": "shared-storage-endpoint"}[kind]}
+	return definition
 }

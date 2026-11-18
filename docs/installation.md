@@ -59,6 +59,13 @@ installations retain their current login credentials.
 
 ## Proxmox provisioning
 
+**Infrastructure → VM** creates standalone Linux VMs from a ready VM template.
+The wizard selects the connection, destination Proxmox server, CPU, memory, disk
+and static network settings. VMID and network suggestions remain editable and are
+validated before provisioning. Each VM has its own SSH key under **Access** and
+provisioning logs under **Activity**. Deletion removes the managed VM and releases
+its saved allocations; the source template remains protected while in use.
+
 VM identifiers are checked across the Proxmox cluster, including guests on offline
 nodes. An unavailable peer does not block provisioning on an available node:
 network checks use reachable guests and the reservations already saved in KubePhos.
@@ -67,7 +74,8 @@ and malformed-response errors remain explicit.
 
 ## Resource connectivity
 
-KubePhos checks Proxmox, Kubernetes APIs, NFSv4 and Harbor about once a minute.
+KubePhos checks Proxmox, Kubernetes APIs, NFSv4, Harbor and standalone VM SSH
+endpoints about once a minute.
 Lists and resource details show **Not reachable** after two failed checks and
 recover automatically after a successful check. Authentication failures show
 **Access denied**; a responding but unavailable service shows **Unavailable**.
@@ -184,7 +192,7 @@ infrastructure and reusable configuration to a new KubePhos instance.
    new one. Ensure the new server can reach the existing Proxmox servers, VMs,
    Kubernetes APIs, registries and remote plugin runtime, if configured.
 
-The archive contains Proxmox connections and credentials, VM templates, Harbor,
+The archive contains Proxmox connections and credentials, VM templates, standalone VMs, Harbor,
 NFS and cluster records and dependencies, application/model/strategy catalogs,
 experiment configurations and suites, installed plugin descriptors, remote runtime
 settings and infrastructure artifacts such as kubeconfigs and certificates.
