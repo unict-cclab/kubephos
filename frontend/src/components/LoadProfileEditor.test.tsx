@@ -3,6 +3,7 @@ import {describe, expect, it} from 'vitest'
 import {AutoscalerTargetEditor} from './AutoscalerTargetEditor'
 import {LoadProfileEditor, LoadProfilePreview, loadProfileSteps} from './LoadProfileEditor'
 import {svgToPDF} from './ResultsView'
+import type {JsonSchema} from '../types'
 
 describe('load profile preview', () => {
   it.each([900, 2700, 2460, 73])('ends the time axis and completed profile at the configured duration (%s seconds)', durationSeconds => {
@@ -62,13 +63,28 @@ describe('load profile preview', () => {
 })
 
 describe('autoscaler targets', () => {
+  const replicas = {minReplicas: {type: 'integer', minimum: 1, maximum: 1000, default: 1}, maxReplicas: {type: 'integer', minimum: 1, maximum: 1000, default: 10}} as const
+  const cpa: JsonSchema = {properties: {intervalSeconds: {type: 'integer', minimum: 5, maximum: 3600, default: 15}, ...replicas, parameters: {type: 'string', default: '{}'}, targetOverrides: {type: 'string'}}}
+  const hpa: JsonSchema = {properties: {...replicas, cpuUtilization: {type: 'integer', title: 'Target CPU (%)', minimum: 1, maximum: 500, default: 70}, targetOverrides: {type: 'string'}}}
+  const components = [{id: 'frontend', traits: ['scalable']}, {id: 'redis', traits: []}]
+
   it('selects scalable services by default and serializes an override', () => {
-    const view = render(<form><AutoscalerTargetEditor prefix="component-7" resetKey="strategy-1" defaults={{intervalSeconds: 15, minReplicas: 1, maxReplicas: 10, parameters: '{}'}} components={[{id: 'frontend', traits: ['scalable']}, {id: 'redis', traits: []}]} /></form>)
+    const view = render(<form><AutoscalerTargetEditor prefix="component-7" schema={cpa} resetKey="strategy-1" defaults={{intervalSeconds: 15, minReplicas: 1, maxReplicas: 10, parameters: '{}'}} components={components} /></form>)
     expect(screen.getByText('1 / 1')).toBeInTheDocument()
     fireEvent.click(screen.getByRole('checkbox', {name: 'Custom values'}))
     fireEvent.change(screen.getByRole('spinbutton', {name: 'Min replicas'}), {target: {value: '3'}})
     const overrides = view.container.querySelector<HTMLInputElement>('input[name="component-7.targetOverrides"]')
-    expect(JSON.parse(overrides?.value ?? '{}').frontend.minReplicas).toBe(3)
+    expect(JSON.parse(overrides?.value ?? '{}').frontend).toEqual({intervalSeconds: 15, minReplicas: 3, maxReplicas: 10, parameters: '{}'})
+  })
+
+  it('offers the settings of the selected autoscaler as overrides', () => {
+    const view = render(<form><AutoscalerTargetEditor prefix="component-2" schema={hpa} resetKey="hpa" defaults={{}} components={components} /></form>)
+    fireEvent.click(screen.getByRole('checkbox', {name: 'Custom values'}))
+    expect(screen.queryByRole('spinbutton', {name: 'Interval (s)'})).not.toBeInTheDocument()
+    expect(screen.queryByRole('textbox', {name: 'Parameters'})).not.toBeInTheDocument()
+    fireEvent.change(screen.getByRole('spinbutton', {name: 'Target CPU (%)'}), {target: {value: '50'}})
+    const overrides = view.container.querySelector<HTMLInputElement>('input[name="component-2.targetOverrides"]')
+    expect(JSON.parse(overrides?.value ?? '{}').frontend).toEqual({minReplicas: 1, maxReplicas: 10, cpuUtilization: 50})
   })
 })
 

@@ -5,6 +5,7 @@ import (
 
 	"encoding/json"
 	"errors"
+	"fmt"
 
 	"log/slog"
 
@@ -20,6 +21,7 @@ import (
 	"kubephos.dev/kubephos/internal/domain"
 	"kubephos.dev/kubephos/internal/id"
 	"kubephos.dev/kubephos/internal/placement"
+	"kubephos.dev/kubephos/internal/plugins"
 	applicationdeployer "kubephos.dev/kubephos/plugins/application-deployer/runtime"
 
 	"kubephos.dev/kubephos/internal/schema"
@@ -387,6 +389,7 @@ func (s *Server) importCatalogStrategy(response http.ResponseWriter, request *ht
 		WorkspaceID          string          `json:"workspaceId"`
 		Name                 string          `json:"name"`
 		Kind                 string          `json:"kind"`
+		PluginID             string          `json:"pluginId"`
 		SourceImage          string          `json:"sourceImage"`
 		DefaultConfiguration json.RawMessage `json:"defaultConfiguration"`
 	}
@@ -406,7 +409,7 @@ func (s *Server) importCatalogStrategy(response http.ResponseWriter, request *ht
 			writeError(response, http.StatusInternalServerError, "database_error", "Could not read the strategy image.")
 			return
 		}
-		input.WorkspaceID, input.Kind = existing.WorkspaceID, existing.Kind
+		input.WorkspaceID, input.Kind, input.PluginID = existing.WorkspaceID, existing.Kind, existing.PluginID
 		if input.Name == "" {
 			input.Name = existing.Name
 		}
@@ -421,13 +424,19 @@ func (s *Server) importCatalogStrategy(response http.ResponseWriter, request *ht
 	if len(input.DefaultConfiguration) == 0 {
 		input.DefaultConfiguration = json.RawMessage(`{}`)
 	}
-	if !strategyNamePattern.MatchString(input.Name) || !map[string]bool{"scheduler": true, "descheduler": true, "autoscaler": true}[input.Kind] || input.SourceImage == "" || len(input.SourceImage) > 512 || strings.ContainsAny(input.SourceImage, "\n\r\t ") {
-		writeError(response, http.StatusUnprocessableEntity, "invalid_strategy", "Name, type or Docker image is invalid.")
+	if !strategyNamePattern.MatchString(input.Name) || !map[string]bool{"scheduler": true, "descheduler": true, "autoscaler": true}[input.Kind] {
+		writeError(response, http.StatusUnprocessableEntity, "invalid_strategy", "Name or type is invalid.")
 		return
 	}
-	strategyPlugin, err := s.pluginForCapability("", input.Kind+".kubernetes.install")
+	strategyPlugin, err := s.strategyPlugin(input.Kind, input.PluginID)
 	if err != nil {
 		writeError(response, http.StatusUnprocessableEntity, "strategy_unsupported", "No installed plugin can run this strategy type.")
+		return
+	}
+	input.PluginID = strategyPlugin.Manifest().ID
+	runsImage := strategyRunsImage(strategyPlugin.Manifest())
+	if runsImage && (input.SourceImage == "" || len(input.SourceImage) > 512 || strings.ContainsAny(input.SourceImage, "\n\r\t ")) || !runsImage && input.SourceImage != "" {
+		writeError(response, http.StatusUnprocessableEntity, "invalid_strategy", "The Docker image is invalid for this strategy type.")
 		return
 	}
 	strategyConfiguration := map[string]any{}
@@ -438,14 +447,16 @@ func (s *Server) importCatalogStrategy(response http.ResponseWriter, request *ht
 	strategyConfiguration["clusterConnectionRef"] = "art_validation_cluster"
 	strategyConfiguration["applicationDeploymentRef"] = "art_validation_application"
 	strategyConfiguration["targetBindingRef"] = "art_validation_binding"
-	strategyConfiguration["image"] = input.SourceImage
+	if runsImage {
+		strategyConfiguration["image"] = input.SourceImage
+	}
 	strategyRaw, _ := json.Marshal(strategyConfiguration)
 	strategyReport := strategyPlugin.Validate(request.Context(), strategyRaw)
 	if !strategyReport.Valid {
 		writeJSON(response, http.StatusUnprocessableEntity, map[string]any{"code": "invalid_strategy_configuration", "validation": strategyReport})
 		return
 	}
-	strategy := domain.CatalogStrategy{ID: id.New("strategy"), WorkspaceID: input.WorkspaceID, Name: input.Name, Kind: input.Kind, SourceImage: input.SourceImage, DefaultConfiguration: input.DefaultConfiguration}
+	strategy := domain.CatalogStrategy{ID: id.New("strategy"), WorkspaceID: input.WorkspaceID, Name: input.Name, Kind: input.Kind, PluginID: input.PluginID, SourceImage: input.SourceImage, DefaultConfiguration: input.DefaultConfiguration}
 	if request.Method == http.MethodPut {
 		strategy.ID = existing.ID
 		strategy, err = s.store.UpdateCatalogStrategy(request.Context(), strategy)
@@ -470,6 +481,54 @@ func (s *Server) importCatalogStrategy(response http.ResponseWriter, request *ht
 	} else {
 		writeJSON(response, http.StatusCreated, strategy)
 	}
+}
+
+// strategyPlugin returns the plugin that runs a catalog strategy of the kind. Without an
+// explicit plugin, the image-based implementation of the kind is used.
+func (s *Server) strategyPlugin(kind, pluginID string) (plugins.Plugin, error) {
+	capability := kind + ".kubernetes.install"
+	if pluginID != "" {
+		plugin, err := s.registry.Get(pluginID)
+		if err != nil || !plugin.Manifest().HasCapability(capability) {
+			return nil, fmt.Errorf("plugin %s cannot run %s strategies", pluginID, kind)
+		}
+		return plugin, nil
+	}
+	for _, manifest := range s.registry.Manifests() {
+		if manifest.HasCapability(capability) && strategyRunsImage(manifest) {
+			return s.registry.Get(manifest.ID)
+		}
+	}
+	return nil, fmt.Errorf("no installed plugin runs %s images", kind)
+}
+
+// strategyRunsImage reports whether the plugin runs a catalog image, such as the Custom
+// Pod Autoscaler; built-in strategies, such as the Kubernetes HPA, carry only settings.
+func strategyRunsImage(manifest plugins.Manifest) bool {
+	for _, property := range strategySettings(manifest) {
+		if property.Format == "kubephos-strategy-image" {
+			return true
+		}
+	}
+	return false
+}
+
+func strategyHasSetting(manifest plugins.Manifest, name string) bool {
+	_, ok := strategySettings(manifest)[name]
+	return ok
+}
+
+type strategySetting struct {
+	Format string `json:"format"`
+}
+
+// strategySettings returns the configuration properties declared by a strategy plugin.
+func strategySettings(manifest plugins.Manifest) map[string]strategySetting {
+	var schema struct {
+		Properties map[string]strategySetting `json:"properties"`
+	}
+	_ = json.Unmarshal(manifest.Schema, &schema)
+	return schema.Properties
 }
 
 func (s *Server) deleteCatalogStrategy(response http.ResponseWriter, request *http.Request) {

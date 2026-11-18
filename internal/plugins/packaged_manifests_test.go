@@ -9,9 +9,11 @@ import (
 
 func TestPackagedManifestsLoad(t *testing.T) {
 	paths, err := filepath.Glob("../../plugins/*/plugin.yaml")
-	if err != nil || len(paths) == 0 {
-		t.Fatalf("manifest discovery: %v", err)
+	grouped, groupErr := filepath.Glob("../../plugins/autoscalers/*/plugin.yaml")
+	if err != nil || groupErr != nil || len(paths) == 0 || len(grouped) == 0 {
+		t.Fatalf("manifest discovery: %v %v", err, groupErr)
 	}
+	paths = append(paths, grouped...)
 	for _, path := range paths {
 		t.Run(filepath.Base(filepath.Dir(path)), func(t *testing.T) {
 			raw, err := os.ReadFile(path)

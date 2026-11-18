@@ -18,7 +18,7 @@ COPY . .
 ARG VERSION=dev
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -X main.version=${VERSION}" -o /out/kubephos ./cmd/kubephos
 RUN set -eu; \
-    for manifest in plugins/*/plugin.yaml; do \
+    for manifest in plugins/*/plugin.yaml plugins/autoscalers/*/plugin.yaml; do \
       plugin_dir="${manifest%/plugin.yaml}"; \
       plugin_name="${plugin_dir##*/}"; \
       executable="${plugin_name}-plugin"; \

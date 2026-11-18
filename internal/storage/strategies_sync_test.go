@@ -82,3 +82,38 @@ func TestSynchronizeStrategyConfigurations(t *testing.T) {
 		}
 	}
 }
+
+func TestSynchronizeBuiltinStrategyReplacesConfigurationSettings(t *testing.T) {
+	url := os.Getenv("KUBEPHOS_TEST_DATABASE_URL")
+	if url == "" {
+		t.Skip("KUBEPHOS_TEST_DATABASE_URL is not set")
+	}
+	ctx := context.Background()
+	conn, err := pgx.Connect(ctx, url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close(ctx)
+	tx, err := conn.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, `CREATE TEMP TABLE experiment_configurations (id text, workspace_id text, definition jsonb, updated_at timestamptz)`); err != nil {
+		t.Fatal(err)
+	}
+	definition := `{"components":[{"id":"hpa","strategyId":"hpa-70","configuration":{"minReplicas":1,"maxReplicas":10,"cpuUtilization":70,"targetOverrides":"{}"}}]}`
+	if _, err := tx.Exec(ctx, `INSERT INTO experiment_configurations VALUES ('configuration','workspace',$1,now())`, definition); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, synchronizeStrategyConfigurationsSQL, "hpa-70", json.RawMessage(`{"minReplicas":2,"maxReplicas":10,"cpuUtilization":60}`), false, "", "workspace", json.RawMessage(`{"minReplicas":1,"maxReplicas":10,"cpuUtilization":70}`)); err != nil {
+		t.Fatal(err)
+	}
+	var configuration map[string]any
+	if err := tx.QueryRow(ctx, `SELECT definition->'components'->0->'configuration' FROM experiment_configurations`).Scan(&configuration); err != nil {
+		t.Fatal(err)
+	}
+	if configuration["minReplicas"] != float64(2) || configuration["cpuUtilization"] != float64(60) || configuration["targetOverrides"] != "{}" {
+		t.Fatalf("catalog settings did not replace the configuration values: %v", configuration)
+	}
+}
