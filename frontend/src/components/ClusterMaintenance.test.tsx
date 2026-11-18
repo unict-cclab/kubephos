@@ -98,3 +98,18 @@ it('keeps the new pool name field focused while its name is typed', () => {
  expect(document.activeElement).toBe(field)
  expect(field.value).toBe('gpu')
 })
+
+it('changes the components of a single cluster', async () => {
+  const catalog = {items: [{id: 'prometheus', title: 'Prometheus', description: '', core: true}, {id: 'headlamp', title: 'Headlamp', description: '', core: false}, {id: 'jaeger', title: 'Jaeger', description: '', core: false}], defaults: {flannel: ['prometheus', 'headlamp', 'jaeger'], cilium: ['prometheus', 'headlamp', 'jaeger']}}
+  vi.mocked(request).mockReset()
+  vi.mocked(request).mockImplementation(async path => (path === '/cluster-components' ? catalog : resource) as never)
+  render(<ClusterMaintenance resource={{...resource, spec: {...resource.spec, components: ['prometheus', 'headlamp']}}} runs={[]} session={session} />)
+  fireEvent.click(screen.getByRole('button', {name: 'Components'}))
+  const jaeger = await screen.findByRole('checkbox', {name: /Jaeger/})
+  expect(jaeger).not.toBeChecked()
+  expect(screen.getByRole('button', {name: 'Save changes'})).toBeDisabled()
+  fireEvent.click(jaeger)
+  fireEvent.click(screen.getByRole('button', {name: 'Save changes'}))
+  await waitFor(() => expect(request).toHaveBeenCalledWith('/kubernetes-clusters/cluster/components', {method: 'POST', body: JSON.stringify({components: ['prometheus', 'headlamp', 'jaeger']})}, undefined))
+  expect(await screen.findByText('Cluster maintenance queued')).toBeInTheDocument()
+})

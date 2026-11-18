@@ -1416,3 +1416,10 @@
 .resource-selection-scroll input[type="text"], .resource-selection-scroll input:not([type]) { min-width: 10rem; }
 .selection-toolbar { margin-bottom: 0; align-items: center; }
 .selection-count { margin-right: auto; color: var(--muted-foreground); font-size: 13px; }
+
+/* Cluster components: one bordered list, matching the sharing recipient list. */
+.cluster-component-list { display: grid; margin-top: 16px; border: 1px solid var(--line); border-radius: 8px; }
+.cluster-component-list .checkbox-field { align-items: flex-start; gap: 12px; margin: 0; padding: 12px 14px; }
+.cluster-component-list .checkbox-field + .checkbox-field { border-top: 1px solid var(--line); }
+.cluster-component-list .checkbox-field > span { display: grid; gap: 2px; min-width: 0; }
+.cluster-component-list small { color: var(--muted-foreground); font-size: 13px; }

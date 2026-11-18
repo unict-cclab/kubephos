@@ -16,6 +16,7 @@ import {useProvisioningSuggestions} from '../hooks/useProvisioningSuggestions'
 import {MultiClusterForm} from './MultiClusterForm'
 import {WizardForm, WizardStep, WizardReview} from './WizardForm'
 import {FormTabs} from './FormTabs'
+import {ClusterComponentsFields} from './ClusterComponentsFields'
 import {ProxmoxNodeSelect} from './ProxmoxNodeSelect'
 
 export interface CommonProps {
@@ -305,6 +306,7 @@ export function KubernetesClusterDialog({open, close, workspaces, templates, ser
         dnsServer: values.get('dnsServer'),
         scrapeInterval: values.get('scrapeInterval'),
  retention: values.get('retention'),
+        components: values.has('components') ? values.getAll('components') : undefined,
  controlPlanes: Number(values.get('controlPlanes')),
         controlPlaneZones: parseZones(String(values.get('controlPlaneZones') ?? '')),
         controlPlaneCapacity: readCapacity(values, 'controlPlane'),
@@ -354,6 +356,7 @@ export function KubernetesClusterDialog({open, close, workspaces, templates, ser
       <WizardStep title="VM placement">
       <div className="vm-placement-grid">{placementPools.map(pool => <fieldset className="vm-placement-pool" key={pool.name}><legend>{pool.label}</legend><div className="vm-placement-columns" aria-hidden="true"><span>Node</span><span>Proxmox server</span></div>{pool.machines.map((name, index) => <label className="vm-placement-row" key={name}><span>{clusterName ? name : '—'}</span><ValidatedInput aria-label={clusterName ? `${name} · Proxmox server` : `${pool.label} · Node ${index + 1} · Proxmox server`} value={machineNodes[name] ?? templateNode} onChange={event => setMachineNodes(nodes => ({...nodes, [name]: event.target.value}))} pattern="[A-Za-z0-9._-]{1,64}" maxLength={64} placeholder="pve" required /></label>)}</fieldset>)}</div>
       </WizardStep>
+      <WizardStep title="Components"><ClusterComponentsFields networking="flannel" /></WizardStep>
       <WizardStep title="Review"><WizardReview /></WizardStep>
     </WizardForm>
   </Dialog>

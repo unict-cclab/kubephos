@@ -53,7 +53,7 @@ func warmRegistryProfile(ctx context.Context, runner commandRunner, machines mac
 func registryWarmupImages(profile registryProfile, spec Spec) []string {
 	images := []string{}
 	for _, mirror := range profile.Endpoint.Spec.Mirrors {
-		if mirror.Source == "docker.io" || (spec.Networking == "cilium" && mirror.Source == "registry.istio.io") {
+		if mirror.Source == "docker.io" || !managedcomponents.RegistryNeeded(mirror.Source, spec.installedComponents()) {
 			continue
 		}
 		images = append(images, mirror.Source+"/"+mirror.Probe)
@@ -62,4 +62,12 @@ func registryWarmupImages(profile registryProfile, spec Spec) []string {
 		images = append(images, managedcomponents.Image(profile.Endpoint.Spec.Host, component.Name, component.Version, profile.Credential.Spec.Project))
 	}
 	return images
+}
+
+// installedComponents returns the selected cluster components; nil means the full set.
+func (spec Spec) installedComponents() []string {
+	if spec.Components == nil {
+		return managedcomponents.DefaultClusterComponents(spec.Networking)
+	}
+	return spec.Components
 }

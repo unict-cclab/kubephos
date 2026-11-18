@@ -23,7 +23,10 @@ const modes: {value: IstioDataPlane; title: string}[] = [
 // whole namespace and configures its waypoint. Settings of the mode not chosen stay mounted inside
 // disabled fieldsets, so they leave the submitted form but return if that mode is chosen again.
 // Experiment configurations and long-lived application deployments offer the same choices.
-export function IstioSettingsEditor({dataPlane: initialDataPlane = 'sidecar', enabled: initialEnabled = true, waypoint, services = [], disabled = false, children}: {dataPlane?: IstioDataPlane; enabled?: boolean; waypoint?: Record<string, unknown>; services?: ApplicationComponent[]; disabled?: boolean; children: ReactNode}) {
+// `available` lists the data planes the cluster installs; only those are offered.
+export function IstioSettingsEditor({dataPlane: requestedDataPlane = 'sidecar', enabled: initialEnabled = true, waypoint, services = [], disabled = false, available = ['sidecar', 'ambient'], children}: {dataPlane?: IstioDataPlane; enabled?: boolean; waypoint?: Record<string, unknown>; services?: ApplicationComponent[]; disabled?: boolean; available?: IstioDataPlane[]; children: ReactNode}) {
+  const offered = modes.filter(mode => available.includes(mode.value))
+  const initialDataPlane = available.includes(requestedDataPlane) ? requestedDataPlane : offered[0]?.value ?? 'sidecar'
   const [enabled, setEnabled] = useState(initialEnabled || initialDataPlane === 'ambient')
   const [dataPlane, setDataPlane] = useState<IstioDataPlane>(initialDataPlane)
   const switchId = useId()
@@ -38,7 +41,7 @@ export function IstioSettingsEditor({dataPlane: initialDataPlane = 'sidecar', en
     {using && <fieldset className="istio-mode-picker">
       <legend>Mode</legend>
       <div className="istio-mode-options">
-        {modes.map(mode => <label key={mode.value} className="istio-mode-option">
+        {offered.map(mode => <label key={mode.value} className="istio-mode-option">
           <input type="radio" name="istioModeChoice" data-review-skip="true" value={mode.value} checked={dataPlane === mode.value} onChange={() => setDataPlane(mode.value)} />
           <strong>{mode.title}</strong>
         </label>)}

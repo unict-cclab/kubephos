@@ -100,6 +100,8 @@ export interface Plugin {
   description: string
   schema: JsonSchema
   capabilities?: string[]
+  // Managed cluster components the plugin needs, such as chaos-mesh.
+  requiredComponents?: string[]
   permissions?: string[]
   artifactInputs?: Array<{type: string; version: string}>
   artifactOutputs?: Array<{type: string; version: string}>

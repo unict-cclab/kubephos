@@ -207,6 +207,8 @@ spec:
     outputs:
     - type: NetworkInjection
       version: v1alpha1
+  requiredComponents:
+  - chaos-mesh
   capabilities:
   - chaos.network.zones
   - chaos.network.preflight

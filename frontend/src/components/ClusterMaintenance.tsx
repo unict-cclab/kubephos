@@ -5,10 +5,11 @@ import {FormTabs} from './FormTabs'
 import {PoolPlacementFields} from './PlacementFields'
 import type {NodeTaint} from '../types'
 import {useErrorState} from './ToastRegion'
-import {useEffect, useId, useState} from 'react'
+import {useCallback, useEffect, useId, useState} from 'react'
 import {request} from '../api'
 import type {ManagedResource, PipelineRun, Session} from '../types'
 import {Dialog} from './Dialog'
+import {ClusterComponentsFields} from './ClusterComponentsFields'
 
 type Capacity = {cores: number; memoryMiB: number; diskGiB: number}
 type Pool = {labels?: Record<string,string>; taints?: NodeTaint[]; name: string; count: number; zones: string[]; capacity: Capacity}
@@ -19,6 +20,7 @@ export function clusterMachineNames(spec: ClusterSpec, pools: Pool[]) {
 
 export function ClusterMaintenance({resource, runs, session,references={}}: {references?:Record<string,string>;resource: ManagedResource; runs: PipelineRun[]; session: Session}) {
   const [open, setOpen] = useState(false)
+  const [componentsOpen, setComponentsOpen] = useState(false)
   const [queued, setQueued] = useState(false)
   const [saved,setSaved]=useState<ManagedResource|null>(null)
   useEffect(()=>setSaved(null),[resource.updatedAt])
@@ -28,7 +30,7 @@ export function ClusterMaintenance({resource, runs, session,references={}}: {ref
   const blocked = resource.status !== 'ready' || queued
   const structuralDisabled=runs.some(run=>run.clusterResourceId===resource.id&&['queued','running'].includes(run.status))
   if (session.user?.role !== 'admin') return null
-  return <><button className="button secondary" disabled={blocked} title={blocked?'The cluster is not ready to edit.':undefined} onClick={() => setOpen(true)}>Edit</button>{queued && <span role="status">Cluster maintenance queued</span>}{open && current.spec.mode==='multi' && <MultiClusterSettingsEditor references={references} resource={current} session={session} onClose={()=>setOpen(false)} onSaved={value=>{setSaved(value);setOpen(false)}}/>}{open && current.spec.mode!=='multi' && <MaintenanceEditor references={references} structuralDisabled={structuralDisabled} onSaved={value=>{setSaved(value);setOpen(false)}} spec={spec} resource={current} session={session} onClose={() => setOpen(false)} onQueued={() => {setQueued(true); setOpen(false)}} />}</>
+  return <><button className="button secondary" disabled={blocked} title={blocked?'The cluster is not ready to edit.':undefined} onClick={() => setOpen(true)}>Edit</button>{current.spec.mode!=='multi' && <button className="button secondary" disabled={blocked} title={blocked?'The cluster is not ready to edit.':undefined} onClick={() => setComponentsOpen(true)}>Components</button>}{queued && <span role="status">Cluster maintenance queued</span>}{open && current.spec.mode==='multi' && <MultiClusterSettingsEditor references={references} resource={current} session={session} onClose={()=>setOpen(false)} onSaved={value=>{setSaved(value);setOpen(false)}}/>}{open && current.spec.mode!=='multi' && <MaintenanceEditor references={references} structuralDisabled={structuralDisabled} onSaved={value=>{setSaved(value);setOpen(false)}} spec={spec} resource={current} session={session} onClose={() => setOpen(false)} onQueued={() => {setQueued(true); setOpen(false)}} />}{componentsOpen && <ComponentsEditor resource={current} session={session} onClose={() => setComponentsOpen(false)} onQueued={() => {setQueued(true); setComponentsOpen(false)}} />}</>
 }
 
 function MaintenanceEditor({spec, resource, session, onClose, onQueued, onSaved, structuralDisabled,references}: {references:Record<string,string>;onSaved:(value:ManagedResource)=>void; structuralDisabled:boolean; spec: ClusterSpec; resource: ManagedResource; session: Session; onClose: () => void; onQueued: () => void}) {
@@ -87,6 +89,28 @@ function MaintenanceEditor({spec, resource, session, onClose, onQueued, onSaved,
       {removed.length > 0 && <div className="maintenance-removal"><ul>{removed.map(name => <li key={name}><code>{name}</code></li>)}</ul><label className="checkbox-field"><input type="checkbox" checked={confirmed} onChange={event => setConfirmed(event.target.checked)} required disabled={pending} /><span>Confirm removal of these nodes and their ephemeral data</span></label></div>}
     </section>
     </WizardStep>
+  </WizardForm></Dialog>
+}
+
+// Changing components reinstalls only the managed platform; machines and Kubernetes stay.
+function ComponentsEditor({resource, session, onClose, onQueued}: {resource: ManagedResource; session: Session; onClose: () => void; onQueued: () => void}) {
+  const formId = useId()
+  const initial = Array.isArray(resource.spec.components) ? resource.spec.components.map(String) : undefined
+  const [original, setOriginal] = useState(initial)
+  const [selected, setSelected] = useState<string[]>()
+  const [pending, setPending] = useState(false)
+  const [error, setError] = useErrorState()
+  const report = useCallback((components: string[]) => {setSelected(components); setOriginal(current => current ?? components)}, [])
+  const changed = Boolean(original && selected) && JSON.stringify(selected) !== JSON.stringify(original)
+  const submit = async (event: React.FormEvent) => {
+    event.preventDefault(); setPending(true); setError('')
+    try {
+      await request(`/kubernetes-clusters/${resource.id}/components`, {method: 'POST', body: JSON.stringify({components: selected})}, session.csrfToken)
+      onQueued()
+    } catch (cause) {setError(cause instanceof Error ? cause.message : 'Could not change the cluster components.')} finally {setPending(false)}
+  }
+  return <Dialog open presentation="page" title="Change components" onClose={pending?undefined:onClose} className="cluster-maintenance-modal"><WizardForm id={formId} onSubmit={event=>void submit(event)} onCancel={onClose} pending={pending} error={error} submitLabel="Save changes" submitDisabled={!changed}>
+    <WizardStep title="Components"><ClusterComponentsFields networking={resource.spec.networking === 'cilium' ? 'cilium' : 'flannel'} initial={initial} onChange={report} /></WizardStep>
   </WizardForm></Dialog>
 }
 

@@ -1,19 +1,16 @@
 import {useState} from 'react'
 import type {ManagedResource, Session} from '../types'
 import {openLiveDashboard} from '../liveDashboard'
+import {clusterHasComponent, useClusterComponentCatalog, type ClusterComponentCatalog} from '../clusterComponents'
 
 type Endpoint = {name: string; address: string; url: string}
 
-function endpoints(spec: Record<string, unknown>): Endpoint[] {
-  if (typeof spec.managedProfile !== 'string' || typeof spec.addressStart !== 'string' || !spec.addressStart) return []
-  const cilium = spec.networking === 'cilium'
-  const services: Array<[string, number, string?]> = [
-    ['Grafana', 32000], ['Prometheus', 32090], ['Cluster Lens', 32088],
-    ['Chaos dashboard', 32300], ['Loki API', 32099], ['Jaeger', 30002],
-    ...(cilium ? [] : [['Kiali', 30001, '/kiali'] as [string, number, string]]),
-    ['Headlamp', 30003], ...(cilium ? [['Hubble', 31235] as [string, number]] : [])
-  ]
-  return services.map(([name, port, path = '']) => ({name, address: `${spec.addressStart}:${port}`, url: `http://${spec.addressStart}:${port}${path}`}))
+// Each installed component lists its dashboards in the catalog; Hubble belongs to Cilium networking.
+function endpoints(spec: Record<string, unknown>, catalog?: ClusterComponentCatalog): Endpoint[] {
+  if (typeof spec.managedProfile !== 'string' || typeof spec.addressStart !== 'string' || !spec.addressStart || !catalog) return []
+  const dashboards = catalog.items.filter(component => clusterHasComponent(spec, component.id)).flatMap(component => component.dashboards ?? [])
+  if (spec.networking === 'cilium') dashboards.push({name: 'Hubble', port: 31235})
+  return dashboards.map(({name, port, path = ''}) => ({name, address: `${spec.addressStart}:${port}`, url: `http://${spec.addressStart}:${port}${path}`}))
 }
 
 function ExternalMark() {
@@ -48,11 +45,12 @@ function LiveDashboardLink({resource, session, address}: {resource: ManagedResou
 
 export function ClusterDashboards({resource, session}: {resource: ManagedResource; session?: Session}) {
   const [workloadCluster, setWorkloadCluster] = useState('')
+  const {catalog} = useClusterComponentCatalog()
   if (resource.kind !== 'kubernetes-cluster' || resource.status !== 'ready') return null
   const multi = resource.spec.mode === 'multi'
   const members = multi && Array.isArray(resource.spec.members)
-    ? resource.spec.members.filter((member): member is Record<string, unknown> => !!member && typeof member === 'object').map(member => ({name: String(member.name), links: endpoints(member)}))
-    : [{name: resource.name, links: endpoints(resource.spec)}]
+    ? resource.spec.members.filter((member): member is Record<string, unknown> => !!member && typeof member === 'object').map(member => ({name: String(member.name), links: endpoints(member, catalog)}))
+    : [{name: resource.name, links: endpoints(resource.spec, catalog)}]
   const groups = members.filter(member => member.links.length > 0)
   if (!groups.length) return null
   const lensSources = multi ? groups.filter(group => group.links.some(link => link.name === 'Cluster Lens')) : []

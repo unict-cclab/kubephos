@@ -23,8 +23,10 @@ type Manifest struct {
 	ArtifactOutputs   []domain.ArtifactContract `json:"artifactOutputs"`
 	Targeting         *Targeting                `json:"targeting,omitempty"`
 	Capabilities      []string                  `json:"capabilities"`
-	Permissions       []string                  `json:"permissions"`
-	Runtime           Runtime                   `json:"runtime"`
+	// RequiredComponents lists the managed cluster components the plugin needs on its cluster.
+	RequiredComponents []string `json:"requiredComponents,omitempty"`
+	Permissions        []string `json:"permissions"`
+	Runtime            Runtime  `json:"runtime"`
 }
 
 type Targeting struct {

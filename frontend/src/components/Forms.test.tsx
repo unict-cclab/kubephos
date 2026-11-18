@@ -102,6 +102,7 @@ describe('KubernetesClusterDialog', () => {
     fireEvent.click(screen.getByRole('button', {name: 'Continue'}))
     fireEvent.click(screen.getByRole('button', {name: 'Continue'}))
     fireEvent.click(screen.getByRole('button', {name: 'Continue'}))
+    fireEvent.click(screen.getByRole('button', {name: 'Continue'}))
     expect(container.querySelectorAll('form')).toHaveLength(1)
     expect(screen.queryByLabelText('Zones')).not.toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', {name: 'Create clusters'}))
@@ -118,7 +119,8 @@ describe('KubernetesClusterDialog', () => {
   }, 15000)
 
   it('submits an independent capacity for every pool', async () => {
-    const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({id: 'cluster_created'}), {status: 202, headers: {'Content-Type': 'application/json'}}))
+    const catalog = {items: [{id: 'prometheus', title: 'Prometheus', description: '', core: true}, {id: 'headlamp', title: 'Headlamp', description: '', core: false}], defaults: {flannel: ['prometheus', 'headlamp'], cilium: ['prometheus', 'headlamp']}}
+    const fetch = vi.fn().mockImplementation((path: string) => Promise.resolve(new Response(JSON.stringify(path === '/api/v1/cluster-components' ? catalog : {id: 'cluster_created'}), {status: path === '/api/v1/cluster-components' ? 200 : 202, headers: {'Content-Type': 'application/json'}})))
     vi.stubGlobal('fetch', fetch)
     render(<KubernetesClusterDialog open close={() => {}} workspaces={[workspace]} templates={[machineTemplate]} services={[harborService, nfsService]} session={{authenticated: true, csrfToken: 'csrf'}} applications={[]} artifacts={[]} connections={[connection]} credentials={[]} onDone={async () => {}} />)
 
@@ -136,12 +138,15 @@ describe('KubernetesClusterDialog', () => {
     fireEvent.click(screen.getByRole('button', {name: 'Continue'}))
     fireEvent.change(screen.getByRole('textbox', {name: 'development-applications-2 · Proxmox server'}), {target: {value: 'pve-2'}})
     fireEvent.click(screen.getByRole('button', {name: 'Continue'}))
+    fireEvent.click(await screen.findByRole('checkbox', {name: /Headlamp/}))
+    fireEvent.click(screen.getByRole('button', {name: 'Continue'}))
     fireEvent.click(screen.getByRole('button', {name: 'Create cluster'}))
 
     await waitFor(() => expect(fetch.mock.calls.some(call => call[0] === '/api/v1/kubernetes-clusters')).toBe(true))
     const body = JSON.parse(fetch.mock.calls.find(call => call[0] === '/api/v1/kubernetes-clusters')![1].body)
     expect(body.machineNodes).toEqual({'development-control-plane-1': 'pve', 'development-management-1': 'pve', 'development-applications-1': 'pve', 'development-applications-2': 'pve-2'})
     expect(body.scrapeInterval).toBe('5s')
+    expect(body.components).toEqual(['prometheus'])
  expect(body.retention).toBe('15d')
  expect(body.controlPlaneCapacity).toEqual({cores: 2, memoryMiB: 4096, diskGiB: 80})
     expect(body.managementPool.capacity).toEqual({cores: 4, memoryMiB: 8192, diskGiB: 80})

@@ -411,6 +411,8 @@ type managedKubernetesClusterInput struct {
 	ManagedProfile       string                          `json:"managedProfile"`
 	ScrapeInterval       string                          `json:"scrapeInterval"`
 	Retention            string                          `json:"retention"`
+	// Components lists the installed cluster components; absent on clusters created before selection existed.
+	Components []string `json:"components,omitempty"`
 }
 
 func (s *Server) listKubernetesClusters(response http.ResponseWriter, request *http.Request) {
@@ -438,6 +440,9 @@ func (s *Server) listKubernetesClusters(response http.ResponseWriter, request *h
 		}
 		items = filtered
 	}
+	for index := range items {
+		items[index] = withInstalledComponents(items[index])
+	}
 	writeJSON(response, http.StatusOK, map[string]any{"items": items})
 }
 
@@ -455,5 +460,5 @@ func (s *Server) getKubernetesCluster(response http.ResponseWriter, request *htt
 	if !s.validateClusterAssignment(response, request, requestUser(request), resource.ID) {
 		return
 	}
-	writeJSON(response, http.StatusOK, resource)
+	writeJSON(response, http.StatusOK, withInstalledComponents(resource))
 }

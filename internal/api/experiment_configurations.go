@@ -560,6 +560,9 @@ func (s *Server) validatedExperimentConfiguration(ctx context.Context, input exp
 	if failure := validateIstioDataPlane(input.Definition); failure != nil {
 		return domain.ExperimentConfiguration{}, failure
 	}
+	if failure := s.validateClusterComponents(cluster, input.Definition); failure != nil {
+		return domain.ExperimentConfiguration{}, failure
+	}
 	validation.Issues = append(validation.Issues, domain.ValidationIssue{Level: "info", Path: "clusterResourceId", Message: "Cluster health and every runtime dependency will be checked again before each run step."})
 	definition, _ := json.Marshal(input.Definition)
 	return domain.ExperimentConfiguration{ID: id.New("expcfg"), Kind: "single", WorkspaceID: input.WorkspaceID, ClusterResourceID: input.ClusterResourceID, Name: input.Name, Description: input.Description, ApplicationRef: applicationRef, ApplicationDigest: applicationDigest, Definition: definition, Validation: validation}, nil

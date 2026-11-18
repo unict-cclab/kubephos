@@ -138,6 +138,9 @@ func (s *Server) deleteApplicationDeployment(w http.ResponseWriter, r *http.Requ
 }
 
 func (s *Server) applicationDeploymentPipeline(ctx context.Context, input applicationDeploymentInput, cluster domain.ManagedResource) (domain.PipelineDefinition, *managedOperationFailure) {
+	if failure := s.validateClusterComponents(cluster, input.Definition); failure != nil {
+		return domain.PipelineDefinition{}, failure
+	}
 	materializer, err := s.applicationMaterializer(ctx, input.ApplicationRef)
 	if err != nil {
 		return domain.PipelineDefinition{}, &managedOperationFailure{status: 422, code: "invalid_application", message: "Select an available catalog application."}
@@ -203,8 +206,8 @@ func (s *Server) applicationDeploymentPipeline(ctx context.Context, input applic
 		if input.Definition.PodDisruptionBudgetMinAvailable > 0 {
 			spec["podDisruptionBudgetMinAvailable"] = input.Definition.PodDisruptionBudgetMinAvailable
 		}
-		if input.Definition.IstioInjection != nil {
-			spec["istioInjection"] = *input.Definition.IstioInjection
+		if injection := defaultIstioInjection(cluster, input.Definition); injection != nil {
+			spec["istioInjection"] = *injection
 		}
 		if len(input.Definition.IstioInjectionOverrides) > 0 {
 			spec["istioInjectionOverrides"] = input.Definition.IstioInjectionOverrides

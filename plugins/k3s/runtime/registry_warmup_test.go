@@ -5,6 +5,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"kubephos.dev/kubephos/internal/managedcomponents"
 )
 
 type registryRecorder struct {
@@ -57,5 +59,17 @@ func TestRegistryWarmupTargetsManagementAndVerifyDoesNotDownload(t *testing.T) {
 	spec.Networking = "flannel"
 	if !strings.Contains(strings.Join(registryWarmupImages(profile, spec), "\n"), "registry.istio.io/") {
 		t.Fatal("single-cluster profile lost Istio probe")
+	}
+}
+
+func TestWarmupSkipsRegistriesOfUnselectedComponents(t *testing.T) {
+	if managedcomponents.RegistryNeeded("registry.istio.io", (Spec{Components: []string{"chaos-mesh"}}).installedComponents()) {
+		t.Fatal("cluster without Istio components probes the Istio registry")
+	}
+	if !managedcomponents.RegistryNeeded("registry.istio.io", (Spec{}).installedComponents()) || managedcomponents.RegistryNeeded("registry.istio.io", (Spec{Networking: "cilium"}).installedComponents()) {
+		t.Fatal("Istio registry selection is not honoured")
+	}
+	if !managedcomponents.RegistryNeeded("ghcr.io", nil) {
+		t.Fatal("unclaimed registry skipped")
 	}
 }

@@ -119,3 +119,10 @@ it('reopens a placed waypoint with its node selector and tolerations', () => {
   const values = renderEditor({dataPlane: 'ambient', waypoint: {nodeSelector: {'kubephos.dev/role': 'management'}, tolerations: [{key: 'dedicated', operator: 'Equal', value: 'mesh', effect: 'NoSchedule'}]}})
   expect(waypoint(values)).toEqual({nodeSelector: {'kubephos.dev/role': 'management'}, tolerations: [{key: 'dedicated', operator: 'Equal', value: 'mesh', effect: 'NoSchedule'}]})
 })
+
+it('offers only the data planes the cluster installs', () => {
+  const values = renderEditor({available: ['ambient']})
+  expect(screen.queryByRole('radio', {name: /^Sidecar/})).not.toBeInTheDocument()
+  expect(mode('Ambient')).toBeChecked()
+  expect(values().get('istioDataPlane')).toBe('ambient')
+})
