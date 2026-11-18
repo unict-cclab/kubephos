@@ -1,9 +1,12 @@
 import {fireEvent, render, screen, waitFor} from '@testing-library/react'
 import {beforeEach, describe, expect, it, vi} from 'vitest'
-import type {CatalogStrategy} from '../types'
+import type {CatalogStrategy, Plugin} from '../types'
 import {StrategyCatalog} from './StrategyCatalog'
 
-const strategy = (kind: CatalogStrategy['kind'], name: string): CatalogStrategy => ({id: name, workspaceId: 'workspace', harborResourceId: 'harbor', name, kind, sourceImage: `example.org/${name}:v1`, defaultConfiguration: {}, operationId: 'operation', status: 'ready', createdAt: '', updatedAt: ''})
+const imagePlugin = (kind: CatalogStrategy['kind']): Plugin => ({id: `${kind}-image`, name: `Image ${kind}`, version: '1', description: '', schema: {properties: {image: {type: 'string', format: 'kubephos-strategy-image'}}}, capabilities: [`${kind}.kubernetes.install`], runtime: {kind: 'process'}})
+const hpa: Plugin = {id: 'hpa', name: 'Horizontal Pod Autoscaler', version: '1', description: '', schema: {properties: {clusterConnectionRef: {type: 'string', format: 'kubephos-artifact-ref'}, minReplicas: {type: 'integer', title: 'Minimum replicas', minimum: 1, default: 1}, cpuUtilization: {type: 'integer', title: 'Target CPU (%)', minimum: 1, maximum: 500, default: 70}, targetOverrides: {type: 'string'}}}, capabilities: ['autoscaler.kubernetes.install'], runtime: {kind: 'process'}}
+const plugins = [imagePlugin('scheduler'), imagePlugin('descheduler'), imagePlugin('autoscaler')]
+const strategy = (kind: CatalogStrategy['kind'], name: string): CatalogStrategy => ({id: name, workspaceId: 'workspace', harborResourceId: 'harbor', name, kind, pluginId: `${kind}-image`, sourceImage: `example.org/${name}:v1`, defaultConfiguration: {}, operationId: 'operation', status: 'ready', createdAt: '', updatedAt: ''})
 const items = [strategy('scheduler', 'sample-scheduler'), strategy('descheduler', 'sample-descheduler'), strategy('autoscaler', 'sample-autoscaler')]
 
 describe('catalog categories', () => {
@@ -11,14 +14,14 @@ describe('catalog categories', () => {
 
 
   it.each([['scheduler', 'sample-scheduler'], ['descheduler', 'sample-descheduler'], ['autoscaler', 'sample-autoscaler']] as const)('shows only %s entries in its tab', (kind, name) => {
-    render(<StrategyCatalog kind={kind} items={items} workspaces={[]} session={{authenticated: true}} isAdmin={false} changed={async () => {}} openOperation={() => {}} />)
+    render(<StrategyCatalog kind={kind} items={items} plugins={plugins} workspaces={[]} session={{authenticated: true}} isAdmin={false} changed={async () => {}} openOperation={() => {}} />)
     expect(screen.getByText(name)).toBeInTheDocument()
     for (const item of items.filter(item => item.kind !== kind)) expect(screen.queryByText(item.name)).not.toBeInTheDocument()
     expect(screen.queryByText(/strategy images/i)).not.toBeInTheDocument()
   })
 
   it('offers view, settings edit and guarded delete actions on an imported image', () => {
-    render(<StrategyCatalog kind="scheduler" items={[{...items[0], status: 'succeeded'}]} workspaces={[]} session={{authenticated: true}} isAdmin changed={async () => {}} openOperation={() => {}} />)
+    render(<StrategyCatalog kind="scheduler" items={[{...items[0], status: 'succeeded'}]} plugins={plugins} workspaces={[]} session={{authenticated: true}} isAdmin changed={async () => {}} openOperation={() => {}} />)
     expect(screen.getByRole('button', {name: 'View sample-scheduler details'})).toBeInTheDocument()
     expect(screen.getByRole('button', {name: 'Delete sample-scheduler'})).toBeEnabled()
     expect(screen.getByText('Ready')).toBeInTheDocument()
@@ -29,7 +32,7 @@ describe('catalog categories', () => {
   })
 
   it('keeps the public image form free of an explicit Harbor selection', () => {
-    render(<StrategyCatalog kind="scheduler" items={[]} workspaces={[]} session={{authenticated: true}} isAdmin changed={async () => {}} openOperation={() => {}} />)
+    render(<StrategyCatalog kind="scheduler" items={[]} plugins={plugins} workspaces={[]} session={{authenticated: true}} isAdmin changed={async () => {}} openOperation={() => {}} />)
 
     fireEvent.click(screen.getByRole('button', {name: 'Add scheduler'}))
 
@@ -40,7 +43,7 @@ describe('catalog categories', () => {
   })
 
   it('enables NetworkAware without storing experiment-specific selectors', () => {
-    render(<StrategyCatalog kind="descheduler" items={[]} workspaces={[]} session={{authenticated: true}} isAdmin changed={async () => {}} openOperation={() => {}} />)
+    render(<StrategyCatalog kind="descheduler" items={[]} plugins={plugins} workspaces={[]} session={{authenticated: true}} isAdmin changed={async () => {}} openOperation={() => {}} />)
     fireEvent.click(screen.getByRole('button', {name: 'Add descheduler'}))
     const policy = (screen.getByRole('textbox', {name: 'Configuration'}) as HTMLTextAreaElement).value
     expect(policy).toContain('name: NetworkAware')
@@ -53,14 +56,14 @@ describe('catalog categories', () => {
     const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify(item), {status: 200, headers: {'Content-Type': 'application/json'}}))
     vi.stubGlobal('fetch', fetch)
     const changed = vi.fn().mockResolvedValue(undefined)
-    render(<StrategyCatalog kind={kind} items={[item]} workspaces={[]} session={{authenticated: true, csrfToken: 'csrf'}} isAdmin changed={changed} openOperation={() => {}} />)
+    render(<StrategyCatalog kind={kind} items={[item]} plugins={plugins} workspaces={[]} session={{authenticated: true, csrfToken: 'csrf'}} isAdmin changed={changed} openOperation={() => {}} />)
     fireEvent.click(screen.getByRole('button', {name: `Edit ${item.name} settings`}))
     const image = screen.getByRole('textbox', {name: 'Image'})
     expect(image).toHaveValue(item.sourceImage)
     fireEvent.change(image, {target: {value: `example.org/sample-${kind}:v2`}})
     fireEvent.click(screen.getByRole('button', {name: 'Validate and save'}))
     await waitFor(() => expect(changed).toHaveBeenCalledOnce())
-    expect(fetch).toHaveBeenCalledWith(`/api/v1/catalog/strategies/${item.id}`, expect.objectContaining({method: 'PUT', body: JSON.stringify({workspaceId: '', name: item.name, kind, sourceImage: `example.org/sample-${kind}:v2`, defaultConfiguration: kind === 'autoscaler' ? {...item.defaultConfiguration, parameters: JSON.stringify({threshold: 42}, null, 2)} : item.defaultConfiguration})}))
+    expect(fetch).toHaveBeenCalledWith(`/api/v1/catalog/strategies/${item.id}`, expect.objectContaining({method: 'PUT', body: JSON.stringify({workspaceId: '', name: item.name, kind, pluginId: `${kind}-image`, sourceImage: `example.org/sample-${kind}:v2`, defaultConfiguration: kind === 'autoscaler' ? {...item.defaultConfiguration, parameters: JSON.stringify({threshold: 42}, null, 2)} : item.defaultConfiguration})}))
     vi.unstubAllGlobals()
   })
 
@@ -70,7 +73,7 @@ describe('catalog categories', () => {
     const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify(item), {status: 200, headers: {'Content-Type': 'application/json'}}))
     vi.stubGlobal('fetch', fetch)
     const changed = vi.fn().mockResolvedValue(undefined)
-    render(<StrategyCatalog kind={kind} items={[item]} workspaces={[]} session={{authenticated: true}} isAdmin changed={changed} openOperation={() => {}} />)
+    render(<StrategyCatalog kind={kind} items={[item]} plugins={plugins} workspaces={[]} session={{authenticated: true}} isAdmin changed={changed} openOperation={() => {}} />)
     fireEvent.click(screen.getByRole('button', {name: `Edit ${item.name} settings`}))
     expect(screen.getByRole('textbox', {name: 'Name'})).toHaveValue(item.name)
     fireEvent.change(screen.getByRole('textbox', {name: 'Name'}), {target: {value: 'renamed-strategy'}})
@@ -96,4 +99,21 @@ describe('catalog categories', () => {
     vi.unstubAllGlobals()
   })
 
+  it('adds a built-in HPA entry with its scaling settings and no image', async () => {
+    const fetch = vi.fn().mockResolvedValue(new Response('{}', {status: 201, headers: {'Content-Type': 'application/json'}}))
+    vi.stubGlobal('fetch', fetch)
+    const item = {...strategy('autoscaler', 'hpa-50'), pluginId: 'hpa', sourceImage: '', status: 'succeeded', defaultConfiguration: {minReplicas: 1, cpuUtilization: 50}}
+    render(<StrategyCatalog kind="autoscaler" items={[item]} plugins={[...plugins, hpa]} workspaces={[]} session={{authenticated: true}} isAdmin changed={async () => {}} openOperation={() => {}} />)
+    expect(screen.getByText('Horizontal Pod Autoscaler')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', {name: 'Add autoscaler'}))
+    fireEvent.change(screen.getByRole('combobox', {name: 'Type'}), {target: {value: 'hpa'}})
+    expect(screen.queryByRole('textbox', {name: 'Image'})).not.toBeInTheDocument()
+    expect(screen.queryByRole('textbox', {name: /overrides/i})).not.toBeInTheDocument()
+    fireEvent.change(screen.getByRole('textbox', {name: 'Name'}), {target: {value: 'hpa-70'}})
+    fireEvent.change(screen.getByRole('spinbutton', {name: /Target CPU/}), {target: {value: '70'}})
+    fireEvent.click(screen.getByRole('button', {name: 'Validate and save'}))
+    await waitFor(() => expect(fetch).toHaveBeenCalled())
+    expect(JSON.parse(fetch.mock.calls[0][1].body)).toEqual({workspaceId: '', name: 'hpa-70', kind: 'autoscaler', pluginId: 'hpa', sourceImage: '', defaultConfiguration: {minReplicas: 1, cpuUtilization: 70}})
+    vi.unstubAllGlobals()
+  })
 })

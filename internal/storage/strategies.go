@@ -12,10 +12,10 @@ import (
 
 func (s *Store) CreateCatalogStrategy(ctx context.Context, strategy domain.CatalogStrategy) (domain.CatalogStrategy, error) {
 	err := s.pool.QueryRow(ctx, `
-		INSERT INTO strategy_catalog (id, workspace_id, name, kind, source_image, default_configuration)
-		VALUES ($1, $2, $3, $4, $5, $6)
+		INSERT INTO strategy_catalog (id, workspace_id, name, kind, plugin_id, source_image, default_configuration)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
 		RETURNING created_at, updated_at
-	`, strategy.ID, strategy.WorkspaceID, strategy.Name, strategy.Kind, strategy.SourceImage, strategy.DefaultConfiguration).Scan(&strategy.CreatedAt, &strategy.UpdatedAt)
+	`, strategy.ID, strategy.WorkspaceID, strategy.Name, strategy.Kind, strategy.PluginID, strategy.SourceImage, strategy.DefaultConfiguration).Scan(&strategy.CreatedAt, &strategy.UpdatedAt)
 	if err != nil {
 		return domain.CatalogStrategy{}, err
 	}
@@ -26,7 +26,7 @@ func (s *Store) CreateCatalogStrategy(ctx context.Context, strategy domain.Catal
 func (s *Store) ListCatalogStrategies(ctx context.Context) ([]domain.CatalogStrategy, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT strategy.id, strategy.workspace_id, COALESCE(strategy.harbor_resource_id, ''), strategy.name, strategy.kind,
-		       strategy.source_image, strategy.default_configuration, COALESCE(strategy.operation_id, ''),
+		       strategy.plugin_id, strategy.source_image, strategy.default_configuration, COALESCE(strategy.operation_id, ''),
 		       COALESCE(artifact.id, ''), COALESCE(operation.status, 'succeeded'), COALESCE(operation.error, ''), strategy.created_at, strategy.updated_at
 		FROM strategy_catalog strategy
 		LEFT JOIN operations operation ON operation.id = strategy.operation_id
@@ -55,7 +55,7 @@ func (s *Store) ListCatalogStrategies(ctx context.Context) ([]domain.CatalogStra
 func (s *Store) GetCatalogStrategy(ctx context.Context, strategyID string) (domain.CatalogStrategy, error) {
 	strategy, err := scanCatalogStrategy(s.pool.QueryRow(ctx, `
 		SELECT strategy.id, strategy.workspace_id, COALESCE(strategy.harbor_resource_id, ''), strategy.name, strategy.kind,
-		       strategy.source_image, strategy.default_configuration, COALESCE(strategy.operation_id, ''),
+		       strategy.plugin_id, strategy.source_image, strategy.default_configuration, COALESCE(strategy.operation_id, ''),
 		       COALESCE(artifact.id, ''), COALESCE(operation.status, 'succeeded'), COALESCE(operation.error, ''), strategy.created_at, strategy.updated_at
 		FROM strategy_catalog strategy
 		LEFT JOIN operations operation ON operation.id = strategy.operation_id
@@ -122,7 +122,7 @@ func deletableCatalogStrategyStatus(status string) bool {
 func scanCatalogStrategy(row pgx.Row) (domain.CatalogStrategy, error) {
 	var strategy domain.CatalogStrategy
 	err := row.Scan(&strategy.ID, &strategy.WorkspaceID, &strategy.HarborResourceID, &strategy.Name, &strategy.Kind,
-		&strategy.SourceImage, &strategy.DefaultConfiguration, &strategy.OperationID, &strategy.ArtifactID,
+		&strategy.PluginID, &strategy.SourceImage, &strategy.DefaultConfiguration, &strategy.OperationID, &strategy.ArtifactID,
 		&strategy.Status, &strategy.Error, &strategy.CreatedAt, &strategy.UpdatedAt)
 	if err != nil {
 		return domain.CatalogStrategy{}, err
@@ -173,6 +173,9 @@ func (s *Store) UpdateCatalogStrategy(ctx context.Context, strategy domain.Catal
 	return s.GetCatalogStrategy(ctx, strategy.ID)
 }
 
+// synchronizeStrategyConfigurationsSQL adds new defaults to the configurations using an entry
+// and keeps their own values, except for built-in entries without an image, such as HPA,
+// whose settings always replace the configuration values.
 const synchronizeStrategyConfigurationsSQL = `
  UPDATE experiment_configurations experiment
  SET definition = jsonb_set(definition, '{components}', (
@@ -183,7 +186,7 @@ const synchronizeStrategyConfigurationsSQL = `
       ARRAY(SELECT key FROM jsonb_object_keys($6::jsonb) key WHERE NOT $2::jsonb ? key)) ||
      COALESCE((SELECT jsonb_object_agg(defaults.key, defaults.value)
       FROM jsonb_each($2::jsonb) defaults
-      WHERE NOT COALESCE(component->'configuration', '{}'::jsonb) ? defaults.key), '{}'::jsonb) ||
+      WHERE $4::text = '' OR NOT COALESCE(component->'configuration', '{}'::jsonb) ? defaults.key), '{}'::jsonb) ||
      CASE WHEN $3 THEN jsonb_build_object('image', $4::text) ELSE '{}'::jsonb END)
    ELSE component END ORDER BY position)
   FROM jsonb_array_elements(definition->'components') WITH ORDINALITY AS items(component, position)
