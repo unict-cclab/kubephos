@@ -27,6 +27,8 @@ import type {Application, ApplicationComponent, Artifact, CatalogStrategy, Exper
 import {Dialog} from './Dialog'
 import {EditorPage} from './EditorPage'
 import {AutoscalerTargetEditor} from './AutoscalerTargetEditor'
+import {runsStrategyImage} from '../strategies'
+import {InputData} from './InputData'
 import {StrategyTargetEditor} from './StrategyTargetEditor'
 import {LoadProfileEditor} from './LoadProfileEditor'
 import {NetworkInjectionEditor} from './NetworkPhasesEditor'
@@ -381,12 +383,16 @@ export function ExperimentConfigurationDialog({open, close, clusters, workspaces
 	setComponents(defaults)
 	setSequence(value => value + defaults.length)
   }, [open, item, compatiblePlugins, components.length, sequence])
+  // Image-based strategies are offered only when the catalog has a ready image for them.
+  const hasCatalogImage = (plugin: Plugin) => !runsStrategyImage(plugin) || strategies.some(entry => entry.workspaceId === workspaceId && entry.pluginId === plugin.id && entry.status === 'succeeded')
   const addAdvancedComponent = (pluginId: string) => {
 	const plugin = advancedPlugins.find(item => item.id === pluginId)
     if (!plugin) return
     const capabilities = primaryCapabilities(plugin)
     setComponents(items => {
-      const next = {key: sequence, pluginId: plugin.id, capability: capabilities[0] ?? ''}
+      // Strategies start from their first ready catalog entry.
+      const strategyId = strategies.find(entry => entry.workspaceId === workspaceId && entry.pluginId === plugin.id && entry.status === 'succeeded')?.id
+      const next = {key: sequence, pluginId: plugin.id, capability: capabilities[0] ?? '', strategyId}
 	  const load = items.findIndex(item => item.capability.startsWith('load.'))
 	  return load < 0 ? [...items, next] : [...items.slice(0, load), next, ...items.slice(load)]
     })
@@ -527,19 +533,25 @@ export function ExperimentConfigurationDialog({open, close, clusters, workspaces
       {monAgentComponent && monAgentPlugin && <section className="experiment-component"><SchemaFields schema={experimentSchema(monAgentPlugin.schema, monAgentComponent.capability)} prefix={`component-${monAgentComponent.key}`} values={monAgentComponent.configuration ?? {}} applications={applications} artifacts={[]} connections={[]} credentials={[]} /></section>}</>}
       </>}]:[])
  ]}/></WizardStep>{destinationMode === 'application' && <WizardStep key="scheduling" title="Scheduling and scaling">
-      <FormTabs label="Scheduling and scaling settings" items={schedulingGroups.map(kind => ({id: kind, title: kind === 'other' ? 'Other' : componentTitle(`${kind}.`), content: <><div className="component-add-options">{advancedPlugins.filter(plugin => schedulingGroup(primaryCapabilities(plugin)[0] ?? '') === kind && !components.some(component => component.pluginId === plugin.id) && pluginAvailableOnCluster(plugin, selectedCluster)).map(plugin => <button className="button secondary compact" type="button" key={plugin.id} disabled={components.length >= 15} onClick={() => addAdvancedComponent(plugin.id)}><ActionIcon name="create" />Add {componentTitle(primaryCapabilities(plugin)[0] ?? '', selectedCluster?.spec.mode === 'multi').toLowerCase()}</button>)}</div>
+      <FormTabs label="Scheduling and scaling settings" items={schedulingGroups.map(kind => ({id: kind, title: kind === 'other' ? 'Other' : componentTitle(`${kind}.`), content: <><div className="component-add-options">{advancedPlugins.filter(plugin => schedulingGroup(primaryCapabilities(plugin)[0] ?? '') === kind && !components.some(component => component.pluginId === plugin.id) && pluginAvailableOnCluster(plugin, selectedCluster) && hasCatalogImage(plugin)).map(plugin => <button className="button secondary compact" type="button" key={plugin.id} disabled={components.length >= 15} onClick={() => addAdvancedComponent(plugin.id)}><ActionIcon name="create" />Add {pluginTitle(plugin, advancedPlugins, selectedCluster?.spec.mode === 'multi').toLowerCase()}</button>)}</div>
       <div className="experiment-component-list">{advancedComponents.filter(component => schedulingGroup(component.capability) === kind).map(component => {
         const plugin = compatiblePlugins.find(item => item.id === component.pluginId)
         const strategyKind = ['scheduler', 'descheduler', 'autoscaler'].find(kind => component.capability.startsWith(`${kind}.`))
-        const readyStrategies = strategyKind ? strategies.filter(item => item.workspaceId === workspaceId && item.kind === strategyKind && (item.status === 'succeeded' || item.id === component.strategyId)) : []
+        const readyStrategies = strategyKind ? strategies.filter(item => item.workspaceId === workspaceId && item.kind === strategyKind && item.pluginId === component.pluginId && (item.status === 'succeeded' || item.id === component.strategyId)) : []
         const selectedStrategy = readyStrategies.find(item => item.id === component.strategyId)
         const missingStrategy = component.strategyId && !selectedStrategy ? component.strategyId : ''
+        // A built-in strategy, such as HPA, either takes all its settings from a catalog entry
+        // or, as Custom, from the fields below; an image-based one always runs a catalog image.
+        const builtin = Boolean(strategyKind) && !runsStrategyImage(plugin)
+        const editable = !builtin || !component.strategyId
+        const selectStrategy = (strategyId: string) => setComponents(items => items.map(item => item.key === component.key ? {...item, strategyId: strategyId || undefined} : item))
         return <section className="experiment-component" key={component.key}>
-		  <div className="experiment-component-head"><strong>{componentTitle(component.capability, selectedCluster?.spec.mode === 'multi')}</strong><button type="button" className="icon-button" aria-label="Remove component" title="Remove component" onClick={() => setComponents(items => items.filter(item => item.key !== component.key))}><ActionIcon name="close" /></button></div>
-          {strategyKind && <label>Image<select value={component.strategyId ?? ''} required onChange={event => setComponents(items => items.map(item => item.key === component.key ? {...item, strategyId: event.target.value} : item))}><option value="">Select a ready {strategyKind}</option>{missingStrategy && <option value={missingStrategy} disabled>{missingStrategy} · unavailable</option>}{readyStrategies.map(item => <option key={item.id} value={item.id} disabled={item.status !== 'succeeded'}>{item.name}{item.status === 'succeeded' ? '' : ` · ${item.status}`}</option>)}</select></label>}
+		  <div className="experiment-component-head"><strong>{plugin ? pluginTitle(plugin, advancedPlugins, selectedCluster?.spec.mode === 'multi') : componentTitle(component.capability, selectedCluster?.spec.mode === 'multi')}</strong><button type="button" className="icon-button" aria-label="Remove component" title="Remove component" onClick={() => setComponents(items => items.filter(item => item.key !== component.key))}><ActionIcon name="close" /></button></div>
+          {strategyKind && <label>{builtin ? 'Settings' : 'Image'}<select value={component.strategyId ?? ''} required={!builtin} onChange={event => selectStrategy(event.target.value)}>{builtin ? <option value="">Custom</option> : !readyStrategies.length && <option value="">No ready {strategyKind} images in the catalog</option>}{missingStrategy && <option value={missingStrategy} disabled>{missingStrategy} · unavailable</option>}{readyStrategies.map(item => <option key={item.id} value={item.id} disabled={item.status !== 'succeeded'}>{item.name}{item.status === 'succeeded' ? '' : ` · ${item.status}`}</option>)}</select></label>}
           {!plugin && <ErrorFeedback message="Component unavailable. Remove or replace it."/>}
-          {plugin && <SchemaFields key={`${plugin.id}-${component.strategyId ?? ''}`} schema={experimentSchema(plugin.schema, component.capability)} prefix={`component-${component.key}`} values={{...(selectedStrategy?.defaultConfiguration ?? {}), ...(component.configuration ?? {})}} applications={applications} artifacts={[]} connections={[]} credentials={[]} />}
-	          {strategyKind === 'autoscaler' && <AutoscalerTargetEditor prefix={`component-${component.key}`} components={effectiveApplicationComponents} defaults={selectedStrategy?.defaultConfiguration ?? {}} resetKey={`${item?.id ?? 'new'}-${applicationRef}-${component.strategyId ?? ''}-${effectiveApplicationComponents.map(item => item.id).join(':')}`} excluded={component.targets?.exclude ?? []} targetOverrides={record(component.configuration?.targetOverrides)} />}
+          {plugin && !editable && selectedStrategy && <InputData value={selectedStrategy.defaultConfiguration} schema={plugin.schema} />}
+          {plugin && editable && <SchemaFields key={`${plugin.id}-${component.strategyId ?? ''}`} layout={strategyKind === 'autoscaler' ? 'inline' : undefined} schema={experimentSchema(plugin.schema, component.capability)} prefix={`component-${component.key}`} values={{...(selectedStrategy?.defaultConfiguration ?? {}), ...(component.configuration ?? {})}} applications={applications} artifacts={[]} connections={[]} credentials={[]} />}
+	          {strategyKind === 'autoscaler' && plugin && <AutoscalerTargetEditor prefix={`component-${component.key}`} schema={plugin.schema} overridable={editable} components={effectiveApplicationComponents} defaults={selectedStrategy?.defaultConfiguration ?? {}} resetKey={`${item?.id ?? 'new'}-${applicationRef}-${component.strategyId ?? ''}-${effectiveApplicationComponents.map(item => item.id).join(':')}`} excluded={component.targets?.exclude ?? []} targetOverrides={record(component.configuration?.targetOverrides)} />}
           {(strategyKind === 'scheduler' || strategyKind === 'descheduler') && <StrategyTargetEditor componentKey={component.key} components={effectiveApplicationComponents} trait={strategyKind !== 'scheduler' ? 'deschedulable' : 'schedulable'} resetKey={`${item?.id ?? 'new'}-${applicationRef}-${component.strategyId ?? ''}-${effectiveApplicationComponents.map(item => item.id).join(':')}`} included={component.targets?.include ?? []} excluded={component.targets?.exclude ?? []} />}
         </section>
       })}</div></>}))} /></WizardStep>}
@@ -577,6 +589,13 @@ export function applicationZones(cluster?: ManagedResource): string[] {
 
 function schedulingGroup(capability: string): string {
   return ['scheduler', 'descheduler', 'autoscaler'].find(kind => capability.startsWith(`${kind}.`)) ?? 'other'
+}
+
+// Plugins of the same kind, such as two autoscalers, are told apart by their names.
+function pluginTitle(plugin: Plugin, plugins: Plugin[], multi = false): string {
+  const capability = primaryCapabilities(plugin)[0] ?? ''
+  const group = schedulingGroup(capability)
+  return plugins.filter(item => schedulingGroup(primaryCapabilities(item)[0] ?? '') === group).length > 1 ? plugin.name : componentTitle(capability, multi)
 }
 
 function componentTitle(capability: string, multi = false): string {

@@ -97,6 +97,10 @@
   .target-editor-heading { margin-top: 24px; padding-block: 12px; }
   .target-editor-list { gap: 10px; }
   .target-editor-list > article { padding: 14px 16px; border-color: var(--line); background: var(--surface); }
+  /* Autoscaler microservices read as one list of rows, not a stack of boxes. */
+  .autoscaler-target-editor:not(.strategy-target-editor) .target-editor-list { gap: 0; border-top: 1px solid var(--line); }
+  .autoscaler-target-editor:not(.strategy-target-editor) .target-editor-list > article { padding: 10px 0; border: 0; border-bottom: 1px solid var(--line); border-radius: 0; background: transparent; }
+  .autoscaler-target-editor:not(.strategy-target-editor) .target-override-fields { margin-top: 8px; padding-top: 0; border-top: 0; }
   .experiment-component-head { margin: 0; }
   .topology-resolution { padding: 12px 16px; border-radius: 8px; font-size: 12px; }
   .detail-page { gap: 24px; }
@@ -724,6 +728,7 @@
   .wizard-panels .schema-fields > .wide { grid-column: 1 / -1; }
   .wizard-panels .schema-fields > label.wide:not(.checkbox-field):not(:has(textarea)) { grid-column: auto; }
   .wizard-panels .schema-fields > label:only-child { grid-column: 1 / -1; }
+  .wizard-panels .schema-fields.schema-fields-inline { grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); }
   .wizard-panels .schema-fields.schema-fields-network { grid-template-columns: repeat(4, minmax(0, 1fr)); max-width: 560px; }
   .wizard-panels .schema-fields-network > label.wide:not(.checkbox-field):not(:has(textarea)) { grid-column: span 2; }
   .wizard-panels .schema-fields.schema-fields-network > label.wide:has(input[name$=".address"]) { grid-column: span 3; }

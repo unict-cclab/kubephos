@@ -311,6 +311,7 @@ type CatalogStrategy struct {
 	HarborResourceID     string          `json:"harborResourceId,omitempty"`
 	Name                 string          `json:"name"`
 	Kind                 string          `json:"kind"`
+	PluginID             string          `json:"pluginId"`
 	SourceImage          string          `json:"sourceImage"`
 	SourceDigest         string          `json:"sourceDigest,omitempty"`
 	MirroredImage        string          `json:"mirroredImage,omitempty"`

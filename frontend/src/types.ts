@@ -155,6 +155,8 @@ export interface CatalogStrategy extends ResourceAttributionFields {
   harborResourceId?: string
   name: string
   kind: 'scheduler' | 'descheduler' | 'autoscaler'
+  // The plugin that runs the entry; built-in strategies, such as HPA, have no image.
+  pluginId: string
   sourceImage: string
   sourceDigest?: string
   mirroredImage?: string
