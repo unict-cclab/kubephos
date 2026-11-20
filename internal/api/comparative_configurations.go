@@ -48,6 +48,9 @@ func validateComparativeConfiguration(input experimentConfigurationInput, load f
 	if len(definition.Variants) < 2 || len(definition.Variants) > 8 || definition.Runs < 1 || definition.Runs > 20 {
 		return fail("invalid_suite", "A comparative configuration requires two to eight single configurations and one to twenty runs per configuration.")
 	}
+	if err := validateDefinitionTrialSchedule(definition); err != nil {
+		return fail("invalid_trial_schedule", err.Error())
+	}
 	seen, aliases, colors := map[string]bool{}, map[string]bool{}, map[string]bool{}
 	var first domain.ExperimentConfiguration
 	for i := range definition.Variants {
@@ -91,7 +94,7 @@ func validateComparativeConfiguration(input experimentConfigurationInput, load f
 	}
 	// Only comparative settings belong to a suite; workload settings remain in
 	// the selected single configurations and are frozen when the run starts.
-	definition = experimentConfigurationDefinitionInput{Kind: "suite", Variants: definition.Variants, Runs: definition.Runs}
+	definition = experimentConfigurationDefinitionInput{Kind: "suite", Variants: definition.Variants, Runs: definition.Runs, RestSecondsBetweenTrials: definition.RestSecondsBetweenTrials, FirstTrialPilot: definition.FirstTrialPilot}
 	value, err := json.Marshal(definition)
 	if err != nil {
 		return fail("invalid_suite", "Could not encode the suite configuration.")
@@ -99,16 +102,18 @@ func validateComparativeConfiguration(input experimentConfigurationInput, load f
 	return domain.ExperimentConfiguration{ID: id.New("expcfg"), Kind: "suite", WorkspaceID: first.WorkspaceID, ClusterResourceID: first.ClusterResourceID, Name: input.Name, Description: input.Description, ApplicationRef: first.ApplicationRef, ApplicationDigest: first.ApplicationDigest, Definition: value, Validation: domain.ValidationReport{Valid: true, CheckedAt: time.Now().UTC(), Issues: []domain.ValidationIssue{}}}, nil
 }
 
-func executionConfigurationSnapshot(configuration domain.ExperimentConfiguration, variants []validatedSuiteVariant, runs int) json.RawMessage {
+func executionConfigurationSnapshot(configuration domain.ExperimentConfiguration, variants []validatedSuiteVariant, runs int, schedule trialSchedule) json.RawMessage {
 	members := make([]domain.ExperimentConfiguration, 0, len(variants))
 	for _, variant := range variants {
 		members = append(members, variant.Configuration)
 	}
 	value, _ := json.Marshal(struct {
-		Configuration domain.ExperimentConfiguration   `json:"configuration"`
-		Members       []domain.ExperimentConfiguration `json:"members"`
-		Runs          int                              `json:"runs"`
-	}{configuration, members, runs})
+		Configuration            domain.ExperimentConfiguration   `json:"configuration"`
+		Members                  []domain.ExperimentConfiguration `json:"members"`
+		Runs                     int                              `json:"runs"`
+		RestSecondsBetweenTrials int                              `json:"restSecondsBetweenTrials,omitempty"`
+		FirstTrialPilot          bool                             `json:"firstTrialPilot,omitempty"`
+	}{configuration, members, runs, schedule.RestSeconds, schedule.Pilot})
 	return value
 }
 

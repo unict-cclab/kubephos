@@ -5,6 +5,7 @@ import {EditorPage} from './EditorPage'
 import {WizardReadout} from './WizardReadout'
 import {ReadoutTable,type ReadoutTableData} from './ReadoutTable'
 import {InputData} from './InputData'
+import {savedTrialSchedule,trialScheduleRows} from './TrialScheduleFields'
 export function ComparativeConfigurationView({item,configurations,applications,clusters,close}:{item:ExperimentConfiguration;configurations:ExperimentConfiguration[];applications:Application[];clusters:ManagedResource[];close:()=>void}) {
  const variants=item.definition.variants??[]
  const runs=item.definition.runs??3
@@ -15,6 +16,6 @@ export function ComparativeConfigurationView({item,configurations,applications,c
  })
  return <EditorPage title={item.name} onClose={close} className="comparative-view-page"><ResourceAttribution resource={item} editable/><WizardReadout sections={[
   {id:'configurations',title:'Configurations',content:<ReadoutTable label="Configurations" data={{headers:['Name','Plot label','Color','Kubernetes cluster','Application / external destination','Status'],rows}}/>},
-  {id:'execution',title:'Execution',content:<div className="form-stack"><InputData value={{executionsPerConfiguration:runs,totalExecutions:variants.length*runs}}/><ReadoutTable label="Execution order" data={{headers:['Position','Configuration'],rows:variants.map((_,index)=>[String(index+1),String(rows[index][1])])}}/></div>}
+  {id:'execution',title:'Execution',content:<div className="form-stack"><InputData value={{executionsPerConfiguration:runs,totalExecutions:variants.length*runs}}/><ReadoutTable label="Repetition schedule" data={{headers:['Field','Value'],rows:trialScheduleRows(savedTrialSchedule(item.definition))}}/><ReadoutTable label="Execution order" data={{headers:['Position','Configuration'],rows:variants.map((_,index)=>[String(index+1),String(rows[index][1])])}}/></div>}
  ]}/>{!item.validation.valid&&<ErrorFeedback message="Validate this comparison to run it."/>}</EditorPage>
 }

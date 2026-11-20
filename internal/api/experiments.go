@@ -117,6 +117,7 @@ type createPipelineExperimentInput struct {
 	Repetitions  int                                    `json:"repetitions"`
 	ScheduledFor *time.Time                             `json:"scheduledFor"`
 	Variants     []createPipelineExperimentVariantInput `json:"variants"`
+	trialScheduleInput
 }
 
 type createPipelineExperimentVariantInput struct {
@@ -271,6 +272,11 @@ func (s *Server) createPipelineExperiment(response http.ResponseWriter, request 
 		writeError(response, http.StatusUnprocessableEntity, "invalid_experiment", err.Error())
 		return
 	}
+	schedule, err := input.trialScheduleInput.resolve(0, false)
+	if err != nil {
+		writeError(response, http.StatusUnprocessableEntity, "invalid_trial_schedule", err.Error())
+		return
+	}
 	scheduledFor, err := normalizeScheduledFor(input.ScheduledFor, time.Now().UTC())
 	if err != nil {
 		writeError(response, http.StatusUnprocessableEntity, "invalid_schedule", err.Error())
@@ -322,7 +328,8 @@ func (s *Server) createPipelineExperiment(response http.ResponseWriter, request 
 		ID: id.New("exp"), WorkspaceID: input.WorkspaceID, Name: input.Name, Description: input.Description,
 		OwnerUserID: requestUser(request).ID,
 		Status:      domain.OperationQueued, ResultType: resultType, ResultVersion: resultVersion,
-		ScheduledFor: &scheduledFor,
+		ScheduledFor:             &scheduledFor,
+		RestSecondsBetweenTrials: schedule.RestSeconds, FirstTrialPilot: schedule.Pilot,
 	}
 	runs := map[string]domain.PipelineRun{}
 	for variantPosition, requested := range input.Variants {
@@ -331,12 +338,12 @@ func (s *Server) createPipelineExperiment(response http.ResponseWriter, request 
 			ID: id.New("var"), ExperimentID: experiment.ID, Position: variantPosition + 1, Name: requested.Name,
 			PipelineID: pipeline.ID, PipelineHash: pipeline.Hash, Configuration: json.RawMessage(`{}`),
 		}
-		for trialPosition := 1; trialPosition <= input.Repetitions; trialPosition++ {
-			trial := domain.ExperimentTrial{ID: id.New("trial"), VariantID: variant.ID, Position: trialPosition, Status: domain.OperationQueued}
+		for _, slot := range schedule.slots(input.Repetitions) {
+			trial := domain.ExperimentTrial{ID: id.New("trial"), VariantID: variant.ID, Position: slot.Position, Pilot: slot.Pilot, Status: domain.OperationQueued}
 			run := domain.PipelineRun{
 				ID: id.New("run"), PipelineID: pipeline.ID, WorkspaceID: input.WorkspaceID,
 				OwnerUserID: experiment.OwnerUserID, IsolationMode: "exclusive",
-				Name:   fmt.Sprintf("%s · %s · Trial %d", input.Name, requested.Name, trialPosition),
+				Name:   fmt.Sprintf("%s · %s · %s", input.Name, requested.Name, slot.runLabel("Trial")),
 				Status: domain.OperationQueued, PipelineHash: pipeline.Hash,
 				ResultType: resultType, ResultVersion: resultVersion,
 				ScheduledFor: &scheduledFor,

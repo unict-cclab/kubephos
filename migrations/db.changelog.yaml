@@ -408,10 +408,18 @@ databaseChangeLog:
             relativeToChangelogFile: true
             splitStatements: false
   - changeSet:
+<<<<<<< Updated upstream
       id: 058-strategy-plugins
       author: kubephos
       changes:
         - sqlFile:
             path: changes/058-strategy-plugins.sql
+=======
+      id: 058-measurement-integrity
+      author: kubephos
+      changes:
+        - sqlFile:
+            path: changes/058-measurement-integrity.sql
+>>>>>>> Stashed changes
             relativeToChangelogFile: true
             splitStatements: false

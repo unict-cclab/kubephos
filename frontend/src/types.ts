@@ -318,7 +318,114 @@ export interface TimeSeriesDataset {
     source: {kind: string; version: string; profile: string}
     series: MetricSeries[]
     summary: {metrics: number; series: number; samples: number}
+    // Window used in rate()/histogram_quantile (legacy datasets: always 60 s).
+    rateWindowSeconds?: number
+    scrapeIntervalSeconds?: number
+    // Provenance catalog: one entry per metric id present in series.
+    metrics?: MetricProvenanceEntry[]
+    locustSummary?: LocustSummary
+    runContext?: RunContext
+    // Measured call chain (call-chain profiling phase before warmup).
+    callModel?: CallModel
+    // Effective Locust task mix applied by the load generator.
+    taskMix?: TaskMixEntry[]
   }
+}
+
+export interface TaskMixEntry {
+  task: string
+  weight: number
+  share: number
+}
+
+export interface CallModelEdge {
+  source: string
+  destination: string
+  perExecution?: number
+  perRequest?: number
+}
+
+export interface CallModelTask {
+  task: string
+  from?: string
+  to?: string
+  // Task executions counted in the window (absent with older load generators).
+  executions?: number
+  // HTTP requests sent by Locust in the window.
+  entryRequests: number
+  // Server-side requests per task execution, by workload.
+  services?: Record<string, number>
+  // Server-side requests per HTTP request sent by Locust, by workload.
+  servicesPerRequest?: Record<string, number>
+  edges?: CallModelEdge[]
+}
+
+export interface CallModel {
+  source: string
+  description?: string
+  method?: string
+  measuredAt: string
+  applicationRef: string
+  scenarioId: string
+  rps?: number
+  secondsPerTask?: number
+  windowTrimSeconds?: number
+  stepSeconds?: number
+  scrapeIntervalSeconds?: number
+  // Forwarding hops (node proxy, gateways, waypoints).
+  proxies?: string[]
+  queries?: Record<string, string>
+  tasks: CallModelTask[]
+}
+
+export type MetricSource = 'locust' | 'istio' | 'cadvisor' | 'kube-state-metrics' | 'mentat' | 'cilium' | 'kubephos' | 'kube-scheduler' | 'descheduler'
+export type MetricVantage = 'client' | 'server' | 'resource' | 'network' | 'control-plane' | 'configuration'
+
+export interface MetricProvenanceEntry {
+  metric: string
+  source: MetricSource | string
+  vantage: MetricVantage | string
+  collector?: string
+  query?: string
+  rateWindowSeconds?: number
+  description?: string
+}
+
+export interface LocustEndpointSummary {
+  method: string
+  name: string
+  requests: number
+  failures: number
+  meanMs?: number
+  minMs?: number
+  maxMs?: number
+  p50Ms?: number
+  p90Ms?: number
+  p95Ms?: number
+  p99Ms?: number
+  p999Ms?: number
+}
+
+export interface LocustSummary {
+  workers?: number
+  measuredFrom?: string
+  measuredTo?: string
+  requests: number
+  failures: number
+  endpoints?: LocustEndpointSummary[]
+  total?: LocustEndpointSummary
+  errors?: Array<{method: string; name: string; error: string; occurrences: number}>
+  workerCpu?: Array<{worker: string; maxPercent: number; warnings: number}>
+  schedule?: {lateRequests: number; maxLagSeconds: number; meanLagSeconds: number}
+}
+
+export interface RunContext {
+  loadSession?: {warmupSeconds?: number; warmupStartedAt?: string; drainSeconds?: number; clock?: string; workers?: number}
+  prometheus?: {version?: string; scrapeIntervalSeconds?: number}
+  kubernetes?: {serverVersion?: string}
+  istio?: {version?: string}
+  nodes?: Array<{name: string; zone?: string; region?: string; instanceType?: string; kubelet?: string; containerRuntime?: string; kernel?: string}>
+  concurrentLoad?: Array<{namespace: string; maxPods: number}>
 }
 
 export interface ExperimentTrial {
@@ -330,6 +437,12 @@ export interface ExperimentTrial {
   pipelineRunId?: string
   resultArtifactId: string
   error?: string
+  // The run produced a verified result but its environment cleanup failed.
+  cleanupError?: string
+  // Warm-up repetition (position 0): never part of statistics.
+  pilot?: boolean
+  // Queued trial resting until this instant before it starts.
+  scheduledFor?: string
   createdAt: string
   startedAt?: string
   completedAt?: string
@@ -365,6 +478,8 @@ export interface Experiment extends ResourceAttributionFields {
   resultVersion: string
   variants: ExperimentVariant[]
   scheduledFor?: string
+  restSecondsBetweenTrials?: number
+  firstTrialPilot?: boolean
   createdAt: string
   updatedAt: string
 }
@@ -413,6 +528,10 @@ export interface ExperimentConfiguration extends ResourceAttributionFields {
     kind?: 'single' | 'suite'
     variants?: Array<{configurationId: string; alias: string; color: string}>
     runs?: number
+    /** Idle seconds between repetitions (0–3600); absent means 0. */
+    restSecondsBetweenTrials?: number
+    /** Adds a warm-up repetition (position 0) excluded from statistics. */
+    firstTrialPilot?: boolean
 	applicationValues: Record<string, unknown>
     istioProxyResources?: Record<string, unknown>
     applicationPlacement?: ApplicationPlacement
@@ -498,6 +617,7 @@ export interface PipelineRun extends ResourceAttributionFields {
   resultArtifactId?: string
   cancelRequested: boolean
   error?: string
+  cleanupError?: string
   createdAt: string
   queuedAt?: string
   scheduledFor?: string

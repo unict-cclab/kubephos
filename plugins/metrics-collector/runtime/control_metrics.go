@@ -6,6 +6,7 @@ import (
 	"math"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -35,10 +36,16 @@ func isControlMetric(metric string) bool {
 // Read native counters at the requested data resolution. Differences yield a mean
 // duration of cycles completed between observations, not a percentile of durations.
 // Preserve per-process labels until after reset handling; never difference summed counters.
-func (plugin Plugin) collectControlMetrics(ctx context.Context, cluster clusterConnection, deployment applicationDeployment, capability observabilityCapability, endpoint serviceEndpoint, start, end time.Time, resolution time.Duration) ([]metricSeries, []controlMetricSummary) {
+func (plugin Plugin) collectControlMetrics(ctx context.Context, cluster clusterConnection, deployment applicationDeployment, capability observabilityCapability, endpoint serviceEndpoint, start, end time.Time, resolution time.Duration) ([]metricSeries, []controlMetricSummary, []metricCatalogEntry) {
 	scope := deployment.Spec.ControlMetrics
 	if scope == nil {
-		return nil, nil
+		return nil, nil, nil
+	}
+	// Provenance of every control metric this run may emit; entries for
+	// metrics without series are pruned when the dataset is assembled.
+	var catalog []metricCatalogEntry
+	describe := func(metric, source, description string, queries ...string) {
+		catalog = append(catalog, metricCatalogEntry{Metric: metric, Source: source, Vantage: vantageControlPlane, Collector: collectorPrometheus, Query: strings.Join(queries, "\n"), Description: description})
 	}
 	schedulerJob := `job="apiserver"`
 	schedulerScope := "cluster"
@@ -104,6 +111,8 @@ func (plugin Plugin) collectControlMetrics(ctx context.Context, cluster clusterC
 	var series []metricSeries
 	if scope.PodScheduling {
 		summary := controlMetricSummary{Metric: "scheduler.pod_scheduling_latency", Status: "unavailable", Scope: "experiment", Source: "kubernetes-pod-conditions"}
+		describe(summary.Metric, sourceKubePhos, "Time from creation to the PodScheduled condition of each application pod created during the run, observed by the KubePhos pod-scheduling probe from Kubernetes pod conditions (1 s timestamp resolution); one sample per pod UID at the step after it was scheduled.",
+			podSchedulingQuery("kubephos_pod_scheduling_latency_milliseconds", deployment.Spec.Namespace), podSchedulingQuery("kubephos_pod_scheduling_scheduled_timestamp_seconds", deployment.Spec.Namespace), podSchedulingQuery("kubephos_pod_scheduling_observed_pods", deployment.Spec.Namespace))
 		latencies, latencyErr := read(podSchedulingQuery("kubephos_pod_scheduling_latency_milliseconds", deployment.Spec.Namespace))
 		scheduled, scheduledErr := read(podSchedulingQuery("kubephos_pod_scheduling_scheduled_timestamp_seconds", deployment.Spec.Namespace))
 		observed, observedErr := read(podSchedulingQuery("kubephos_pod_scheduling_observed_pods", deployment.Spec.Namespace))
@@ -134,6 +143,12 @@ func (plugin Plugin) collectControlMetrics(ctx context.Context, cluster clusterC
 
 	for _, component := range components {
 		summary := controlMetricSummary{Metric: component.metric, Status: "unavailable", Scope: component.scope, Source: component.base}
+		source, what := sourceKubeScheduler, "scheduling algorithm duration of the kube-scheduler ("+component.scope+" scheduler)"
+		if strings.HasPrefix(component.metric, "descheduler.") {
+			source, what = sourceDescheduler, "descheduling loop duration of the experiment descheduler"
+		}
+		describe(component.metric, source, "Mean "+what+" in milliseconds over the cycles completed between consecutive steps: difference of the native _sum and _count counters per process, with counter resets handled.",
+			counterQuery(component.base, component.legacy, component.selector, "_sum"), counterQuery(component.base, component.legacy, component.selector, "_count"))
 		sums, err := read(counterQuery(component.base, component.legacy, component.selector, "_sum"))
 		if err != nil {
 			summary.Reason = "Duration metrics query failed"
@@ -162,6 +177,8 @@ func (plugin Plugin) collectControlMetrics(ctx context.Context, cluster clusterC
 		// namespace on the metric is renamed by Prometheus because the scrape target
 		// already has its own namespace label. Select only successful app evictions.
 		selector := `job=` + strconv.Quote(scope.Namespace+"/descheduler-metrics") + `,exported_namespace=` + strconv.Quote(deployment.Spec.Namespace) + `,result="success"`
+		describe(summary.Metric, sourceDescheduler, "Cumulative number of application pods successfully evicted by the experiment descheduler since the start of the run (descheduler_pods_evicted_total increases per process, counter resets handled).",
+			counterQuery("descheduler_pods_evicted_total", "descheduler_pods_evicted", selector, ""))
 		counters, err := read(counterQuery("descheduler_pods_evicted_total", "descheduler_pods_evicted", selector, ""))
 		if err == nil && len(counters) > 0 {
 			points, total := cumulativeCounterSeries(counters, true, start)
@@ -173,7 +190,7 @@ func (plugin Plugin) collectControlMetrics(ctx context.Context, cluster clusterC
 		}
 		summaries = append(summaries, summary)
 	}
-	return series, summaries
+	return series, summaries, catalog
 }
 
 func counterChanges(series []metricSeries, fresh bool) map[time.Time]float64 {

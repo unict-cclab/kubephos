@@ -1,0 +1,10 @@
+/* Load generator sizing advice in the load profile Generator tab. */
+.generator-advice { display: grid; gap: 8px; padding: 12px 14px; border: 1px solid var(--border); border-radius: var(--radius-md); font-size: 13px; }
+.generator-advice h4, .generator-advice p, .generator-advice ul { margin: 0; }
+.generator-advice ul { padding-left: 18px; display: grid; gap: 4px; }
+.generator-advice > button { justify-self: start; }
+.generator-advice-table { border-collapse: collapse; width: max-content; max-width: 100%; }
+.generator-advice-table th, .generator-advice-table td { padding: 3px 12px 3px 0; text-align: left; font-weight: 400; }
+.generator-advice-table thead th { color: var(--muted-foreground); font-size: 12px; }
+.generator-advice-table tr.needs-attention th, .generator-advice-table tr.needs-attention td { font-weight: 600; }
+.generator-advice.needs-attention { border-color: var(--amber); background: var(--amber-background); }

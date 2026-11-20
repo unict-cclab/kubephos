@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"kubephos.dev/kubephos/internal/domain"
 	"kubephos.dev/kubephos/internal/id"
@@ -21,6 +22,17 @@ type comparisonView struct {
 	Artifacts            []domain.Artifact          `json:"artifacts"`
 	SourceConfigurations map[string]json.RawMessage `json:"sourceConfigurations"`
 	Sources              []domain.Experiment        `json:"sources"`
+	// Snapshot is present when the view was read from the frozen snapshot.
+	// Legacy comparisons without one are resolved from the live sources.
+	Snapshot *comparisonSnapshotInfo `json:"snapshot,omitempty"`
+	// Stale reports that the live sources no longer match the snapshot.
+	Stale         bool                    `json:"stale"`
+	StaleReasons  []string                `json:"staleReasons,omitempty"`
+	Compatibility comparisonCompatibility `json:"compatibility"`
+}
+
+type comparisonSnapshotInfo struct {
+	CapturedAt time.Time `json:"capturedAt"`
 }
 
 func validateComparison(item *domain.ResultComparison) error {
@@ -187,6 +199,9 @@ func (s *Server) comparisonSources(r *http.Request, item domain.ResultComparison
 			if trial == nil || trial.Status != "succeeded" || trial.ResultArtifactID == "" {
 				return view, errors.New("A selected run has no completed results. Edit the comparison to select another run.")
 			}
+			if trial.Pilot {
+				return view, errors.New("Warm-up runs are excluded from statistics and cannot be compared. Edit the comparison to select a measured run.")
+			}
 			if seen[trial.ResultArtifactID] {
 				return view, errors.New("The same result cannot appear more than once in a comparison.")
 			}
@@ -247,8 +262,27 @@ func (s *Server) getComparison(w http.ResponseWriter, r *http.Request) {
 		comparisonStorageError(w, err)
 		return
 	}
-	// Older comparisons may group runs from different experiments together.
-	// Resolve them with the same whole-experiment semantics as new comparisons.
+	if item.Snapshot != nil {
+		view, err := s.comparisonSnapshotView(r, item)
+		if err != nil {
+			writeError(w, 409, "source_unavailable", err.Error())
+			return
+		}
+		writeJSON(w, 200, view)
+		return
+	}
+	view, err := s.liveComparisonView(r, item)
+	if err != nil {
+		writeError(w, 409, "source_unavailable", err.Error())
+		return
+	}
+	writeJSON(w, 200, view)
+}
+
+// liveComparisonSeries resolves a selection against the current sources.
+// Older comparisons may group runs from different experiments together; they
+// are resolved with the same whole-experiment semantics as new comparisons.
+func (s *Server) liveComparisonSeries(r *http.Request, item domain.ResultComparison) ([]domain.ComparisonSeries, error) {
 	selections := []comparisonExperimentInput{}
 	seenSources := map[string]bool{}
 	for _, group := range item.Series {
@@ -259,20 +293,24 @@ func (s *Server) getComparison(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	if len(selections) >= 2 {
-		expanded, err := s.comparisonExperimentSeries(r, selections)
-		if err != nil {
-			writeError(w, 409, "source_unavailable", err.Error())
-			return
-		}
-		item.Series = expanded
+	if len(selections) < 2 {
+		return item.Series, nil
 	}
+	return s.comparisonExperimentSeries(r, selections)
+}
+
+func (s *Server) liveComparisonView(r *http.Request, item domain.ResultComparison) (comparisonView, error) {
+	series, err := s.liveComparisonSeries(r, item)
+	if err != nil {
+		return comparisonView{}, err
+	}
+	item.Series = series
 	view, err := s.comparisonSources(r, item)
 	if err != nil {
-		writeError(w, 409, "source_unavailable", err.Error())
-		return
+		return comparisonView{}, err
 	}
-	writeJSON(w, 200, view)
+	view.Compatibility = comparisonCompatibilityReport(view.Result.Variants)
+	return view, nil
 }
 
 func (s *Server) saveComparison(w http.ResponseWriter, r *http.Request) {
@@ -315,6 +353,13 @@ func (s *Server) saveComparison(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 422, "invalid_runs", err.Error())
 		return
 	}
+	// Freeze exactly what the comparison shows now, so later reads are reproducible.
+	live, err := s.liveComparisonView(r, item)
+	if err != nil {
+		writeError(w, 422, "invalid_runs", err.Error())
+		return
+	}
+	item.Snapshot = captureComparisonSnapshot(live)
 	saved, err := s.store.SaveResultComparison(r.Context(), item, update)
 	if err != nil {
 		comparisonStorageError(w, err)
@@ -400,7 +445,8 @@ func experimentComparisonSeries(source domain.Experiment, color string) []domain
 		}
 		group := domain.ComparisonSeries{Label: label, Color: color, Runs: []domain.ComparisonRun{}}
 		for _, trial := range variant.Trials {
-			if trial.Status == "succeeded" && trial.ResultArtifactID != "" {
+			// Pilot runs only warm the environment and never enter statistics.
+			if trial.Status == "succeeded" && trial.ResultArtifactID != "" && !trial.Pilot {
 				group.Runs = append(group.Runs, domain.ComparisonRun{ExperimentID: source.ID, TrialID: trial.ID})
 			}
 		}

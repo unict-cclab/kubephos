@@ -30,6 +30,18 @@ window. Each repetition waits separately, including runs inside a suite. You can
 stop a waiting experiment to clean up its resources. Editing the configuration
 changes future executions; existing experiments keep their saved settings.
 
+**Rest between runs** (`restSecondsBetweenTrials`, 0–3600 s, default 0) delays
+each run after the previous one, including its cleanup, has finished. The next run
+is scheduled for later instead of occupying a worker. **Pilot run**
+(`firstTrialPilot`) adds a warm-up run before each configuration's runs, at
+position 0: it absorbs image pulls and cold caches and is excluded from
+statistics and comparisons.
+
+When cleanup fails after a run has produced its verified results, the run stays
+completed with its data and shows a cleanup warning. Because the environment may
+not be clean, later runs of the experiment are not started and the experiment
+is marked failed.
+
 **Application → Istio** enables injection by default for HTTP applications, with
 per-service overrides. Native TCP applications retain their default opt-out.
 Cilium multi cluster groups do not use Istio.
@@ -215,9 +227,21 @@ a color. Labels do not rename the source experiments. Already selected items
 cannot be added twice. Comparative configurations use the same selection flow
 with **Add configurations**.
 
-A comparison keeps referring to its source experiments. When one of them is
-deleted or no longer shared with you, the list marks the comparison, and its page
-names the missing experiments with **Edit comparison** to remove them.
+Saving a comparison freezes exactly which runs and results it shows, with their
+labels, colors and recorded configurations. Later re-runs, deletions or new runs
+in the source experiments do not change it: the page reports that the sources
+changed, and **Refresh** (`POST /api/v1/comparisons/{id}/refresh`) re-reads
+them. Comparisons saved before this version have no snapshot and follow their
+sources until edited or refreshed. Results of your own experiments stay
+available in your frozen comparisons after you delete the experiment, and are
+removed with the last comparison that uses them. A source deleted by someone
+else, or no longer shared with you, makes the comparison unavailable; the list
+marks it, and **Edit comparison** removes it.
+
+A comparison also reports whether its sources were measured alike. It compares
+the load scenario, steps, duration, warmup, workers, users, spawn rate, network
+phases, data resolution, rate window and SLO, and lists every difference as a
+warning. It never blocks the comparison.
 
 Existing datasets retain their original measurement definitions. New end-to-end
 measurements record `endToEndSource: locust`. Cluster Lens uses the same Locust

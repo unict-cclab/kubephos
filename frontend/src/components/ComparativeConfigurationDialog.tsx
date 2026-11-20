@@ -15,6 +15,7 @@ import {NumericInput} from './NumericInput'
 import {ComparativeConfigurationView} from './ComparativeConfigurationView'
 import {ActionIcon} from './ActionIcon'
 import type {ReadoutTableData} from './ReadoutTable'
+import {TrialScheduleFields, isTrialScheduleError, savedTrialSchedule, trialScheduleError, type TrialSchedule} from './TrialScheduleFields'
 const suiteColors = ['#1f77b4', '#d55e00', '#009e73', '#cc79a7', '#e69f00', '#56b4e9', '#000000', '#7f7f7f']
 
 export function ComparativeConfigurationDialog({open, close, configurations, applications, clusters, session, changed, item, readOnly = false}: {open: boolean; close: () => void; configurations: ExperimentConfiguration[]; applications: Application[]; clusters: ManagedResource[]; session: Session; changed: () => Promise<void>; item?: ExperimentConfiguration; readOnly?: boolean}) {
@@ -25,6 +26,8 @@ export function ComparativeConfigurationDialog({open, close, configurations, app
     setSelected(item?.definition.variants?.map(member => member.configurationId) ?? [])
     setPresentation(Object.fromEntries((item?.definition.variants ?? []).map(member => [member.configurationId, {alias: member.alias, color: member.color}])))
     setRuns(item?.definition.runs ?? 3)
+    setSchedule(savedTrialSchedule(item?.definition))
+    setScheduleError('')
     setError('')
     setRevision(item?.updatedAt)
   }, [open, item?.id])
@@ -32,6 +35,8 @@ export function ComparativeConfigurationDialog({open, close, configurations, app
   const [adding, setAdding] = useState(false)
   const [presentation, setPresentation] = useState<Record<string, {alias: string; color: string}>>({})
   const [runs, setRuns] = useState(3)
+  const [schedule, setSchedule] = useState<TrialSchedule>(savedTrialSchedule())
+  const [scheduleError, setScheduleError] = useState('')
   const [revision, setRevision] = useState(item?.updatedAt)
   const [pending, setPending] = useState(false)
   const [error, setError] = useErrorState()
@@ -58,17 +63,23 @@ export function ComparativeConfigurationDialog({open, close, configurations, app
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     if(selected.length<2||selected.some(id=>!available.some(configuration=>configuration.id===id))){setError('Select at least two single configurations.');return}
+    if(trialScheduleError(schedule))return
     const values = new FormData(event.currentTarget)
     setPending(true)
     setError('')
     try {
-      await request<ExperimentConfiguration>(item ? `/experiment-configurations/${item.id}` : '/experiment-configurations', {method: item ? 'PUT' : 'POST', body: JSON.stringify({name: values.get('name'), description: item?.description ?? '', kind: 'suite', updatedAt: revision, definition: {kind: 'suite', variants: selected.map(configurationId => ({configurationId, alias: presentation[configurationId]?.alias, color: presentation[configurationId]?.color})), runs}})}, session.csrfToken)
+      await request<ExperimentConfiguration>(item ? `/experiment-configurations/${item.id}` : '/experiment-configurations', {method: item ? 'PUT' : 'POST', body: JSON.stringify({name: values.get('name'), description: item?.description ?? '', kind: 'suite', updatedAt: revision, definition: {kind: 'suite', variants: selected.map(configurationId => ({configurationId, alias: presentation[configurationId]?.alias, color: presentation[configurationId]?.color})), runs, ...schedule}})}, session.csrfToken)
       setSelected([])
       setPresentation({})
       close()
       await changed()
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : 'Could not save the comparison.')
+      // The field may sit on another wizard step: mark it and say so at the top.
+      if (isTrialScheduleError(cause)) {
+        const message = cause.message || 'Rest between repetitions must be between 0 and 3600 seconds.'
+        setScheduleError(message)
+        setError(`Execution: ${message}`)
+      } else setError(cause instanceof Error ? cause.message : 'Could not save the comparison.')
     } finally {
       setPending(false)
     }
@@ -85,6 +96,7 @@ export function ComparativeConfigurationDialog({open, close, configurations, app
     {selected.filter(id => !available.some(configuration => configuration.id === id)).map((id, index) => <div key={`${id}-${index}`}><ErrorFeedback message={`Unavailable single configuration ${id || '(deleted)'}`}/><button type="button" className="button secondary compact" onClick={() => setSelected(current => current.filter(value => value !== id))}>Remove unavailable configuration</button></div>)}
     </WizardStep><WizardStep title="Execution">{selected.length > 0 && <>{selected.map((id, index) => <div className="suite-order-row" key={`${id}-${index}`}><span>{index + 1}. {presentation[id]?.alias ?? available.find(configuration => configuration.id === id)?.name ?? 'Unavailable configuration'}</span><button type="button" className="button secondary icon-button" aria-label={`Move configuration ${index + 1} up`} disabled={index === 0} onClick={() => setSelected(current => {const next = [...current]; [next[index - 1], next[index]] = [next[index], next[index - 1]]; return next})}><ActionIcon name="up" /></button><button type="button" className="button secondary icon-button" aria-label={`Move configuration ${index + 1} down`} disabled={index === selected.length - 1} onClick={() => setSelected(current => {const next = [...current]; [next[index], next[index + 1]] = [next[index + 1], next[index]]; return next})}><ActionIcon name="down" /></button></div>)}</>}
     <label>Executions per configuration<NumericInput name="runs" min={1} max={20} value={runs} onValueChange={setRuns} required /></label>
+    <TrialScheduleFields value={schedule} error={scheduleError} onChange={value => {setSchedule(value); setScheduleError('')}} />
     </WizardStep><WizardStep title="Review"><WizardReview /></WizardStep>
   </WizardForm></Dialog>{adding && <ResourcePickerDialog resource="configurations" items={available} selectedIds={selected} session={session} close={() => setAdding(false)} add={add} />}</>
 }

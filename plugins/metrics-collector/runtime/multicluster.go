@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"kubephos.dev/kubephos/internal/domain"
 	"kubephos.dev/kubephos/internal/plugins"
@@ -82,7 +83,7 @@ func (p Plugin) Execute(ctx context.Context, step domain.PlanStep, log plugins.L
 	if err := json.Unmarshal(step.Input, &spec); err != nil {
 		return nil, err
 	}
-	raw, err := p.executeSingle(ctx, step, log)
+	raw, err := p.executeSingle(ctx, step, log, 0)
 	if err != nil || len(spec.Peers) == 0 {
 		return raw, err
 	}
@@ -93,13 +94,17 @@ func (p Plugin) Execute(ctx context.Context, step domain.PlanStep, log plugins.L
 	dataset := &result.Dataset
 	labelCluster(dataset.Spec.Series, spec.ClusterName)
 	summaries := [][]controlMetricSummary{dataset.Spec.ControlMetrics}
+	catalogs := [][]metricCatalogEntry{dataset.Spec.Metrics}
+	contexts := []*runContext{dataset.Spec.RunContext}
 	names := []string{spec.ClusterName}
+	// Every cluster uses the primary's rate window so that merged series are comparable.
+	rateWindow := time.Duration(dataset.Spec.RateWindowSeconds) * time.Second
 	for i, peer := range spec.Peers {
 		peerStep, err := metricPeerStep(step, spec, i)
 		if err != nil {
 			return nil, err
 		}
-		raw, err := p.executeSingle(ctx, peerStep, log)
+		raw, err := p.executeSingle(ctx, peerStep, log, rateWindow)
 		if err != nil {
 			return nil, fmt.Errorf("collect cluster %s: %w", peer.Name, err)
 		}
@@ -113,6 +118,8 @@ func (p Plugin) Execute(ctx context.Context, step domain.PlanStep, log plugins.L
 		dataset.Spec.Placement = mergePlacement(dataset.Spec.Placement, value.Dataset.Spec.Placement)
 		dataset.Spec.Series = append(dataset.Spec.Series, value.Dataset.Spec.Series...)
 		summaries = append(summaries, value.Dataset.Spec.ControlMetrics)
+		catalogs = append(catalogs, value.Dataset.Spec.Metrics)
+		contexts = append(contexts, value.Dataset.Spec.RunContext)
 		names = append(names, peer.Name)
 		if value.Dataset.Spec.Start.Before(dataset.Spec.Start) {
 			dataset.Spec.Start = value.Dataset.Spec.Start
@@ -126,18 +133,16 @@ func (p Plugin) Execute(ctx context.Context, step domain.PlanStep, log plugins.L
 		}
 	}
 	series := []metricSeries{}
-	ids := map[string]bool{}
-	samples := 0
 	for _, value := range dataset.Spec.Series {
 		if unavailable[value.Metric] {
 			continue
 		}
 		series = append(series, value)
-		ids[value.Metric] = true
-		samples += len(value.Points)
 	}
 	dataset.Spec.Series = series
-	dataset.Spec.Summary = datasetSummary{Metrics: len(ids), Series: len(series), Samples: samples}
+	dataset.Spec.Summary = summarizeSeries(series)
+	dataset.Spec.Metrics = buildCatalog(mergeCatalogs(catalogs, names), series)
+	dataset.Spec.RunContext = mergeRunContexts(contexts, names)
 	dataset.Spec.Clusters = names
 	return json.Marshal(result)
 }
@@ -229,11 +234,14 @@ func ciliumMetricDefinitions(deployment applicationDeployment, peerOnly bool) []
 		selector := "{measurement_cluster=" + strconv.Quote(deployment.Spec.ClusterName) + "}"
 		switch definition.ID {
 		case "network.rtt":
-			definition.Query = `1000 * sum by (origin_cluster,destination_cluster) (rate(cluster_network_latency_sum` + selector + `[1m])) / sum by (origin_cluster,destination_cluster) (rate(cluster_network_latency_count` + selector + `[1m]))`
+			definition.Query = `1000 * sum by (origin_cluster,destination_cluster) (rate(cluster_network_latency_sum` + selector + rateWindowRange + `)) / sum by (origin_cluster,destination_cluster) (rate(cluster_network_latency_count` + selector + rateWindowRange + `))`
+			definition.Description = "Mean ICMP round-trip time between the pod networks of connected Cilium clusters, measured by the KubePhos mentat mesh probes of this cluster (rate of the latency sum over the rate of the probe count), in milliseconds."
 		case "network.packet_loss":
-			definition.Query = `100 * avg by (origin_cluster,destination_cluster) (avg_over_time(cluster_network_packet_loss_ratio` + selector + `[1m]))`
+			definition.Query = `100 * avg by (origin_cluster,destination_cluster) (avg_over_time(cluster_network_packet_loss_ratio` + selector + rateWindowRange + `))`
+			definition.Description = "Percentage of ICMP probes lost between connected Cilium clusters (mentat mesh probes of this cluster), averaged over the rate window."
 		case "network.bandwidth":
 			definition.Query = `avg by (origin_cluster,destination_cluster) (cluster_network_bandwidth_bytes_per_second` + selector + `)`
+			definition.Description = "Bandwidth between connected Cilium clusters estimated by mentat from UDP packet dispersion (latest probe value at each step)."
 		}
 
 		result = append(result, definition)

@@ -103,6 +103,47 @@ spec:
         maxItems: 100
         items:
           type: object
+      warmupSeconds:
+        type: integer
+        title: Warmup seconds
+        description: Traffic at the profile's initial rate sent before the measured
+          profile starts; excluded from the measurement window.
+        minimum: 0
+        maximum: 3600
+        default: 0
+      drainSeconds:
+        type: integer
+        title: Drain seconds
+        description: Idle time after the profile before the load workers stop, so
+          the final metrics are scraped.
+        minimum: 0
+        maximum: 600
+        default: 30
+      taskWeights:
+        type: object
+        title: Request mix
+        description: Relative weight of each Locust task (function or method name,
+          or TaskSet class name); tasks not listed keep the locustfile weight.
+        x-kubephos-hidden: true
+      profileCallChain:
+        type: boolean
+        title: Measure call chain
+        description: Before the warmup, run every task alone to measure how many
+          requests each service receives per task execution.
+        default: false
+      profileSecondsPerTask:
+        type: integer
+        title: Profiling seconds per task
+        minimum: 30
+        maximum: 600
+        default: 60
+      profileRps:
+        type: number
+        title: Profiling requests per second
+        description: Total rate while profiling; defaults to the lower of 10 and
+          the profile's initial rate.
+        minimum: 0.01
+        maximum: 100000
       clusterName:
         type: string
         x-kubephos-hidden: true

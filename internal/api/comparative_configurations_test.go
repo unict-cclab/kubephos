@@ -91,7 +91,7 @@ func TestComparativeConfigurationValidation(t *testing.T) {
 func TestExecutionSnapshotFreezesSuiteAndSingleSettings(t *testing.T) {
 	configuration := domain.ExperimentConfiguration{ID: "suite", Kind: "suite", Definition: json.RawMessage(`{"kind":"suite","runs":4}`)}
 	member := domain.ExperimentConfiguration{ID: "single", ClusterResourceID: "cluster", ApplicationRef: "app:test", ApplicationDigest: "original", Definition: json.RawMessage(`{"components":[{"configuration":{"rps":10}}]}`)}
-	snapshot := executionConfigurationSnapshot(configuration, []validatedSuiteVariant{{Configuration: member}}, 4)
+	snapshot := executionConfigurationSnapshot(configuration, []validatedSuiteVariant{{Configuration: member}}, 4, trialSchedule{})
 	configuration.Definition[0] = ' '
 	member.Definition[0] = ' '
 	member.ApplicationDigest = "changed"

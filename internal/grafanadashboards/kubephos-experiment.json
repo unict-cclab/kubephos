@@ -874,7 +874,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum(kube_pod_status_phase{namespace=\"$namespace\",phase=\"Running\"})",
+          "expr": "sum(kube_pod_status_phase{namespace=\"$namespace\",pod!~\"kubephos-pod-scheduling-.*|kubephos-load-.*\",phase=\"Running\"})",
           "legendFormat": "",
           "refId": "A",
           "range": true
@@ -933,7 +933,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum(kube_pod_status_phase{namespace=\"$namespace\",phase=\"Pending\"}) or vector(0)",
+          "expr": "sum(kube_pod_status_phase{namespace=\"$namespace\",pod!~\"kubephos-pod-scheduling-.*|kubephos-load-.*\",phase=\"Pending\"}) or vector(0)",
           "legendFormat": "",
           "refId": "A",
           "range": true
@@ -996,7 +996,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum(increase(kube_pod_container_status_restarts_total{namespace=\"$namespace\"}[$__range])) or vector(0)",
+          "expr": "sum(increase(kube_pod_container_status_restarts_total{namespace=\"$namespace\",pod!~\"kubephos-pod-scheduling-.*|kubephos-load-.*\"}[$__range])) or vector(0)",
           "legendFormat": "",
           "refId": "A",
           "range": true
@@ -1059,7 +1059,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum(kube_pod_status_unschedulable{namespace=\"$namespace\"}) or vector(0)",
+          "expr": "sum(kube_pod_status_unschedulable{namespace=\"$namespace\",pod!~\"kubephos-pod-scheduling-.*|kubephos-load-.*\"}) or vector(0)",
           "legendFormat": "",
           "refId": "A",
           "range": true
@@ -1122,7 +1122,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "max by (deployment) (kube_deployment_status_replicas_ready{namespace=\"$namespace\",deployment!=\"kubephos-pod-scheduling\"})",
+          "expr": "max by (deployment) (kube_deployment_status_replicas_ready{namespace=\"$namespace\",deployment!~\"kubephos-pod-scheduling|kubephos-load-.*\"})",
           "legendFormat": "{{deployment}}",
           "refId": "A",
           "range": true
@@ -1179,7 +1179,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum by (deployment) (changes(kube_deployment_spec_replicas{namespace=\"$namespace\",deployment!=\"kubephos-pod-scheduling\"}[5m]))",
+          "expr": "sum by (deployment) (changes(kube_deployment_spec_replicas{namespace=\"$namespace\",deployment!~\"kubephos-pod-scheduling|kubephos-load-.*\"}[5m]))",
           "legendFormat": "{{deployment}}",
           "refId": "A",
           "range": true
@@ -1235,7 +1235,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum by (phase) (kube_pod_status_phase{namespace=\"$namespace\"}) > 0",
+          "expr": "sum by (phase) (kube_pod_status_phase{namespace=\"$namespace\",pod!~\"kubephos-pod-scheduling-.*|kubephos-load-.*\"}) > 0",
           "legendFormat": "{{phase}}",
           "refId": "A",
           "range": true
@@ -1291,7 +1291,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "count by (node) (kube_pod_info{namespace=\"$namespace\",node!=\"\"})",
+          "expr": "count by (node) (kube_pod_info{namespace=\"$namespace\",pod!~\"kubephos-pod-scheduling-.*|kubephos-load-.*\",node!=\"\"})",
           "legendFormat": "{{node}}",
           "refId": "A",
           "range": true
@@ -1360,7 +1360,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "1000 * sum by (pod) (rate(container_cpu_usage_seconds_total{namespace=\"$namespace\",container!=\"\",container!=\"POD\",pod!~\"kubephos-pod-scheduling-.*\",container!=\"istio-proxy\"}[1m]))",
+          "expr": "1000 * sum by (pod) (rate(container_cpu_usage_seconds_total{namespace=\"$namespace\",container!=\"\",container!=\"POD\",pod!~\"kubephos-pod-scheduling-.*|kubephos-load-.*\",container!=\"istio-proxy\"}[1m]))",
           "legendFormat": "{{pod}}",
           "refId": "A",
           "range": true
@@ -1415,7 +1415,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "1000 * sum by (pod) (rate(container_cpu_usage_seconds_total{namespace=\"$namespace\",container=\"istio-proxy\"}[1m]))",
+          "expr": "1000 * sum by (pod) (rate(container_cpu_usage_seconds_total{namespace=\"$namespace\",pod!~\"kubephos-pod-scheduling-.*|kubephos-load-.*\",container=\"istio-proxy\"}[1m]))",
           "legendFormat": "{{pod}}",
           "refId": "A",
           "range": true
@@ -1470,7 +1470,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "100 * sum by (pod) (rate(container_cpu_usage_seconds_total{namespace=\"$namespace\",container!=\"\",container!=\"POD\",pod!~\"kubephos-pod-scheduling-.*\"}[1m])) / sum by (pod) (kube_pod_container_resource_requests{namespace=\"$namespace\",resource=\"cpu\"})",
+          "expr": "100 * sum by (pod) (rate(container_cpu_usage_seconds_total{namespace=\"$namespace\",container!=\"\",container!=\"POD\",pod!~\"kubephos-pod-scheduling-.*|kubephos-load-.*\"}[1m])) / sum by (pod) (kube_pod_container_resource_requests{namespace=\"$namespace\",resource=\"cpu\"})",
           "legendFormat": "{{pod}}",
           "refId": "A",
           "range": true
@@ -1525,7 +1525,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum by (pod) (container_memory_working_set_bytes{namespace=\"$namespace\",container!=\"\",container!=\"POD\",pod!~\"kubephos-pod-scheduling-.*\"})",
+          "expr": "sum by (pod) (container_memory_working_set_bytes{namespace=\"$namespace\",container!=\"\",container!=\"POD\",pod!~\"kubephos-pod-scheduling-.*|kubephos-load-.*\"})",
           "legendFormat": "{{pod}}",
           "refId": "A",
           "range": true

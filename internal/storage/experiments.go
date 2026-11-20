@@ -95,6 +95,7 @@ func (s *Store) readListExperimentsForUser(ctx context.Context, userID string, l
 	rows, err := s.pool.Query(ctx, `
 		SELECT experiment.id, experiment.workspace_id, COALESCE(experiment.configuration_id, ''), experiment.owner_user_id, owner.username,
 		       experiment.kind, experiment.name, experiment.description, experiment.status, experiment.result_type, experiment.result_version, experiment.scheduled_for, experiment.created_at, experiment.updated_at,
+		       experiment.rest_seconds_between_trials, experiment.first_trial_pilot,
                EXISTS (
                    SELECT 1 FROM experiment_variants variant
                    JOIN experiment_trials trial ON trial.variant_id = variant.id
@@ -113,7 +114,7 @@ func (s *Store) readListExperimentsForUser(ctx context.Context, userID string, l
 	result := []domain.Experiment{}
 	for rows.Next() {
 		var experiment domain.Experiment
-		if err := rows.Scan(&experiment.ID, &experiment.WorkspaceID, &experiment.ConfigurationID, &experiment.OwnerUserID, &experiment.OwnerUsername, &experiment.Kind, &experiment.Name, &experiment.Description, &experiment.Status, &experiment.ResultType, &experiment.ResultVersion, &experiment.ScheduledFor, &experiment.CreatedAt, &experiment.UpdatedAt, &experiment.CancelRequested); err != nil {
+		if err := rows.Scan(&experiment.ID, &experiment.WorkspaceID, &experiment.ConfigurationID, &experiment.OwnerUserID, &experiment.OwnerUsername, &experiment.Kind, &experiment.Name, &experiment.Description, &experiment.Status, &experiment.ResultType, &experiment.ResultVersion, &experiment.ScheduledFor, &experiment.CreatedAt, &experiment.UpdatedAt, &experiment.RestSecondsBetweenTrials, &experiment.FirstTrialPilot, &experiment.CancelRequested); err != nil {
 			rows.Close()
 			return nil, err
 		}
@@ -231,7 +232,8 @@ func (s *Store) listExperimentTrials(ctx context.Context, variantIDs []string) (
 		return trials, nil
 	}
 	rows, err := s.pool.Query(ctx, `
-		SELECT trial.id, trial.variant_id, trial.position, trial.status, COALESCE(trial.operation_id, ''), COALESCE(trial.pipeline_run_id, ''), COALESCE(trial.result_artifact_id, ''), trial.error, trial.created_at, run.started_at, trial.completed_at
+		SELECT trial.id, trial.variant_id, trial.position, trial.status, COALESCE(trial.operation_id, ''), COALESCE(trial.pipeline_run_id, ''), COALESCE(trial.result_artifact_id, ''), trial.error, trial.created_at, run.started_at, trial.completed_at,
+		       trial.cleanup_error, trial.pilot, CASE WHEN trial.status = 'queued' THEN run.scheduled_for END
 		FROM experiment_trials trial
 		LEFT JOIN pipeline_runs run ON run.id = trial.pipeline_run_id
 		WHERE trial.variant_id = ANY($1::text[])
@@ -243,7 +245,7 @@ func (s *Store) listExperimentTrials(ctx context.Context, variantIDs []string) (
 	defer rows.Close()
 	for rows.Next() {
 		var trial domain.ExperimentTrial
-		if err := rows.Scan(&trial.ID, &trial.VariantID, &trial.Position, &trial.Status, &trial.OperationID, &trial.PipelineRunID, &trial.ResultArtifactID, &trial.Error, &trial.CreatedAt, &trial.StartedAt, &trial.CompletedAt); err != nil {
+		if err := rows.Scan(&trial.ID, &trial.VariantID, &trial.Position, &trial.Status, &trial.OperationID, &trial.PipelineRunID, &trial.ResultArtifactID, &trial.Error, &trial.CreatedAt, &trial.StartedAt, &trial.CompletedAt, &trial.CleanupError, &trial.Pilot, &trial.ScheduledFor); err != nil {
 			return nil, err
 		}
 		trials[trial.VariantID] = append(trials[trial.VariantID], trial)

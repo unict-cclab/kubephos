@@ -31,6 +31,16 @@ const (
 	applicationOwnershipKey = "kubephos.dev/application-marker"
 	loadProfileKey          = "kubephos.dev/load-scenario"
 	previousReplicasKey     = "kubephos.dev/load-previous-replicas"
+	maxWarmupSeconds        = 3600
+	maxDrainSeconds         = 600
+	defaultDrainSeconds     = 30
+	// startClockEnv selects how a Locust replica finds the profile's t=0:
+	// "shared" waits for the instant KubePhos publishes to every worker, "local"
+	// (resume and restore) starts the profile when the process starts.
+	startClockEnv = "KUBEPHOS_START_CLOCK"
+	// loadWorkersEnv tells every Locust replica how many independent workers share
+	// the configured (total) offered load, so each paces rps_at(t)/workers.
+	loadWorkersEnv = "KUBEPHOS_LOAD_WORKERS"
 )
 
 type Plugin struct {
@@ -57,6 +67,18 @@ type Spec struct {
 	SpawnRate                float64          `json:"spawnRate,omitempty"`
 	Steps                    []LoadStep       `json:"steps,omitempty"`
 	GeographicSteps          []GeographicStep `json:"geographicSteps,omitempty"`
+	// WarmupSeconds of traffic at the profile's initial rate precede the measured
+	// profile; DrainSeconds keep idle workers serving metrics after it ends.
+	WarmupSeconds int  `json:"warmupSeconds,omitempty"`
+	DrainSeconds  *int `json:"drainSeconds,omitempty"`
+	// TaskWeights overrides the locustfile weight of the named tasks (function or
+	// method __name__, or TaskSet class name); fractional weights keep their ratios.
+	TaskWeights map[string]float64 `json:"taskWeights,omitempty"`
+	// ProfileCallChain runs every task alone for ProfileSecondsPerTask at
+	// ProfileRPS (total) before the warmup, to measure its call chain.
+	ProfileCallChain      bool    `json:"profileCallChain,omitempty"`
+	ProfileSecondsPerTask int     `json:"profileSecondsPerTask,omitempty"`
+	ProfileRPS            float64 `json:"profileRps,omitempty"`
 }
 
 type LoadStep struct {
@@ -182,9 +204,22 @@ type loadSessionSpec struct {
 	Steps            []LoadStep       `json:"steps"`
 	GeographicSteps  []GeographicStep `json:"geographicSteps,omitempty"`
 	DurationSeconds  int              `json:"durationSeconds"`
-	StartedAt        *time.Time       `json:"startedAt,omitempty"`
-	CompletedAt      *time.Time       `json:"completedAt,omitempty"`
-	Workload         workloadTarget   `json:"workload"`
+	// StartedAt and CompletedAt delimit the measured profile (t=0 and t=end).
+	StartedAt       *time.Time     `json:"startedAt,omitempty"`
+	CompletedAt     *time.Time     `json:"completedAt,omitempty"`
+	Workload        workloadTarget `json:"workload"`
+	WarmupSeconds   *int           `json:"warmupSeconds,omitempty"`
+	WarmupStartedAt *time.Time     `json:"warmupStartedAt,omitempty"`
+	DrainSeconds    *int           `json:"drainSeconds,omitempty"`
+	Clock           string         `json:"clock,omitempty"`
+	// Workers is the number of Locust processes that ran the measured profile;
+	// Replicas is already zero once a finite session completes.
+	Workers       int            `json:"workers,omitempty"`
+	LocustSummary *locustSummary `json:"locustSummary,omitempty"`
+	// TaskMix is the effective request mix the workers applied; CallChainProfile
+	// the per-task profiling windows (cluster clock) that preceded the warmup.
+	TaskMix          []taskMixEntry    `json:"taskMix,omitempty"`
+	CallChainProfile *callChainProfile `json:"callChainProfile,omitempty"`
 }
 
 type loadTarget struct {
@@ -260,7 +295,7 @@ func (Plugin) Manifest() plugins.Manifest {
 	return plugins.Manifest{
 		ID: pluginID, Name: "Interactive Kubernetes load session", Version: "0.11.0",
 		Description:     "Runs an ordered RPS timeline using a verified Locust journey against a catalog application or external HTTP destination.",
-		Schema:          json.RawMessage(`{"type":"object","additionalProperties":false,"required":["clusterConnectionRef","applicationDeploymentRef","loadScenarioSetRef","scenarioId","action","replicas","maxUsers","spawnRate"],"properties":{"clusterConnectionRef":{"type":"string","title":"Kubernetes cluster","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ClusterConnection","x-kubephos-artifact-version":"v1alpha1"},"applicationDeploymentRef":{"type":"string","title":"Application deployment","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ApplicationDeployment","x-kubephos-artifact-version":"v1alpha1"},"loadScenarioSetRef":{"type":"string","title":"Load scenarios","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"LoadScenarioSet","x-kubephos-artifact-version":"v1alpha1"},"scenarioId":{"type":"string","title":"Load scenario","description":"User behavior implemented by the Locust file supplied by the selected application.","minLength":1,"maxLength":63,"default":"storefront-journey"},"action":{"type":"string","title":"Action","x-kubephos-primary-action":true,"enum":["start","stop","resume"],"default":"start"},"interactive":{"type":"boolean","title":"Interactive session","default":false},"replicas":{"type":"integer","title":"Load workers","minimum":1,"maximum":100,"default":1},"maxUsers":{"type":"integer","title":"Maximum concurrent users per worker","minimum":1,"maximum":100000,"default":1000},"spawnRate":{"type":"number","title":"Users started per second","minimum":0.1,"maximum":100000,"default":10},"steps":{"type":"array","title":"Temporal workload timeline","maxItems":100,"items":{"type":"object"}},"geographicSteps":{"type":"array","title":"Geographic traffic timeline","maxItems":100,"items":{"type":"object"}},"clusterName":{"type":"string","x-kubephos-hidden":true},"peers":{"type":"array","minItems":1,"maxItems":5,"x-kubephos-hidden":true,"items":{"type":"object","required":["name","clusterConnectionRef","applicationDeploymentRef"],"additionalProperties":false,"properties":{"name":{"type":"string"},"clusterConnectionRef":{"type":"string","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ClusterConnection","x-kubephos-artifact-version":"v1alpha1"},"applicationDeploymentRef":{"type":"string","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ApplicationDeployment","x-kubephos-artifact-version":"v1alpha1"}}}},"networkTimeline":{"type":"boolean","x-kubephos-hidden":true}}}`),
+		Schema:          json.RawMessage(`{"type":"object","additionalProperties":false,"required":["clusterConnectionRef","applicationDeploymentRef","loadScenarioSetRef","scenarioId","action","replicas","maxUsers","spawnRate"],"properties":{"clusterConnectionRef":{"type":"string","title":"Kubernetes cluster","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ClusterConnection","x-kubephos-artifact-version":"v1alpha1"},"applicationDeploymentRef":{"type":"string","title":"Application deployment","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ApplicationDeployment","x-kubephos-artifact-version":"v1alpha1"},"loadScenarioSetRef":{"type":"string","title":"Load scenarios","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"LoadScenarioSet","x-kubephos-artifact-version":"v1alpha1"},"scenarioId":{"type":"string","title":"Load scenario","description":"User behavior implemented by the Locust file supplied by the selected application.","minLength":1,"maxLength":63,"default":"storefront-journey"},"action":{"type":"string","title":"Action","x-kubephos-primary-action":true,"enum":["start","stop","resume"],"default":"start"},"interactive":{"type":"boolean","title":"Interactive session","default":false},"replicas":{"type":"integer","title":"Load workers","minimum":1,"maximum":100,"default":1},"maxUsers":{"type":"integer","title":"Maximum concurrent users per worker","minimum":1,"maximum":100000,"default":1000},"spawnRate":{"type":"number","title":"Users started per second","minimum":0.1,"maximum":100000,"default":10},"steps":{"type":"array","title":"Temporal workload timeline","maxItems":100,"items":{"type":"object"}},"geographicSteps":{"type":"array","title":"Geographic traffic timeline","maxItems":100,"items":{"type":"object"}},"clusterName":{"type":"string","x-kubephos-hidden":true},"peers":{"type":"array","minItems":1,"maxItems":5,"x-kubephos-hidden":true,"items":{"type":"object","required":["name","clusterConnectionRef","applicationDeploymentRef"],"additionalProperties":false,"properties":{"name":{"type":"string"},"clusterConnectionRef":{"type":"string","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ClusterConnection","x-kubephos-artifact-version":"v1alpha1"},"applicationDeploymentRef":{"type":"string","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ApplicationDeployment","x-kubephos-artifact-version":"v1alpha1"}}}},"networkTimeline":{"type":"boolean","x-kubephos-hidden":true},"warmupSeconds":{"type":"integer","title":"Warmup seconds","description":"Traffic at the profile's initial rate sent before the measured profile starts; excluded from the measurement window.","minimum":0,"maximum":3600,"default":0},"drainSeconds":{"type":"integer","title":"Drain seconds","description":"Idle time after the profile before the load workers stop, so the final metrics are scraped.","minimum":0,"maximum":600,"default":30},"taskWeights":{"type":"object","title":"Request mix","description":"Relative weight of each Locust task (function or method name, or TaskSet class name); tasks not listed keep the locustfile weight.","x-kubephos-hidden":true},"profileCallChain":{"type":"boolean","title":"Measure call chain","description":"Before the warmup, run every task alone to measure how many requests each service receives per task execution.","default":false},"profileSecondsPerTask":{"type":"integer","title":"Profiling seconds per task","minimum":30,"maximum":600,"default":60},"profileRps":{"type":"number","title":"Profiling requests per second","description":"Total rate while profiling; defaults to the lower of 10 and the profile's initial rate.","minimum":0.01,"maximum":100000}}}`),
 		ArtifactInputs:  []domain.ArtifactContract{{Type: "ClusterConnection", Version: "v1alpha1"}, {Type: "ApplicationDeployment", Version: "v1alpha1"}, {Type: "LoadScenarioSet", Version: "v1alpha1"}},
 		ArtifactOutputs: []domain.ArtifactContract{{Type: "LoadSession", Version: "v1alpha1"}},
 		Capabilities:    []string{"load.session.control", "load.session.preflight", "load.session.cleanup", "lifecycle.cleanup"},
@@ -303,12 +338,27 @@ func (Plugin) Validate(ctx context.Context, invocation Invocation) domain.Valida
 	if spec.SpawnRate != 0 && (spec.SpawnRate < 0.1 || spec.SpawnRate > 100000) {
 		return invalid(report, "spawnRate", "Spawn rate must be between 0.1 and 100000.")
 	}
+	if spec.WarmupSeconds < 0 || spec.WarmupSeconds > maxWarmupSeconds {
+		return invalid(report, "warmupSeconds", "Warmup must be between 0 and 3600 seconds.")
+	}
+	if spec.DrainSeconds != nil && (*spec.DrainSeconds < 0 || *spec.DrainSeconds > maxDrainSeconds) {
+		return invalid(report, "drainSeconds", "Drain must be between 0 and 600 seconds.")
+	}
+	if path, err := validateRequestMix(spec); err != nil {
+		return invalid(report, path, err.Error())
+	}
 	duration, err := validateSpecTimeline(spec)
 	if err != nil {
 		return invalid(report, "steps", err.Error())
 	}
 	if err := validateGeographicTimeline(spec.GeographicSteps, duration); err != nil {
 		return invalid(report, "geographicSteps", err.Error())
+	}
+	if err := checkSessionBudget(spec, duration, 0); err != nil {
+		return invalid(report, "steps", err.Error())
+	}
+	if spec.ProfileCallChain {
+		report.Issues = append(report.Issues, domain.ValidationIssue{Level: "info", Message: fmt.Sprintf("Call-chain profiling adds %ds per task with a positive weight before the warmup.", withDefaults(spec).ProfileSecondsPerTask)})
 	}
 	report.Issues = append(report.Issues, domain.ValidationIssue{Level: "info", Message: fmt.Sprintf("The experiment duration is %s, calculated from %d ordered workload steps.", (time.Duration(duration) * time.Second).String(), len(spec.Steps))})
 	report.Issues = append(report.Issues, domain.ValidationIssue{Level: "info", Message: "KubePhos will revalidate the cluster, application ownership, load profile, geographic coverage, current session state and target endpoint before changing load."})
@@ -352,6 +402,9 @@ func (plugin Plugin) Precheck(ctx context.Context, step domain.PlanStep, log plu
 	duration, err := validateSpecTimeline(spec)
 	if err != nil {
 		return unhealthy(err.Error(), "loadTimeline", "invalid"), nil
+	}
+	if _, err := validateRequestMix(spec); err != nil {
+		return unhealthy(err.Error(), "requestMix", "invalid"), nil
 	}
 	if err := validateGeographicTimeline(spec.GeographicSteps, duration); err != nil {
 		return unhealthy(err.Error(), "geographicTimeline", "invalid"), nil
@@ -438,7 +491,10 @@ func (plugin Plugin) Execute(ctx context.Context, step domain.PlanStep, log plug
 	}
 	previous := 0
 	durationSeconds, _ := validateSpecTimeline(spec)
-	var startedAt, completedAt *time.Time
+	var startedAt, completedAt, warmupStartedAt *time.Time
+	var summary *locustSummary
+	var taskMix []taskMixEntry
+	var profiled *callChainProfile
 	if exists {
 		previous = state.Spec.Replicas
 	}
@@ -469,14 +525,9 @@ func (plugin Plugin) Execute(ctx context.Context, step domain.PlanStep, log plug
 			if err := waitForReady(ctx, runner, cluster.Spec.Kubeconfig, deployment.Spec.Namespace, profile, spec.Replicas, log); err != nil {
 				return nil, err
 			}
-			started := plugin.now().UTC()
 			checks := []func() error{}
 			if spec.NetworkTimeline {
 				if err := log("info", "Synchronizing network phases with the load profile"); err != nil {
-					return nil, err
-				}
-				started, err = armNetworkTimeline(ctx, runner, cluster.Spec.Kubeconfig, deployment, profile, durationSeconds, spec.Replicas)
-				if err != nil {
 					return nil, err
 				}
 				checks = append(checks, func() error {
@@ -484,15 +535,82 @@ func (plugin Plugin) Execute(ctx context.Context, step domain.PlanStep, log plug
 					return err
 				})
 			}
-			startedAt = &started
-			if err := waitForLoadDuration(ctx, runner, cluster.Spec.Kubeconfig, deployment.Spec.Namespace, profile, spec.Replicas, time.Duration(durationSeconds)*time.Second, log, checks...); err != nil {
+			// Call-chain profiling precedes the warmup; its length (tasks x seconds)
+			// comes from the workers' task plan and is part of the shared timeline.
+			profilingSeconds := 0
+			var plan taskPlan
+			if spec.ProfileCallChain {
+				plan, err = readTaskPlan(ctx, runner, cluster.Spec.Kubeconfig, deployment.Spec.Namespace, profile, spec.Replicas)
+				if err != nil {
+					return nil, fmt.Errorf("read the task plan for call-chain profiling: %w", err)
+				}
+				taskMix = plan.TaskMix
+				profilingSeconds = len(plan.ProfileTasks) * spec.ProfileSecondsPerTask
+				// The task count is known only now; fail before sending traffic
+				// rather than being killed by the runtime timeout mid-profile.
+				if err := checkSessionBudget(spec, durationSeconds, profilingSeconds); err != nil {
+					return nil, err
+				}
+				if len(plan.ProfileTasks) == 0 {
+					if err := log("warning", "Call-chain profiling skipped: the scenario has no task with a positive weight"); err != nil {
+						return nil, err
+					}
+				}
+			}
+			// Every worker (and network shaper) receives the same absolute start, so
+			// the recorded window is exactly the profile the processes execute.
+			clock, err := armSharedStart(ctx, runner, cluster.Spec.Kubeconfig, deployment, profile, spec.Replicas, profilingSeconds, spec.WarmupSeconds, durationSeconds, spec.NetworkTimeline, plugin.now)
+			if err != nil {
 				return nil, err
+			}
+			if profilingSeconds > 0 {
+				profiled = &callChainProfile{RPS: spec.ProfileRPS, SecondsPerTask: spec.ProfileSecondsPerTask, Windows: callChainWindows(plan.ProfileTasks, clock.profilingStart, spec.ProfileSecondsPerTask)}
+				if err := log("info", fmt.Sprintf("Call-chain profiling: %d tasks x %ds at %g RPS from %s", len(plan.ProfileTasks), spec.ProfileSecondsPerTask, spec.ProfileRPS, clock.profilingStart.Format(time.RFC3339))); err != nil {
+					return nil, err
+				}
+			}
+			started := clock.profileStart
+			completed := started.Add(time.Duration(durationSeconds) * time.Second)
+			startedAt, completedAt = &started, &completed
+			if spec.WarmupSeconds > 0 {
+				warmup := clock.warmupStart
+				warmupStartedAt = &warmup
+			}
+			if err := log("info", fmt.Sprintf("Shared load start armed: warmup %ds from %s, measured profile %s to %s", spec.WarmupSeconds, clock.warmupStart.Format(time.RFC3339), started.Format(time.RFC3339), completed.Format(time.RFC3339))); err != nil {
+				return nil, err
+			}
+			if clock.clockOffset != 0 {
+				if err := log("warning", fmt.Sprintf("Cluster clock differs from the KubePhos host clock by %s; the measured window uses the cluster clock", clock.clockOffset)); err != nil {
+					return nil, err
+				}
+			}
+			// completed is a cluster-clock instant; convert the host clock before waiting.
+			if err := waitForLoadDuration(ctx, runner, cluster.Spec.Kubeconfig, deployment.Spec.Namespace, profile, spec.Replicas, completed.Sub(plugin.now().Add(clock.clockOffset)), log, checks...); err != nil {
+				return nil, err
+			}
+			// Idle workers keep serving their final counters until Prometheus scrapes them.
+			if drain := drainSeconds(spec); drain > 0 {
+				if err := log("info", fmt.Sprintf("Load profile completed; draining %ds so the final metrics are scraped", drain)); err != nil {
+					return nil, err
+				}
+				if err := drainWait(ctx, time.Duration(drain)*time.Second); err != nil {
+					return nil, err
+				}
+			}
+			collected, reportedMix, err := collectLocustSummary(ctx, runner, cluster.Spec.Kubeconfig, deployment.Spec.Namespace, profile, spec.Replicas, started, completed)
+			if len(reportedMix) > 0 {
+				taskMix = reportedMix
+			}
+			if err != nil {
+				if logErr := log("warning", "Locust statistics summary is unavailable: "+err.Error()); logErr != nil {
+					return nil, logErr
+				}
+			} else {
+				summary = collected
 			}
 			if _, err := runner.Run(ctx, cluster.Spec.Kubeconfig, nil, "scale", resource, "-n", deployment.Spec.Namespace, "--replicas", "0"); err != nil {
 				return nil, err
 			}
-			completed := plugin.now().UTC()
-			completedAt = &completed
 		}
 	case "stop", "resume":
 		if !ownedBy(state, deployment, profile) {
@@ -504,6 +622,11 @@ func (plugin Plugin) Execute(ctx context.Context, step domain.PlanStep, log plug
 		replicas := 0
 		if spec.Action == "resume" {
 			replicas = spec.Replicas
+			// Pods divide the total profile by the worker count baked into the template;
+			// keep it equal to the replica count the session resumes with.
+			if err := setLoadWorkers(ctx, runner, cluster.Spec.Kubeconfig, deployment.Spec.Namespace, resource, replicas); err != nil {
+				return nil, err
+			}
 		}
 		if _, err := runner.Run(ctx, cluster.Spec.Kubeconfig, nil, "scale", resource, "-n", deployment.Spec.Namespace, "--replicas", fmt.Sprint(replicas)); err != nil {
 			return nil, err
@@ -523,6 +646,17 @@ func (plugin Plugin) Execute(ctx context.Context, step domain.PlanStep, log plug
 		APIVersion: artifactAPI, Kind: "LoadSession", Metadata: loadSessionMetadata{Name: deployment.Spec.Namespace + "/" + profile.ID, Version: "v1alpha1"},
 		Spec: loadSessionSpec{ApplicationRef: deployment.Spec.ApplicationRef, ClusterServer: cluster.Spec.Server, Namespace: deployment.Spec.Namespace, ScenarioID: profile.ID, Action: spec.Action, State: stateValue, Replicas: replicas, PreviousReplicas: previous, Steps: spec.Steps, GeographicSteps: spec.GeographicSteps, DurationSeconds: durationSeconds, StartedAt: startedAt, CompletedAt: completedAt, Workload: profile.Workload},
 	}}
+	if startedAt != nil {
+		warmup, drain := spec.WarmupSeconds, drainSeconds(spec)
+		value.LoadSession.Spec.WarmupSeconds = &warmup
+		value.LoadSession.Spec.Workers = spec.Replicas
+		value.LoadSession.Spec.WarmupStartedAt = warmupStartedAt
+		value.LoadSession.Spec.DrainSeconds = &drain
+		value.LoadSession.Spec.Clock = sharedStartClock
+		value.LoadSession.Spec.LocustSummary = summary
+		value.LoadSession.Spec.TaskMix = taskMix
+		value.LoadSession.Spec.CallChainProfile = profiled
+	}
 	return json.Marshal(value)
 }
 
@@ -632,7 +766,28 @@ func (plugin Plugin) Cleanup(ctx context.Context, step domain.PlanStep, raw json
 	if err := log("warning", fmt.Sprintf("Restoring the previous load intensity %d", previous)); err != nil {
 		return err
 	}
+	if previous > 0 {
+		if err := setLoadWorkers(ctx, runner, cluster.Spec.Kubeconfig, deployment.Spec.Namespace, resource, previous); err != nil {
+			return err
+		}
+	}
 	_, err = runner.Run(ctx, cluster.Spec.Kubeconfig, nil, "scale", resource, "-n", deployment.Spec.Namespace, "--replicas", fmt.Sprint(previous))
+	return err
+}
+
+// loadWorkers is the number of Locust replicas that share the configured load.
+func loadWorkers(replicas int) int {
+	if replicas < 1 {
+		return 1
+	}
+	return replicas
+}
+
+// setLoadWorkers prepares the template for pods started outside a shared start
+// (resume, restore): they split the load across the new replica count and run the
+// profile from their own process start, as no instant will be published to them.
+func setLoadWorkers(ctx context.Context, runner commandRunner, kubeconfig, namespace, resource string, replicas int) error {
+	_, err := runner.Run(ctx, kubeconfig, nil, "set", "env", resource, "-n", namespace, "-c", "locust", fmt.Sprintf("%s=%d", loadWorkersEnv, loadWorkers(replicas)), startClockEnv+"=local")
 	return err
 }
 
@@ -893,6 +1048,22 @@ func validateResult(session loadSession, spec Spec, cluster clusterConnection, d
 	if state == "completed" && (session.Spec.StartedAt == nil || session.Spec.CompletedAt == nil || session.Spec.CompletedAt.Before(*session.Spec.StartedAt) || session.Spec.CompletedAt.Sub(*session.Spec.StartedAt) < time.Duration(durationSeconds)*time.Second) {
 		return errors.New("load session artifact does not contain a complete measurement interval")
 	}
+	if err := validateRequestMixResult(session, spec); err != nil {
+		return err
+	}
+	if session.Spec.Clock == "" {
+		return nil
+	}
+	// A shared-start window is exact: t=0 and t=end of the profile, after the warmup.
+	if session.Spec.Clock != sharedStartClock || state != "completed" || session.Spec.CompletedAt.Sub(*session.Spec.StartedAt) != time.Duration(durationSeconds)*time.Second || session.Spec.WarmupSeconds == nil || *session.Spec.WarmupSeconds != spec.WarmupSeconds || session.Spec.DrainSeconds == nil || *session.Spec.DrainSeconds != drainSeconds(spec) {
+		return errors.New("load session artifact does not match the shared measurement window")
+	}
+	if (spec.WarmupSeconds > 0) != (session.Spec.WarmupStartedAt != nil) || (session.Spec.WarmupStartedAt != nil && session.Spec.StartedAt.Sub(*session.Spec.WarmupStartedAt) != time.Duration(spec.WarmupSeconds)*time.Second) {
+		return errors.New("load session artifact does not match the configured warmup")
+	}
+	if summary := session.Spec.LocustSummary; summary != nil && (summary.MeasuredFrom == nil || summary.MeasuredTo == nil || !summary.MeasuredFrom.Equal(*session.Spec.StartedAt) || !summary.MeasuredTo.Equal(*session.Spec.CompletedAt)) {
+		return errors.New("Locust summary does not cover the measured window")
+	}
 	return nil
 }
 
@@ -965,6 +1136,12 @@ func validateLoadTimeline(steps []LoadStep) (int, error) {
 }
 
 func validateSpecTimeline(spec Spec) (int, error) {
+	if spec.WarmupSeconds < 0 || spec.WarmupSeconds > maxWarmupSeconds {
+		return 0, errors.New("warmup must be between 0 and 3600 seconds")
+	}
+	if spec.DrainSeconds != nil && (*spec.DrainSeconds < 0 || *spec.DrainSeconds > maxDrainSeconds) {
+		return 0, errors.New("drain must be between 0 and 600 seconds")
+	}
 	if spec.NetworkTimeline && (spec.Action != "start" || spec.Interactive || len(spec.Steps) == 0) {
 		return 0, errors.New("Network phases require a finite start load profile.")
 	}
@@ -1054,6 +1231,18 @@ func withDefaults(spec Spec) Spec {
 	}
 	if len(spec.Steps) == 0 && !spec.Interactive {
 		spec.Steps = []LoadStep{{Type: "constant", DurationSeconds: 900, RPS: 30}}
+	}
+	if spec.DrainSeconds == nil {
+		drain := defaultDrainSeconds
+		spec.DrainSeconds = &drain
+	}
+	if spec.ProfileCallChain {
+		if spec.ProfileSecondsPerTask == 0 {
+			spec.ProfileSecondsPerTask = defaultProfileSecondsPerTask
+		}
+		if spec.ProfileRPS == 0 {
+			spec.ProfileRPS = defaultProfileRPS(spec.Steps)
+		}
 	}
 	return spec
 }
@@ -1235,10 +1424,14 @@ func loadManifest(profile loadProfile, marker string, spec Spec, targets []loadT
 		map[string]any{"name": "KUBEPHOS_TARGETS", "value": string(targetValue)},
 		map[string]any{"name": "KUBEPHOS_MAX_USERS", "value": fmt.Sprint(spec.MaxUsers)},
 		map[string]any{"name": "KUBEPHOS_SPAWN_RATE", "value": fmt.Sprint(spec.SpawnRate)},
+		map[string]any{"name": loadWorkersEnv, "value": fmt.Sprint(loadWorkers(spec.Replicas))},
+		map[string]any{"name": startClockEnv, "value": startClockMode(spec)},
+		map[string]any{"name": "KUBEPHOS_WARMUP_SECONDS", "value": fmt.Sprint(spec.WarmupSeconds)},
 		map[string]any{"name": "KUBEPHOS_STEPS", "value": string(stepsValue)},
 		map[string]any{"name": "KUBEPHOS_GEOGRAPHIC_STEPS", "value": string(geographicValue)},
 		map[string]any{"name": "KUBEPHOS_PARAMETERS", "value": string(parametersValue)},
 	}
+	environment = append(environment, requestMixEnvironment(spec)...)
 	parameterNames := make([]string, 0, len(profile.Parameters))
 	for name := range profile.Parameters {
 		parameterNames = append(parameterNames, name)
@@ -1310,7 +1503,9 @@ func loadManifest(profile loadProfile, marker string, spec Spec, targets []loadT
 	return result, nil
 }
 
-const locustWrapper = `import importlib.util
+const locustWrapper = `import fractions
+import functools
+import importlib.util
 import json
 import math
 import os
@@ -1319,8 +1514,9 @@ import time
 from urllib.parse import urljoin, urlsplit
 import gevent
 from gevent.lock import Semaphore
-from locust import LoadTestShape
+from locust import LoadTestShape, TaskSet, events
 from locust.clients import HttpSession
+from locust.exception import RescheduleTaskImmediately
 from locust.contrib.fasthttp import FastHttpSession
 from locust.user import User
 
@@ -1332,44 +1528,304 @@ steps = json.loads(os.environ["KUBEPHOS_STEPS"])
 geographic_steps = json.loads(os.environ["KUBEPHOS_GEOGRAPHIC_STEPS"])
 max_users = int(os.environ["KUBEPHOS_MAX_USERS"])
 spawn_rate = float(os.environ["KUBEPHOS_SPAWN_RATE"])
+
+def configured_load_workers(value):
+    # Every Deployment replica is an independent headless Locust process, so the
+    # configured profile is the total offered load and each worker paces its share.
+    try:
+        return max(1, int(value))
+    except (TypeError, ValueError):
+        return 1
+
+def configured_seconds(value):
+    try:
+        seconds = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    return seconds if math.isfinite(seconds) and seconds > 0 else 0.0
+
+load_workers = configured_load_workers(os.environ.get("KUBEPHOS_LOAD_WORKERS", "1"))
+warmup_seconds = configured_seconds(os.environ.get("KUBEPHOS_WARMUP_SECONDS", "0"))
+start_clock = os.environ.get("KUBEPHOS_START_CLOCK", "local")
+start_file = "/tmp/kubephos-start"
 started_at = time.monotonic()
-network_clock = os.environ.get("KUBEPHOS_NETWORK_CLOCK", "")
-network_start = None
+shared_start = None
 
 def profile_elapsed():
-    global network_start
-    if not network_clock:
-        return time.monotonic() - started_at
-    if network_start is None:
-        import ssl
-        import urllib.request
-        service_account = "/var/run/secrets/kubernetes.io/serviceaccount/"
-        namespace = os.environ["KUBEPHOS_NETWORK_NAMESPACE"]
-        with open(service_account + "token") as source:
-            token = source.read().strip()
-        request = urllib.request.Request(
-            "https://kubernetes.default.svc/api/v1/namespaces/" + namespace + "/configmaps/" + network_clock,
-            headers={"Authorization": "Bearer " + token})
-        with urllib.request.urlopen(request, context=ssl.create_default_context(cafile=service_account + "ca.crt"), timeout=2) as response:
-            value = json.load(response).get("data", {}).get("startUnix", "")
-        if not value:
+    # Seconds since t=0 of the measured profile; negative during the warmup. With
+    # the shared clock every worker idles (None) until KubePhos publishes the Unix
+    # second of t=0, chosen after all workers are ready, so they start together.
+    global shared_start
+    if start_clock != "shared":
+        return time.monotonic() - started_at - warmup_seconds
+    if shared_start is None:
+        try:
+            with open(start_file) as source:
+                value = source.read().strip()
+            shared_start = float(value) if value else None
+        except (OSError, ValueError):
             return None
-        network_start = int(value)
-        with open("/tmp/kubephos-network-clock-ready.tmp", "w") as target:
-            target.write(str(network_start))
-        os.replace("/tmp/kubephos-network-clock-ready.tmp", "/tmp/kubephos-network-clock-ready")
-    return time.time() - network_start
+        if shared_start is None:
+            return None
+    return time.time() - shared_start
+
 request_lock = Semaphore()
-next_request_at = time.monotonic()
+next_request_at = None
 
 def no_wait(_self):
     return 0.0
 
+user_classes = []
 for name, value in vars(module).items():
     if not name.startswith("_") and isinstance(value, type) and issubclass(value, User) and value.abstract is False:
         value.wait_time = no_wait
         globals()[name] = value
+        user_classes.append(value)
 del name, value
+
+# Request mix: Locust stores the weighted tasks of every User and TaskSet class as
+# a list repeating each task "weight" times. KubePhos rebuilds those lists with
+# the configured weights, wraps every task function to count its executions and,
+# while profiling the call chain, narrows every list to a single task.
+max_task_entries = 10000
+task_plan_file = "/tmp/kubephos-task-plan.json"
+task_classes = {}
+task_class_order = []
+task_executions = {}
+current_tasks = {}
+task_mode = {"target": None}
+task_plan = {"taskMix": [], "profileTasks": []}
+
+def parse_task_weights(value):
+    try:
+        raw = json.loads(value) if value else {}
+    except ValueError:
+        print("KubePhos: ignoring invalid task weights", flush=True)
+        return {}
+    if not isinstance(raw, dict):
+        return {}
+    weights = {}
+    for name, weight in raw.items():
+        if isinstance(weight, bool) or not isinstance(weight, (int, float)):
+            continue
+        weight = float(weight)
+        if math.isfinite(weight) and weight >= 0:
+            weights[str(name)] = weight
+    return weights
+
+def task_name(task):
+    return getattr(task, "kubephos_task", None) or getattr(task, "__name__", None) or repr(task)
+
+def is_task_set(task):
+    return isinstance(task, type) and issubclass(task, TaskSet)
+
+def distinct_tasks(tasks):
+    # (task, repetitions) in order of first appearance: the Locust weights.
+    order, counts = [], {}
+    for task in tasks:
+        if id(task) not in counts:
+            counts[id(task)] = 0
+            order.append(task)
+        counts[id(task)] += 1
+    return [(task, counts[id(task)]) for task in order]
+
+def integer_weights(weights):
+    # Locust weights are repetitions: fractional weights (percentages) are scaled
+    # to at most max_task_entries entries, every positive weight keeps at least one
+    # entry and the result is reduced by the common divisor, preserving ratios.
+    positive = [weight for weight in weights if weight > 0]
+    if not positive:
+        return [0 for _ in weights]
+    if all(float(weight).is_integer() for weight in positive) and sum(positive) <= max_task_entries:
+        return [int(weight) for weight in weights]
+    # Decimal percentages (33.3/66.7, 0.5/0.25) have an exact small common scale.
+    exact = [fractions.Fraction(weight).limit_denominator(1000) for weight in weights]
+    scale = 1
+    for value in exact:
+        scale = scale * value.denominator // math.gcd(scale, value.denominator)
+    if all(abs(float(value) - weight) <= 1e-9 * max(1.0, weight) for value, weight in zip(exact, weights)):
+        values = [int(value * scale) for value in exact]
+        divisor = 0
+        for value in values:
+            divisor = math.gcd(divisor, value)
+        values = [value // divisor for value in values]
+        if sum(values) <= max_task_entries:
+            return values
+    factor = max(len(positive), max_task_entries - len(positive)) / sum(positive)
+    values = [max(1, int(round(weight * factor))) if weight > 0 else 0 for weight in weights]
+    divisor = 0
+    for value in values:
+        divisor = math.gcd(divisor, value)
+    return [value // divisor for value in values]
+
+def counted_task(task):
+    name = task_name(task)
+
+    @functools.wraps(task)
+    def run(*args, **kwargs):
+        task_executions[name] = task_executions.get(name, 0) + 1
+        key = id(gevent.getcurrent())
+        previous = current_tasks.get(key)
+        current_tasks[key] = name
+        try:
+            return task(*args, **kwargs)
+        finally:
+            if previous is None:
+                current_tasks.pop(key, None)
+            else:
+                current_tasks[key] = previous
+    run.kubephos_task = name
+    return run
+
+def kubephos_idle(parent):
+    # A class that cannot reach the profiled task: a nested TaskSet returns to its
+    # parent, a user waits without sending requests.
+    if isinstance(parent, TaskSet):
+        parent.interrupt(reschedule=True)
+    gevent.sleep(0.5)
+
+def apply_tasks(target):
+    # None restores the configured mix; a task name narrows every class to it.
+    task_mode["target"] = target
+    for cls in task_class_order:
+        entries = task_classes[cls]
+        if not entries:
+            continue
+        if target is None:
+            cls.tasks = [task for task, _, integer in entries for _ in range(integer)]
+            continue
+        chosen = [task for task, _, integer in entries if integer > 0 and (reaches_task(task, target, (cls, task)) if is_task_set(task) else task_name(task) == target)]
+        cls.tasks = chosen or [kubephos_idle]
+
+def reaches_task(cls, target, path):
+    for task, _, integer in task_classes.get(cls) or []:
+        if integer <= 0:
+            continue
+        if is_task_set(task):
+            if task not in path and reaches_task(task, target, path + (task,)):
+                return True
+        elif task_name(task) == target:
+            return True
+    return False
+
+def leaf_mix(roots):
+    # Share of task executions of every task function, through nested TaskSets and
+    # across User classes (by their weight). TaskSet entries are paths, not tasks.
+    shares, weights, order = {}, {}, []
+
+    def walk(cls, share, path):
+        entries = task_classes.get(cls) or []
+        if not entries:
+            return
+        total = sum(integer for _, _, integer in entries)
+        if total <= 0:
+            raise RuntimeError("KubePhos task weights leave %s without tasks" % getattr(cls, "__name__", cls))
+        for task, weight, integer in entries:
+            if integer <= 0:
+                continue
+            part = share * integer / total
+            if is_task_set(task):
+                if task not in path:
+                    walk(task, part, path + (task,))
+                continue
+            name = task_name(task)
+            if name not in shares:
+                order.append(name)
+                shares[name], weights[name] = 0.0, weight
+            shares[name] += part
+
+    roots = [cls for cls in roots if task_classes.get(cls)]
+    user_weights = [max(0.0, float(getattr(cls, "weight", 1) or 0)) for cls in roots]
+    total_weight = sum(user_weights)
+    for cls, weight in zip(roots, user_weights):
+        if weight > 0:
+            walk(cls, weight / total_weight, (cls,))
+    total = sum(shares.values())
+    if total <= 0:
+        raise RuntimeError("KubePhos task weights leave the scenario without tasks")
+    return [{"task": name, "weight": weights[name], "share": shares[name] / total} for name in order]
+
+def configure_task_mix(roots, overrides):
+    wrappers = {}
+    known = set()
+
+    def visit(cls):
+        if cls in task_classes:
+            return
+        original = distinct_tasks(list(getattr(cls, "tasks", None) or []))
+        names = [task_name(task) for task, _ in original]
+        known.update(names)
+        configured = [float(overrides.get(name, count)) for (_, count), name in zip(original, names)]
+        changed = any(name in overrides for name in names)
+        integers = integer_weights(configured) if changed else [count for _, count in original]
+        entries = []
+        for (task, _), weight, integer in zip(original, configured, integers):
+            if not is_task_set(task):
+                if id(task) not in wrappers:
+                    wrappers[id(task)] = counted_task(task)
+                task = wrappers[id(task)]
+                task_executions.setdefault(task_name(task), 0)
+            entries.append((task, weight, integer))
+        task_classes[cls] = entries
+        task_class_order.append(cls)
+        for task, _ in original:
+            if is_task_set(task):
+                visit(task)
+
+    for cls in roots:
+        visit(cls)
+    unknown = sorted(set(overrides) - known)
+    if unknown:
+        print("KubePhos: ignoring task weights of unknown tasks: " + ", ".join(unknown), flush=True)
+    apply_tasks(None)
+    task_plan["taskMix"] = leaf_mix(roots)
+    task_plan["profileTasks"] = [entry["task"] for entry in task_plan["taskMix"] if entry["share"] > 0]
+    return task_plan
+
+def profiling_task_at(elapsed):
+    # Call-chain profiling runs before the warmup: one window per task, in order.
+    if not profile_tasks or elapsed is None or elapsed >= -warmup_seconds:
+        return None
+    offset = elapsed + warmup_seconds + len(profile_tasks) * profile_seconds_per_task
+    if offset < 0:
+        return None
+    return profile_tasks[min(len(profile_tasks) - 1, int(offset // profile_seconds_per_task))]
+
+def sync_task_mode(elapsed):
+    global next_request_at
+    target = profiling_task_at(elapsed)
+    if target != task_mode["target"]:
+        apply_tasks(target)
+        if target is not None:
+            # Slots reserved by the previous task's users are discarded when they
+            # abort; the new task's users reserve from now, so no second is lost.
+            next_request_at = None
+    return target
+
+def check_task_mode():
+    # Before each request: a task started in an earlier profiling window stops
+    # instead of sending its remaining requests into another task's window.
+    target = sync_task_mode(profile_elapsed())
+    if target is None:
+        return
+    current = current_tasks.get(id(gevent.getcurrent()))
+    if current is not None and current != target:
+        raise RescheduleTaskImmediately()
+
+def write_task_plan(path):
+    try:
+        with open(path + ".tmp", "w") as target:
+            json.dump({"taskMix": task_plan["taskMix"], "profileTasks": profile_tasks}, target)
+        os.replace(path + ".tmp", path)
+    except OSError as error:
+        print("KubePhos: cannot write the task plan: %s" % error, flush=True)
+
+profile_call_chain = os.environ.get("KUBEPHOS_PROFILE_CALL_CHAIN") == "true" and start_clock == "shared"
+profile_seconds_per_task = configured_seconds(os.environ.get("KUBEPHOS_PROFILE_SECONDS_PER_TASK", "60"))
+profile_rps = configured_seconds(os.environ.get("KUBEPHOS_PROFILE_RPS", "0"))
+configure_task_mix(user_classes, parse_task_weights(os.environ.get("KUBEPHOS_TASK_WEIGHTS", "")))
+profile_tasks = list(task_plan["profileTasks"]) if profile_call_chain and profile_seconds_per_task > 0 and profile_rps > 0 else []
+write_task_plan(task_plan_file)
 
 def duration(items):
     return sum(float(item["durationSeconds"]) for item in items)
@@ -1383,29 +1839,98 @@ def active_step(items, elapsed):
         cursor += item_duration
     return (items[-1], float(items[-1]["durationSeconds"])) if items else (None, 0.0)
 
+def step_number(step, key):
+    # The Go encoder omits zero-valued numeric fields, so a missing field means 0.
+    value = step.get(key)
+    return 0.0 if value is None else float(value)
+
 def rps_at(elapsed):
     step, local_time = active_step(steps, elapsed)
     if step is None:
         return 0.0
     kind = step["type"]
     if kind == "constant":
-        return max(0.0, float(step["rps"]))
+        return max(0.0, step_number(step, "rps"))
     if kind == "sinusoidal":
-        period = float(step["periodSeconds"])
-        phase = float(step.get("phaseSeconds", 0))
+        period = max(step_number(step, "periodSeconds"), 1.0)
+        phase = step_number(step, "phaseSeconds")
         if "minRps" in step and "maxRps" in step:
-            baseline = (float(step["minRps"]) + float(step["maxRps"])) / 2.0
-            amplitude = (float(step["maxRps"]) - float(step["minRps"])) / 2.0
+            baseline = (step_number(step, "minRps") + step_number(step, "maxRps")) / 2.0
+            amplitude = (step_number(step, "maxRps") - step_number(step, "minRps")) / 2.0
         else:
-            baseline = float(step["baselineRps"])
-            amplitude = float(step["amplitudeRps"])
+            baseline = step_number(step, "baselineRps")
+            amplitude = step_number(step, "amplitudeRps")
         return max(0.0, baseline + amplitude * math.sin((2.0 * math.pi * (local_time + phase)) / period))
-    start = float(step["startRps"])
-    end = float(step["endRps"])
-    progress = min(max(local_time / max(float(step["durationSeconds"]), 1.0), 0.0), 1.0)
-    curve = float(step.get("curve", 3.0))
+    start = step_number(step, "startRps")
+    end = step_number(step, "endRps")
+    progress = min(max(local_time / max(step_number(step, "durationSeconds"), 1.0), 0.0), 1.0)
+    # A missing curve is 0 (linear), matching the UI preview and the metrics collector.
+    curve = step_number(step, "curve")
     shaped = progress if abs(curve) < 1e-9 else (math.exp(curve * progress) - 1.0) / (math.exp(curve) - 1.0)
     return max(0.0, start + (end - start) * shaped)
+
+def worker_rps_at(elapsed):
+    # The warmup offers the profile's initial rate; nothing is sent before it or
+    # after the profile ends (drain).
+    phase = load_phase(elapsed)
+    if phase == 3:
+        return profile_rps / load_workers
+    if phase == 0:
+        return rps_at(0.0) / load_workers
+    if phase == 1:
+        return rps_at(elapsed) / load_workers
+    return 0.0
+
+# Open-loop sizing (Little's law): a user without think time completes one
+# request per latency period, so rate x latency users are busy at any instant.
+# With only ceil(rate) users the generator falls behind its schedule as soon as
+# the mean latency exceeds one second, and the system under test is offered
+# less load exactly when it saturates (coordinated omission). Users therefore
+# follow the observed latency with headroom; ceil(rate) remains the floor.
+user_headroom = 1.5
+latency_window = {"sum": 0.0, "count": 0, "estimate": 0.0, "updated_at": None}
+
+def observe_latency(request_type=None, name=None, response_time=None, exception=None, **kwargs):
+    if response_time is None or not math.isfinite(response_time) or response_time < 0:
+        return
+    latency_window["sum"] += response_time / 1000.0
+    latency_window["count"] += 1
+
+def latency_estimate():
+    # Mean latency (seconds) of the requests completed since the previous update,
+    # at most once per second. It rises at once, so users are added before the
+    # schedule slips, and decays slowly, so the user count does not oscillate.
+    now = time.monotonic()
+    updated_at = latency_window["updated_at"]
+    if updated_at is None or now - updated_at >= 1.0:
+        latency_window["updated_at"] = now
+        if latency_window["count"]:
+            mean = latency_window["sum"] / latency_window["count"]
+            estimate = latency_window["estimate"]
+            latency_window["estimate"] = mean if mean >= estimate else 0.8 * estimate + 0.2 * mean
+            latency_window["sum"] = 0.0
+            latency_window["count"] = 0
+    return latency_window["estimate"]
+
+def worker_users_at(elapsed):
+    rate = worker_rps_at(elapsed)
+    if rate <= 0:
+        return 0
+    requested = math.ceil(rate * max(1.0, user_headroom * latency_estimate()) - 1e-9)
+    return min(max_users, max(1, requested))
+
+def load_phase(elapsed):
+    # kubephos_load_phase: 3 call-chain profiling (before the warmup), 0 warmup,
+    # 1 measured profile, 2 drain; None while idle.
+    if elapsed is None:
+        return None
+    if elapsed < -warmup_seconds:
+        return 3 if profile_tasks and elapsed >= -warmup_seconds - len(profile_tasks) * profile_seconds_per_task else None
+    if elapsed < 0:
+        return 0
+    if elapsed <= duration(steps):
+        return 1
+    return 2
 
 def choose_weighted(items):
     return random.choices(items, weights=[float(item.get("weight", 1.0)) for item in items], k=1)[0]
@@ -1427,7 +1952,8 @@ def choose_target():
         by_zone.setdefault(target.get("zone", "default"), []).append(target)
     if not geographic_steps:
         return choose_weighted(targets)["url"]
-    elapsed = profile_elapsed()
+    # The warmup uses the geographic distribution of the profile's t=0.
+    elapsed = max(0.0, profile_elapsed() or 0.0)
     zones = sorted(by_zone)
     weights = zone_weights_at(elapsed, zones)
     candidates = [{"zone": zone, "weight": weights[zone]} for zone in zones if weights[zone] > 0]
@@ -1439,34 +1965,76 @@ def request_url(url):
         return url
     return urljoin(choose_target().rstrip("/") + "/", str(url).lstrip("/"))
 
+def request_path(url):
+    parts = urlsplit(str(url))
+    return (parts.path or "/") + ("?" + parts.query if parts.query else "")
+
 def wait_for_request_slot():
     global next_request_at
     while True:
         elapsed = profile_elapsed()
-        if elapsed is None or elapsed < 0:
+        if elapsed is None:
             gevent.sleep(0.1)
             continue
-        target_rps = rps_at(elapsed)
+        target_rps = worker_rps_at(elapsed)
         if target_rps <= 0:
             with request_lock:
-                next_request_at = time.monotonic()
+                next_request_at = None
             gevent.sleep(0.1)
             continue
         now = time.monotonic()
+        # Slots are spaced 1/rate apart and never reset to "now" while users are
+        # queued: resetting a queued schedule starts a new burst and overshoots
+        # the target. Reservations are limited to a short horizon so a later rate
+        # change applies quickly; users beyond it wait and retry without a slot.
+        horizon = max(1.0, 2.0 / target_rps)
         with request_lock:
-            if next_request_at > now + max(1.0, 2.0 / target_rps):
-                next_request_at = now
-            slot_at = max(now, next_request_at)
-            next_request_at = slot_at + (1.0 / target_rps)
+            scheduled_at = now if next_request_at is None else next_request_at
+            slot_at = max(now, scheduled_at)
+            reserved = slot_at <= now + horizon
+            if reserved:
+                next_request_at = slot_at + (1.0 / target_rps)
+        if not reserved:
+            gevent.sleep(max(0.01, min(0.25, slot_at - horizon - now)))
+            continue
+        # A slot that is already in the past was missed because every user was busy:
+        # the closed-loop generator fell behind the open-loop schedule.
+        record_schedule_lag(now - scheduled_at, target_rps)
         if slot_at > now:
             gevent.sleep(slot_at - now)
+            # A slot reserved ahead can fall after the profile ended (or in a
+            # zero-rate step): send nothing then, so the drain carries no traffic.
+            elapsed = profile_elapsed()
+            if elapsed is None or worker_rps_at(elapsed) <= 0:
+                continue
         return
+
+# Coordinated-omission evidence: lag = issue time - scheduled slot time, cumulative
+# for Prometheus and since the start of the measured profile for the summary.
+schedule_stats = {"count": 0, "lag_sum": 0.0, "late": 0, "max_lag": 0.0}
+measured_schedule = {"count": 0, "lag_sum": 0.0, "late": 0, "max_lag": 0.0}
+
+def late_threshold(target_rps):
+    return max(0.05, 0.5 / target_rps)
+
+def record_schedule_lag(lag, target_rps):
+    lag = max(0.0, lag)
+    late = lag > late_threshold(target_rps)
+    for stats in (schedule_stats, measured_schedule):
+        stats["count"] += 1
+        stats["lag_sum"] += lag
+        stats["max_lag"] = max(stats["max_lag"], lag)
+        if late:
+            stats["late"] += 1
 
 original_http_request = HttpSession.request
 original_fast_http_request = FastHttpSession.request
 
 def paced_http_request(self, *args, **kwargs):
+    check_task_mode()
     wait_for_request_slot()
+    # The slot can fall in the next profiling window (reservations reach ahead).
+    check_task_mode()
     if "url" in kwargs:
         kwargs["url"] = request_url(kwargs["url"])
     elif len(args) >= 2:
@@ -1474,11 +2042,24 @@ def paced_http_request(self, *args, **kwargs):
     return original_http_request(self, *args, **kwargs)
 
 def paced_fast_http_request(self, *args, **kwargs):
+    check_task_mode()
     wait_for_request_slot()
+    # The slot can fall in the next profiling window (reservations reach ahead).
+    check_task_mode()
     if "url" in kwargs:
-        kwargs["url"] = request_url(kwargs["url"])
+        original = kwargs["url"]
+        kwargs["url"] = request_url(original)
+        rewritten = kwargs["url"]
     elif len(args) >= 2:
+        original = args[1]
         args = (args[0], request_url(args[1]), *args[2:])
+        rewritten = args[1]
+    else:
+        original = rewritten = None
+    # FastHttpSession names requests by the URL it receives; keep the path, like
+    # HttpSession, so endpoints are not split by the chosen target host.
+    if rewritten is not None and rewritten != original and len(args) < 3 and not kwargs.get("name") and not getattr(self, "request_name", None):
+        kwargs["name"] = request_path(rewritten)
     return original_fast_http_request(self, *args, **kwargs)
 
 module.kubephos_wait_for_request_slot = wait_for_request_slot
@@ -1486,68 +2067,230 @@ module.kubephos_wait_for_request_slot = wait_for_request_slot
 HttpSession.request = paced_http_request
 FastHttpSession.request = paced_fast_http_request
 
+# Measurement window: Locust statistics are reset at the profile's t=0 so the
+# summary covers only the measured profile, not the warmup.
+measurement = {"environment": None, "phase": None, "measured_from": None, "cpu_max": 0.0, "cpu_warnings": 0, "cpu_warning_emitted": False}
+cpu_warning_event = getattr(events, "cpu_warning", None)
+
+def locust_runner():
+    return getattr(measurement["environment"], "runner", None)
+
+def begin_measurement(elapsed):
+    measurement["measured_from"] = shared_start if shared_start is not None else time.time() - elapsed
+    for key in measured_schedule:
+        measured_schedule[key] = 0.0 if key in ("lag_sum", "max_lag") else 0
+    measurement["cpu_max"] = 0.0
+    measurement["cpu_warnings"] = 0
+    runner = locust_runner()
+    if runner is not None:
+        measurement["cpu_warning_emitted"] = bool(getattr(runner, "cpu_warning_emitted", False))
+        runner.stats.reset_all()
+
+def sample_cpu():
+    runner = locust_runner()
+    if runner is None:
+        return
+    usage = getattr(runner, "current_cpu_usage", None)
+    if isinstance(usage, (int, float)) and math.isfinite(usage):
+        measurement["cpu_max"] = max(measurement["cpu_max"], float(usage))
+    # Without the cpu_warning event only Locust's one-shot flag is available.
+    if cpu_warning_event is None and getattr(runner, "cpu_warning_emitted", False) and not measurement["cpu_warning_emitted"]:
+        measurement["cpu_warning_emitted"] = True
+        measurement["cpu_warnings"] += 1
+
+def record_cpu_warning(cpu_usage=None, **kwargs):
+    if measurement["phase"] == 1:
+        measurement["cpu_warnings"] += 1
+        if isinstance(cpu_usage, (int, float)) and math.isfinite(cpu_usage):
+            measurement["cpu_max"] = max(measurement["cpu_max"], float(cpu_usage))
+
+def update_phase(elapsed):
+    phase = load_phase(elapsed)
+    sync_task_mode(elapsed)
+    if phase == 1 and measurement["measured_from"] is None:
+        begin_measurement(elapsed)
+    measurement["phase"] = phase
+    if phase == 1:
+        sample_cpu()
+    return phase
+
+def stats_entry_summary(entry):
+    minimum = getattr(entry, "min_response_time", None)
+    return {
+        "method": entry.method or "",
+        "name": entry.name or "",
+        "numRequests": int(entry.num_requests),
+        "numNoneRequests": int(getattr(entry, "num_none_requests", 0) or 0),
+        "numFailures": int(entry.num_failures),
+        "totalResponseTime": float(entry.total_response_time or 0),
+        "minResponseTime": None if minimum is None else float(minimum),
+        "maxResponseTime": float(entry.max_response_time or 0),
+        "responseTimes": {str(key): int(count) for key, count in (entry.response_times or {}).items()},
+    }
+
+def error_text(error):
+    parse = getattr(type(error), "parse_error", None)
+    try:
+        return str(parse(error.error)) if parse is not None else str(error.error)
+    except Exception:
+        return str(error.error)
+
+def locust_summary():
+    runner = locust_runner()
+    stats = getattr(runner, "stats", None)
+    return {
+        "phase": measurement["phase"],
+        "measuredFrom": measurement["measured_from"],
+        "entries": [stats_entry_summary(entry) for entry in stats.entries.values()] if stats is not None else [],
+        "total": stats_entry_summary(stats.total) if stats is not None else None,
+        "errors": [{"method": error.method or "", "name": error.name or "", "error": error_text(error), "occurrences": int(error.occurrences)} for error in stats.errors.values()] if stats is not None else [],
+        "cpu": {"maxPercent": measurement["cpu_max"], "warnings": measurement["cpu_warnings"]},
+        "schedule": {"count": measured_schedule["count"], "lagSum": measured_schedule["lag_sum"], "late": measured_schedule["late"], "maxLag": measured_schedule["max_lag"]},
+        "taskMix": task_plan["taskMix"],
+        "taskExecutions": dict(task_executions),
+    }
+
+def next_phase_delay(elapsed):
+    # Wake exactly at every phase and profiling-window transition.
+    if elapsed is None:
+        return 0.2
+    boundaries = [0.0, -warmup_seconds] + [-warmup_seconds - profile_seconds_per_task * index for index in range(1, len(profile_tasks) + 1)]
+    upcoming = [boundary - elapsed for boundary in boundaries if boundary > elapsed]
+    return max(0.001, min([1.0] + upcoming))
+
+def watch_phases():
+    while True:
+        elapsed = profile_elapsed()
+        update_phase(elapsed)
+        gevent.sleep(next_phase_delay(elapsed))
+
+@events.init.add_listener
+def start_measurement(environment, **kwargs):
+    measurement["environment"] = environment
+    if cpu_warning_event is not None:
+        cpu_warning_event.add_listener(record_cpu_warning)
+    gevent.spawn(watch_phases)
+
+buckets = (0.1, 0.25, 0.5, 1, 2.5, 5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000, 30000, 60000)
+max_metric_names = 50
+metrics = {}
+metric_names = set()
+
+def metric_counts():
+    return {"success": 0, "failure": 0, "sum": 0.0, "count": 0, "buckets": [0] * len(buckets)}
+
+def metric_name(name):
+    # Bounded cardinality: after 50 distinct request names the rest are "other".
+    name = "" if name is None else str(name)
+    if name in metric_names:
+        return name
+    if len(metric_names) < max_metric_names:
+        metric_names.add(name)
+        return name
+    return "other"
+
+def label_value(value):
+    # Prometheus text format escaping of label values.
+    return str(value).replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n")
+
+def record_request(request_type, name, response_time, exception, **kwargs):
+    operation = name if request_type == "redis" else request_type
+    counts = metrics.setdefault((str(operation), metric_name(name)), metric_counts())
+    counts["failure" if exception is not None else "success"] += 1
+    if response_time is None or not math.isfinite(response_time) or response_time < 0:
+        return
+    counts["sum"] += response_time
+    counts["count"] += 1
+    for i, bound in enumerate(buckets):
+        if response_time <= bound:
+            counts["buckets"][i] += 1
+
+def seed_metrics(redis_operation):
+    # Seed both outcomes before traffic starts, including all-success runs.
+    if redis_operation == "mixed":
+        operations = ("GET", "SET")
+    elif redis_operation:
+        operations = (redis_operation,)
+    else:
+        operations = ("GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS")
+    for operation in operations:
+        metrics[(operation, "")] = metric_counts()
+
+def prometheus_number(value):
+    return repr(float(value))
+
+def prometheus_exposition():
+    series = sorted(metrics.items())
+    labels = ['operation="%s",name="%s"' % (label_value(operation), label_value(name)) for (operation, name), _ in series]
+    lines = ["# TYPE kubephos_load_requests_total counter"]
+    for label, (_, counts) in zip(labels, series):
+        for outcome in ("success", "failure"):
+            lines.append('kubephos_load_requests_total{%s,outcome="%s"} %d' % (label, outcome, counts[outcome]))
+    lines.append("# TYPE kubephos_load_duration_milliseconds histogram")
+    for label, (_, counts) in zip(labels, series):
+        for bound, count in zip(buckets, counts["buckets"]):
+            lines.append('kubephos_load_duration_milliseconds_bucket{%s,le="%s"} %d' % (label, bound, count))
+        lines.append('kubephos_load_duration_milliseconds_bucket{%s,le="+Inf"} %d' % (label, counts["count"]))
+        lines.append('kubephos_load_duration_milliseconds_count{%s} %d' % (label, counts["count"]))
+        lines.append('kubephos_load_duration_milliseconds_sum{%s} %s' % (label, prometheus_number(counts["sum"])))
+    elapsed = profile_elapsed()
+    phase = load_phase(elapsed)
+    runner = locust_runner()
+    lines.append("# TYPE kubephos_load_target_rps gauge")
+    lines.append("kubephos_load_target_rps %s" % prometheus_number(0.0 if elapsed is None else worker_rps_at(elapsed)))
+    lines.append("# TYPE kubephos_load_users gauge")
+    lines.append("kubephos_load_users %d" % int(getattr(runner, "user_count", 0) or 0))
+    lines.append("# TYPE kubephos_load_schedule_lag_seconds summary")
+    lines.append("kubephos_load_schedule_lag_seconds_sum %s" % prometheus_number(schedule_stats["lag_sum"]))
+    lines.append("kubephos_load_schedule_lag_seconds_count %d" % schedule_stats["count"])
+    lines.append("# TYPE kubephos_load_late_requests_total counter")
+    lines.append("kubephos_load_late_requests_total %d" % schedule_stats["late"])
+    lines.append("# TYPE kubephos_load_phase gauge")
+    if phase is not None:
+        lines.append("kubephos_load_phase %d" % phase)
+    if task_executions:
+        lines.append("# TYPE kubephos_load_task_executions_total counter")
+        for task in sorted(task_executions):
+            lines.append('kubephos_load_task_executions_total{task="%s"} %d' % (label_value(task), task_executions[task]))
+    if profile_tasks:
+        target = profiling_task_at(elapsed)
+        lines.append("# TYPE kubephos_load_profiling_task gauge")
+        for task in profile_tasks:
+            lines.append('kubephos_load_profiling_task{task="%s"} %d' % (label_value(task), 1 if task == target else 0))
+    return "\n".join(lines) + "\n"
+
+def serve_stats(environ, start_response):
+    path = environ.get("PATH_INFO")
+    if path == "/stats/prometheus":
+        body, content_type = prometheus_exposition(), "text/plain; version=0.0.4"
+    elif path == "/stats/summary":
+        body, content_type = json.dumps(locust_summary()), "application/json"
+    else:
+        start_response("404 Not Found", [])
+        return [b""]
+    start_response("200 OK", [("Content-Type", content_type)])
+    return [body.encode()]
+
+events.request.add_listener(observe_latency)
+
 if os.environ.get("KUBEPHOS_LOAD_METRICS") == "true":
-    from locust import events
     from gevent.pywsgi import WSGIServer
-    buckets = (0.1, 0.25, 0.5, 1, 2.5, 5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000, 30000, 60000)
-    metrics = {}
     metrics_server = None
-
-    @events.request.add_listener
-    def record_request(request_type, name, response_time, exception, **kwargs):
-        operation = name if request_type == "redis" else request_type
-        counts = metrics.setdefault(operation, {"success": 0, "failure": 0, "sum": 0.0, "count": 0, "buckets": [0] * len(buckets)})
-        counts["failure" if exception is not None else "success"] += 1
-        if response_time is None or not math.isfinite(response_time) or response_time < 0:
-            return
-        counts["sum"] += response_time
-        counts["count"] += 1
-        for i, bound in enumerate(buckets):
-            if response_time <= bound:
-                counts["buckets"][i] += 1
-
-    def expose_metrics(environ, start_response):
-        if environ.get("PATH_INFO") != "/stats/prometheus":
-            start_response("404 Not Found", [])
-            return [b""]
-        lines = ["# TYPE kubephos_load_requests_total counter", "# TYPE kubephos_load_duration_milliseconds histogram"]
-        for operation, counts in metrics.items():
-            label = "operation=" + json.dumps(operation)
-            for outcome in ("success", "failure"):
-                lines.append('kubephos_load_requests_total{%s,outcome="%s"} %d' % (label, outcome, counts[outcome]))
-            for bound, count in zip(buckets, counts["buckets"]):
-                lines.append('kubephos_load_duration_milliseconds_bucket{%s,le="%s"} %d' % (label, bound, count))
-            lines.append('kubephos_load_duration_milliseconds_bucket{%s,le="+Inf"} %d' % (label, counts["count"]))
-            lines.append('kubephos_load_duration_milliseconds_count{%s} %d' % (label, counts["count"]))
-            lines.append('kubephos_load_duration_milliseconds_sum{%s} %s' % (label, counts["sum"]))
-        start_response("200 OK", [("Content-Type", "text/plain; version=0.0.4")])
-        return [("\n".join(lines) + "\n").encode()]
+    events.request.add_listener(record_request)
 
     @events.init.add_listener
     def start_metrics(**kwargs):
         global metrics_server
-        # Seed both outcomes before traffic starts, including all-success runs.
-        redis_operation = getattr(module, "CONFIG", {}).get("operation")
-        if redis_operation == "mixed":
-            operations = ("GET", "SET")
-        elif redis_operation:
-            operations = (redis_operation,)
-        else:
-            operations = ("GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS")
-        for operation in operations:
-            metrics[operation] = {"success": 0, "failure": 0, "sum": 0.0, "count": 0, "buckets": [0] * len(buckets)}
-        metrics_server = WSGIServer(("0.0.0.0", 9646), expose_metrics, log=None)
+        seed_metrics(getattr(module, "CONFIG", {}).get("operation"))
+        metrics_server = WSGIServer(("0.0.0.0", 9646), serve_stats, log=None)
         metrics_server.start()
 
 class KubePhosLoadShape(LoadTestShape):
     def tick(self):
-        elapsed = profile_elapsed() if network_clock else self.get_run_time()
-        if elapsed is None or elapsed < 0:
+        elapsed = profile_elapsed()
+        if load_phase(elapsed) not in (0, 1, 3):
             return 0, spawn_rate
-        if elapsed > duration(steps):
-            return 0, spawn_rate
-        requested = math.ceil(rps_at(elapsed))
-        return min(max_users, max(1, requested)) if requested > 0 else 0, spawn_rate
+        return worker_users_at(elapsed), spawn_rate
 `
 
 func invalid(report domain.ValidationReport, path, message string) domain.ValidationReport {

@@ -165,3 +165,34 @@ func TestExperimentDefinitionIsScopedToTheExperimentNamespace(t *testing.T) {
 		t.Fatal("dashboard has no queries or variables")
 	}
 }
+
+func TestExperimentWorkloadPanelsExcludeTheLoadGenerator(t *testing.T) {
+	var dashboard struct {
+		Panels []struct {
+			Title   string `json:"title"`
+			Targets []struct {
+				Expr string `json:"expr"`
+			} `json:"targets"`
+		} `json:"panels"`
+	}
+	if err := json.Unmarshal(ExperimentDefinition(), &dashboard); err != nil {
+		t.Fatal(err)
+	}
+	checked := 0
+	for _, panel := range dashboard.Panels {
+		for _, target := range panel.Targets {
+			// Pod, container and deployment series of the experiment namespace
+			// describe the application; the Locust driver lives there too.
+			if !strings.Contains(target.Expr, "kube_pod_") && !strings.Contains(target.Expr, "container_") && !strings.Contains(target.Expr, "kube_deployment_") {
+				continue
+			}
+			checked++
+			if !strings.Contains(target.Expr, "kubephos-load-.*") {
+				t.Fatalf("panel %q includes the load generator: %s", panel.Title, target.Expr)
+			}
+		}
+	}
+	if checked == 0 {
+		t.Fatal("no workload queries were checked")
+	}
+}

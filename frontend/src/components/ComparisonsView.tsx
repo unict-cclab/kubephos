@@ -1,8 +1,8 @@
 import {ResourcePickerDialog, type CandidateLoader, type CandidatePage, type PickerResource} from './ResourcePickerDialog'
 import {DisabledActionHint} from './DisabledActionHint'
-import {useCallback, useEffect, useState} from 'react'
+import {lazy, Suspense, useCallback, useEffect, useState} from 'react'
 import type {Artifact, Experiment, Operation, Session, Workspace} from '../types'
-import {request} from '../api'
+import {refreshComparison, request} from '../api'
 import {formatDate} from '../lib'
 import {useDetailRoute} from '../detailRoute'
 import {comparisonColors, selectableComparisonRuns, type ComparisonView, type ResultComparison, type UnavailableComparisonSource} from '../comparisons'
@@ -15,6 +15,9 @@ import {ResultsView} from './LazyResultsView'
 import {Dialog} from './Dialog'
 import {ResponsiveTable} from './ResponsiveTable'
 import {DetailBreadcrumb} from './DetailBreadcrumb'
+
+// Only comparison pages need the integrity notice, so it loads with them.
+const ComparisonIntegrityNotice = lazy(() => import('./ComparisonIntegrityNotice').then(module => ({default: module.ComparisonIntegrityNotice})))
 
 const loadComparisonCandidates: CandidateLoader = (search, owner, offset, signal) => request<CandidatePage>(`/comparisons/candidates?${new URLSearchParams({search, owner, offset: String(offset)})}`, {}, undefined, signal)
 
@@ -29,6 +32,11 @@ export function unavailableSummary(sources: UnavailableComparisonSource[]): stri
   const count = sources.length
   const noun = count === 1 ? 'experiment' : 'experiments'
   return sources.every(source => source.reason === 'deleted') ? `${count} ${noun} deleted` : `${count} ${noun} unavailable`
+}
+
+// Comparisons saved before snapshots existed still follow their sources.
+function LiveBadge() {
+  return <span className="comparison-live-badge" title="Live comparison — results may change; save or refresh to freeze">Live<span className="visually-hidden"> comparison, results may change</span></span>
 }
 
 function UnavailableBadge({sources}: {sources: UnavailableComparisonSource[]}) {
@@ -93,6 +101,13 @@ export function ComparisonsView(props: Props) {
     catch (cause) {setError(cause instanceof Error ? cause.message : 'Could not delete the comparison.')}
     finally {setBusy(false)}
   }
+  // Replaces the frozen snapshot; errors (409 when a source is gone) are shown by the notice.
+  const refresh = async () => {
+    if (!loaded) return
+    const view = await refreshComparison(loaded.comparison.id, props.session.csrfToken)
+    setLoaded(view)
+    setItems(current => current.map(item => item.id === view.comparison.id ? view.comparison : item))
+  }
   const comparableExperiments=new Set(selectableComparisonRuns(props.experiments).map(run=>run.experiment.id)).size
   const canCreateComparison=!loading&&(sourceCount ?? comparableExperiments)>=2
   const creationHint=loading?'Loading comparisons…':'Requires two experiments with results.'
@@ -101,12 +116,12 @@ export function ComparisonsView(props: Props) {
   const actions = (item: ResultComparison) => <><ResourceAction action="edit" label={`Edit ${item.name}`} disabled={busy} onClick={() => setEditing(item)} /><ResourceAction action="delete" label={`Delete ${item.name}`} disabled={busy} onClick={() => void remove(item)} /></>
   return <>
     {confirmationDialog}
-    {loaded ? <ResultsView key={`${loaded.comparison.id}:${loaded.comparison.updatedAt}`} {...props} artifacts={loaded.artifacts} focusedExperiment={loaded.result} onBack={detail.close} comparison={{sourceConfigurations: loaded.sourceConfigurations, actions: actions(loaded.comparison), sources: <div className="resource-selection-scroll"><ResponsiveTable aria-label="Comparison source experiments"><thead><tr><th>Experiment</th><th>Created</th></tr></thead><tbody>{loaded.sources.map(source => <tr key={source.id}><td><a href={`#results/instance/${encodeURIComponent(source.id)}`}>{source.name}</a></td><td>{formatDate(source.createdAt)}</td></tr>)}</tbody></ResponsiveTable></div>}} /> : <>
+    {loaded ? <><ResultsView key={`${loaded.comparison.id}:${loaded.comparison.updatedAt}:${loaded.snapshot?.capturedAt ?? ''}`} {...props} artifacts={loaded.artifacts} focusedExperiment={loaded.result} onBack={detail.close} comparison={{sourceConfigurations: loaded.sourceConfigurations, actions: actions(loaded.comparison), notice: <Suspense fallback={null}><ComparisonIntegrityNotice view={loaded} onRefresh={refresh} /></Suspense>, sources: <div className="resource-selection-scroll"><ResponsiveTable aria-label="Comparison source experiments"><thead><tr><th>Experiment</th><th>Created</th></tr></thead><tbody>{loaded.sources.map(source => <tr key={source.id}><td><a href={`#results/instance/${encodeURIComponent(source.id)}`}>{source.name}</a></td><td>{formatDate(source.createdAt)}</td></tr>)}</tbody></ResponsiveTable></div>}} /></> : <>
       <header className="page-header">{detail.route && <DetailBreadcrumb parent="Comparisons" current={selected?.name ?? 'Comparison'} back={detail.close} />}
       <ResourceListHeading title={selected?.name ?? 'Comparisons'} icon="experiments" action={selected ? actions(selected) : <DisabledActionHint disabled={!canCreateComparison} reason={creationHint}><ResourceAction action="create" label="New comparison" disabled={!canCreateComparison} title={canCreateComparison?'New comparison':creationHint} onClick={() => {if(canCreateComparison)setEditing(null)}} /></DisabledActionHint>} /></header>
       {selected?.unavailableSources?.length ? <UnavailableSourcesNotice item={selected} busy={busy} edit={() => setEditing(selected)} remove={() => void remove(selected)} /> : <ErrorFeedback message={error} />}
       {!loading && !detail.route && affected > 0 && <div className="source-alert-banner" role="status"><WarningIcon /><span>{affected === 1 ? '1 comparison includes' : `${affected} comparisons include`} experiments that are no longer available. Open {affected === 1 ? 'it' : 'them'} to review.</span></div>}
-      {loading ? <p role="status">Loading comparisons…</p> : !detail.route && <ResourceListTable open={item => detail.open('comparison', item.id)} items={items} editable label="Comparisons" searchText={item => item.name} columns={[{label: 'Name', render: item => <div className="comparison-name-cell"><h3>{item.name}</h3>{item.unavailableSources?.length ? <UnavailableBadge sources={item.unavailableSources} /> : null}</div>}, {label: 'Experiments', render: item => new Set(item.series.flatMap(group => group.runs.map(run => run.experimentId))).size}]} actions={item => <><ResourceAction action="view" label={`View ${item.name} details`} onClick={() => detail.open('comparison', item.id)} />{actions(item)}</>} empty={<><strong>No comparisons yet</strong><p>Compare results from completed experiments.</p></>} />}
+      {loading ? <p role="status">Loading comparisons…</p> : !detail.route && <ResourceListTable open={item => detail.open('comparison', item.id)} items={items} editable label="Comparisons" searchText={item => item.name} columns={[{label: 'Name', render: item => <div className="comparison-name-cell"><h3>{item.name}</h3>{!item.snapshotCapturedAt && <LiveBadge />}{item.unavailableSources?.length ? <UnavailableBadge sources={item.unavailableSources} /> : null}</div>}, {label: 'Experiments', render: item => new Set(item.series.flatMap(group => group.runs.map(run => run.experimentId))).size}]} actions={item => <><ResourceAction action="view" label={`View ${item.name} details`} onClick={() => detail.open('comparison', item.id)} />{actions(item)}</>} empty={<><strong>No comparisons yet</strong><p>Compare results from completed experiments.</p></>} />}
     </>}
     {editing !== undefined && <ComparisonDialog loadCandidates={loadComparisonCandidates} key={editing?.id ?? 'new'} item={editing ?? undefined} experiments={[...props.experiments, ...(loaded?.sources ?? []).filter(source => !props.experiments.some(item => item.id === source.id))]} session={props.session} close={() => setEditing(undefined)} saved={item => {setEditing(undefined); reload(); detail.open('comparison', item.id)}} />}
   </>

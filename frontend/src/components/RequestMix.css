@@ -1,0 +1,25 @@
+/* Request mix tab of the load profile and call-chain results. */
+.request-mix { display: grid; gap: 16px; min-width: 0; }
+.request-mix-section { display: grid; gap: 10px; padding: 12px 14px; border: 1px solid var(--border); border-radius: var(--radius-md); min-width: 0; }
+.request-mix-section h4, .request-mix-section p { margin: 0; }
+.request-mix-section .field-help { color: var(--muted-foreground); font-size: 13px; }
+.request-mix-table { border-collapse: collapse; width: 100%; font-size: 13px; }
+.request-mix-table th, .request-mix-table td { padding: 6px 10px 6px 0; text-align: left; vertical-align: top; border-bottom: 1px solid var(--border); }
+.request-mix-table thead th { color: var(--muted-foreground); font-weight: 500; font-size: 12px; }
+.request-mix-table tfoot td, .request-mix-table tfoot th { border-bottom: 0; font-weight: 600; }
+.request-mix-calls { display: grid; gap: 2px; margin: 0; padding: 0; list-style: none; }
+.request-mix-calls code, .call-chain-calls code { font-size: 12px; white-space: nowrap; }
+.request-mix-weight { display: grid; grid-template-columns: 84px minmax(80px, 1fr); gap: 8px; align-items: center; min-width: 180px; }
+.request-mix-weight input[type="range"] { width: 100%; accent-color: var(--blue); }
+.request-mix-summary { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; font-size: 13px; }
+.request-mix-summary > button { margin-left: auto; }
+.request-mix-notice { padding: 8px 12px; border-radius: var(--radius-md); background: var(--muted); font-size: 13px; }
+.request-mix-notice.warning { background: var(--amber-background); border: 1px solid var(--amber); }
+.request-mix-notice ul { margin: 4px 0 0; padding-left: 18px; }
+.request-mix-profile { display: flex; flex-wrap: wrap; gap: 12px 20px; align-items: end; }
+.request-mix-profile label:not(.checkbox-field) { display: grid; gap: 4px; max-width: 220px; }
+.call-chain-figure { margin: 0; min-width: 0; }
+.call-chain-tag { margin-left: 6px; padding: 0 6px; border: 1px solid var(--border); border-radius: 999px; font-size: 11px; color: var(--muted-foreground); }
+.call-chain-ranking td:first-child { color: var(--muted-foreground); }
+.call-chain-results { display: grid; gap: 16px; }
+.call-chain-calls { display: flex; flex-wrap: wrap; gap: 4px 10px; }

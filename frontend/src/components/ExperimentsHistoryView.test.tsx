@@ -1,4 +1,5 @@
-import {fireEvent, render, screen, waitFor} from '@testing-library/react'
+import {fireEvent, render, screen, waitFor, within} from '@testing-library/react'
+import {formatDate} from '../lib'
 import {beforeAll, beforeEach, describe, expect, it, vi} from 'vitest'
 import type {Experiment, ExperimentConfiguration} from '../types'
 import {request} from '../api'
@@ -161,5 +162,41 @@ describe('experiments history bulk deletion', () => {
     fireEvent.click(screen.getByRole('button', {name: 'Cancel'}))
     expect(screen.queryAllByRole('checkbox', {name: /^Select /})).toHaveLength(0)
     expect(screen.getByRole('button', {name: 'Select'})).toBeInTheDocument()
+  })
+})
+
+describe('repetition progress in the run list', () => {
+  const session = {authenticated: true, user: {id: 'owner', username: 'owner', role: 'user' as const}}
+  const trial = (id: string, position: number, status: string, extra: Record<string, unknown> = {}) => ({id, variantId: 'variant', position, status, resultArtifactId: status === 'succeeded' ? `data-${id}` : '', createdAt: '2026-09-17T00:00:00Z', ...extra})
+  const show = (experiment: Experiment) => render(<ExperimentsHistoryView experiments={[experiment]} configurations={[]} artifacts={[]} operations={[]} workspaces={[]} session={session} changed={async () => {}} openOperation={() => {}} />)
+  const row = () => screen.getAllByRole('row').find(item => item.textContent?.includes('Measured run'))!
+
+  beforeEach(() => {window.location.hash = '#results'})
+
+  it('counts measured repetitions only and labels the warm-up as excluded', () => {
+    show({id: 'exp_pilot', kind: 'instance', name: 'Measured run', ownerUserId: 'owner', status: 'running', restSecondsBetweenTrials: 60, firstTrialPilot: true, createdAt: '2026-09-17T00:00:00Z', updatedAt: '2026-09-17T00:00:00Z', variants: [{id: 'variant', name: 'Baseline', trials: [trial('pilot', 0, 'succeeded', {pilot: true}), trial('one', 1, 'succeeded'), trial('two', 2, 'running'), trial('three', 3, 'queued')]}]} as unknown as Experiment)
+    expect(row()).toHaveTextContent('1/3')
+    expect(row()).toHaveTextContent('+ Warm-up (excluded)')
+    expect(row()).toHaveTextContent('60 s rest between repetitions')
+  })
+
+  it('shows when a queued repetition rests before it starts', () => {
+    const until = new Date(Date.now() + 10 * 60_000).toISOString()
+    show({id: 'exp_rest', kind: 'instance', name: 'Measured run', ownerUserId: 'owner', status: 'running', createdAt: '2026-09-17T00:00:00Z', updatedAt: '2026-09-17T00:00:00Z', variants: [{id: 'variant', name: 'Baseline', trials: [trial('one', 1, 'succeeded'), trial('two', 2, 'queued', {scheduledFor: until})]}]} as unknown as Experiment)
+    expect(row()).toHaveTextContent(`Resting until ${formatDate(until)}`)
+  })
+
+  it('does not call a delayed first start a rest', () => {
+    show({id: 'exp_later', kind: 'instance', name: 'Measured run', ownerUserId: 'owner', status: 'queued', createdAt: '2026-09-17T00:00:00Z', updatedAt: '2026-09-17T00:00:00Z', variants: [{id: 'variant', name: 'Baseline', trials: [trial('one', 1, 'queued', {scheduledFor: new Date(Date.now() + 60_000).toISOString()})]}]} as unknown as Experiment)
+    expect(row()).not.toHaveTextContent('Resting until')
+  })
+
+  it('warns that a result was kept although cleanup failed, with the error on expand', () => {
+    show({id: 'exp_cleanup', kind: 'instance', name: 'Measured run', ownerUserId: 'owner', status: 'failed', createdAt: '2026-09-17T00:00:00Z', updatedAt: '2026-09-17T00:00:00Z', variants: [{id: 'variant', name: 'Baseline', trials: [trial('one', 1, 'succeeded', {cleanupError: 'namespace kubephos-run-1 stuck terminating'}), trial('two', 2, 'canceled')]}]} as unknown as Experiment)
+    const summary = within(row()).getByText('Result kept — cleanup failed')
+    expect(summary.closest('summary')).toHaveAttribute('title', 'Baseline · Execution 1: namespace kubephos-run-1 stuck terminating')
+    fireEvent.click(summary)
+    expect(within(row()).getByText('Baseline · Execution 1: namespace kubephos-run-1 stuck terminating')).toBeVisible()
+    expect(window.location.hash).toBe('#results')
   })
 })

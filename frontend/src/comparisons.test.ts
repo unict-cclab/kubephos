@@ -46,6 +46,9 @@ describe('comparisons and suite regression', () => {
   it('only offers successful runs with results from finished experiments', () => {
     expect(selectableComparisonRuns([grouped])).toHaveLength(3)
     expect(selectableComparisonRuns([{...grouped, status: 'running'}])).toEqual([])
+    const warmed = structuredClone(grouped)
+    warmed.variants[0].trials[0].pilot = true
+    expect(selectableComparisonRuns([warmed])).toHaveLength(2)
     const failed = {...structuredClone(grouped), status: 'failed'}
     failed.variants[0].trials[0].status = 'failed'
     failed.variants[0].trials[1].resultArtifactId = ''

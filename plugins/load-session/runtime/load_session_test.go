@@ -7,9 +7,11 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"gopkg.in/yaml.v3"
 
@@ -218,10 +220,23 @@ type fakeRunner struct {
 	namespaceMarker string
 	exists          bool
 	state           workloadState
+	workers         int
+	startClock      string
+	// summaries are served per pod by the wrapper's /stats/summary; a missing pod fails.
+	summaries map[string]string
+	commands  []string
+	// taskPlan is served as the wrapper's task plan file; planMisses fail first reads.
+	taskPlan   string
+	planMisses int
 }
+
+var fakeStartPattern = regexp.MustCompile(`printf '%s' (\d+) > /tmp/kubephos-start`)
+
+func fakePodName(index int) string { return "kubephos-load-default-load-" + strconv.Itoa(index) }
 
 func (runner *fakeRunner) Run(_ context.Context, _ string, stdin []byte, args ...string) (string, error) {
 	command := strings.Join(args, " ")
+	runner.commands = append(runner.commands, command)
 	if command == "get --raw=/readyz" {
 		return "ok", nil
 	}
@@ -254,7 +269,27 @@ func (runner *fakeRunner) Run(_ context.Context, _ string, stdin []byte, args ..
 		runner.exists = true
 		runner.state.Metadata.Annotations = map[string]string{applicationOwnershipKey: annotations[applicationOwnershipKey].(string), loadProfileKey: annotations[loadProfileKey].(string)}
 		runner.state.Spec.Replicas = 1
+		runner.workers = manifestWorkers(string(stdin))
 		return "created", nil
+	}
+	if strings.HasPrefix(command, "set env deployment/kubephos-load-default-load ") {
+		runner.workers, runner.startClock = -1, ""
+		for _, arg := range args {
+			if value, found := strings.CutPrefix(arg, loadWorkersEnv+"="); found {
+				workers, err := strconv.Atoi(value)
+				if err != nil {
+					return "", errors.New("invalid worker environment")
+				}
+				runner.workers = workers
+			}
+			if value, found := strings.CutPrefix(arg, startClockEnv+"="); found {
+				runner.startClock = value
+			}
+		}
+		if runner.workers < 1 {
+			return "", errors.New("invalid worker environment")
+		}
+		return "updated", nil
 	}
 	if strings.HasPrefix(command, "scale deployment/kubephos-load-default-load ") {
 		value, err := strconv.Atoi(args[len(args)-1])
@@ -280,11 +315,41 @@ func (runner *fakeRunner) Run(_ context.Context, _ string, stdin []byte, args ..
 		runner.state.Status.ReadyReplicas = runner.state.Spec.Replicas
 		return "ready", nil
 	}
+	if strings.HasPrefix(command, "get pods ") && strings.HasSuffix(command, "-o json") {
+		items := []string{}
+		for index := 0; index < runner.state.Spec.Replicas; index++ {
+			items = append(items, `{"metadata":{"name":"`+fakePodName(index)+`"},"status":{"phase":"Running","containerStatuses":[{"name":"locust","ready":true,"restartCount":0,"state":{"running":{}}}]}}`)
+		}
+		return `{"items":[` + strings.Join(items, ",") + `]}`, nil
+	}
 	if strings.HasPrefix(command, "get pods ") {
 		if runner.state.Spec.Replicas == 0 {
 			return "", nil
 		}
 		return "pod/kubephos-load-default-load-one", nil
+	}
+	if strings.HasPrefix(command, "exec -n kubephos-app-one ") && strings.Contains(command, " -c locust -- /bin/sh -ec ") {
+		match := fakeStartPattern.FindStringSubmatch(command)
+		if match == nil {
+			return "", errors.New("start clock missing")
+		}
+		return match[1] + " " + strconv.FormatInt(time.Now().Unix(), 10) + "\n", nil
+	}
+	if strings.HasPrefix(command, "exec -n kubephos-app-one ") && strings.Contains(command, " -c locust -- python3 -c ") {
+		if summary, ok := runner.summaries[args[3]]; ok {
+			return summary, nil
+		}
+		return "", errors.New("container exec failed")
+	}
+	if strings.HasPrefix(command, "exec -n kubephos-app-one ") && strings.HasSuffix(command, " -c locust -- cat "+taskPlanFile) {
+		if runner.planMisses > 0 || runner.taskPlan == "" {
+			runner.planMisses--
+			return "", errors.New("cat: no such file")
+		}
+		return runner.taskPlan, nil
+	}
+	if strings.HasPrefix(command, "get --raw=/api/v1/namespaces/kubephos-app-one/pods/") {
+		return "", errors.New("proxy unavailable")
 	}
 	if strings.HasPrefix(command, "delete deployment/kubephos-load-default-load ") {
 		runner.exists = false

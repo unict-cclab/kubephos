@@ -19,6 +19,7 @@ CREATE TABLE managed_resources(id text,operation_id text REFERENCES operations(i
 CREATE TABLE strategy_catalog(operation_id text REFERENCES operations(id));
 CREATE TABLE plugin_runtime_profiles(endpoint_artifact_id text,credential_artifact_id text);
 CREATE TABLE plugin_runtime_registries(endpoint_artifact_id text,credential_artifact_id text);
+CREATE TABLE result_comparison_artifacts(comparison_id text,artifact_id text,experiment_id text);
 CREATE TABLE experiment_figures(experiment_id text REFERENCES experiments(id) ON DELETE CASCADE,storage_key text,source_artifact_ids text[]);
 CREATE TABLE artifact_deletions(storage_key text PRIMARY KEY,queued_at timestamptz DEFAULT now(),retry_after timestamptz DEFAULT now());
 CREATE TABLE audit_events(target_id text);
@@ -191,5 +192,40 @@ func TestRetryExperimentCleanupRejectsBusyCluster(t *testing.T) {
 	}
 	if err := s.RetryExperimentCleanup(ctx, "run_delete"); !errors.Is(err, ErrConflict) {
 		t.Fatalf("busy cluster cleanup accepted: %v", err)
+	}
+}
+
+func TestExperimentDeletionKeepsComparisonSnapshotArtifactsUntilReleased(t *testing.T) {
+	s := deletionStore(t)
+	ctx := context.Background()
+	if _, err := s.pool.Exec(ctx, `INSERT INTO result_comparison_artifacts VALUES('cmp','art_delete','exp_delete')`); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DeleteExperiment(ctx, "exp_delete"); err != nil {
+		t.Fatal(err)
+	}
+	var count int
+	if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM artifacts WHERE id='art_delete'`).Scan(&count); err != nil || count != 1 {
+		t.Fatalf("frozen artifact deleted with its experiment: %d %v", count, err)
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, `DELETE FROM result_comparison_artifacts`); err != nil {
+		t.Fatal(err)
+	}
+	if err := purgeReleasedComparisonArtifacts(ctx, tx, []string{"art_delete", "art_infra"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM artifacts WHERE id='art_delete'`).Scan(&count); err != nil || count != 0 {
+		t.Fatalf("released artifact kept: %d %v", count, err)
+	}
+	if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM artifacts WHERE id='art_infra'`).Scan(&count); err != nil || count != 1 {
+		t.Fatalf("artifact still used by a pipeline run was purged: %d %v", count, err)
 	}
 }

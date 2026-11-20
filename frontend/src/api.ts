@@ -1,3 +1,5 @@
+import type {ComparisonView} from './comparisons'
+
 export class ApiError extends Error {
   status: number
   body: Record<string, unknown>
@@ -57,4 +59,10 @@ export async function request<T>(path: string, options: RequestInit = {}, csrfTo
     if (isAbort(cause)) throw cause
     throw new ApiError(response.status, {code: 'invalid_response', message: 'KubePhos returned an incomplete response. Refresh the page and try again.'})
   }
+}
+
+// Re-reads a comparison's sources and replaces its frozen snapshot. Rejects with
+// ApiError 409 (source_unavailable) when a source experiment is gone or unshared.
+export function refreshComparison(id: string, csrfToken?: string): Promise<ComparisonView> {
+  return request<ComparisonView>(`/comparisons/${encodeURIComponent(id)}/refresh`, {method: 'POST'}, csrfToken)
 }

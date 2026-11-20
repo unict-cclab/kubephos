@@ -1,0 +1,247 @@
+import {aggregatePlotMetric, knownWorkloads, resolveWorkload, type AggregateSeries, type LoadedDataset, type RunLevelMetric, type VariantComparison} from '../../resultsData'
+import {summarize, tCritical} from '../../statistics'
+import type {Experiment} from '../../types'
+import type {Insight, ServiceHealth} from './insights'
+import type {ChartPanel, ChartPoint, ChartSeries} from './TimeChart'
+
+// Pure models behind the results overview (KPI cards, primary chart, services table).
+// They read only run-level values (one number per repetition), aggregated curves and
+// per-service summaries, so the experiment page (raw datasets) and the comparison page
+// (worker-prepared data) build the same overview.
+
+export const overviewMetrics = ['load.achieved_rps', 'load.successful_rps', 'load.failed_rps', 'load.offered_rps', 'load.configured_rps', 'load.p50_response_time', 'load.p95_response_time', 'load.p99_response_time', 'load.failure_percentage', 'load.slo_violation_percentage']
+
+// colorNote: why the display colour differs from the user's chosen colour (legend tooltip).
+export interface OverviewGroup {id: string; label: string; color: string; colorNote?: string}
+
+export const paletteColor = (index: number) => `var(--chart-${index % 8 + 1})`
+
+// Identity colour per variant: the configured colour, else the palette slot of its position.
+export function overviewGroups(runLevel: RunLevelMetric[]): OverviewGroup[] {
+  const seen = new Map<string, OverviewGroup>()
+  for (const metric of runLevel) metric.groups.forEach((group, index) => {
+    if (!seen.has(group.id) && group.values.length) seen.set(group.id, {id: group.id, label: group.label, color: group.color || paletteColor(index)})
+  })
+  // Keep variant order (first metric that lists every group).
+  const order = runLevel.find(metric => metric.groups.length)?.groups.map(group => group.id) ?? []
+  return [...seen.values()].sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id))
+}
+
+export type Tone = 'ok' | 'warning' | 'critical'
+export type KpiId = 'throughput' | 'latency' | 'errors' | 'slo'
+
+export interface KpiEntry {
+  group: OverviewGroup
+  value?: number
+  n: number
+  // Relative change vs the baseline group (percent); undefined for the baseline itself.
+  change?: number
+  baseline?: boolean
+  comparison?: VariantComparison
+  tone?: Tone
+  note?: string
+}
+
+export interface KpiCard {
+  id: KpiId
+  title: string
+  metric: string
+  unit: string
+  // Lower values are better (latency, errors) or higher (throughput, compliance).
+  better: 'higher' | 'lower'
+  entries: KpiEntry[]
+  // Throughput: the offered rate per group; latency: P50/P99 per group.
+  detail: (entry: KpiEntry) => string | undefined
+}
+
+const mean = (values: number[]) => values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : undefined
+
+function valuesOf(runLevel: RunLevelMetric[], metric: string, groupId: string): {values: number[]; artifactIds: string[]} {
+  const group = runLevel.find(item => item.metric === metric)?.groups.find(item => item.id === groupId)
+  return {values: group?.values ?? [], artifactIds: group?.artifactIds ?? []}
+}
+
+// Achieved rate per run: load.achieved_rps, else successful + failed of the same run.
+function achievedValues(runLevel: RunLevelMetric[], groupId: string): {values: number[]; metric: string} {
+  const achieved = valuesOf(runLevel, 'load.achieved_rps', groupId)
+  if (achieved.values.length) return {values: achieved.values, metric: 'load.achieved_rps'}
+  const ok = valuesOf(runLevel, 'load.successful_rps', groupId)
+  const failed = valuesOf(runLevel, 'load.failed_rps', groupId)
+  return {values: ok.artifactIds.map((id, index) => ok.values[index] + (failed.values[failed.artifactIds.indexOf(id)] ?? 0)), metric: 'load.successful_rps'}
+}
+
+export interface KpiInput {
+  runLevel: RunLevelMetric[]
+  comparisons: VariantComparison[]
+  baseline?: string
+  slo?: number
+}
+
+export function kpiCards({runLevel, comparisons, baseline, slo}: KpiInput): KpiCard[] {
+  const groups = overviewGroups(runLevel)
+  if (!groups.length) return []
+  const baselineId = groups.some(group => group.id === baseline) ? baseline! : groups[0].id
+  const multiple = groups.length > 1
+  const comparisonFor = (metrics: string[], groupId: string) => multiple ? comparisons.find(row => metrics.includes(row.metric) && row.groupId === groupId && row.baselineId === baselineId) : undefined
+  const build = (id: KpiId, title: string, metric: string, unit: string, better: 'higher' | 'lower', read: (group: OverviewGroup) => number[], tone: (value: number, group: OverviewGroup) => Tone | undefined, detail: KpiCard['detail'], comparisonMetrics = [metric]): KpiCard | undefined => {
+    const values = new Map(groups.map(group => [group.id, read(group)]))
+    if (![...values.values()].some(list => list.length)) return undefined
+    const baseValue = mean(values.get(baselineId) ?? [])
+    const entries = groups.map(group => {
+      const list = values.get(group.id) ?? []
+      const value = mean(list)
+      const change = multiple && group.id !== baselineId && value !== undefined && baseValue ? (value - baseValue) / Math.abs(baseValue) * 100 : undefined
+      return {group, value, n: list.length, change, baseline: multiple && group.id === baselineId, comparison: group.id === baselineId ? undefined : comparisonFor(comparisonMetrics, group.id), tone: value === undefined ? undefined : tone(value, group)}
+    })
+    return {id, title, metric, unit, better, entries, detail}
+  }
+  const offered = (group: OverviewGroup) => {const list = valuesOf(runLevel, 'load.offered_rps', group.id).values; return list.length ? list : valuesOf(runLevel, 'load.configured_rps', group.id).values}
+  const offeredLabel = runLevel.some(item => item.metric === 'load.offered_rps' && item.groups.some(group => group.values.length)) ? 'offered' : 'configured'
+  const ratio = (group: OverviewGroup) => {const achieved = mean(achievedValues(runLevel, group.id).values); const target = mean(offered(group)); return achieved !== undefined && target ? achieved / target : undefined}
+  const percentile = (metric: string, group: OverviewGroup) => mean(valuesOf(runLevel, metric, group.id).values)
+  const cards = [
+    build('throughput', 'Throughput', 'load.achieved_rps', 'requests_per_second', 'higher', group => achievedValues(runLevel, group.id).values, (_, group) => {const share = ratio(group); return share === undefined ? undefined : share < .8 ? 'critical' : share < .95 || share > 1.05 ? 'warning' : 'ok'}, entry => {
+      const target = mean(offered(entry.group))
+      const share = ratio(entry.group)
+      return target === undefined ? undefined : `of ${Math.round(target).toLocaleString('en-US')} req/s ${offeredLabel}${share === undefined ? '' : ` · ${Math.round(share * 100)} %`}`
+    }, ['load.achieved_rps', 'load.successful_rps']),
+    build('latency', 'Latency P95', 'load.p95_response_time', 'milliseconds', 'lower', group => valuesOf(runLevel, 'load.p95_response_time', group.id).values, value => slo === undefined ? undefined : value > slo ? 'warning' : 'ok', entry => {
+      const parts = [['P50', percentile('load.p50_response_time', entry.group)], ['P99', percentile('load.p99_response_time', entry.group)]].filter((item): item is [string, number] => item[1] !== undefined)
+      return parts.length ? parts.map(([label, value]) => `${label} ${formatShortMs(value)}`).join(' · ') : slo !== undefined ? `${entry.value !== undefined && entry.value > slo ? 'above' : 'within'} SLO ${formatShortMs(slo)}` : 'mean of window P95s'
+    }),
+    build('errors', 'Error rate', 'load.failure_percentage', 'percent', 'lower', group => valuesOf(runLevel, 'load.failure_percentage', group.id).values, value => value >= 5 ? 'critical' : value >= 1 ? 'warning' : 'ok', () => 'failed / all requests'),
+    build('slo', 'SLO compliance', 'load.slo_violation_percentage', 'percent', 'higher', group => valuesOf(runLevel, 'load.slo_violation_percentage', group.id).values.map(value => 100 - value), value => value < 50 ? 'critical' : value < 95 ? 'warning' : 'ok', () => slo === undefined ? 'windows meeting the P95 objective' : `windows with P95 ≤ ${formatShortMs(slo)}`)
+  ]
+  return cards.filter((card): card is KpiCard => Boolean(card))
+}
+
+export function formatShortMs(value: number): string {
+  return value >= 1000 ? `${(value / 1000).toFixed(value >= 10000 ? 1 : 2).replace(/\.?0+$/, '')} s` : `${Math.round(value)} ms`
+}
+
+// Significance of a between-group difference, as a short badge.
+export function significance(row: VariantComparison | undefined): {label: string; tone: 'significant' | 'neutral'; title: string} | undefined {
+  if (!row) return undefined
+  if (row.insufficient || row.adjustedPValue === undefined) return {label: `n = ${row.groupCount}/${row.baselineCount}`, tone: 'neutral', title: 'Fewer than 3 repetitions in a group: no significance test.'}
+  const p = row.adjustedPValue
+  const g = row.hedgesG
+  const pText = p < .001 ? 'p < 0.001' : `p = ${p.toFixed(p < .01 ? 3 : 2)}`
+  return {label: p < .05 ? `${pText}${g !== undefined ? ` · g ${g.toFixed(1)}` : ''}` : 'n.s.', tone: p < .05 ? 'significant' : 'neutral', title: `Welch t-test on repetition means, Holm-adjusted ${pText} (family of ${row.familySize})${g !== undefined ? `; Hedges g = ${g.toFixed(2)}` : ''}.`}
+}
+
+// --- time series ---
+
+export function toChartPoints(series: AggregateSeries): ChartPoint[] {
+  return series.points.map(point => ({t: Date.parse(point.timestamp), v: point.value})).filter(point => Number.isFinite(point.t) && Number.isFinite(point.v))
+}
+
+// 95% CI half-width band across repetitions (exact t), when the curve is a mean of ≥ 2 runs.
+export function confidenceBand(series: AggregateSeries): Array<[number, number]> | undefined {
+  const runs = series.runs ?? 0
+  if (!series.deviation || runs < 2 || series.deviation.length !== series.points.length) return undefined
+  const factor = tCritical(runs - 1) / Math.sqrt(runs)
+  return series.points.map((point, index) => [point.value - series.deviation![index].value * factor, point.value + series.deviation![index].value * factor])
+}
+
+export function chartSeries(series: AggregateSeries, id: string, label: string, color: string, options: {dashed?: boolean; band?: boolean} = {}): ChartSeries {
+  return {id, label, color, points: toChartPoints(series), step: series.stepMilliseconds, dashed: options.dashed, band: options.band === false ? undefined : confidenceBand(series)}
+}
+
+// Colour of an aggregated curve: the group with the same label (curves carry the variant label).
+export function colorOf(groups: OverviewGroup[], series: AggregateSeries, index: number): string {
+  return groups.find(group => group.label === series.label)?.color ?? series.color ?? paletteColor(index)
+}
+
+export interface TimelineInput {
+  groups: OverviewGroup[]
+  plot: (metric: string) => AggregateSeries[]
+  slo?: number
+}
+
+// Primary chart: offered vs achieved request rate (top) and client latency (bottom).
+export function primaryPanels({groups, plot, slo}: TimelineInput): ChartPanel[] {
+  const multiple = groups.length > 1
+  const achievedMetric = plot('load.achieved_rps').length ? 'load.achieved_rps' : 'load.successful_rps'
+  const achieved = plot(achievedMetric)
+  const offeredMetric = plot('load.offered_rps').length ? 'load.offered_rps' : 'load.configured_rps'
+  const offered = plot(offeredMetric)
+  const rate: ChartSeries[] = []
+  if (offered[0]) rate.push(chartSeries(offered[0], 'offered', offeredMetric === 'load.offered_rps' ? 'Offered (target)' : 'Configured (target)', 'var(--chart-target)', {dashed: true, band: false}))
+  achieved.forEach((series, index) => rate.push(chartSeries(series, `achieved-${index}`, multiple ? series.label : achievedMetric === 'load.achieved_rps' ? 'Achieved' : 'Successful', colorOf(groups, series, index))))
+  const latency: ChartSeries[] = []
+  const p95 = plot('load.p95_response_time')
+  const p50 = multiple ? [] : plot('load.p50_response_time')
+  p95.forEach((series, index) => latency.push(chartSeries(series, `p95-${index}`, multiple ? `${series.label} · P95` : 'P95', colorOf(groups, series, index))))
+  p50.forEach((series, index) => latency.push(chartSeries(series, `p50-${index}`, 'P50', 'var(--chart-1-soft)')))
+  return [
+    {id: 'rate', title: 'Request rate (req/s)', unit: 'requests_per_second', series: rate},
+    {id: 'latency', title: 'Client latency', unit: 'milliseconds', series: latency, reference: slo ? {value: slo, label: `SLO ${formatShortMs(slo)}`} : undefined}
+  ].filter(panel => panel.series.length)
+}
+
+// --- services ---
+
+// Copy of a dataset restricted to one workload's series of a metric (others untouched).
+function onlyService(item: LoadedDataset, metric: string, service: string): LoadedDataset {
+  const known = knownWorkloads(item.dataset)
+  return {...item, aggregateCache: undefined, dataset: {...item.dataset, spec: {...item.dataset.spec, series: item.dataset.spec.series.filter(series => series.metric !== metric || resolveWorkload(series, known)?.name === service)}}}
+}
+
+// One service's curve of a metric (mean across repetitions per variant).
+export function serviceCurve(datasets: LoadedDataset[], metric: string, service: string, experiment?: Experiment): AggregateSeries[] {
+  return aggregatePlotMetric(datasets.map(item => onlyService(item, metric, service)), metric, experiment)
+}
+
+export const serviceDetailMetrics: Array<{metric: string; title: string; unit: string}> = [
+  {metric: 'application.p95_response_time', title: 'Server P95', unit: 'milliseconds'},
+  {metric: 'application.request_rps', title: 'Requests (req/s)', unit: 'requests_per_second'},
+  {metric: 'cpu.cores', title: 'CPU (cores)', unit: 'cores'},
+  {metric: 'deployment.ready_replicas', title: 'Ready replicas', unit: 'replicas'}
+]
+
+// Fallback ranking from per-service summaries (comparison payloads prepared before the
+// worker returned per-series services). Score = server P95; bottleneck as in insights.ts (≥ 2× the runner-up
+// and ≥ 100 ms), corroborated only by what the summaries show.
+export interface ServiceSummaryRow {service: string; kind?: string; groupID: string; summary: {mean: number}}
+export function rankServiceSummaries(groupID: string, byMetric: Record<string, {rows: ServiceSummaryRow[]} | undefined>): ServiceHealth[] {
+  const value = (metric: string, service: string) => byMetric[metric]?.rows.find(row => row.groupID === groupID && row.service === service)?.summary.mean
+  const services = [...new Set(Object.values(byMetric).flatMap(entry => entry?.rows.filter(row => row.groupID === groupID).map(row => row.service) ?? []))]
+  const rows = services.map((service): ServiceHealth => {
+    const p95Ms = value('application.p95_response_time', service)
+    const cpuCores = value('cpu.cores', service)
+    const reasons = [p95Ms !== undefined ? `server P95 ${formatShortMs(p95Ms)}` : '', cpuCores !== undefined ? `CPU ${cpuCores.toFixed(2)} cores` : ''].filter(Boolean)
+    return {service, rps: value('application.request_rps', service), p95Ms, cpuCores, replicas: value('deployment.ready_replicas', service), score: Math.round((p95Ms ?? 0) * 10) / 10, bottleneck: false, reasons}
+  }).sort((a, b) => b.score - a.score || (b.cpuCores ?? 0) - (a.cpuCores ?? 0) || a.service.localeCompare(b.service))
+  const [top, second] = rows
+  if (top && (top.p95Ms ?? 0) >= 100 && (!second || top.score >= 2 * second.score)) {
+    top.bottleneck = true
+    top.reasons.push(second?.score ? `${(top.score / second.score).toFixed(1)}× the next slowest service (${second.service})` : 'only service with measurable latency')
+  }
+  return rows
+}
+
+// Mean ± CI across repetitions, as text, for tooltips.
+export function acrossRunsText(values: number[], format: (value: number) => string): string {
+  if (values.length < 2) return values.length ? `${format(values[0])} (1 repetition)` : 'no data'
+  const summary = summarize(values)
+  return `${format(summary.mean)} mean of ${values.length} repetitions; 95% CI ${format(summary.confidence95Low)}–${format(summary.confidence95High)}`
+}
+
+// Verdict of a saved comparison (no raw samples on the page): significant differences on
+// the key metrics (Holm-adjusted p < 0.05 on repetition means) and load-fidelity warnings.
+export function comparisonVerdict(cards: KpiCard[], fidelityWarnings: Array<{label: string; text: string}>): Insight[] {
+  const insights: Insight[] = []
+  for (const {label, text} of fidelityWarnings.slice(0, 1)) insights.push({id: 'fidelity', severity: 'warning', title: `${label}: target load not sustained`, detail: text, evidence: {metric: 'load.achieved_rps'}, target: 'throughput'})
+  for (const card of cards) for (const entry of card.entries) {
+    const badge = significance(entry.comparison)
+    if (!entry.comparison || badge?.tone !== 'significant' || entry.change === undefined) continue
+    const better = card.better === 'higher' ? entry.change > 0 : entry.change < 0
+    insights.push({id: `${card.id}-${entry.group.id}`, severity: better ? 'ok' : 'warning', title: `${entry.group.label}: ${card.title.charAt(0).toLowerCase()}${card.title.slice(1)} ${formatChangeText(entry.change)} vs ${entry.comparison.baseline}`, detail: `${badge.title} ${better ? 'Better' : 'Worse'} than the baseline.`, evidence: {metric: card.metric, value: entry.value, unit: card.unit}, target: card.id === 'latency' || card.id === 'slo' ? 'latency' : 'throughput'})
+  }
+  if (cards.some(card => card.entries.length > 1) && !insights.some(item => item.id !== 'fidelity')) insights.push({id: 'no-difference', severity: 'info', title: 'No significant difference on the key metrics', detail: 'Throughput, latency, errors and SLO compliance do not differ from the baseline at Holm-adjusted p < 0.05 (or there are fewer than 3 repetitions per series). See Statistics for every metric.', evidence: {}})
+  return insights.slice(0, 4)
+}
+
+function formatChangeText(change: number): string {
+  return `${change > 0 ? '+' : '−'}${Math.abs(change) >= 10 ? Math.round(Math.abs(change)) : Math.abs(change).toFixed(1)} %`
+}

@@ -3,9 +3,24 @@ import {describe, expect, it, vi} from 'vitest'
 import {request} from '../api'
 import {timeAxis} from '../charts'
 import type {Artifact, Experiment, Operation, Session, TimeSeriesDataset} from '../types'
-import {formatAxis, aggregateMetric, aggregatePlotMetric, cohenD, compactLabel, experimentProgress, figureDimensions, niceAxis, ResultsView, serviceMetricStatistics, setPNGResolution, podSchedulingStatistics, statisticsCSV, summarize, svgToPDF, variantStatistics, type LoadedDataset} from './ResultsView'
+import {figureKindLabel, type FigureKind} from './results/FigureStudio'
+import {formatAxis, aggregateMetric, aggregatePlotMetric, cohenD, compactLabel, experimentProgress, figureDimensions, loadLeadFromConfiguration, niceAxis, ResultsView, serviceMetricStatistics, setPNGResolution, podSchedulingStatistics, statisticsCSV, summarize, svgToPDF, variantStatistics, type LoadedDataset} from './ResultsView'
 
 vi.mock('../api', () => ({request: vi.fn(async () => ({items: []}))}))
+
+// Secondary sections are collapsed disclosures; publication figures live in the figure studio.
+async function openSection(name: string) {
+  const button = await screen.findByRole('button', {name: new RegExp(`^${name}`)})
+  if (button.getAttribute('aria-expanded') !== 'true') fireEvent.click(button)
+}
+async function openStudio(kind?: FigureKind, metric?: string) {
+  if (!screen.queryByRole('dialog', {name: 'Figure studio'})) fireEvent.click(await screen.findByRole('button', {name: 'Create figure'}))
+  const dialog = await screen.findByRole('dialog', {name: 'Figure studio'})
+  if (kind) fireEvent.click(within(dialog).getByRole('radio', {name: new RegExp(`^${figureKindLabel(kind)}`)}))
+  if (metric) fireEvent.change(within(dialog).getByRole('combobox', {name: 'Metric'}), {target: {value: metric}})
+  return dialog
+}
+const closeStudio = () => fireEvent.click(within(screen.getByRole('dialog', {name: 'Figure studio'})).getByRole('button', {name: 'Close'}))
 
 const artifact: Artifact = {id: 'art_dataset', operationId: 'op_collect', workspaceId: 'ws_dev', name: 'dataset', type: 'TimeSeriesDataset', version: 'v1alpha1', mediaType: 'application/json', digest: 'sha256:value', sizeBytes: 100, sensitive: false, verifiedAt: '2026-09-09T10:00:00Z'}
 
@@ -57,7 +72,7 @@ describe('serviceMetricStatistics', () => {
 
   it('sums pods per deployment before computing temporal variability', () => {
     const dataset = loaded('service', [[1, 3], [3, 5]])
-    dataset.dataset.spec.series.forEach((series, index) => {series.labels = {pod: `api-abc123-pod${index}`}})
+    dataset.dataset.spec.series.forEach((series, index) => {series.labels = {pod: `api-abc123-pod0${index}`}})
     dataset.dataset.spec.series.push({metric: 'deployment.ready_replicas', unit: 'replicas', labels: {deployment: 'api'}, points: dataset.dataset.spec.series[0].points.map(point => ({...point, value: 2}))})
     const result = serviceMetricStatistics([dataset], 'cpu.cores')
     expect(result.unmatched).toBe(0)
@@ -85,7 +100,7 @@ describe('serviceMetricStatistics', () => {
     expect(result.rows[1].summary.mean).toBe(25)
   })
 
-  it.each(['deployment.ready_replicas', 'cpu.cores', 'memory.working_set'])('excludes the load driver from the service chart for %s', metric => {
+  it.each(['deployment.ready_replicas', 'cpu.cores', 'memory.working_set', 'pod.restarts'])('excludes the load driver from the service chart and application totals for %s', metric => {
     const dataset = loaded('loader', [[1, 3], [100, 200]])
     dataset.dataset.spec.series.forEach((series, index) => {
       series.metric = metric
@@ -95,9 +110,12 @@ describe('serviceMetricStatistics', () => {
     const result = serviceMetricStatistics([dataset], metric)
     expect(result.rows).toHaveLength(1)
     expect(result.rows[0].service).toBe('api')
-    expect(result.rows[0].summary.mean).toBe(2)
+    // Restarts are lifetime counters: the run keeps only their increase (1 -> 3 becomes 0 -> 2).
+    const expected = metric === 'pod.restarts' ? [0, 2] : [1, 3]
+    expect(result.rows[0].summary.mean).toBe(metric === 'pod.restarts' ? 1 : 2)
     expect(result.unmatched).toBe(0)
-    expect(aggregateMetric([dataset], metric)[0].points.map(point => point.value)).toEqual([101, 203])
+    // Legacy datasets queried the whole namespace; the Locust driver is not part of the application.
+    expect(aggregateMetric([dataset], metric)[0].points.map(point => point.value)).toEqual(expected)
   })
 
   it('uses the most specific deployment and omits unidentifiable pods', () => {
@@ -120,6 +138,26 @@ describe('experimentProgress', () => {
       {trials: [{status: 'failed'}, {status: 'canceled'}, {status: 'queued'}]}
     ]} as Experiment
     expect(experimentProgress(experiment)).toEqual({completed: 3, total: 5})
+  })
+})
+
+describe('loadLeadFromConfiguration', () => {
+  const configuration = (settings: Record<string, unknown>) => ({components: [{capability: 'load.session.control', configuration: {steps: [{type: 'constant', durationSeconds: 60, rps: 20}], ...settings}}]})
+  it('places call-chain profiling and warmup before the measured profile', () => {
+    expect(loadLeadFromConfiguration(configuration({}))).toEqual({warmupSeconds: 0, profiling: false})
+    expect(loadLeadFromConfiguration(configuration({warmupSeconds: 90}))).toEqual({warmupSeconds: 90, profiling: false})
+    expect(loadLeadFromConfiguration(configuration({warmupSeconds: 30, profileCallChain: true, profileSecondsPerTask: 45, taskWeights: {index: 1, browse: 3, checkout: 0}}))).toEqual({warmupSeconds: 30, profiling: true, profilingSeconds: 90})
+    // Without a saved mix the number of profiled tasks is unknown.
+    expect(loadLeadFromConfiguration(configuration({profileCallChain: true}))).toEqual({warmupSeconds: 0, profiling: true, profilingSeconds: undefined})
+  })
+
+  it('keeps the progress cursor at t=0 during profiling and warmup', () => {
+    const experiment = {id: 'exp_lead', name: 'Lead', description: '', status: 'running', resultType: 'TimeSeriesDataset', resultVersion: 'v1alpha1', variants: [{id: 'variant_lead', name: 'Baseline', configuration: configuration({warmupSeconds: 600, profileCallChain: true, profileSecondsPerTask: 60, taskWeights: {a: 1, b: 1}}), trials: [{id: 'trial_lead', position: 1, status: 'running', resultArtifactId: '', operationId: 'op_lead'}]}]} as unknown as Experiment
+    // 90 s after the load operation started: the second profiling window.
+    const operation = {id: 'op_lead', pluginId: 'io.kubephos.load.kubernetes.session', status: 'running', createdAt: new Date(Date.now() - 90_000).toISOString()} as Operation
+    render(<ResultsView artifacts={[]} experiments={[experiment]} operations={[operation]} workspaces={[]} session={{authenticated: true, user: {id: 'user_a', username: 'alice', role: 'user'}} as Session} changed={async () => {}} openOperation={() => {}} focusedExperiment={experiment} />)
+    expect(screen.getAllByText('Measuring the call chain').length).toBeGreaterThan(0)
+    expect(screen.queryByText('Load running')).not.toBeInTheDocument()
   })
 })
 
@@ -183,6 +221,7 @@ describe('focused experiment results', () => {
       {id: 'custom', name: 'Custom', trials: [trial(custom, 1), {id: 'missing', position: 2, status: 'failed', resultArtifactId: '', operationId: ''}]}
     ]} as unknown as Experiment
     render(<ResultsView artifacts={datasets.map(dataset => dataset.artifact)} experiments={[experiment]} operations={[]} workspaces={[]} session={{authenticated: true} as Session} changed={async () => {}} openOperation={() => {}} focusedExperiment={experiment} />)
+    await openSection('Statistics')
     const comparison = await screen.findByRole('table', {name: 'Strategy comparison'})
     expect(comparison).toHaveTextContent('Baseline · 2/2 executions')
     expect(comparison).toHaveTextContent('Custom · 1/2 executions')
@@ -205,6 +244,7 @@ describe('focused experiment results', () => {
       {id: 'missing', name: 'Missing strategy', trials: [{id: 'failed', position: 1, status: 'failed', resultArtifactId: ''}]}
     ]} as unknown as Experiment
     render(<ResultsView artifacts={datasets.map(dataset => dataset.artifact)} experiments={[experiment]} operations={[]} workspaces={[]} session={{authenticated: true} as Session} changed={async () => {}} openOperation={() => {}} focusedExperiment={experiment} />)
+    await openSection('Statistics')
     const table = await screen.findByRole('table', {name: 'Strategy comparison'})
     expect(table).toHaveTextContent('2.0 ms')
     expect(table).toHaveTextContent('5.0 ms')
@@ -222,18 +262,19 @@ describe('focused experiment results', () => {
     const experiment = {id: 'exp_single', name: 'Single available run', status: 'succeeded', variants: [{id: 'v1', name: 'Baseline', trials}]} as Experiment
     vi.mocked(request).mockImplementation(async path => path.endsWith('/figures') ? {items: []} as never : dataset.dataset as never)
     render(<ResultsView artifacts={[dataset.artifact]} experiments={[experiment]} operations={[]} workspaces={[]} session={{authenticated: true} as Session} changed={async () => {}} openOperation={() => {}} focusedExperiment={experiment} />)
-    const statisticsButton = await screen.findByRole('button', {name: 'Statistics'})
-    fireEvent.click(statisticsButton)
+    await openSection('Statistics')
     expect(screen.queryByText('Across executions')).not.toBeInTheDocument()
     const table = screen.getByRole('table', {name: 'Statistics for Baseline · Execution 1'})
     expect(within(table).queryByRole('columnheader', {name: 'P95 of time samples'})).not.toBeInTheDocument()
     expect(within(table).queryByRole('columnheader', {name: 'P99 of time samples'})).not.toBeInTheDocument()
     const cells = within(table).getAllByRole('row')[1].querySelectorAll('td')
-    expect(cells[1]).toHaveTextContent('2')
-    expect(cells[2]).toHaveTextContent('2.0 ms')
-    expect(cells[3]).toHaveTextContent('1.4 ms')
-    expect(cells[4]).toHaveTextContent('1.0 ms')
-    expect(cells[6]).toHaveTextContent('3.0 ms')
+    expect(cells[1]).toHaveTextContent('Locust · client side')
+    expect(cells[2]).toHaveTextContent('2')
+    expect(cells[3]).toHaveTextContent('2.0')
+    expect(cells[4]).toHaveTextContent('2.0 ms')
+    expect(cells[5]).toHaveTextContent('1.4 ms')
+    expect(cells[6]).toHaveTextContent('1.0 ms')
+    expect(cells[8]).toHaveTextContent('3.0 ms')
   })
 
   it('separates aggregate results from the individual run tabs', async () => {
@@ -244,26 +285,26 @@ describe('focused experiment results', () => {
     const experiment = {id: 'exp_02', name: 'Scheduler comparison', description: '', status: 'succeeded', resultType: 'TimeSeriesDataset', resultVersion: 'v1alpha1', variants: [{id: 'variant_01', name: 'Baseline', alias: 'Paper label', trials: [{id: 'trial_01', position: 1, status: 'succeeded', resultArtifactId: first.artifact.id, operationId: 'op_01'}, {id: 'trial_02', position: 2, status: 'succeeded', resultArtifactId: second.artifact.id, operationId: 'op_02'}]}]} as Experiment
     render(<ResultsView artifacts={[first.artifact, second.artifact]} experiments={[experiment]} operations={[]} workspaces={[]} session={{authenticated: true} as Session} changed={async () => {}} openOperation={() => {}} focusedExperiment={experiment} />)
     expect(screen.getByRole('button', {name: 'All executions'})).toHaveAttribute('aria-current', 'page')
+    await openSection('Statistics')
     expect(await screen.findByRole('heading', {name: 'Within each execution'})).toBeInTheDocument()
     expect(screen.queryByText(/Based on .* run means/)).not.toBeInTheDocument()
     expect(screen.getByText('Mean across executions')).toBeInTheDocument()
     expect(screen.getAllByText('Std. dev.').length).toBeGreaterThan(0)
     expect(screen.getAllByText('3.0 ms').length).toBeGreaterThan(0)
     expect(screen.getAllByText('1.4 ms').length).toBeGreaterThan(0)
-    expect(screen.queryByText(/±/)).not.toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', {name: 'Plots'}))
-    const chart = screen.getByRole('img', {name: 'P95 response time comparison chart'})
+    expect(within(document.getElementById('section-statistics-body')!).queryByText(/±/)).not.toBeInTheDocument()
+    await openStudio('timeseries', 'load.p95_response_time')
+    const chart = screen.getByRole('img', {name: 'P95 latency — client (Locust) comparison chart'})
     expect(within(chart).getByText('Paper label')).toBeInTheDocument()
-    expect(chart).not.toHaveTextContent(/Run \d+/)
-    expect(document.querySelector('.chart-legend')).not.toHaveTextContent(/Run \d+/)
-    expect(chart.querySelectorAll('path[stroke-width="2.5"]')).toHaveLength(1)
+    expect(chart).not.toHaveTextContent(/Run \d+|Execution \d+/)
+    expect(chart.querySelectorAll('path.series-line')).toHaveLength(1)
     expect(chart.querySelector('.deviation-band path')).toHaveAttribute('d', expect.stringContaining('Z'))
     expect(new TextDecoder().decode(svgToPDF(chart as unknown as SVGSVGElement))).toContain('/ca 0.16')
     expect(chart.querySelector('style')).toBeNull()
     expect(chart.querySelector('.axis')).toHaveAttribute('fill', 'none')
     expect(chart.querySelector('.axis')).toHaveAttribute('stroke', '#111')
+    closeStudio()
 
-    fireEvent.click(screen.getByRole('button', {name: 'Statistics'}))
     expect(await screen.findByText('Across executions')).toBeInTheDocument()
     const runTables = screen.getAllByRole('table', {name: /^Statistics for /})
     expect(runTables).toHaveLength(2)
@@ -273,9 +314,8 @@ describe('focused experiment results', () => {
     expect(screen.getByRole('button', {name: 'Baseline · Execution 1'})).toHaveAttribute('aria-current', 'page')
     expect(screen.queryByText('Across executions')).not.toBeInTheDocument()
     expect(screen.queryByRole('button', {name: /logs/i})).not.toBeInTheDocument()
-    fireEvent.click(await screen.findByRole('button', {name: 'Plots'}))
-    expect(document.querySelector('.chart-legend')).toHaveTextContent('Paper label')
-    expect(document.querySelector('.chart-legend')).not.toHaveTextContent(/Run \d+/)
+    await openStudio('timeseries', 'load.p95_response_time')
+    expect(screen.getByRole('img', {name: 'P95 latency — client (Locust) comparison chart'})).not.toHaveTextContent(/Run \d+/)
   })
 
   it('adds a newly completed run without downloading the existing dataset again', async () => {
@@ -286,6 +326,7 @@ describe('focused experiment results', () => {
     const experiment = {id: 'exp_03', name: 'Load test', status: 'running', variants: [{id: 'variant_03', name: 'Default', trials: [{id: 'trial_11', position: 1, status: 'succeeded', resultArtifactId: first.artifact.id, operationId: 'op_11'}, {id: 'trial_12', position: 2, status: 'running', resultArtifactId: '', operationId: 'op_12'}]}]} as Experiment
     const props = {experiments: [experiment], operations: [], workspaces: [], session: {authenticated: true} as Session, changed: async () => {}, openOperation: () => {}}
     const view = render(<ResultsView {...props} artifacts={[first.artifact]} focusedExperiment={experiment} />)
+    await openSection('Statistics')
     expect(await screen.findByRole('heading', {name: 'Within each execution'})).toBeInTheDocument()
     const completed = {...experiment, variants: [{...experiment.variants[0], trials: [experiment.variants[0].trials[0], {...experiment.variants[0].trials[1], status: 'succeeded', resultArtifactId: second.artifact.id}]}]} as Experiment
     view.rerender(<ResultsView {...props} experiments={[completed]} artifacts={[first.artifact, second.artifact]} focusedExperiment={completed} />)
@@ -303,9 +344,12 @@ describe('focused experiment results', () => {
     vi.mocked(request).mockImplementation(async path => path.endsWith('/figures') ? {items: []} as never : result.dataset as never)
     const experiment = {id: 'exp_outcomes', name: 'Autoscaler run', status: 'succeeded', variants: [{id: 'variant_outcomes', name: 'Autoscaler', configuration: {components: [{capability: 'metrics.timeseries.collect', configuration: {sloMilliseconds: 250}}]}, trials: [{id: 'trial_outcomes', position: 1, status: 'succeeded', resultArtifactId: result.artifact.id, operationId: 'op_outcomes'}]}]} as unknown as Experiment
     render(<ResultsView artifacts={[result.artifact]} experiments={[experiment]} operations={[]} workspaces={[]} session={{authenticated: true} as Session} changed={async () => {}} openOperation={() => {}} focusedExperiment={experiment} />)
+    expect(await screen.findByRole('listitem', {name: 'SLO compliance'})).toHaveTextContent('50 %')
+    await openSection('Statistics')
     expect((await screen.findAllByText('50.00%')).length).toBeGreaterThan(0)
     expect(within(screen.getByRole('table', {name: /^Statistics for /})).getByText('Ready replicas').closest('tr')).toHaveTextContent('4')
-    fireEvent.click(screen.getByRole('button', {name: 'Plots'}))
+    expect(screen.getByRole('img', {name: /^Request rate and client latency/}).textContent).toContain('SLO 250 ms')
+    await openStudio('timeseries', 'load.p95_response_time')
     expect(screen.getByText(/SLO 250\.0 ms/)).toBeInTheDocument()
   })
 
@@ -318,7 +362,9 @@ describe('focused experiment results', () => {
     vi.mocked(request).mockImplementation(async path => path.endsWith('/figures') ? {items: []} as never : result.dataset as never)
     const experiment = {id: 'exp_without_slo', name: 'Run without SLO', status: 'succeeded', variants: [{id: 'variant_without_slo', name: 'Default', configuration: {components: [{capability: 'metrics.timeseries.collect', configuration: {}}]}, trials: [{id: 'trial_without_slo', position: 1, status: 'succeeded', resultArtifactId: result.artifact.id, operationId: 'op_without_slo'}]}]} as unknown as Experiment
     render(<ResultsView artifacts={[result.artifact]} experiments={[experiment]} operations={[]} workspaces={[]} session={{authenticated: true} as Session} changed={async () => {}} openOperation={() => {}} focusedExperiment={experiment} />)
+    await openSection('Statistics')
     expect(await screen.findByRole('heading', {name: 'Within each execution'})).toBeInTheDocument()
+    expect(screen.queryByRole('listitem', {name: 'SLO compliance'})).not.toBeInTheDocument()
     expect(screen.queryByText('SLO violation windows')).not.toBeInTheDocument()
     expect(screen.queryByText(/SLO \d/)).not.toBeInTheDocument()
   })
@@ -338,21 +384,20 @@ describe('focused experiment results', () => {
     const experiment = {id: 'exp_throughput', name: 'Throughput run', status: 'succeeded', variants: [{id: 'variant_throughput', name: 'Default', configuration: {components: []}, trials: [{id: 'trial_throughput', position: 1, status: 'succeeded', resultArtifactId: result.artifact.id, operationId: 'op_throughput'}]}]} as unknown as Experiment
     render(<ResultsView artifacts={[result.artifact]} experiments={[experiment]} operations={[]} workspaces={[]} session={{authenticated: true} as Session} changed={async () => {}} openOperation={() => {}} focusedExperiment={experiment} />)
 
-    expect(await screen.findByText('Throughput')).toBeInTheDocument()
-    expect(screen.getByText('Throughput').closest('tr')).toHaveTextContent('3.00 req/s')
-    expect(screen.queryByText('CPU usage', {selector: '.key-metrics span'})).not.toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', {name: 'Plots'}))
-    expect(screen.queryByRole('button', {name: /Load/})).not.toBeInTheDocument()
-    expect(screen.getByRole('img', {name: 'CPU usage comparison chart'})).toBeInTheDocument()
-    expect(screen.queryByText(/Mean P95 across windows/)).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', {name: /Application/})).not.toBeInTheDocument()
-    expect(screen.queryByText('Throughput per service')).not.toBeInTheDocument()
-    expect(screen.getByText('Mean window P95 per service')).toBeInTheDocument()
-    const serviceChart = screen.getByRole('img', {name: 'Mean window P95 per service: mean and standard deviation'})
+    expect(await screen.findByRole('listitem', {name: 'Throughput'})).toHaveTextContent('10 req/s')
+    await openSection('Statistics')
+    expect(await screen.findByText('Throughput', {selector: 'td'})).toBeInTheDocument()
+    expect(screen.getByText('Throughput', {selector: 'td'}).closest('tr')).toHaveTextContent('3.00 req/s')
+    const dialog = await openStudio('timeseries', 'cpu.cores')
+    expect(within(dialog).getByRole('img', {name: 'CPU usage comparison chart'})).toBeInTheDocument()
+    expect(within(dialog).queryByText(/Mean P95 across windows/)).not.toBeInTheDocument()
+    await openStudio('services', 'application.p95_response_time')
+    expect(within(dialog).getByLabelText('Figure name')).not.toHaveValue('Throughput per service')
+    expect(within(dialog).getByLabelText('Figure name')).toHaveValue('Mean window P95 per service')
+    const serviceChart = within(dialog).getByRole('img', {name: 'Mean window P95 per service: mean and 95% confidence interval'})
     expect(serviceChart.querySelector('text[font-size="11"]')).toBeNull()
     expect(serviceChart).not.toHaveTextContent('± 1.4 ms')
-    expect(document.querySelector('.chart-legend')).not.toHaveTextContent(/mean|last/)
-    fireEvent.click(screen.getByRole('button', {name: 'Statistics'}))
+    closeStudio()
     fireEvent.click(screen.getByRole('tab',{name:'By service'}))
     const serviceStats = screen.getByRole('table', {name: 'Service statistics for Default · Execution 1'})
     expect(serviceStats).toHaveTextContent('3.0 ms')
@@ -441,7 +486,7 @@ describe('publication figures', () => {
     const text = new TextDecoder().decode(svgToPDF(svg))
     expect(text).toContain('/Encoding /WinAnsiEncoding')
     expect(text).toContain(String.raw`(\261 1.4 ms) Tj`)
-    expect(text).toContain('1 0 0 1 115.920 153.000 Tm')
+    expect(text).toContain('1 0 0 1 116.265 153.000 Tm')
     expect(text).not.toContain('(- 1.4 ms)')
   })
 
@@ -521,10 +566,10 @@ it('integrates event-weighted cycle means and eviction totals into the common st
   vi.mocked(request).mockImplementation(async path => path.endsWith('/figures') ? {items: []} as never : result.dataset as never)
   const experiment = {id: 'exp_control', name: 'Control metrics', status: 'succeeded', variants: [{id: 'control', name: 'Default', trials: [{id: 'trial_control', position: 1, status: 'succeeded', resultArtifactId: result.artifact.id, operationId: ''}]}]} as Experiment
   render(<ResultsView artifacts={[result.artifact]} experiments={[experiment]} operations={[]} workspaces={[]} session={{authenticated: true} as Session} changed={async () => {}} openOperation={() => {}} focusedExperiment={experiment} />)
+  await openSection('Statistics')
   const summary = await screen.findByRole('table', {name: 'Statistics for Default · Execution 1'})
   expect(screen.queryByRole('button', {name: /^Summary$/})).not.toBeInTheDocument()
   expect(screen.getByRole('button', {name: /^Export$/})).toBeInTheDocument()
-  expect(screen.getByRole('navigation', {name: 'Result sections'}).querySelector('button')).toHaveTextContent('Statistics')
   expect(screen.queryByRole('table', {name: 'Scheduling and descheduling statistics'})).not.toBeInTheDocument()
   expect(within(summary).getByText('130.0 ms')).toBeInTheDocument()
   const schedulingLatency = within(summary).getByText('Scheduling latency').closest('tr')!
@@ -538,10 +583,11 @@ it('integrates event-weighted cycle means and eviction totals into the common st
   expect(within(summary).getAllByText('—').length).toBeGreaterThan(0)
   expect(aggregateMetric([result], 'scheduler.cycle_duration')[0].points[0].timestamp).toBe('1970-01-01T00:00:00.000Z')
   expect(aggregateMetric([result], 'cpu.cores')[0].points[0].timestamp).toBe('1970-01-01T00:00:00.000Z')
-  fireEvent.click(screen.getByRole('button', {name: 'Plots'}))
-  expect(screen.queryByRole('img', {name: 'Scheduling cycle duration comparison chart'})).not.toBeInTheDocument()
-  expect(screen.queryByRole('img', {name: 'Descheduler evictions comparison chart'})).not.toBeInTheDocument()
-  fireEvent.click(screen.getByRole('button', {name: 'Statistics'}))
+  const dialog = await openStudio('timeseries')
+  const options = within(within(dialog).getByRole('combobox', {name: 'Metric'})).getAllByRole('option').map(option => option.textContent)
+  expect(options).not.toContain('Scheduling cycle duration')
+  expect(options).not.toContain('Descheduler evictions')
+  closeStudio()
   const temporal = screen.getByRole('table', {name: 'Statistics for Default · Execution 1'})
   const eviction = within(temporal).getByText('Descheduler evictions').closest('tr')!
   expect(eviction).toHaveTextContent('8')
@@ -582,11 +628,11 @@ it('keeps scheduler and descheduler metrics in statistics while omitting all the
   vi.mocked(request).mockResolvedValue(result.dataset as never)
   const experiment = {id: 'sparse', name: 'Sparse scheduling', status: 'succeeded', variants: [{id: 'default', name: 'Default', trials: [{id: 'trial', position: 1, status: 'succeeded', resultArtifactId: result.artifact.id}]}]} as Experiment
   render(<ResultsView artifacts={[result.artifact]} experiments={[experiment]} operations={[]} workspaces={[]} session={{authenticated: true} as Session} changed={async () => {}} openOperation={() => {}} focusedExperiment={experiment} />)
-  await screen.findByRole('table', {name: 'Statistics for Default · Execution 1'})
-  fireEvent.click(screen.getByRole('button', {name: 'Plots'}))
+  await openSection('All metrics')
+  fireEvent.click(screen.getByRole('button', {name: 'Scheduling latency'}))
+  expect(screen.getByText('This metric has no time series (statistics only).')).toBeInTheDocument()
   expect(screen.queryByRole('img', {name: /Scheduling|Descheduling|evictions/i})).not.toBeInTheDocument()
-  expect(document.querySelector('.chart-grid')?.children).toHaveLength(0)
-  fireEvent.click(screen.getByRole('button', {name: 'Statistics'}))
+  await openSection('Statistics')
   const table = screen.getByRole('table', {name: 'Statistics for Default · Execution 1'})
   const row = within(table).getByText('Scheduling latency').closest('tr')!
   expect(row).toHaveTextContent('600.0 ms')
@@ -606,6 +652,7 @@ it('restores Export downloads and keeps CSV control means event weighted and ser
   vi.mocked(request).mockImplementation(async path => path.endsWith('/figures') ? {items: [{id: 'saved', metric: 'cpu.cores', format: 'pdf', sourceArtifactIds: [result.artifact.id], createdAt: '2026-09-09T10:00:00Z'}]} as never : result.dataset as never)
   const experiment = {id: 'export', name: 'Export', status: 'succeeded', variants: [{id: 'default', name: 'Default', trials: [{id: 'trial', position: 1, status: 'succeeded', resultArtifactId: result.artifact.id}]}]} as Experiment
   render(<ResultsView artifacts={[result.artifact]} experiments={[experiment]} operations={[]} workspaces={[]} session={{authenticated: true} as Session} changed={async () => {}} openOperation={() => {}} focusedExperiment={experiment} />)
+  await openSection('Statistics')
   await screen.findByRole('table', {name: 'Statistics for Default · Execution 1'})
   fireEvent.click(screen.getByRole('button', {name: 'Export'}))
   expect(screen.getByRole('button', {name: 'Statistics CSV'})).toBeInTheDocument()
@@ -649,6 +696,7 @@ it('orders service labels naturally and keeps CPU units explicit in statistics',
   expect(serviceMetricStatistics([dataset], 'cpu.cores').rows.map(row => row.service)).toEqual(['s1', 's2', 's10'])
   vi.mocked(request).mockResolvedValue(dataset.dataset as never)
   render(<ResultsView artifacts={[dataset.artifact]} experiments={[]} operations={[]} workspaces={[]} session={{authenticated: true} as Session} changed={async () => {}} openOperation={() => {}} />)
+  await openSection('Statistics')
   const table = await screen.findByRole('table', {name: /Statistics for/})
   expect(table.textContent).toContain('cores')
   fireEvent.click(screen.getByRole('tab',{name:'By service'}))
@@ -738,7 +786,7 @@ it('includes every available suite repetition beyond twenty runs', async () => {
   vi.mocked(request).mockClear()
   vi.mocked(request).mockImplementation(async path => path.endsWith('/figures') ? {items: []} as never : byID.get(path.split('/')[2]) as never)
   render(<ResultsView artifacts={datasets.map(dataset => dataset.artifact)} experiments={[experiment]} operations={[]} workspaces={[]} session={{authenticated: true}} changed={async () => {}} openOperation={() => {}} focusedExperiment={experiment} />)
-  expect(await screen.findByRole('button', {name: 'Plots'})).toBeInTheDocument()
+  expect(await screen.findByRole('button', {name: 'Create figure'})).toBeInTheDocument()
   expect(screen.queryByText('Included runs')).not.toBeInTheDocument()
   expect(screen.queryByRole('button', {name: 'Change'})).not.toBeInTheDocument()
   expect(vi.mocked(request).mock.calls.filter(([path]) => path.endsWith('/download'))).toHaveLength(24)
@@ -754,13 +802,15 @@ it('keeps saved comparisons read-only toward experiments and preserves each sour
   const config = (sloMilliseconds: number) => ({components: [{capability: 'metrics.timeseries.collect', configuration: {sloMilliseconds}}]})
   const comparison = {id: 'cmp_paper', ownerUserId: 'alice', name: 'Paper', kind: 'comparison', status: 'succeeded', variants: [{id: 'combined', name: 'Combined', alias: 'Combined', configuration: config(250), trials: [first, second].map((item, index) => ({id: `trial-${index}`, position: index + 1, status: 'succeeded', resultArtifactId: item.artifact.id, operationId: item.artifact.operationId}))}]} as unknown as Experiment
   render(<ResultsView artifacts={[first.artifact, second.artifact]} experiments={[]} operations={[]} workspaces={[]} session={{authenticated: true, user: {id: 'alice', role: 'user'}} as Session} changed={async () => {}} openOperation={() => {}} focusedExperiment={comparison} onBack={() => {}} comparison={{sourceConfigurations: {[first.artifact.id]: config(250), [second.artifact.id]: config(500)}}} />)
-  fireEvent.click(screen.getByRole('button', {name: 'Statistics'}))
+  await openSection('Statistics')
   const table = await screen.findByRole('table', {name: 'Experiment comparison'})
   expect(within(table).getByText('SLO violation windows').closest('tr')).toHaveTextContent('25.00%')
   expect(screen.queryByText(/execution/i)).not.toBeInTheDocument()
   expect(screen.queryByRole('button', {name: /Share|Delete experiment|Stop experiment/})).not.toBeInTheDocument()
-  fireEvent.click(screen.getByRole('button', {name: 'Plots'}))
+  await openStudio('timeseries', 'load.p95_response_time')
+  expect(screen.getByRole('img', {name: 'P95 latency — client (Locust) comparison chart'})).toBeInTheDocument()
   expect(document.querySelector('.slo-label')).not.toBeInTheDocument()
+  closeStudio()
   fireEvent.click(screen.getByRole('button', {name: 'Export'}))
   expect(screen.getByRole('button', {name: 'Statistics CSV'})).toBeInTheDocument()
   expect(vi.mocked(request).mock.calls.every(([path]) => path.startsWith('/artifacts/'))).toBe(true)
@@ -794,4 +844,20 @@ it('keeps service bar groups distinct when experiment names match', () => {
  expect(rows.map(row=>row.group)).toEqual(['Same name','Same name'])
  expect(rows.map(row=>row.groupID)).toEqual(['first','second'])
  expect(rows.map(row=>row.color)).toEqual(['#123456','#abcdef'])
+})
+
+it('fills the per-execution statistics table with the plotted workload samples only', async () => {
+  const result = loaded('workload_window', [[100, 3], [100, 5]])
+  result.dataset.spec.workloadStartedAt = '2026-09-09T10:00:00Z'
+  result.dataset.spec.series.push({metric: 'cpu.cores', unit: 'cores', labels: {pod: 'kubephos-load-default-7c9b6d8f5-xyz12'}, points: [{timestamp: '2026-09-09T09:59:45Z', value: 40}, {timestamp: '2026-09-09T10:00:00Z', value: 40}]})
+  expect(aggregatePlotMetric([result], 'cpu.cores')[0].points.map(point => point.value)).toEqual([8])
+  vi.mocked(request).mockImplementation(async path => path.endsWith('/figures') ? {items: []} as never : result.dataset as never)
+  const experiment = {id: 'exp_window', name: 'Window', status: 'succeeded', variants: [{id: 'default', name: 'Default', trials: [{id: 'trial_window', position: 1, status: 'succeeded', resultArtifactId: result.artifact.id, operationId: ''}]}]} as Experiment
+  render(<ResultsView artifacts={[result.artifact]} experiments={[experiment]} operations={[]} workspaces={[]} session={{authenticated: true} as Session} changed={async () => {}} openOperation={() => {}} focusedExperiment={experiment} />)
+  await openSection('Statistics')
+  const table = await screen.findByRole('table', {name: 'Statistics for Default · Execution 1'})
+  const cells = within(within(table).getByText('CPU usage').closest('tr')!).getAllByRole('cell')
+  expect(cells[1]).toHaveTextContent('cAdvisor')
+  expect(cells[2]).toHaveTextContent('1')
+  expect(cells[4]).toHaveTextContent('8.00 cores')
 })

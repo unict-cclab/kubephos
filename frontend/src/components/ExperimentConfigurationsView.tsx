@@ -12,6 +12,7 @@ import {CloneDialog} from './CloneDialog'
 import {ErrorFeedback, useErrorState} from './ToastRegion'
 import {ResourceListHeading} from './ResourceListHeading'
 import {ConfigurationReadout} from './ConfigurationReadout'
+import {savedTrialSchedule, trialScheduleRows} from './TrialScheduleFields'
 import {FormTabs} from './FormTabs'
 import {WizardForm, WizardStep, WizardReview} from './WizardForm'
 import {ResourceSharing, canManageResource} from './ResourceSharing'
@@ -20,7 +21,7 @@ import {ActionIcon} from './ActionIcon'
 import {ComparativeConfigurationDialog} from './ComparativeConfigurationDialog'
 import {ResourceListTable} from './ResourceListTable'
 import {useDeleteConfirmation} from './ConfirmationDialog'
-import {useEffect, useId, useMemo, useRef, useState, type FormEvent} from 'react'
+import {useEffect, useId, useMemo, useRef, useState, type FormEvent, type ReactNode} from 'react'
 import {request} from '../api'
 import {readSchemaValues} from '../lib'
 import type {Application, ApplicationComponent, Artifact, CatalogStrategy, Experiment, ExperimentConfiguration, JsonSchema, ManagedResource, Operation, Plugin, Session, Workspace} from '../types'
@@ -144,7 +145,7 @@ function ExperimentConfigurationDetailsPage({item, clusters, applications, plugi
     <header className="page-header"><DetailBreadcrumb parent="Configurations" current={item.name} back={close} />
     <div className="detail-page-heading"><h2>{item.name}</h2><div className="detail-page-actions"><ResourceSharing kind="experiment-configurations" id={item.id} name={item.name} ownerUserId={item.ownerUserId} session={session} changed={changed} />{canRun && <button className="button primary" disabled={!item.validation.valid} onClick={run}>Run experiment</button>}<button className="button secondary" onClick={view}>View configuration</button>{canRun && <button className="button secondary" onClick={edit}>Edit configuration</button>}{canClone && <button className="button secondary" onClick={clone}>Clone configuration</button>}</div></div></header>
     <ResourceAttribution resource={item} editable /><article className="detail-page-card comparative-details">
-      <div className="details-summary"><div><span>Executions per configuration</span><strong>{item.definition.runs ?? 3}</strong></div><div><span>Total executions</span><strong>{(item.definition.variants?.length ?? 0) * (item.definition.runs ?? 3)}</strong></div></div>
+      <div className="details-summary"><div><span>Executions per configuration</span><strong>{item.definition.runs ?? 3}</strong></div><div><span>Total executions</span><strong>{(item.definition.variants?.length ?? 0) * (item.definition.runs ?? 3)}</strong></div>{trialScheduleRows(savedTrialSchedule(item.definition)).map(([label, value]) => <div key={label}><span>{label}</span><strong>{value}</strong></div>)}</div>
       <div className="comparative-members-heading"><h3>Execution order</h3><span>Plot color</span></div>
       <ol className="comparative-member-list">{item.definition.variants?.map((member, index) => <li className="comparative-member" key={`${member.configurationId}-${index}`}>
         <span className="comparative-member-position" aria-hidden="true">{String(index + 1).padStart(2, '0')}</span>
@@ -235,7 +236,9 @@ export function ExperimentConfigurationDialog({open, close, clusters, workspaces
 	const application = availableApplications.find(item => item.reference === applicationRef)
 	const dynamicTopology = destinationMode === 'application' && application?.descriptor.spec?.valuesSchema?.['x-kubephos-dynamic-topology'] === true
 	const effectiveApplicationComponents = dynamicTopology ? resolvedComponents ?? application?.descriptor.spec?.interface?.components ?? [] : application?.descriptor.spec?.interface?.components ?? []
-  const applicationValues = normalizeApplicationValues(application, {...(application?.descriptor.spec?.defaults ?? {}), ...(item?.definition.applicationValues ?? {})})
+  // Saved values belong to the saved application: another application starts from its own defaults.
+  const savedApplication = !item || applicationRef === item.applicationRef
+  const applicationValues = normalizeApplicationValues(application, {...(application?.descriptor.spec?.defaults ?? {}), ...(savedApplication ? item?.definition.applicationValues ?? {} : {})})
   const nativeTCP = Boolean(application?.descriptor.spec?.interface?.endpoints?.length) && application!.descriptor.spec!.interface!.endpoints!.every(endpoint => endpoint.protocol === 'tcp')
   // A saved configuration uses Istio when it runs ambient or injects at least one service;
   // new configurations follow the application default (no mesh for TCP-only applications).
@@ -461,6 +464,9 @@ export function ExperimentConfigurationDialog({open, close, clusters, workspaces
           istioDataPlane: destinationMode === 'application' && values.get('istioDataPlane') === 'ambient' ? 'ambient' : undefined,
           istioWaypoint: destinationMode === 'application' && values.get('istioDataPlane') === 'ambient' ? JSON.parse(String(values.get('istioWaypoint') ?? 'null')) ?? undefined : undefined,
           podDisruptionBudgetMinAvailable: destinationMode === 'application' ? Number(values.get('podDisruptionBudgetMinAvailable')) : 0,
+          // Repetition schedule is edited at run time; keep the saved values on edit.
+          restSecondsBetweenTrials: item?.definition.restSecondsBetweenTrials,
+          firstTrialPilot: item?.definition.firstTrialPilot,
           components: (deploymentMode ? [] : submittedComponents).map((component, index) => {
             const plugin = compatiblePlugins.find(item => item.id === component.pluginId)
             if (!plugin) throw new Error(`Component ${component.pluginId} unavailable. Remove or replace it.`)
@@ -522,7 +528,7 @@ export function ExperimentConfigurationDialog({open, close, clusters, workspaces
       ]} />}
       </WizardStep>{!deploymentMode && <><WizardStep key="load" title="Load profile" blocked={!loadTimelineValid}>
       {destinationMode === 'application' && (application?.descriptor.spec?.interface?.loadScenarios?.length ?? 0) > 1 && <label>Load scenario<select value={loadScenarioId} onChange={event => setLoadScenarioId(event.target.value)} required>{application?.descriptor.spec?.interface?.loadScenarios?.map(item => <option key={item.id} value={item.id}>{item.id} · {item.engine ?? 'load'}</option>)}</select></label>}
-      {loadComponent && (() => {const plugin = compatiblePlugins.find(item => item.id === loadComponent.pluginId)!; return <section className="experiment-component"><LoadProfileEditor onValidityChange={setLoadTimelineValid} onDurationChange={setExperimentDuration} settings={<SchemaFields schema={experimentSchema(plugin.schema, loadComponent.capability)} prefix={`component-${loadComponent.key}`} values={loadComponent.configuration ?? {}} applications={applications} artifacts={[]} connections={[]} credentials={[]} />} key={`${item?.id ?? 'new'}-${loadComponent.key}`} prefix={`component-${loadComponent.key}`} zones={destinationMode !== 'external' && nativeTCP && selectedCluster?.spec.mode !== 'multi' ? [] : zones} distribution={destinationMode === 'external' ? 'endpoint' : selectedCluster?.spec.mode === 'multi' ? 'cluster' : 'zone'} values={loadComponent.configuration} /></section>})()}
+      {loadComponent && (() => {const plugin = compatiblePlugins.find(item => item.id === loadComponent.pluginId)!; return <section className="experiment-component"><LoadProfileEditor onValidityChange={setLoadTimelineValid} onDurationChange={setExperimentDuration} settings={<SchemaFields schema={experimentSchema(plugin.schema, loadComponent.capability)} prefix={`component-${loadComponent.key}`} values={loadComponent.configuration ?? {}} applications={applications} artifacts={[]} connections={[]} credentials={[]} />} requestMix={destinationMode === 'application' && application && loadScenarioId ? {applicationId: application.id, applicationRef, scenarioId: loadScenarioId, components: effectiveApplicationComponents} : undefined} key={`${item?.id ?? 'new'}-${loadComponent.key}`} prefix={`component-${loadComponent.key}`} zones={destinationMode !== 'external' && nativeTCP && selectedCluster?.spec.mode !== 'multi' ? [] : zones} distribution={destinationMode === 'external' ? 'endpoint' : selectedCluster?.spec.mode === 'multi' ? 'cluster' : 'zone'} values={savedApplication ? loadComponent.configuration : withoutTaskWeights(loadComponent.configuration)} /></section>})()}
       </WizardStep><WizardStep key="monitoring" title="Monitoring" blocked={Boolean(networkComponent)&&!networkTimelineValid}>
 <FormTabs label="Monitoring settings" items={[
  {id:'metrics',title:'Metrics',content:<>      {metricsComponent && (() => {const plugin = compatiblePlugins.find(item => item.id === metricsComponent.pluginId)!; return <section className="experiment-component"><SchemaFields schema={experimentSchema(plugin.schema, metricsComponent.capability)} prefix={`component-${metricsComponent.key}`} values={metricsComponent.configuration ?? {}} applications={applications} artifacts={[]} connections={[]} credentials={[]} /></section>})()}
@@ -533,7 +539,12 @@ export function ExperimentConfigurationDialog({open, close, clusters, workspaces
       {monAgentComponent && monAgentPlugin && <section className="experiment-component"><SchemaFields schema={experimentSchema(monAgentPlugin.schema, monAgentComponent.capability)} prefix={`component-${monAgentComponent.key}`} values={monAgentComponent.configuration ?? {}} applications={applications} artifacts={[]} connections={[]} credentials={[]} /></section>}</>}
       </>}]:[])
  ]}/></WizardStep>{destinationMode === 'application' && <WizardStep key="scheduling" title="Scheduling and scaling">
+<<<<<<< Updated upstream
       <FormTabs label="Scheduling and scaling settings" items={schedulingGroups.map(kind => ({id: kind, title: kind === 'other' ? 'Other' : componentTitle(`${kind}.`), content: <><div className="component-add-options">{advancedPlugins.filter(plugin => schedulingGroup(primaryCapabilities(plugin)[0] ?? '') === kind && !components.some(component => component.pluginId === plugin.id) && pluginAvailableOnCluster(plugin, selectedCluster) && hasCatalogImage(plugin)).map(plugin => <button className="button secondary compact" type="button" key={plugin.id} disabled={components.length >= 15} onClick={() => addAdvancedComponent(plugin.id)}><ActionIcon name="create" />Add {pluginTitle(plugin, advancedPlugins, selectedCluster?.spec.mode === 'multi').toLowerCase()}</button>)}</div>
+=======
+      <FormTabs label="Scheduling and scaling settings" items={schedulingGroups.map(kind => ({id: kind, title: kind === 'other' ? 'Other' : componentTitle(`${kind}.`), content: <><div className="component-add-options">{advancedPlugins.filter(plugin => schedulingGroup(primaryCapabilities(plugin)[0] ?? '') === kind && !components.some(component => component.pluginId === plugin.id) && pluginAvailableOnCluster(plugin, selectedCluster)).map(plugin => <button className="button secondary compact" type="button" key={plugin.id} disabled={components.length >= 15} onClick={() => addAdvancedComponent(plugin.id)}><ActionIcon name="create" />Add {componentTitle(primaryCapabilities(plugin)[0] ?? '', selectedCluster?.spec.mode === 'multi').toLowerCase()}</button>)}</div>
+      <SchedulingPrerequisites kind={kind} plugins={advancedPlugins.filter(plugin => schedulingGroup(primaryCapabilities(plugin)[0] ?? '') === kind && !components.some(component => component.pluginId === plugin.id))} cluster={selectedCluster} componentTitle={id => clusterComponentTitle(componentCatalog, id)} readyStrategies={strategies.filter(item => item.workspaceId === workspaceId && item.kind === kind && item.status === 'succeeded').length} />
+>>>>>>> Stashed changes
       <div className="experiment-component-list">{advancedComponents.filter(component => schedulingGroup(component.capability) === kind).map(component => {
         const plugin = compatiblePlugins.find(item => item.id === component.pluginId)
         const strategyKind = ['scheduler', 'descheduler', 'autoscaler'].find(kind => component.capability.startsWith(`${kind}.`))
@@ -563,6 +574,19 @@ export function ExperimentConfigurationDialog({open, close, clusters, workspaces
 
 const emptySchema: JsonSchema = {type: 'object', properties: {}}
 
+// Explains why a scheduling/scaling component cannot be added instead of hiding it.
+export function SchedulingPrerequisites({kind, plugins, cluster, componentTitle: title, readyStrategies}: {kind: string; plugins: Plugin[]; cluster?: ManagedResource; componentTitle: (id: string) => string; readyStrategies: number}) {
+  if (kind === 'other' || !plugins.length) return null
+  const label = componentTitle(`${kind}.`).toLowerCase()
+  const blocked = plugins.map(plugin => missingPluginComponents(plugin, cluster)).filter(missing => missing.length)
+  const notes: ReactNode[] = []
+  if (!cluster) notes.push(<>Select a Kubernetes cluster to add a {label}.</>)
+  else if (blocked.length === plugins.length) notes.push(<>A {label} needs the {[...new Set(blocked.flat())].map(title).join(', ')} component on cluster <strong>{cluster.name}</strong>. Add it in <a href="#kubernetes">Kubernetes clusters</a> → {cluster.name} → Components, then return here.</>)
+  if (kind !== 'other' && readyStrategies === 0) notes.push(<>No {label} image is ready in this workspace. Register one in <a href="#catalog">Catalog</a> → Strategies (kind “{kind}”); the {label} uses it.</>)
+  if (!notes.length) return null
+  return <div className="scheduling-prerequisites" role="note">{notes.map((note, index) => <p key={index}>{note}</p>)}</div>
+}
+
 export function configurableSchema(schema: JsonSchema): JsonSchema {
   const properties = Object.fromEntries(Object.entries(schema.properties ?? {}).filter(([, property]) => property.format !== 'kubephos-artifact-ref' && property.format !== 'kubephos-application-ref' && property.format !== 'kubephos-strategy-image'))
   return {type: 'object', properties, required: (schema.required ?? []).filter(name => name in properties)}
@@ -572,7 +596,8 @@ export function configurableSchema(schema: JsonSchema): JsonSchema {
 function experimentSchema(schema: JsonSchema, capability: string): JsonSchema {
   const result = configurableSchema(schema)
   const hidden = new Set<string>()
-  if (capability.startsWith('load.')) ['action', 'interactive', 'scenarioId', 'steps', 'geographicSteps'].forEach(name => hidden.add(name))
+  // The Request mix tab of the load profile owns the task mix and call-chain profiling.
+  if (capability.startsWith('load.')) ['action', 'interactive', 'scenarioId', 'steps', 'geographicSteps', 'taskWeights', 'profileCallChain', 'profileSecondsPerTask', 'profileRps'].forEach(name => hidden.add(name))
   if (capability.startsWith('autoscaler.')) hidden.add('targetOverrides')
   if (!hidden.size) return result
   const properties = Object.fromEntries(Object.entries(result.properties ?? {}).filter(([name]) => !hidden.has(name)))
@@ -585,6 +610,12 @@ export function applicationZones(cluster?: ManagedResource): string[] {
   if (!Array.isArray(pools)) return []
   const values = pools.flatMap(pool => pool && typeof pool === 'object' && 'zones' in pool && Array.isArray(pool.zones) ? pool.zones : [])
   return [...new Set(values.filter((zone): zone is string => typeof zone === 'string' && zone.length > 0))].sort()
+}
+
+// Task weights name the Locust tasks of the saved application's scenario.
+function withoutTaskWeights(configuration: Record<string, unknown> = {}): Record<string, unknown> {
+  const {taskWeights: _taskWeights, ...rest} = configuration
+  return rest
 }
 
 function schedulingGroup(capability: string): string {

@@ -44,6 +44,9 @@ type Spec struct {
 	Window                     string        `json:"window"`
 	Resolution                 string        `json:"resolution"`
 	SLOMilliseconds            int           `json:"sloMilliseconds,omitempty"`
+	// RateWindow is the range used by rate(), histogram_quantile() and
+	// avg_over_time(): "auto" (default) or an explicit PromQL duration.
+	RateWindow string `json:"rateWindow,omitempty"`
 }
 
 type clusterConnection struct {
@@ -121,6 +124,18 @@ type loadSession struct {
 		StartedAt       *time.Time `json:"startedAt"`
 		CompletedAt     *time.Time `json:"completedAt"`
 		Steps           []loadStep `json:"steps"`
+		Replicas        int        `json:"replicas,omitempty"`
+		// Optional fields of newer load sessions; absent on legacy artifacts.
+		WarmupSeconds   *int            `json:"warmupSeconds,omitempty"`
+		WarmupStartedAt *time.Time      `json:"warmupStartedAt,omitempty"`
+		DrainSeconds    *int            `json:"drainSeconds,omitempty"`
+		Clock           string          `json:"clock,omitempty"`
+		Workers         int             `json:"workers,omitempty"`
+		LocustSummary   json.RawMessage `json:"locustSummary,omitempty"`
+		// Request mix and call-chain profiling (optional). callChainProfile
+		// stays raw so that a malformed value never fails the run.
+		TaskMix          json.RawMessage `json:"taskMix,omitempty"`
+		CallChainProfile json.RawMessage `json:"callChainProfile,omitempty"`
 	} `json:"spec"`
 }
 
@@ -152,6 +167,16 @@ type metricDefinition struct {
 	Unit        string
 	Aggregation string
 	Query       string
+	// Provenance lives next to the query so the published catalog cannot
+	// drift from what was actually measured.
+	Source      string
+	Vantage     string
+	Description string
+	// Optional metrics may legitimately have no series (older load generator
+	// image, idle windows, no mesh traffic); they never fail a run.
+	Optional bool
+	// RateWindowSeconds is set by applyRateWindow when the query uses a range.
+	RateWindowSeconds int
 }
 
 type timeSeriesDataset struct {
@@ -179,9 +204,18 @@ type datasetSpec struct {
 	End               time.Time              `json:"end"`
 	StepSeconds       int                    `json:"stepSeconds"`
 	SLOMilliseconds   int                    `json:"sloMilliseconds,omitempty"`
-	Source            datasetSource          `json:"source"`
-	Series            []metricSeries         `json:"series"`
-	Summary           datasetSummary         `json:"summary"`
+	// Window of rate()/histogram_quantile()/avg_over_time() ranges, in seconds.
+	RateWindowSeconds int `json:"rateWindowSeconds,omitempty"`
+	// Scrape interval of the load generator's Prometheus job, when detected.
+	ScrapeIntervalSeconds int                  `json:"scrapeIntervalSeconds,omitempty"`
+	Metrics               []metricCatalogEntry `json:"metrics,omitempty"`
+	LocustSummary         json.RawMessage      `json:"locustSummary,omitempty"`
+	TaskMix               json.RawMessage      `json:"taskMix,omitempty"`
+	CallModel             *callModel           `json:"callModel,omitempty"`
+	RunContext            *runContext          `json:"runContext,omitempty"`
+	Source                datasetSource        `json:"source"`
+	Series                []metricSeries       `json:"series"`
+	Summary               datasetSummary       `json:"summary"`
 }
 
 type datasetSource struct {
@@ -234,7 +268,7 @@ func (Plugin) Manifest() plugins.Manifest {
 	return plugins.Manifest{
 		ID: pluginID, Name: "Kubernetes metrics collector", Version: "0.9.0",
 		Description:     "Collects a normalized workload dataset through a compatible metrics capability.",
-		Schema:          json.RawMessage(`{"type":"object","additionalProperties":false,"required":["clusterConnectionRef","applicationDeploymentRef","observabilityCapabilityRef","loadSessionRef","window","resolution"],"properties":{"clusterConnectionRef":{"type":"string","title":"Kubernetes cluster","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ClusterConnection","x-kubephos-artifact-version":"v1alpha1"},"applicationDeploymentRef":{"type":"string","title":"Application deployment","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ApplicationDeployment","x-kubephos-artifact-version":"v1alpha1"},"observabilityCapabilityRef":{"type":"string","title":"Metrics service","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ObservabilityCapability","x-kubephos-artifact-version":"v1alpha1"},"loadSessionRef":{"type":"string","title":"Completed load session","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"LoadSession","x-kubephos-artifact-version":"v1alpha1"},"window":{"type":"string","title":"Metrics fallback window","x-kubephos-hidden":true,"enum":["5m","15m","30m","1h"],"default":"15m"},"resolution":{"type":"string","title":"Data resolution","enum":["5s","15s","30s","1m"],"default":"15s"},"sloMilliseconds":{"type":"integer","title":"Response time SLO (optional, ms)","minimum":1,"maximum":600000},"clusterName":{"type":"string","x-kubephos-hidden":true},"peers":{"type":"array","minItems":1,"maxItems":5,"x-kubephos-hidden":true,"items":{"type":"object","required":["name","clusterConnectionRef","applicationDeploymentRef","observabilityCapabilityRef"],"additionalProperties":false,"properties":{"name":{"type":"string"},"clusterConnectionRef":{"type":"string","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ClusterConnection","x-kubephos-artifact-version":"v1alpha1"},"applicationDeploymentRef":{"type":"string","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ApplicationDeployment","x-kubephos-artifact-version":"v1alpha1"},"observabilityCapabilityRef":{"type":"string","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ObservabilityCapability","x-kubephos-artifact-version":"v1alpha1"}}}}}}`),
+		Schema:          json.RawMessage(`{"type":"object","additionalProperties":false,"required":["clusterConnectionRef","applicationDeploymentRef","observabilityCapabilityRef","loadSessionRef","window","resolution"],"properties":{"clusterConnectionRef":{"type":"string","title":"Kubernetes cluster","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ClusterConnection","x-kubephos-artifact-version":"v1alpha1"},"applicationDeploymentRef":{"type":"string","title":"Application deployment","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ApplicationDeployment","x-kubephos-artifact-version":"v1alpha1"},"observabilityCapabilityRef":{"type":"string","title":"Metrics service","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ObservabilityCapability","x-kubephos-artifact-version":"v1alpha1"},"loadSessionRef":{"type":"string","title":"Completed load session","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"LoadSession","x-kubephos-artifact-version":"v1alpha1"},"window":{"type":"string","title":"Metrics fallback window","x-kubephos-hidden":true,"enum":["5m","15m","30m","1h"],"default":"15m"},"resolution":{"type":"string","title":"Data resolution","enum":["5s","15s","30s","1m"],"default":"15s"},"sloMilliseconds":{"type":"integer","title":"Response time SLO (optional, ms)","minimum":1,"maximum":600000},"rateWindow":{"type":"string","title":"Rate window","description":"Range used by rate() and percentile queries. Auto uses max(resolution, 4 x scrape interval).","enum":["auto","30s","1m","2m","5m"],"default":"auto"},"clusterName":{"type":"string","x-kubephos-hidden":true},"peers":{"type":"array","minItems":1,"maxItems":5,"x-kubephos-hidden":true,"items":{"type":"object","required":["name","clusterConnectionRef","applicationDeploymentRef","observabilityCapabilityRef"],"additionalProperties":false,"properties":{"name":{"type":"string"},"clusterConnectionRef":{"type":"string","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ClusterConnection","x-kubephos-artifact-version":"v1alpha1"},"applicationDeploymentRef":{"type":"string","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ApplicationDeployment","x-kubephos-artifact-version":"v1alpha1"},"observabilityCapabilityRef":{"type":"string","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ObservabilityCapability","x-kubephos-artifact-version":"v1alpha1"}}}}}}`),
 		ArtifactInputs:  []domain.ArtifactContract{{Type: "ClusterConnection", Version: "v1alpha1"}, {Type: "ApplicationDeployment", Version: "v1alpha1"}, {Type: "ObservabilityCapability", Version: "v1alpha1"}, {Type: "LoadSession", Version: "v1alpha1"}},
 		ArtifactOutputs: []domain.ArtifactContract{{Type: "TimeSeriesDataset", Version: "v1alpha1"}},
 		Capabilities:    []string{"metrics.timeseries.collect", "metrics.timeseries.preflight"},
@@ -271,6 +305,9 @@ func (Plugin) Validate(ctx context.Context, invocation Invocation) domain.Valida
 	if spec.SLOMilliseconds < 0 || spec.SLOMilliseconds > 600000 {
 		return invalid(report, "sloMilliseconds", "When set, the response time SLO must be between 1 and 600000 milliseconds.")
 	}
+	if !validRateWindow(spec.RateWindow) {
+		return invalid(report, "rateWindow", "Select a supported rate window.")
+	}
 	report.Issues = append(report.Issues, domain.ValidationIssue{Level: "info", Message: "KubePhos will revalidate the cluster, application scope and metrics API before collecting the dataset."})
 	return report
 }
@@ -288,6 +325,9 @@ func (Plugin) Plan(ctx context.Context, raw json.RawMessage) (domain.Plan, error
 	}
 	if _, ok := resolutions()[spec.Resolution]; !ok {
 		return domain.Plan{}, errors.New("unsupported data resolution")
+	}
+	if !validRateWindow(spec.RateWindow) {
+		return domain.Plan{}, errors.New("unsupported rate window")
 	}
 	input, err := json.Marshal(spec)
 	if err != nil {
@@ -347,7 +387,10 @@ func (plugin Plugin) precheckSingle(ctx context.Context, step domain.PlanStep, l
 	return domain.HealthReport{Status: domain.HealthHealthy, Summary: "Metrics collection inputs are valid and ready", Checks: map[string]string{"api": "ready", "application": "owned", "authorization": "allowed", "metricsAPI": "ready"}}, nil
 }
 
-func (plugin Plugin) executeSingle(ctx context.Context, step domain.PlanStep, log plugins.Logger) (json.RawMessage, error) {
+// executeSingle collects one cluster. rateWindow forces the range of rate
+// queries (peers reuse the primary cluster's window); zero selects it from
+// the configuration and the detected scrape interval.
+func (plugin Plugin) executeSingle(ctx context.Context, step domain.PlanStep, log plugins.Logger, rateWindow time.Duration) (json.RawMessage, error) {
 	spec, cluster, deployment, capability, endpoint, err := resolve(step)
 	if err != nil {
 		return nil, err
@@ -358,10 +401,25 @@ func (plugin Plugin) executeSingle(ctx context.Context, step domain.PlanStep, lo
 		return nil, err
 	}
 	start, end := metricWindow(load, plugin.now().UTC(), windows()[spec.Window])
-	definitions := scopeReusableNamespaceMetrics(deploymentMetricDefinitions(deployment), deployment)
+	scrapeInterval, scrapeJob := plugin.detectScrapeInterval(ctx, cluster, capability, endpoint, deployment.Spec.Namespace)
+	if rateWindow <= 0 {
+		rateWindow = selectRateWindow(spec.RateWindow, resolution, scrapeInterval)
+	}
+	if scrapeInterval > 0 {
+		if err := log("info", fmt.Sprintf("Using a %s rate window (scrape interval %s of %s, resolution %s)", formatPromDuration(rateWindow), scrapeInterval, scrapeJob, resolution)); err != nil {
+			return nil, err
+		}
+		if explicit, ok := rateWindowChoices()[spec.RateWindow]; ok && explicit != rateWindow {
+			_ = log("warning", fmt.Sprintf("The configured %s rate window covers fewer than two scrapes; widened to %s.", spec.RateWindow, formatPromDuration(rateWindow)))
+		}
+	} else if err := log("info", fmt.Sprintf("Scrape interval unknown; using a %s rate window", formatPromDuration(rateWindow))); err != nil {
+		return nil, err
+	}
+	definitions := deploymentMetricDefinitions(deployment)
 	if spec.PeerOnly {
 		definitions = ciliumMetricDefinitions(deployment, true)
 	}
+	definitions = applyRateWindow(scopeReusableNamespaceMetrics(definitions, deployment), rateWindow)
 	type queryResult struct {
 		definition metricDefinition
 		series     []metricSeries
@@ -383,30 +441,79 @@ func (plugin Plugin) executeSingle(ctx context.Context, step domain.PlanStep, lo
 			results <- queryResult{definition: definition, series: series, err: queryErr}
 		}()
 	}
+	// Run context and pod ownership are best effort and collected meanwhile;
+	// their warnings are logged from this goroutine once they are done.
+	type contextResult struct {
+		context  *runContext
+		pods     map[string]podWorkload
+		warnings []string
+	}
+	contextResults := make(chan contextResult, 1)
+	go func() {
+		var warnings []string
+		warn := func(message string) { warnings = append(warnings, message) }
+		value := plugin.collectRunContext(queryContext, cluster, deployment, capability, endpoint, load, start, end, resolution, scrapeInterval, spec.PeerOnly, warn)
+		pods := plugin.resolvePodWorkloads(queryContext, cluster, capability, endpoint, deployment.Spec.Namespace, start, end, rateWindow, nodeZones(value.Nodes), warn)
+		contextResults <- contextResult{context: value, pods: pods, warnings: warnings}
+	}()
+	// The measured call chain is best effort as well; peers never build one
+	// (multi-cluster datasets keep the primary cluster's model).
+	type callModelResult struct {
+		model    *callModel
+		warnings []string
+	}
+	callModelResults := make(chan callModelResult, 1)
+	go func() {
+		var warnings []string
+		var model *callModel
+		if !spec.PeerOnly {
+			model = plugin.collectCallModel(queryContext, cluster, deployment, capability, endpoint, load, scrapeInterval, func(message string) { warnings = append(warnings, message) })
+		}
+		callModelResults <- callModelResult{model: model, warnings: warnings}
+	}()
 	allSeries := []metricSeries{}
+	catalog := []metricCatalogEntry{}
 	if !spec.PeerOnly {
 		allSeries = append(allSeries, configuredLoadSeries(load, start, end, resolution))
+		catalog = append(catalog, configuredLoadCatalogEntry())
 	}
 	for range definitions {
 		collected := <-results
-		if collected.err != nil {
+		if collected.err != nil && !collected.definition.Optional {
 			cancel()
 			return nil, fmt.Errorf("collect %s: %w", collected.definition.ID, collected.err)
 		}
 		if len(collected.series) == 0 {
-			cancel()
-			return nil, fmt.Errorf("collect %s: metrics service returned no series", collected.definition.ID)
+			if !collected.definition.Optional {
+				cancel()
+				return nil, fmt.Errorf("collect %s: metrics service returned no series", collected.definition.ID)
+			}
+			reason := "no series"
+			if collected.err != nil {
+				reason = collected.err.Error()
+			}
+			if err := log("info", fmt.Sprintf("Optional metric %s unavailable: %s", collected.definition.ID, reason)); err != nil {
+				cancel()
+				return nil, err
+			}
+			continue
 		}
 		if err := log("info", fmt.Sprintf("Collected %d %s series", len(collected.series), collected.definition.ID)); err != nil {
 			cancel()
 			return nil, err
 		}
 		allSeries = append(allSeries, collected.series...)
+		catalog = append(catalog, collected.definition.catalogEntry())
 	}
 	if spec.SLOMilliseconds > 0 && !spec.PeerOnly {
 		for _, series := range allSeries {
 			if series.Metric == "load.p95_response_time" {
 				allSeries = append(allSeries, sloViolationSeries(series, spec.SLOMilliseconds))
+				for _, definition := range definitions {
+					if definition.ID == series.Metric {
+						catalog = append(catalog, sloCatalogEntry(definition, spec.SLOMilliseconds))
+					}
+				}
 				break
 			}
 		}
@@ -415,38 +522,53 @@ func (plugin Plugin) executeSingle(ctx context.Context, step domain.PlanStep, lo
 	if scope := deployment.Spec.ControlMetrics; scope != nil && !scope.StartedAt.IsZero() && scope.StartedAt.Before(start) && end.Sub(scope.StartedAt) <= 24*time.Hour {
 		controlStart = scope.StartedAt.UTC().Truncate(time.Second)
 	}
-	controlSeries, controlSummaries := plugin.collectControlMetrics(ctx, cluster, deployment, capability, endpoint, controlStart, end, resolution)
+	controlSeries, controlSummaries, controlCatalog := plugin.collectControlMetrics(ctx, cluster, deployment, capability, endpoint, controlStart, end, resolution)
 	allSeries = append(allSeries, controlSeries...)
+	catalog = append(catalog, controlCatalog...)
+	background := <-contextResults
+	for _, warning := range background.warnings {
+		_ = log("warning", warning)
+	}
+	modelResult := <-callModelResults
+	for _, warning := range modelResult.warnings {
+		_ = log("warning", warning)
+	}
+	labelWorkloads(allSeries, background.pods)
 	sort.Slice(allSeries, func(i, j int) bool {
 		if allSeries[i].Metric != allSeries[j].Metric {
 			return allSeries[i].Metric < allSeries[j].Metric
 		}
 		return labelIdentity(allSeries[i].Labels) < labelIdentity(allSeries[j].Labels)
 	})
-	samples := 0
-	for _, series := range allSeries {
-		samples += len(series.Points)
-	}
-	metricCount := len(definitions) + 1
-	controlMetricIDs := map[string]bool{}
-	for _, series := range controlSeries {
-		controlMetricIDs[series.Metric] = true
-	}
-	metricCount += len(controlMetricIDs)
-	if spec.SLOMilliseconds > 0 {
-		metricCount++
-	}
 	placement := plugin.collectPlacement(ctx, cluster, deployment, capability, endpoint, start, end, resolution)
 	dataset := timeSeriesDataset{
 		APIVersion: artifactAPI, Kind: "TimeSeriesDataset", Metadata: datasetMetadata{Name: deployment.Spec.Namespace + "/workload-overview", Version: "v1alpha1"},
 		Spec: datasetSpec{
 			Placement: placement, EndToEndSource: "locust", ApplicationRef: deployment.Spec.ApplicationRef, ClusterServer: cluster.Spec.Server, Namespace: deployment.Spec.Namespace,
 			Start: controlStart, WorkloadStartedAt: &start, ControlMetrics: controlSummaries, End: end, StepSeconds: int(resolution.Seconds()), SLOMilliseconds: spec.SLOMilliseconds,
+			RateWindowSeconds: int(math.Ceil(rateWindow.Seconds())), ScrapeIntervalSeconds: int(math.Ceil(scrapeInterval.Seconds())),
+			Metrics: buildCatalog(catalog, allSeries), RunContext: background.context,
 			Source: datasetSource{Kind: capability.Spec.MetricsAPI, Version: capability.Metadata.Version, Profile: "kubephos-experiment-evidence/v2"},
-			Series: allSeries, Summary: datasetSummary{Metrics: metricCount, Series: len(allSeries), Samples: samples},
+			Series: allSeries, Summary: summarizeSeries(allSeries),
 		},
 	}
+	if !spec.PeerOnly {
+		dataset.Spec.LocustSummary = locustSummary(load)
+		dataset.Spec.TaskMix = taskMix(load)
+		dataset.Spec.CallModel = modelResult.model
+	}
 	return json.Marshal(result{Dataset: dataset})
+}
+
+// summarizeSeries counts the distinct metrics, series and samples present.
+func summarizeSeries(series []metricSeries) datasetSummary {
+	ids := map[string]bool{}
+	samples := 0
+	for _, item := range series {
+		ids[item.Metric] = true
+		samples += len(item.Points)
+	}
+	return datasetSummary{Metrics: len(ids), Series: len(series), Samples: samples}
 }
 
 func (Plugin) Verify(ctx context.Context, step domain.PlanStep, raw json.RawMessage, log plugins.Logger) (domain.HealthReport, error) {
@@ -566,9 +688,11 @@ func configuredSeriesResolution(value loadSession, start, end time.Time, resolut
 
 func configuredRPS(value loadSession, elapsed float64) float64 {
 	cursor := 0.0
-	for _, step := range value.Spec.Steps {
+	for index, step := range value.Spec.Steps {
 		duration := float64(step.DurationSeconds)
-		if elapsed < cursor+duration {
+		// The window end belongs to the last step: the profile is still running at
+		// completedAt, so the final sample must not read as 0.
+		if elapsed < cursor+duration || index == len(value.Spec.Steps)-1 && elapsed <= cursor+duration {
 			local := math.Max(0, elapsed-cursor)
 			switch step.Type {
 			case "constant":
@@ -644,19 +768,107 @@ func trafficEntryPointMatcher(deployment applicationDeployment) string {
 // data plane, so the two never count the same request twice.
 const serviceReporter = `reporter=~"destination|waypoint"`
 
+// KubePhos adds its own workloads to the application namespace: the
+// pod-scheduling probe and the Locust load generator ("kubephos-load-<scenario>",
+// see the load-session plugin). They are not part of the system under test, so
+// application resource metrics exclude them. The pod pattern has no parentheses
+// because namespace scoping rewrites rate() vectors that contain none.
+// The Istio ambient waypoint Deployment is mesh data plane and stays included.
+type workloadExclusion struct{ pod, deployment string }
+
+var (
+	applicationWorkloads = workloadExclusion{pod: `pod!~"kubephos-pod-scheduling-.*|kubephos-load-.*"`, deployment: `deployment!~"kubephos-pod-scheduling|kubephos-load-.*"`}
+	// An external destination's namespace holds only the Locust driver, which
+	// is then the only in-cluster workload these metrics can describe.
+	externalDriverWorkloads = workloadExclusion{pod: `pod!~"kubephos-pod-scheduling-.*"`, deployment: `deployment!="kubephos-pod-scheduling"`}
+)
+
 func metricDefinitions(namespace, _ string) []metricDefinition {
+	return namespaceMetricDefinitions(namespace, applicationWorkloads)
+}
+
+// Provenance vocabulary of the dataset catalog (spec.metrics).
+const (
+	sourceLocust           = "locust"
+	sourceIstio            = "istio"
+	sourceCadvisor         = "cadvisor"
+	sourceKubeStateMetrics = "kube-state-metrics"
+	sourceMentat           = "mentat"
+	sourceKubePhos         = "kubephos"
+	sourceKubeScheduler    = "kube-scheduler"
+	sourceDescheduler      = "descheduler"
+
+	vantageClient        = "client"
+	vantageServer        = "server"
+	vantageResource      = "resource"
+	vantageNetwork       = "network"
+	vantageControlPlane  = "control-plane"
+	vantageConfiguration = "configuration"
+
+	collectorPrometheus = "prometheus"
+	collectorKubePhos   = "kubephos"
+)
+
+const istioServerVantage = "measured by the Istio proxy in front of the destination workload (server side: sidecar \"destination\" reporter or ambient waypoint), per destination workload; excludes the client network path and load generator time"
+
+func namespaceMetricDefinitions(namespace string, exclude workloadExclusion) []metricDefinition {
 	selector := strconv.Quote(namespace)
+	istio := `{` + serviceReporter + `,destination_workload_namespace=` + selector + `}`
+	buckets := `sum by (destination_workload, le) (rate(istio_request_duration_milliseconds_bucket` + istio + rateWindowRange + `))`
+	quantile := func(id, q, label string) metricDefinition {
+		return metricDefinition{ID: id, Unit: "milliseconds", Aggregation: "mean", Source: sourceIstio, Vantage: vantageServer, Optional: q != "0.95",
+			Query:       `histogram_quantile(` + q + `, ` + buckets + `)`,
+			Description: label + " percentile of server response time " + istioServerVantage + ", estimated by interpolation inside the istio_request_duration_milliseconds histogram buckets."}
+	}
 	return append(locustMetricDefinitions(namespace), []metricDefinition{
-		{ID: "application.request_rps", Unit: "requests_per_second", Aggregation: "sum", Query: `sum by (destination_workload) (rate(istio_requests_total{` + serviceReporter + `,destination_workload_namespace=` + selector + `}[1m]))`},
-		{ID: "application.p95_response_time", Unit: "milliseconds", Aggregation: "mean", Query: `histogram_quantile(0.95, sum by (destination_workload, le) (rate(istio_request_duration_milliseconds_bucket{` + serviceReporter + `,destination_workload_namespace=` + selector + `}[1m])))`},
-		{ID: "cpu.cores", Unit: "cores", Aggregation: "sum", Query: `sum by (pod) (rate(container_cpu_usage_seconds_total{namespace=` + selector + `,container!="",container!="POD",pod!~"kubephos-pod-scheduling-.*"}[1m]))`},
-		{ID: "memory.working_set", Unit: "bytes", Aggregation: "sum", Query: `sum by (pod) (container_memory_working_set_bytes{namespace=` + selector + `,container!="",container!="POD",pod!~"kubephos-pod-scheduling-.*"})`},
-		{ID: "pod.restarts", Unit: "count", Aggregation: "sum", Query: `sum by (pod) (kube_pod_container_status_restarts_total{namespace=` + selector + `,pod!~"kubephos-pod-scheduling-.*"})`},
-		{ID: "deployment.ready_replicas", Unit: "replicas", Aggregation: "sum", Query: `max by (deployment) (kube_deployment_status_replicas_ready{namespace=` + selector + `,deployment!="kubephos-pod-scheduling"})`},
-		{ID: "network.rtt", Unit: "milliseconds", Aggregation: "mean", Query: `1000 * sum by (origin_node, destination_node) (rate(node_latency_sum[1m])) / sum by (origin_node, destination_node) (rate(node_latency_count[1m]))`},
-		{ID: "network.packet_loss", Unit: "percent", Aggregation: "mean", Query: `100 * avg_over_time(node_packet_loss_ratio[1m])`},
-		{ID: "network.bandwidth", Unit: "bytes_per_second", Aggregation: "mean", Query: `node_bandwidth_bytes_per_second`},
+		{ID: "application.request_rps", Unit: "requests_per_second", Aggregation: "sum", Source: sourceIstio, Vantage: vantageServer,
+			Query:       `sum by (destination_workload) (rate(istio_requests_total` + istio + rateWindowRange + `))`,
+			Description: "Rate of requests received by each workload, " + istioServerVantage + "."},
+		quantile("application.p95_response_time", "0.95", "95th"),
+		quantile("application.p50_response_time", "0.5", "50th (median)"),
+		quantile("application.p90_response_time", "0.9", "90th"),
+		quantile("application.p99_response_time", "0.99", "99th"),
+		{ID: "application.mean_response_time", Unit: "milliseconds", Aggregation: "mean", Source: sourceIstio, Vantage: vantageServer, Optional: true,
+			Query:       `sum by (destination_workload) (rate(istio_request_duration_milliseconds_sum` + istio + rateWindowRange + `)) / sum by (destination_workload) (rate(istio_request_duration_milliseconds_count` + istio + rateWindowRange + `))`,
+			Description: "Mean server response time (rate of the latency sum divided by the rate of the request count) " + istioServerVantage + "."},
+		{ID: "cpu.cores", Unit: "cores", Aggregation: "sum", Source: sourceCadvisor, Vantage: vantageResource,
+			Query:       `sum by (pod) (rate(container_cpu_usage_seconds_total{namespace=` + selector + `,container!="",container!="POD",` + exclude.pod + `}` + rateWindowRange + `))`,
+			Description: "CPU used by each pod in cores: rate of container CPU seconds reported by cAdvisor (kubelet), summed over the pod's containers, excluding pause containers and KubePhos helper pods. Labels workload/workload_kind/node/zone are resolved from kube-state-metrics."},
+		{ID: "memory.working_set", Unit: "bytes", Aggregation: "sum", Source: sourceCadvisor, Vantage: vantageResource,
+			Query:       `sum by (pod) (container_memory_working_set_bytes{namespace=` + selector + `,container!="",container!="POD",` + exclude.pod + `})`,
+			Description: "Working-set memory of each pod (cAdvisor container_memory_working_set_bytes summed over containers), sampled at each step; excludes pause containers and KubePhos helper pods."},
+		{ID: "cpu.limit_cores", Unit: "cores", Aggregation: "sum", Source: sourceKubeStateMetrics, Vantage: vantageResource, Optional: true,
+			Query:       `sum by (pod) (kube_pod_container_resource_limits{namespace=` + selector + `,resource="cpu",` + exclude.pod + `})`,
+			Description: "Sum of the CPU limits (cores) of each pod's containers reported by kube-state-metrics. Containers without a limit are not counted, so a pod with any unlimited container is not CPU-capped by this value. Compare with cpu.cores to detect throttling."},
+		{ID: "cpu.request_cores", Unit: "cores", Aggregation: "sum", Source: sourceKubeStateMetrics, Vantage: vantageResource, Optional: true,
+			Query:       `sum by (pod) (kube_pod_container_resource_requests{namespace=` + selector + `,resource="cpu",` + exclude.pod + `})`,
+			Description: "Sum of the CPU requests (cores) of each pod's containers reported by kube-state-metrics (what the scheduler reserves; autoscalers usually target a percentage of it)."},
+		{ID: "pod.restarts", Unit: "count", Aggregation: "sum", Source: sourceKubeStateMetrics, Vantage: vantageResource,
+			Query:       `sum by (pod) (kube_pod_container_status_restarts_total{namespace=` + selector + `,` + exclude.pod + `})`,
+			Description: "Cumulative container restart counter of each pod reported by kube-state-metrics; the increase over the run is the number of restarts."},
+		{ID: "deployment.ready_replicas", Unit: "replicas", Aggregation: "sum", Source: sourceKubeStateMetrics, Vantage: vantageResource,
+			Query:       `max by (deployment) (kube_deployment_status_replicas_ready{namespace=` + selector + `,` + exclude.deployment + `})`,
+			Description: "Ready replicas of each Deployment reported by kube-state-metrics (status.readyReplicas)."},
+		{ID: "statefulset.ready_replicas", Unit: "replicas", Aggregation: "sum", Source: sourceKubeStateMetrics, Vantage: vantageResource, Optional: true,
+			Query:       `max by (statefulset) (kube_statefulset_status_replicas_ready{namespace=` + selector + `})`,
+			Description: "Ready replicas of each StatefulSet reported by kube-state-metrics (status.readyReplicas)."},
+		daemonSetReadyDefinition(selector),
+		{ID: "network.rtt", Unit: "milliseconds", Aggregation: "mean", Source: sourceMentat, Vantage: vantageNetwork,
+			Query:       `1000 * sum by (origin_node, destination_node) (rate(node_latency_sum` + rateWindowRange + `)) / sum by (origin_node, destination_node) (rate(node_latency_count` + rateWindowRange + `))`,
+			Description: "Mean ICMP round-trip time between each pair of Kubernetes nodes measured by the KubePhos mentat probe agent (rate of the latency sum over the rate of the probe count), in milliseconds."},
+		{ID: "network.packet_loss", Unit: "percent", Aggregation: "mean", Source: sourceMentat, Vantage: vantageNetwork,
+			Query:       `100 * avg_over_time(node_packet_loss_ratio` + rateWindowRange + `)`,
+			Description: "Percentage of ICMP probes lost between each pair of Kubernetes nodes (mentat), averaged over the rate window."},
+		{ID: "network.bandwidth", Unit: "bytes_per_second", Aggregation: "mean", Source: sourceMentat, Vantage: vantageNetwork,
+			Query:       `node_bandwidth_bytes_per_second`,
+			Description: "Link bandwidth between each pair of Kubernetes nodes estimated by mentat from UDP packet dispersion (latest probe value at each step)."},
 	}...)
+}
+
+func daemonSetReadyDefinition(selector string) metricDefinition {
+	return metricDefinition{ID: "daemonset.ready_replicas", Unit: "replicas", Aggregation: "sum", Source: sourceKubeStateMetrics, Vantage: vantageResource, Optional: true,
+		Query:       `max by (daemonset) (kube_daemonset_status_number_ready{namespace=` + selector + `})`,
+		Description: "Ready pods of each DaemonSet reported by kube-state-metrics (status.numberReady)."}
 }
 
 func nativeTCPDeployment(deployment applicationDeployment) bool {
@@ -679,11 +891,11 @@ func deploymentMetricDefinitions(deployment applicationDeployment) []metricDefin
 		return nativeMetricDefinitions(deployment.Spec.Namespace)
 	}
 
-	definitions := metricDefinitions(deployment.Spec.Namespace, trafficEntryPointMatcher(deployment))
 	if !deployment.Spec.External {
-		return definitions
+		return metricDefinitions(deployment.Spec.Namespace, trafficEntryPointMatcher(deployment))
 	}
-	filtered := make([]metricDefinition, 0, len(definitions)-2)
+	definitions := namespaceMetricDefinitions(deployment.Spec.Namespace, externalDriverWorkloads)
+	filtered := make([]metricDefinition, 0, len(definitions))
 	for _, definition := range definitions {
 		if strings.HasPrefix(definition.ID, "application.") {
 			continue
@@ -693,19 +905,56 @@ func deploymentMetricDefinitions(deployment applicationDeployment) []metricDefin
 	return filtered
 }
 
+const locustClientVantage = "measured by the Locust load generator (client side, end to end: includes the network path, the mesh and the application)"
+
 // Locust measures all end-to-end requests at the load generator.
 func locustMetricDefinitions(namespace string) []metricDefinition {
 	selector := `namespace=` + strconv.Quote(namespace)
 	requests := `kubephos_load_requests_total{` + selector
-	success := `sum(rate(` + requests + `,outcome="success"}[1m]))`
-	failed := `sum(rate(` + requests + `,outcome="failure"}[1m]))`
-	total := `sum(rate(` + requests + `}[1m]))`
-	return []metricDefinition{
-		{ID: "load.successful_rps", Unit: "requests_per_second", Aggregation: "sum", Query: success},
-		{ID: "load.failed_rps", Unit: "requests_per_second", Aggregation: "sum", Query: failed},
-		{ID: "load.failure_percentage", Unit: "percent", Aggregation: "mean", Query: `100 * ` + failed + ` / clamp_min(` + total + `, 0.000001)`},
-		{ID: "load.p95_response_time", Unit: "milliseconds", Aggregation: "mean", Query: `histogram_quantile(0.95, sum by (le) (rate(kubephos_load_duration_milliseconds_bucket{` + selector + `}[1m])))`},
+	success := `sum(rate(` + requests + `,outcome="success"}` + rateWindowRange + `))`
+	failed := `sum(rate(` + requests + `,outcome="failure"}` + rateWindowRange + `))`
+	total := `sum(rate(` + requests + `}` + rateWindowRange + `))`
+	buckets := `sum by (le) (rate(kubephos_load_duration_milliseconds_bucket{` + selector + `}` + rateWindowRange + `))`
+	quantile := func(id, q, label string) metricDefinition {
+		return metricDefinition{ID: id, Unit: "milliseconds", Aggregation: "mean", Optional: q != "0.95",
+			Query:       `histogram_quantile(` + q + `, ` + buckets + `)`,
+			Description: label + " percentile of response time " + locustClientVantage + ", estimated by interpolation inside the kubephos_load_duration_milliseconds histogram buckets of each rate window; exact percentiles of the whole measured window are in locustSummary."}
 	}
+	definitions := []metricDefinition{
+		{ID: "load.successful_rps", Unit: "requests_per_second", Aggregation: "sum", Query: success,
+			Description: "Rate of requests that completed successfully, " + locustClientVantage + ", summed over all load workers."},
+		{ID: "load.failed_rps", Unit: "requests_per_second", Aggregation: "sum", Query: failed,
+			Description: "Rate of requests Locust recorded as failed (connection errors, timeouts, error status or failed response checks), summed over all load workers."},
+		// Without traffic the ratio is undefined: 0/0 yields NaN, which is
+		// dropped, so idle windows have no sample instead of a fake 0 %. The
+		// "or 0 *" branch keeps 0 % when traffic exists but no failure series
+		// was ever exported. An entirely idle run has no series at all.
+		{ID: "load.failure_percentage", Unit: "percent", Aggregation: "mean", Optional: true,
+			Query:       `100 * (` + failed + ` or 0 * ` + total + `) / ` + total,
+			Description: "Failed requests as a percentage of all requests issued by Locust in each rate window (client side); no sample when no request was issued."},
+		quantile("load.p95_response_time", "0.95", "95th"),
+		quantile("load.p50_response_time", "0.5", "50th (median)"),
+		quantile("load.p90_response_time", "0.9", "90th"),
+		quantile("load.p99_response_time", "0.99", "99th"),
+		{ID: "load.mean_response_time", Unit: "milliseconds", Aggregation: "mean", Optional: true,
+			Query:       `sum(rate(kubephos_load_duration_milliseconds_sum{` + selector + `}` + rateWindowRange + `)) / sum(rate(kubephos_load_duration_milliseconds_count{` + selector + `}` + rateWindowRange + `))`,
+			Description: "Mean response time " + locustClientVantage + ": rate of the latency sum divided by the rate of the request count."},
+		{ID: "load.achieved_rps", Unit: "requests_per_second", Aggregation: "sum", Optional: true, Query: total,
+			Description: "Total rate of requests actually issued and completed by Locust (successful + failed), summed over all load workers."},
+		{ID: "load.offered_rps", Unit: "requests_per_second", Aggregation: "sum", Optional: true,
+			Query:       `sum(kubephos_load_target_rps{` + selector + `})`,
+			Description: "Request rate the load workers were trying to send at each step (sum of each worker's open-loop target, kubephos_load_target_rps); offered above achieved means the generator could not keep up."},
+		{ID: "load.schedule_lag", Unit: "seconds", Aggregation: "mean", Optional: true,
+			Query:       `sum(rate(kubephos_load_schedule_lag_seconds_sum{` + selector + `}` + rateWindowRange + `)) / sum(rate(kubephos_load_schedule_lag_seconds_count{` + selector + `}` + rateWindowRange + `))`,
+			Description: "Mean delay per request between its scheduled send time and the moment Locust issued it, in seconds (coordinated-omission evidence: values near 0 mean the open-loop schedule was kept)."},
+		{ID: "load.users", Unit: "count", Aggregation: "sum", Optional: true,
+			Query:       `sum(kubephos_load_users{` + selector + `})`,
+			Description: "Number of simulated Locust users running, summed over all load workers."},
+	}
+	for i := range definitions {
+		definitions[i].Source, definitions[i].Vantage = sourceLocust, vantageClient
+	}
+	return definitions
 }
 
 // Native protocol latency includes Redis redirects, without an HTTP proxy.
@@ -713,15 +962,21 @@ func nativeMetricDefinitions(namespace string) []metricDefinition {
 	selector := `namespace=` + strconv.Quote(namespace)
 	requests := `kubephos_load_requests_total{` + selector
 	definitions := append(locustMetricDefinitions(namespace), []metricDefinition{
-		{ID: "redis.operation_rps", Unit: "requests_per_second", Aggregation: "sum", Query: `sum by (operation) (rate(` + requests + `}[1m]))`},
-		{ID: "redis.operation_p95_response_time", Unit: "milliseconds", Aggregation: "mean", Query: `histogram_quantile(0.95, sum by (operation, le) (rate(kubephos_load_duration_milliseconds_bucket{` + selector + `}[1m])))`},
+		{ID: "redis.operation_rps", Unit: "requests_per_second", Aggregation: "sum", Source: sourceLocust, Vantage: vantageClient,
+			Query:       `sum by (operation) (rate(` + requests + `}` + rateWindowRange + `))`,
+			Description: "Rate of Redis operations issued by the Locust load generator (client side), per operation."},
+		{ID: "redis.operation_p95_response_time", Unit: "milliseconds", Aggregation: "mean", Source: sourceLocust, Vantage: vantageClient,
+			Query:       `histogram_quantile(0.95, sum by (operation, le) (rate(kubephos_load_duration_milliseconds_bucket{` + selector + `}` + rateWindowRange + `)))`,
+			Description: "95th percentile of Redis operation latency per operation, measured by Locust (client side, includes cluster redirects), estimated from histogram buckets."},
 	}...)
 	for _, definition := range metricDefinitions(namespace, "") {
-		if strings.HasPrefix(definition.ID, "load.") || strings.HasPrefix(definition.ID, "application.") {
+		if strings.HasPrefix(definition.ID, "load.") || strings.HasPrefix(definition.ID, "application.") || definition.ID == "statefulset.ready_replicas" {
 			continue
 		}
 		if definition.ID == "deployment.ready_replicas" {
+			// Native TCP applications run as StatefulSets; the id is kept for compatibility.
 			definition.Query = `max by (statefulset) (kube_statefulset_status_replicas_ready{` + selector + `})`
+			definition.Description = "Ready replicas of each application StatefulSet reported by kube-state-metrics (status.readyReplicas); native TCP applications run as StatefulSets."
 		}
 		definitions = append(definitions, definition)
 	}
@@ -827,12 +1082,22 @@ func validateDataset(dataset timeSeriesDataset, spec Spec, cluster clusterConnec
 	if dataset.Spec.SLOMilliseconds != spec.SLOMilliseconds || dataset.Spec.SLOMilliseconds < 0 {
 		return errors.New("dataset response time objective is invalid")
 	}
+	if dataset.Spec.RateWindowSeconds < 0 || dataset.Spec.RateWindowSeconds > 3600 || dataset.Spec.ScrapeIntervalSeconds < 0 {
+		return errors.New("dataset rate window or scrape interval is invalid")
+	}
+	// expected holds the required metrics, allowed every metric this run may
+	// contain; optional metrics may legitimately be absent.
 	expected := map[string]bool{"load.configured_rps": false}
+	allowed := map[string]bool{"load.configured_rps": true}
 	if spec.SLOMilliseconds > 0 {
 		expected["load.slo_violation_percentage"] = false
+		allowed["load.slo_violation_percentage"] = true
 	}
 	for _, definition := range deploymentMetricDefinitions(deployment) {
-		expected[definition.ID] = false
+		allowed[definition.ID] = true
+		if !definition.Optional {
+			expected[definition.ID] = false
+		}
 	}
 	controlIDs := map[string]bool{}
 	for _, summary := range dataset.Spec.ControlMetrics {
@@ -845,11 +1110,12 @@ func validateDataset(dataset timeSeriesDataset, spec Spec, cluster clusterConnec
 		controlIDs[summary.Metric] = true
 		if summary.Status == "available" {
 			expected[summary.Metric] = false
+			allowed[summary.Metric] = true
 		}
 	}
 	samples := 0
 	for _, series := range dataset.Spec.Series {
-		if _, ok := expected[series.Metric]; !ok || series.Unit == "" || (series.Aggregation != "sum" && series.Aggregation != "mean") || len(series.Points) == 0 {
+		if !allowed[series.Metric] || series.Unit == "" || (series.Aggregation != "sum" && series.Aggregation != "mean") || len(series.Points) == 0 {
 			return errors.New("dataset contains an invalid metric series")
 		}
 		expected[series.Metric] = true
@@ -865,7 +1131,13 @@ func validateDataset(dataset timeSeriesDataset, spec Spec, cluster clusterConnec
 			return errors.New("dataset is missing one or more managed metrics")
 		}
 	}
-	if dataset.Spec.Summary.Metrics != len(expected) || dataset.Spec.Summary.Series != len(dataset.Spec.Series) || dataset.Spec.Summary.Samples != samples || samples == 0 {
+	if err := validateCallModel(dataset.Spec.CallModel); err != nil {
+		return err
+	}
+	if err := validateCatalog(dataset.Spec.Metrics, dataset.Spec.Series); err != nil {
+		return err
+	}
+	if dataset.Spec.Summary != summarizeSeries(dataset.Spec.Series) || dataset.Spec.Summary.Series != len(dataset.Spec.Series) || dataset.Spec.Summary.Samples != samples || samples == 0 {
 		return errors.New("dataset summary does not match its contents")
 	}
 	return nil

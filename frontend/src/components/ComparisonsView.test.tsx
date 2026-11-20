@@ -1,13 +1,14 @@
-import {fireEvent, render, screen, waitFor} from '@testing-library/react'
+import {fireEvent, render, screen, waitFor, within} from '@testing-library/react'
 import {beforeEach, expect, it, vi} from 'vitest'
-import {request} from '../api'
+import {refreshComparison, request} from '../api'
 import {ComparisonDialog, ComparisonsView} from './ComparisonsView'
 import type {Experiment, Session} from '../types'
 import type {ResultComparison} from '../comparisons'
-vi.mock('../api', () => ({request: vi.fn()}))
+vi.mock('../api', () => ({request: vi.fn(), refreshComparison: vi.fn()}))
+vi.mock('./LazyResultsView', () => ({ResultsView: ({focusedExperiment, comparison}: {focusedExperiment?: {name: string}; comparison?: {notice?: import('react').ReactNode}}) => <section aria-label="Comparison results">{comparison?.notice}{focusedExperiment?.name}</section>}))
 const session = {authenticated: true, csrfToken: 'csrf', user: {id: 'alice', role: 'user'}} as Session
 const experiments = ['first', 'second'].map((id, i) => ({id, name: `Experiment ${i + 1}`, ownerUserId: 'alice', ownerUsername: 'alice', kind: 'instance', status: 'succeeded', variants: [{id: `v-${id}`, name: 'NAS', alias: 'NAS', color: '#123456', configuration: {}, trials: [{id: `t-${id}`, position: 1, status: 'succeeded', resultArtifactId: `data-${id}`}]}]})) as Experiment[]
-beforeEach(() => {vi.mocked(request).mockReset(); window.location.hash = '#comparisons'})
+beforeEach(() => {vi.mocked(request).mockReset(); vi.mocked(refreshComparison).mockReset(); window.location.hash = '#comparisons'})
 it('selects whole experiments with separate colors even when aliases match and execution counts differ', async () => {
  const saved = vi.fn(); vi.mocked(request).mockResolvedValue({id: 'comparison'} as never)
  const repeated = {...experiments[1], variants: experiments[1].variants.map(variant => ({...variant, trials: [variant.trials[0], {...variant.trials[0], id: 'extra', position: 2, resultArtifactId: 'extra-data'}]}))}
@@ -89,4 +90,45 @@ it('explains a deleted source on the comparison page and offers to edit it', asy
  expect(screen.queryByText(/Edit the comparison to remove its runs/)).not.toBeInTheDocument()
  fireEvent.click(screen.getByRole('button', {name: 'Edit comparison'}))
  expect(screen.getByRole('button', {name: 'Remove Removed baseline'})).toBeInTheDocument()
+})
+
+const frozen = {id: 'frozen', name: 'Frozen paper', ownerUserId: 'alice', createdAt: '2026-09-17T00:00:00Z', updatedAt: '2026-09-17T00:00:00Z', snapshotCapturedAt: '2026-09-17T00:00:00Z', series: [{label: 'Experiment 1', color: '#123456', runs: [{experimentId: 'first', trialId: 't-first'}]}]} as ResultComparison
+const live = {...frozen, id: 'live', name: 'Live paper', snapshotCapturedAt: undefined}
+
+it('marks comparisons without a snapshot as live in the list', async () => {
+ vi.mocked(request).mockResolvedValue({items: [frozen, live]} as never)
+ render(<ComparisonsView experiments={experiments} artifacts={[]} operations={[]} workspaces={[]} session={session} changed={async () => {}} openOperation={() => {}} />)
+ await screen.findByText('Live paper')
+ const rows = screen.getAllByRole('row')
+ expect(rows.find(row => row.textContent?.includes('Live paper'))).toHaveTextContent('Live')
+ expect(rows.find(row => row.textContent?.includes('Frozen paper'))).not.toHaveTextContent(/Live/)
+})
+
+it('shows the integrity notice above a comparison and refreshes its snapshot', async () => {
+ window.location.hash = '#comparisons/comparison/frozen'
+ const view = {comparison: frozen, result: {...experiments[0], id: 'frozen', name: 'Frozen paper', kind: 'comparison'}, sources: experiments, artifacts: [], sourceConfigurations: {}, snapshot: {capturedAt: '2026-09-17T00:00:00Z'}, stale: true, staleReasons: ['Experiment 1: 1 newer completed run is not included.'], compatibility: {compatible: true, differences: []}}
+ vi.mocked(request).mockImplementation((async (path: string) => path === '/comparisons' ? {items: [frozen]} : view) as never)
+ const refreshedAt = '2026-11-02T10:00:00Z'
+ vi.mocked(refreshComparison).mockResolvedValue({...view, comparison: {...frozen, updatedAt: refreshedAt, snapshotCapturedAt: refreshedAt}, snapshot: {capturedAt: refreshedAt}, stale: false, staleReasons: []} as never)
+ render(<ComparisonsView experiments={experiments} artifacts={[]} operations={[]} workspaces={[]} session={session} changed={async () => {}} openOperation={() => {}} />)
+ expect(await screen.findByRole('region', {name: 'Comparison results'})).toBeInTheDocument()
+ const banner = await screen.findByRole('status', {name: 'The source experiments changed after this snapshot'})
+ expect(banner).toHaveTextContent('1 newer completed run is not included.')
+ fireEvent.click(screen.getByRole('button', {name: 'Refresh snapshot'}))
+ const dialog = await screen.findByRole('dialog', {name: 'Refresh snapshot?'})
+ fireEvent.click(within(dialog).getByRole('button', {name: 'Refresh snapshot'}))
+ await waitFor(() => expect(refreshComparison).toHaveBeenCalledWith('frozen', 'csrf'))
+ await waitFor(() => expect(screen.queryByRole('status', {name: 'The source experiments changed after this snapshot'})).not.toBeInTheDocument())
+})
+
+it('keeps the frozen comparison and explains a refresh conflict', async () => {
+ window.location.hash = '#comparisons/comparison/frozen'
+ const view = {comparison: frozen, result: {...experiments[0], id: 'frozen', name: 'Frozen paper', kind: 'comparison'}, sources: experiments, artifacts: [], sourceConfigurations: {}, snapshot: {capturedAt: '2026-09-17T00:00:00Z'}, stale: true, staleReasons: ['Experiment "Experiment 2" was deleted; its frozen results are still shown.']}
+ vi.mocked(request).mockImplementation((async (path: string) => path === '/comparisons' ? {items: [frozen]} : view) as never)
+ vi.mocked(refreshComparison).mockRejectedValue(Object.assign(new Error('Source unavailable.'), {status: 409}))
+ render(<ComparisonsView experiments={experiments} artifacts={[]} operations={[]} workspaces={[]} session={session} changed={async () => {}} openOperation={() => {}} />)
+ fireEvent.click(await screen.findByRole('button', {name: 'Refresh snapshot'}))
+ fireEvent.click(within(await screen.findByRole('dialog', {name: 'Refresh snapshot?'})).getByRole('button', {name: 'Refresh snapshot'}))
+ expect(await screen.findByRole('alert')).toHaveTextContent('cannot be refreshed')
+ expect(screen.getByRole('region', {name: 'Comparison results'})).toBeInTheDocument()
 })

@@ -1,5 +1,5 @@
 import {afterEach, describe, expect, it, vi} from 'vitest'
-import {ApiError, apiErrorMessage, request} from './api'
+import {ApiError, apiErrorMessage, refreshComparison, request} from './api'
 
 describe('apiErrorMessage', () => {
   it('shows validation details when the API has no top-level message', () => {
@@ -68,4 +68,23 @@ it('accepts an empty 202 from Start while preserving JSON accepted responses and
     await expect(request('/experiments/prepared/start-traffic', {method: 'POST'})).rejects.toMatchObject({status: 202, body: {code: 'invalid_response'}})
     await expect(request('/experiments')).rejects.toMatchObject({status: 200, body: {code: 'invalid_response'}})
   } finally {vi.unstubAllGlobals()}
+})
+
+describe('refreshComparison', () => {
+  afterEach(() => vi.unstubAllGlobals())
+
+  it('posts to the refresh endpoint with the CSRF token and returns the new view', async () => {
+    const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({snapshot: {capturedAt: '2026-11-02T10:00:00Z'}, stale: false}), {status: 200}))
+    vi.stubGlobal('fetch', fetch)
+    await expect(refreshComparison('cmp/1', 'csrf')).resolves.toMatchObject({snapshot: {capturedAt: '2026-11-02T10:00:00Z'}, stale: false})
+    const [url, options] = fetch.mock.calls[0]
+    expect(url).toBe('/api/v1/comparisons/cmp%2F1/refresh')
+    expect(options.method).toBe('POST')
+    expect(new Headers(options.headers).get('X-CSRF-Token')).toBe('csrf')
+  })
+
+  it('rejects with a 409 when a source experiment is gone', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({code: 'source_unavailable', message: 'A source experiment is unavailable.'}), {status: 409})))
+    await expect(refreshComparison('cmp', 'csrf')).rejects.toMatchObject({status: 409, body: {code: 'source_unavailable'}, message: 'A source experiment is unavailable.'})
+  })
 })

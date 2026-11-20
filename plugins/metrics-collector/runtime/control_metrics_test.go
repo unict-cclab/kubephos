@@ -66,7 +66,7 @@ func TestControlMetricsFailuresDoNotFabricateZero(t *testing.T) {
 	deployment := applicationDeployment{}
 	deployment.Spec.ControlMetrics = &controlMetricsScope{SchedulerName: "default-scheduler", PodScheduling: true}
 	plugin := Plugin{Runner: controlUnavailableRunner{}}
-	series, summaries := plugin.collectControlMetrics(context.Background(), clusterConnection{}, deployment, observabilityCapability{}, serviceEndpoint{}, time.Unix(100, 0), time.Unix(110, 0), time.Second)
+	series, summaries, _ := plugin.collectControlMetrics(context.Background(), clusterConnection{}, deployment, observabilityCapability{}, serviceEndpoint{}, time.Unix(100, 0), time.Unix(110, 0), time.Second)
 	if len(series) != 0 || len(summaries) != 4 {
 		t.Fatalf("unexpected unavailable metrics: %+v %+v", series, summaries)
 	}
@@ -141,7 +141,7 @@ func TestControlMetricsIncludeTheFinalPartialSample(t *testing.T) {
 	deployment := applicationDeployment{}
 	deployment.Spec.ControlMetrics = &controlMetricsScope{StartedAt: start, SchedulerName: "isolated", Namespace: "control"}
 	plugin := Plugin{Runner: controlTailRunner{start: start, end: end}}
-	series, summaries := plugin.collectControlMetrics(context.Background(), clusterConnection{}, deployment, observabilityCapability{}, serviceEndpoint{}, start, end, 15*time.Second)
+	series, summaries, _ := plugin.collectControlMetrics(context.Background(), clusterConnection{}, deployment, observabilityCapability{}, serviceEndpoint{}, start, end, 15*time.Second)
 	if len(series) != 1 || len(summaries) == 0 || summaries[0].Count == nil || *summaries[0].Count != 3 || summaries[0].Mean == nil || math.Abs(*summaries[0].Mean-500.0/3) > 1e-8 {
 		t.Fatalf("final cycles were lost: %+v %+v", series, summaries)
 	}

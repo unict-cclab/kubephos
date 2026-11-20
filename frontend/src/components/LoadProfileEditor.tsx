@@ -4,9 +4,15 @@ import {workloadTable, trafficTable, sinusoidalRange} from './PhaseReadout'
 import {FormTabs} from './FormTabs'
 import {ResourceAction} from './ResourceAction'
 import {ActionIcon} from './ActionIcon'
-import {useEffect, useId, useMemo, useRef, useState, type Dispatch, type SetStateAction, type ReactNode} from 'react'
+import {lazy, Suspense, useEffect, useId, useMemo, useRef, useState, type Dispatch, type SetStateAction, type ReactNode} from 'react'
 import {niceAxis, timeAxis} from '../charts'
 import {NumericInput} from './NumericInput'
+import type {RequestMixContext} from './RequestMixEditor'
+
+// Loaded with the Generator tab so the initial bundle stays within its budget.
+const LoadGeneratorSettings = lazy(() => import('./LoadGeneratorAdvice').then(module => ({default: module.LoadGeneratorSettings})))
+const RequestMixEditor = lazy(() => import('./RequestMixEditor').then(module => ({default: module.RequestMixEditor})))
+const mixFields = ['taskWeights', 'profileCallChain', 'profileSecondsPerTask', 'profileRps']
 
 export type LoadProfileStep = {
   type: 'constant' | 'sinusoidal' | 'exponential'
@@ -36,7 +42,7 @@ type GeographicStep = {
   endWeights: Record<string, number>
 }
 
-export function LoadProfileEditor({prefix, zones, values = {}, distribution = 'zone', tabbed = true, settings, onDurationChange, onValidityChange}: {onValidityChange?: (valid: boolean) => void; onDurationChange?: (duration: number) => void; settings?: ReactNode; prefix: string; zones: string[]; values?: Record<string, unknown>; distribution?: 'zone' | 'cluster' | 'endpoint'; tabbed?: boolean}) {
+export function LoadProfileEditor({prefix, zones, values = {}, distribution = 'zone', tabbed = true, settings, requestMix, onDurationChange, onValidityChange}: {requestMix?: RequestMixContext; onValidityChange?: (valid: boolean) => void; onDurationChange?: (duration: number) => void; settings?: ReactNode; prefix: string; zones: string[]; values?: Record<string, unknown>; distribution?: 'zone' | 'cluster' | 'endpoint'; tabbed?: boolean}) {
   const initialSteps = loadProfileSteps(values.steps)
   const initialGeography = geographicProfileSteps(values.geographicSteps, zones)
   const [activeLoad,setActiveLoad]=useState<string>()
@@ -105,7 +111,9 @@ export function LoadProfileEditor({prefix, zones, values = {}, distribution = 'z
     {tabbed ? <FormTabs label="Load profile settings" items={[
       {id: 'workload', title: 'Workload', content: workspace},
       ...(zones.length ? [{id: 'distribution', title: 'Traffic distribution', content: geography}] : []),
-      ...(settings ? [{id: 'generator', title: 'Generator', content: settings}] : [])
+      // Until the editor loads, the saved mix settings are submitted unchanged.
+      ...(requestMix ? [{id: 'mix', title: 'Request mix', content: <Suspense fallback={mixFields.map(name => values[name] !== undefined && <input key={name} type="hidden" name={`${prefix}.${name}`} value={typeof values[name] === 'object' ? JSON.stringify(values[name]) : String(values[name])} readOnly />)}><RequestMixEditor key={`${requestMix.applicationRef}|${requestMix.scenarioId}`} prefix={prefix} values={values} samples={loadSamples(previewSteps)} context={requestMix} /></Suspense>}] : []),
+      ...(settings ? [{id: 'generator', title: 'Generator', content: <Suspense fallback={settings}><LoadGeneratorSettings prefix={prefix} samples={loadSamples(previewSteps)} values={values}>{settings}</LoadGeneratorSettings></Suspense>}] : [])
     ]} /> : <>{workload}{preview}{zones.length > 0 && geography}</>}
   </div>
 }
@@ -233,8 +241,10 @@ function NumberField({label, value, set, min, max = 100000, step = 1, validation
   return <label>{label}<NumericInput validationMessage={validationMessage} value={value} min={min} max={max} step={step} required onValueChange={set} /></label>
 }
 
+// Profiles are stored in whole seconds: any second must stay valid here (a 0.1 minute
+// step rejected 45 s or 100 s saved through the API and blocked saving the configuration).
 function Minutes({label, value, set, allowZero = false}: {label: string; value: number; set: (value: number) => void; allowZero?: boolean}) {
-  return <label>{label} (minutes)<NumericInput value={value / 60} min={allowZero ? 0 : 0.1} max={1440} step={0.1} required onValueChange={next => set(Math.round(next * 60))} /></label>
+  return <label>{label} (minutes)<NumericInput value={Number((value / 60).toFixed(4))} min={allowZero ? 0 : 1 / 60} max={1440} step="any" required onValueChange={next => set(Math.round(next * 60))} /></label>
 }
 
 function WeightGrid({title, zones, values, set}: {title: string; zones: string[]; values: Record<string, number>; set: (zone: string, value: number) => void}) {

@@ -50,7 +50,7 @@ func (s *Server) downloadArtifact(response http.ResponseWriter, request *http.Re
 		writeError(response, http.StatusInternalServerError, "database_error", "Could not read artifact metadata.")
 		return
 	}
-	if !s.authorizeOperation(response, request, artifact.OperationID) {
+	if !s.comparisonRetainedArtifact(request, artifact.ID) && !s.authorizeOperation(response, request, artifact.OperationID) {
 		return
 	}
 	if artifact.Sensitive {
@@ -66,6 +66,17 @@ func (s *Server) downloadArtifact(response http.ResponseWriter, request *http.Re
 	response.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": artifactFilename(artifact)}))
 	response.Header().Set("X-Content-Type-Options", "nosniff")
 	writeArtifactBody(response, request, artifact, value)
+}
+
+// comparisonRetainedArtifact lets a comparison owner read results frozen by
+// their snapshot after the source experiment was deleted.
+func (s *Server) comparisonRetainedArtifact(request *http.Request, artifactID string) bool {
+	user := requestUser(request)
+	if user.ID == "" {
+		return false
+	}
+	retained, err := s.store.ComparisonArtifactRetained(request.Context(), user.ID, artifactID)
+	return err == nil && retained
 }
 
 func writeArtifactBody(response http.ResponseWriter, request *http.Request, artifact domain.Artifact, value []byte) {

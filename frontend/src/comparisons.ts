@@ -8,20 +8,31 @@ export interface UnavailableComparisonSource {experimentId: string; label: strin
 export interface ResultComparison extends ResourceAttributionFields {
   id: string; name: string; ownerUserId: string; series: ComparisonSeries[]; createdAt: string; updatedAt: string
   unavailableSources?: UnavailableComparisonSource[]
+  snapshotCapturedAt?: string
+}
+export interface ComparisonCompatibility {
+  compatible: boolean
+  differences: Array<{field: string; values: Record<string, unknown>}>
+  sources?: Array<{label: string; fingerprint: string}>
 }
 export interface ComparisonView {
   comparison: ResultComparison; result: Experiment; sources: Experiment[]; artifacts: Artifact[]; sourceConfigurations: Record<string, Record<string, unknown>>
+  // Present when the view comes from the frozen snapshot; absent for legacy comparisons.
+  snapshot?: {capturedAt: string}
+  stale?: boolean
+  staleReasons?: string[]
+  compatibility?: ComparisonCompatibility
 }
 export interface SelectableRun {key: string; experiment: Experiment; variant: ExperimentVariant; trial: ExperimentTrial}
 export const runKey = (run: ComparisonRun) => `${run.experimentId}/${run.trialId}`
 export const comparisonColors = ['#1f77b4', '#d55e00', '#009e73', '#cc79a7', '#e69f00', '#56b4e9', '#332288', '#882255']
 export function selectableComparisonRuns(experiments: Experiment[]): SelectableRun[] {
-  return experiments.filter(item => item.kind !== 'comparison' && ['succeeded', 'failed', 'canceled'].includes(item.status)).flatMap(experiment => experiment.variants.flatMap(variant => variant.trials.filter(trial => trial.status === 'succeeded' && trial.resultArtifactId).map(trial => ({key: runKey({experimentId: experiment.id, trialId: trial.id}), experiment, variant, trial}))))
+  return experiments.filter(item => item.kind !== 'comparison' && ['succeeded', 'failed', 'canceled'].includes(item.status)).flatMap(experiment => experiment.variants.flatMap(variant => variant.trials.filter(trial => trial.status === 'succeeded' && trial.resultArtifactId && !trial.pilot).map(trial => ({key: runKey({experimentId: experiment.id, trialId: trial.id}), experiment, variant, trial}))))
 }
 
 function canonical(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`
-  if (value && typeof value === 'object') return `{${Object.entries(value).sort(([a], [b]) => a.localeCompare(b)).map(([key, entry]) => `${JSON.stringify(key)}:${canonical(entry)}`).join(',')}}`
+  if (value && typeof value === 'object') return `{${Object.entries(value).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([key, entry]) => `${JSON.stringify(key)}:${canonical(entry)}`).join(',')}}`
   return JSON.stringify(value) ?? ''
 }
 export function comparisonWarnings(datasets: LoadedDataset[], configurations: Record<string, Record<string, unknown>>): string[] {

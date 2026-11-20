@@ -38,7 +38,9 @@ func TestCollectorPrecheckExecuteAndVerify(t *testing.T) {
 	if err := json.Unmarshal(raw, &value); err != nil {
 		t.Fatal(err)
 	}
-	if value.Dataset.Spec.Summary.Metrics != 15 || value.Dataset.Spec.Summary.Series != 15 || value.Dataset.Spec.Summary.Samples != 33 {
+	// 29 queried metrics (12 Locust, 6 Istio, 8 resource, 3 network), the
+	// configured load and the SLO: two samples each, five configured samples.
+	if value.Dataset.Spec.Summary.Metrics != 31 || value.Dataset.Spec.Summary.Series != 31 || value.Dataset.Spec.Summary.Samples != 65 {
 		t.Fatalf("unexpected dataset summary %#v", value.Dataset.Spec.Summary)
 	}
 	if value.Dataset.Spec.SLOMilliseconds != 250 {
@@ -110,7 +112,7 @@ func TestCollectorOmitsSLOMetricsWhenObjectiveIsNotConfigured(t *testing.T) {
 	if err := json.Unmarshal(raw, &value); err != nil {
 		t.Fatal(err)
 	}
-	if value.Dataset.Spec.SLOMilliseconds != 0 || value.Dataset.Spec.Summary.Metrics != 14 {
+	if value.Dataset.Spec.SLOMilliseconds != 0 || value.Dataset.Spec.Summary.Metrics != 30 {
 		t.Fatalf("unexpected dataset without SLO %#v", value.Dataset.Spec)
 	}
 	for _, series := range value.Dataset.Spec.Series {
@@ -146,7 +148,8 @@ func TestConfiguredLoadSeriesPreservesTimeline(t *testing.T) {
 		loadStep{Type: "constant", DurationSeconds: 15, RPS: 30},
 	)
 	series := configuredLoadSeries(value, start, end, 15*time.Second)
-	if len(series.Points) != 3 || series.Points[0].Value != 10 || series.Points[1].Value != 30 || series.Points[2].Value != 0 {
+	// The sample at completedAt still belongs to the last step (it used to read 0).
+	if len(series.Points) != 3 || series.Points[0].Value != 10 || series.Points[1].Value != 30 || series.Points[2].Value != 30 {
 		t.Fatalf("unexpected configured load series %#v", series.Points)
 	}
 }
@@ -169,7 +172,10 @@ func TestConfiguredLoadSeriesDoesNotAliasSinusoidalProfile(t *testing.T) {
 
 func TestLoadMetricsUseLocustClient(t *testing.T) {
 	definitions := metricDefinitions("experiment", "^(?:gateway)$")
-	for _, definition := range definitions[:4] {
+	for _, definition := range definitions {
+		if !strings.HasPrefix(definition.ID, "load.") {
+			continue
+		}
 		if !strings.Contains(definition.Query, "kubephos_load_") || !strings.Contains(definition.Query, `namespace="experiment"`) || strings.Contains(definition.Query, "istio_") {
 			t.Fatalf("load query must use the Locust client: %s", definition.Query)
 		}
@@ -178,7 +184,10 @@ func TestLoadMetricsUseLocustClient(t *testing.T) {
 
 func TestApplicationMetricsRemainSeparatedByDestinationWorkload(t *testing.T) {
 	definitions := metricDefinitions("experiment", "^(?:gateway)$")
-	for _, definition := range definitions[4:6] {
+	for _, definition := range definitions {
+		if !strings.HasPrefix(definition.ID, "application.") {
+			continue
+		}
 		if !strings.Contains(definition.Query, serviceReporter) || !strings.Contains(definition.Query, `destination_workload_namespace="experiment"`) || !strings.Contains(definition.Query, "destination_workload") {
 			t.Fatalf("application query must retain the destination workload label: %s", definition.Query)
 		}
@@ -238,6 +247,9 @@ func TestDecodeMatrixSkipsPrometheusWarmupNaN(t *testing.T) {
 func discardLog(string, string) error { return nil }
 
 type fakeRunner struct {
+	// override answers a command first when it reports handled; query is the
+	// decoded PromQL of Prometheus API calls.
+	override  func(command, query string) (response string, handled bool, err error)
 	now       time.Time
 	mu        sync.Mutex
 	calls     int
@@ -250,6 +262,15 @@ func (runner *fakeRunner) Run(ctx context.Context, _ string, args ...string) (st
 	runner.mu.Lock()
 	runner.calls++
 	runner.mu.Unlock()
+	if runner.override != nil {
+		query := ""
+		if parsed, err := url.Parse(strings.TrimPrefix(args[len(args)-1], "--raw=")); err == nil {
+			query = parsed.Query().Get("query")
+		}
+		if response, handled, err := runner.override(command, query); handled {
+			return response, err
+		}
+	}
 	if command == "get --raw=/readyz" {
 		return "ok", nil
 	}
@@ -374,7 +395,7 @@ func TestEndToEndMetricsAlwaysUseLocustAndKeepServiceMetricsOnIstio(t *testing.T
 		for _, definition := range definitions {
 			if strings.HasPrefix(definition.ID, "load.") {
 				loadMetrics++
-				if !strings.Contains(definition.Query, "kubephos_load_") || strings.Contains(definition.Query, "istio_") || !strings.Contains(definition.Query, `namespace="run"`) || !strings.Contains(definition.Query, "[1m]") {
+				if !strings.Contains(definition.Query, "kubephos_load_") || strings.Contains(definition.Query, "istio_") || !strings.Contains(definition.Query, `namespace="run"`) || strings.Contains(definition.Query, "rate(") && !strings.Contains(definition.Query, rateWindowRange) || definition.Source != sourceLocust || definition.Vantage != vantageClient {
 					t.Fatalf("end-to-end metric is not client-side and isolated: %+v", definition)
 				}
 			}
@@ -382,8 +403,8 @@ func TestEndToEndMetricsAlwaysUseLocustAndKeepServiceMetricsOnIstio(t *testing.T
 				t.Fatalf("service metric lost destination measurement: %+v", definition)
 			}
 		}
-		if loadMetrics != 4 {
-			t.Fatalf("expected four Locust end-to-end metrics, got %d", loadMetrics)
+		if loadMetrics != 12 {
+			t.Fatalf("expected twelve Locust end-to-end metrics, got %d", loadMetrics)
 		}
 	}
 }
@@ -402,5 +423,88 @@ func TestConfiguredLoadSeriesReadsSinusoidalRange(t *testing.T) {
 	}
 	if math.Abs(values[0]-100) > 1e-9 || slices.Max(values) < 149 || slices.Min(values) > 51 {
 		t.Fatalf("a sinusoidal range must oscillate between 50 and 150 around 100, got %v", values)
+	}
+}
+
+// The Locust load generator ("kubephos-load-<scenario>") shares the application
+// namespace and must not be counted as application resources.
+func applicationResourceQueries(namespace string) map[string]string {
+	selector := `namespace="` + namespace + `"`
+	return map[string]string{
+		"cpu.cores":                 `sum by (pod) (rate(container_cpu_usage_seconds_total{` + selector + `,container!="",container!="POD",pod!~"kubephos-pod-scheduling-.*|kubephos-load-.*"}[1m]))`,
+		"memory.working_set":        `sum by (pod) (container_memory_working_set_bytes{` + selector + `,container!="",container!="POD",pod!~"kubephos-pod-scheduling-.*|kubephos-load-.*"})`,
+		"pod.restarts":              `sum by (pod) (kube_pod_container_status_restarts_total{` + selector + `,pod!~"kubephos-pod-scheduling-.*|kubephos-load-.*"})`,
+		"deployment.ready_replicas": `max by (deployment) (kube_deployment_status_replicas_ready{` + selector + `,deployment!~"kubephos-pod-scheduling|kubephos-load-.*"})`,
+	}
+}
+
+func assertApplicationResourceQueries(t *testing.T, name string, definitions []metricDefinition, expected map[string]string) {
+	t.Helper()
+	found := map[string]bool{}
+	for _, definition := range applyRateWindow(definitions, time.Minute) {
+		want, ok := expected[definition.ID]
+		if !ok {
+			continue
+		}
+		found[definition.ID] = true
+		if definition.Query != want {
+			t.Fatalf("%s %s query:\n got: %s\nwant: %s", name, definition.ID, definition.Query, want)
+		}
+	}
+	for id := range expected {
+		if !found[id] {
+			t.Fatalf("%s is missing %s", name, id)
+		}
+	}
+}
+
+func TestApplicationResourceMetricsExcludeLoadGenerator(t *testing.T) {
+	istio := applicationDeployment{}
+	istio.Spec.Namespace = "experiment"
+	assertApplicationResourceQueries(t, "istio", deploymentMetricDefinitions(istio), applicationResourceQueries("experiment"))
+
+	native := istio
+	native.Spec.Endpoints = []struct {
+		Protocol string `json:"protocol"`
+	}{{Protocol: "tcp"}}
+	nativeQueries := applicationResourceQueries("experiment")
+	// Native TCP applications run as StatefulSets; Locust is a Deployment.
+	nativeQueries["deployment.ready_replicas"] = `max by (statefulset) (kube_statefulset_status_replicas_ready{namespace="experiment"})`
+	assertApplicationResourceQueries(t, "native", deploymentMetricDefinitions(native), nativeQueries)
+
+	cilium := istio
+	cilium.Spec.Networking = "cilium"
+	cilium.Spec.ClusterName = "cluster-a"
+	assertApplicationResourceQueries(t, "cilium", deploymentMetricDefinitions(cilium), applicationResourceQueries("experiment"))
+	assertApplicationResourceQueries(t, "cilium peer", ciliumMetricDefinitions(cilium, true), applicationResourceQueries("experiment"))
+	ciliumNative := cilium
+	ciliumNative.Spec.Endpoints = native.Spec.Endpoints
+	assertApplicationResourceQueries(t, "cilium native", deploymentMetricDefinitions(ciliumNative), nativeQueries)
+
+	for name, deployment := range map[string]applicationDeployment{"istio": istio, "native": native, "cilium": cilium, "cilium native": ciliumNative} {
+		for _, definition := range deploymentMetricDefinitions(deployment) {
+			if strings.HasPrefix(definition.ID, "load.") || strings.HasPrefix(definition.ID, "redis.") {
+				// Locust's own client metrics are the end-to-end measurement.
+				continue
+			}
+			if strings.Contains(definition.Query, "namespace=") && !strings.Contains(definition.Query, "statefulset") && !strings.Contains(definition.Query, "daemonset") && !strings.Contains(definition.Query, "destination_workload_namespace=") && !strings.Contains(definition.Query, "kubephos-load-.*") {
+				t.Fatalf("%s %s counts the load generator: %s", name, definition.ID, definition.Query)
+			}
+		}
+	}
+}
+
+// An external destination's namespace contains only the Locust driver.
+func TestExternalDeploymentResourceMetricsKeepLocustDriver(t *testing.T) {
+	var deployment applicationDeployment
+	deployment.Spec.Namespace = "kubephos-load-run"
+	deployment.Spec.External = true
+	for _, definition := range deploymentMetricDefinitions(deployment) {
+		if strings.Contains(definition.Query, "kubephos-load-.*") {
+			t.Fatalf("external %s would return no series: %s", definition.ID, definition.Query)
+		}
+		if definition.ID == "deployment.ready_replicas" && definition.Query != `max by (deployment) (kube_deployment_status_replicas_ready{namespace="kubephos-load-run",deployment!="kubephos-pod-scheduling"})` {
+			t.Fatalf("external ready replicas changed: %s", definition.Query)
+		}
 	}
 }
