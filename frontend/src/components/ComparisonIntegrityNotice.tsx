@@ -1,4 +1,5 @@
 import {useId, useState} from 'react'
+import './ComparisonIntegrityNotice.css'
 import type {ComparisonView} from '../comparisons'
 import {formatDate} from '../lib'
 import {useDeleteConfirmation} from './ConfirmationDialog'

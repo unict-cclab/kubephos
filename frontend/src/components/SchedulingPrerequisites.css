@@ -1,0 +1,3 @@
+.scheduling-prerequisites { display: grid; gap: 6px; margin: 4px 0 12px; padding: 10px 14px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--muted); color: var(--muted-foreground); font-size: 13px; }
+.scheduling-prerequisites p { margin: 0; }
+.scheduling-prerequisites a { color: inherit; text-decoration: underline; }

@@ -80,7 +80,7 @@ Il frontend corregge già, sui dataset vecchi, i punti che si possono ricalcolar
   - Le ripetizioni successive vengono comunque annullate, per non misurare su un ambiente sporco.
 - **Pausa tra le ripetizioni** (`restSecondsBetweenTrials`, 0–3600 s). Il cluster può tornare a regime prima della ripetizione successiva.
 - **Prima ripetizione come warm-up** (`firstTrialPilot`). Assorbe il download delle immagini e le cache fredde. È visibile come "Warm-up (excluded)" ed è esclusa da statistiche, grafici e comparisons.
-- **Migrazione `058-measurement-integrity.sql`.** È solo additiva: nuove colonne e una nuova tabella, i dati esistenti non vengono toccati.
+- **Migrazione `059-measurement-integrity.sql`.** È solo additiva: nuove colonne e una nuova tabella, i dati esistenti non vengono toccati.
 
 ## 4. Comparisons
 

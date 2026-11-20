@@ -21,7 +21,7 @@ import {ActionIcon} from './ActionIcon'
 import {ComparativeConfigurationDialog} from './ComparativeConfigurationDialog'
 import {ResourceListTable} from './ResourceListTable'
 import {useDeleteConfirmation} from './ConfirmationDialog'
-import {useEffect, useId, useMemo, useRef, useState, type FormEvent, type ReactNode} from 'react'
+import {lazy, Suspense, useEffect, useId, useMemo, useRef, useState, type FormEvent} from 'react'
 import {request} from '../api'
 import {readSchemaValues} from '../lib'
 import type {Application, ApplicationComponent, Artifact, CatalogStrategy, Experiment, ExperimentConfiguration, JsonSchema, ManagedResource, Operation, Plugin, Session, Workspace} from '../types'
@@ -29,6 +29,8 @@ import {Dialog} from './Dialog'
 import {EditorPage} from './EditorPage'
 import {AutoscalerTargetEditor} from './AutoscalerTargetEditor'
 import {runsStrategyImage} from '../strategies'
+// Loaded with the scheduling step: keeps the initial bundle within budget.
+const SchedulingPrerequisites = lazy(() => import('./SchedulingPrerequisites').then(module => ({default: module.SchedulingPrerequisites})))
 import {InputData} from './InputData'
 import {StrategyTargetEditor} from './StrategyTargetEditor'
 import {LoadProfileEditor} from './LoadProfileEditor'
@@ -539,12 +541,8 @@ export function ExperimentConfigurationDialog({open, close, clusters, workspaces
       {monAgentComponent && monAgentPlugin && <section className="experiment-component"><SchemaFields schema={experimentSchema(monAgentPlugin.schema, monAgentComponent.capability)} prefix={`component-${monAgentComponent.key}`} values={monAgentComponent.configuration ?? {}} applications={applications} artifacts={[]} connections={[]} credentials={[]} /></section>}</>}
       </>}]:[])
  ]}/></WizardStep>{destinationMode === 'application' && <WizardStep key="scheduling" title="Scheduling and scaling">
-<<<<<<< Updated upstream
       <FormTabs label="Scheduling and scaling settings" items={schedulingGroups.map(kind => ({id: kind, title: kind === 'other' ? 'Other' : componentTitle(`${kind}.`), content: <><div className="component-add-options">{advancedPlugins.filter(plugin => schedulingGroup(primaryCapabilities(plugin)[0] ?? '') === kind && !components.some(component => component.pluginId === plugin.id) && pluginAvailableOnCluster(plugin, selectedCluster) && hasCatalogImage(plugin)).map(plugin => <button className="button secondary compact" type="button" key={plugin.id} disabled={components.length >= 15} onClick={() => addAdvancedComponent(plugin.id)}><ActionIcon name="create" />Add {pluginTitle(plugin, advancedPlugins, selectedCluster?.spec.mode === 'multi').toLowerCase()}</button>)}</div>
-=======
-      <FormTabs label="Scheduling and scaling settings" items={schedulingGroups.map(kind => ({id: kind, title: kind === 'other' ? 'Other' : componentTitle(`${kind}.`), content: <><div className="component-add-options">{advancedPlugins.filter(plugin => schedulingGroup(primaryCapabilities(plugin)[0] ?? '') === kind && !components.some(component => component.pluginId === plugin.id) && pluginAvailableOnCluster(plugin, selectedCluster)).map(plugin => <button className="button secondary compact" type="button" key={plugin.id} disabled={components.length >= 15} onClick={() => addAdvancedComponent(plugin.id)}><ActionIcon name="create" />Add {componentTitle(primaryCapabilities(plugin)[0] ?? '', selectedCluster?.spec.mode === 'multi').toLowerCase()}</button>)}</div>
-      <SchedulingPrerequisites kind={kind} plugins={advancedPlugins.filter(plugin => schedulingGroup(primaryCapabilities(plugin)[0] ?? '') === kind && !components.some(component => component.pluginId === plugin.id))} cluster={selectedCluster} componentTitle={id => clusterComponentTitle(componentCatalog, id)} readyStrategies={strategies.filter(item => item.workspaceId === workspaceId && item.kind === kind && item.status === 'succeeded').length} />
->>>>>>> Stashed changes
+      <Suspense fallback={null}><SchedulingPrerequisites kind={kind} plugins={advancedPlugins.filter(plugin => schedulingGroup(primaryCapabilities(plugin)[0] ?? '') === kind && !components.some(component => component.pluginId === plugin.id))} cluster={selectedCluster} componentTitle={id => clusterComponentTitle(componentCatalog, id)} hasImage={hasCatalogImage} pluginTitle={plugin => pluginTitle(plugin, advancedPlugins, selectedCluster?.spec.mode === 'multi')} /></Suspense>
       <div className="experiment-component-list">{advancedComponents.filter(component => schedulingGroup(component.capability) === kind).map(component => {
         const plugin = compatiblePlugins.find(item => item.id === component.pluginId)
         const strategyKind = ['scheduler', 'descheduler', 'autoscaler'].find(kind => component.capability.startsWith(`${kind}.`))
@@ -574,18 +572,7 @@ export function ExperimentConfigurationDialog({open, close, clusters, workspaces
 
 const emptySchema: JsonSchema = {type: 'object', properties: {}}
 
-// Explains why a scheduling/scaling component cannot be added instead of hiding it.
-export function SchedulingPrerequisites({kind, plugins, cluster, componentTitle: title, readyStrategies}: {kind: string; plugins: Plugin[]; cluster?: ManagedResource; componentTitle: (id: string) => string; readyStrategies: number}) {
-  if (kind === 'other' || !plugins.length) return null
-  const label = componentTitle(`${kind}.`).toLowerCase()
-  const blocked = plugins.map(plugin => missingPluginComponents(plugin, cluster)).filter(missing => missing.length)
-  const notes: ReactNode[] = []
-  if (!cluster) notes.push(<>Select a Kubernetes cluster to add a {label}.</>)
-  else if (blocked.length === plugins.length) notes.push(<>A {label} needs the {[...new Set(blocked.flat())].map(title).join(', ')} component on cluster <strong>{cluster.name}</strong>. Add it in <a href="#kubernetes">Kubernetes clusters</a> → {cluster.name} → Components, then return here.</>)
-  if (kind !== 'other' && readyStrategies === 0) notes.push(<>No {label} image is ready in this workspace. Register one in <a href="#catalog">Catalog</a> → Strategies (kind “{kind}”); the {label} uses it.</>)
-  if (!notes.length) return null
-  return <div className="scheduling-prerequisites" role="note">{notes.map((note, index) => <p key={index}>{note}</p>)}</div>
-}
+
 
 export function configurableSchema(schema: JsonSchema): JsonSchema {
   const properties = Object.fromEntries(Object.entries(schema.properties ?? {}).filter(([, property]) => property.format !== 'kubephos-artifact-ref' && property.format !== 'kubephos-application-ref' && property.format !== 'kubephos-strategy-image'))
