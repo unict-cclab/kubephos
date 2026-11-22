@@ -450,8 +450,8 @@ func (s *Server) validatedExperimentConfiguration(ctx context.Context, input exp
 		component.StrategyID = strings.TrimSpace(component.StrategyID)
 		if component.StrategyID != "" {
 			strategy, err := s.store.GetCatalogStrategy(ctx, component.StrategyID)
-			if err != nil || strategy.WorkspaceID != input.WorkspaceID || strategy.Status != domain.OperationSucceeded || !strings.HasPrefix(component.Capability, strategy.Kind+".") {
-				return domain.ExperimentConfiguration{}, &managedOperationFailure{status: http.StatusUnprocessableEntity, code: "invalid_strategy", message: "Select a ready strategy image matching the component type."}
+			if err != nil || strategy.WorkspaceID != input.WorkspaceID || strategy.Status != domain.OperationSucceeded || strategy.PluginID != component.PluginID || !strings.HasPrefix(component.Capability, strategy.Kind+".") {
+				return domain.ExperimentConfiguration{}, &managedOperationFailure{status: http.StatusUnprocessableEntity, code: "invalid_strategy", message: "Select a ready catalog entry matching the component type."}
 			}
 			image := strategy.SourceImage
 			defaults := strategy.DefaultConfiguration
@@ -485,10 +485,19 @@ func (s *Server) validatedExperimentConfiguration(ctx context.Context, input exp
 			if json.Unmarshal(component.Configuration, &overrides) != nil || overrides == nil {
 				return domain.ExperimentConfiguration{}, &managedOperationFailure{status: http.StatusUnprocessableEntity, code: "invalid_strategy", message: "Strategy configuration must be a JSON object."}
 			}
+			builtin := !strategyRunsImage(manifest)
 			for key, value := range overrides {
-				merged[key] = value
+				// A built-in strategy, such as HPA, runs exactly the settings of its catalog entry.
+				if _, fixed := merged[key]; !builtin || !fixed {
+					merged[key] = value
+				}
 			}
-			merged["image"] = image
+			if builtin && strategyHasSetting(manifest, "targetOverrides") {
+				merged["targetOverrides"] = "{}"
+			}
+			if image != "" {
+				merged["image"] = image
+			}
 			component.Configuration, _ = json.Marshal(merged)
 		}
 		configSchema, err := experimentComponentSchema(manifest.Schema)

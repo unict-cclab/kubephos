@@ -407,3 +407,11 @@ databaseChangeLog:
             path: changes/057-telegram-notifications.sql
             relativeToChangelogFile: true
             splitStatements: false
+  - changeSet:
+      id: 058-strategy-plugins
+      author: kubephos
+      changes:
+        - sqlFile:
+            path: changes/058-strategy-plugins.sql
+            relativeToChangelogFile: true
+            splitStatements: false

@@ -8,7 +8,7 @@ import {ServiceResourceEditor, serviceResourceFields} from './ServiceResourceEdi
 
 interface SchemaFieldsProps {
   schema: JsonSchema
-  layout?: 'network'
+  layout?: 'network' | 'inline'
   serviceTargets?: ApplicationComponent[]
   onValuesChange?: () => void
   prefix?: string

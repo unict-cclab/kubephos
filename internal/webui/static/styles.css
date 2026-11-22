@@ -966,7 +966,7 @@ summary { color: var(--muted-foreground); font-size: 13px; font-weight: 500; cur
 .target-override-fields { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-top: 10px; border-top: 1px solid var(--line); padding-top: 9px; }
 .target-override-fields label { margin: 0; color: var(--muted-foreground); font-size: 12px; }
 .target-override-fields input, .target-override-fields textarea { padding: 8px; }
-.target-override-fields label:last-child { grid-column: 1 / -1; }
+.target-override-fields label:has(textarea) { grid-column: 1 / -1; }
 .network-profile-editor { display: grid; gap: 12px; }
 .network-mode-heading { display: flex; align-items: center; justify-content: space-between; gap: 18px; border: 1px solid var(--line); border-radius: 11px; padding: 12px 14px; background: var(--muted); }
 .network-mode-heading strong, .network-mode-heading p { display: block; }

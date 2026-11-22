@@ -1,7 +1,7 @@
 import {fireEvent, render, screen, waitFor, within} from '@testing-library/react'
 import {createElement} from 'react'
 import {afterEach, beforeAll, describe, expect, it, vi} from 'vitest'
-import type {Application, ExperimentConfiguration, ManagedResource, Plugin, Workspace} from '../types'
+import type {Application, CatalogStrategy, ExperimentConfiguration, ManagedResource, Plugin, Workspace} from '../types'
 import {isTerminalExperiment} from '../lib'
 import {applicationZones, configurableSchema, ExperimentConfigurationDialog, ExperimentConfigurationsView, experimentPlugins, primaryCapabilities} from './ExperimentConfigurationsView'
 
@@ -216,10 +216,34 @@ describe('experiment configuration helpers', () => {
 
   it('keeps an unavailable saved strategy visible while editing', async () => {
     const item: ExperimentConfiguration = {id: 'cfg_strategy', workspaceId: workspace.id, clusterResourceId: cluster.id, name: 'Saved strategy', description: '', applicationRef: application.reference, applicationDigest: application.digest, definition: {applicationValues: {}, components: [{id: 'component-1', pluginId: 'scheduler', capability: 'scheduler.install', strategyId: 'strategy_removed', configuration: {policy: 'custom'}, targets: {include: [], exclude: []}}]}, validation: {valid: true, issues: []}, createdAt: '2026-09-12T00:00:00Z', updatedAt: '2026-09-12T00:00:00Z'}
-    render(createElement(ExperimentConfigurationDialog, {open: true, close: () => {}, items: [item], experiments: [], clusters: [cluster], workspaces: [workspace], applications: [application], plugins: [loadPlugin, metricsPlugin, plugin('scheduler', ['scheduler.install'])], strategies: [], session: {authenticated: true}, isAdmin: true, changed: async () => {}, openOperation: () => {}, item}))
+    const scheduler = plugin('scheduler', ['scheduler.install'])
+    scheduler.schema.properties!.image = {type: 'string', format: 'kubephos-strategy-image'}
+    render(createElement(ExperimentConfigurationDialog, {open: true, close: () => {}, items: [item], experiments: [], clusters: [cluster], workspaces: [workspace], applications: [application], plugins: [loadPlugin, metricsPlugin, scheduler], strategies: [], session: {authenticated: true}, isAdmin: true, changed: async () => {}, openOperation: () => {}, item}))
     await goToStep('Scheduling and scaling')
     expect(screen.getByRole('combobox', {name: 'Image'})).toHaveValue('strategy_removed')
     expect(screen.getByRole('option', {name: 'strategy_removed · unavailable'})).toBeInTheDocument()
+  })
+
+  it('runs HPA with the settings of its catalog entry or with custom values', async () => {
+    const cpa = {...plugin('cpa', ['autoscaler.kubernetes.install']), name: 'Custom Pod Autoscaler'}
+    cpa.schema = {type: 'object', properties: {image: {type: 'string', format: 'kubephos-strategy-image'}}}
+    const hpa = {...plugin('hpa', ['autoscaler.kubernetes.install']), name: 'Horizontal Pod Autoscaler'}
+    hpa.schema = {type: 'object', properties: {cpuUtilization: {type: 'integer', title: 'Target CPU (%)', default: 70}, targetOverrides: {type: 'string'}}}
+    const entry: CatalogStrategy = {id: 'hpa-50', workspaceId: workspace.id, name: 'hpa-50', kind: 'autoscaler', pluginId: 'hpa', sourceImage: '', defaultConfiguration: {cpuUtilization: 50}, status: 'succeeded', createdAt: '2026-09-12T00:00:00Z', updatedAt: '2026-09-12T00:00:00Z'}
+    const item: ExperimentConfiguration = {id: 'cfg_autoscaler', workspaceId: workspace.id, clusterResourceId: cluster.id, name: 'Autoscaling', description: '', applicationRef: application.reference, applicationDigest: application.digest, definition: {applicationValues: {}, components: []}, validation: {valid: true, issues: []}, createdAt: '2026-09-12T00:00:00Z', updatedAt: '2026-09-12T00:00:00Z'}
+    render(createElement(ExperimentConfigurationDialog, {open: true, close: () => {}, items: [item], experiments: [], clusters: [cluster], workspaces: [workspace], applications: [application], plugins: [loadPlugin, metricsPlugin, cpa, hpa], strategies: [entry], session: {authenticated: true}, isAdmin: true, changed: async () => {}, openOperation: () => {}, item}))
+    await goToStep('Scheduling and scaling')
+    fireEvent.click(screen.getByRole('tab', {name: 'Autoscaler'}))
+    // The catalog has no Custom Pod Autoscaler image, so only HPA can be added.
+    expect(screen.queryByRole('button', {name: 'Add custom pod autoscaler'})).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', {name: 'Add horizontal pod autoscaler'}))
+    const settings = screen.getByRole('combobox', {name: 'Settings'})
+    expect(settings).toHaveValue('hpa-50')
+    expect(within(settings).getAllByRole('option').map(option => option.textContent)).toEqual(['Custom', 'hpa-50'])
+    expect(screen.queryByRole('spinbutton', {name: /Target CPU/})).not.toBeInTheDocument()
+    expect(screen.queryByRole('checkbox', {name: 'Custom values'})).not.toBeInTheDocument()
+    fireEvent.change(settings, {target: {value: ''}})
+    expect(screen.getByRole('spinbutton', {name: /Target CPU/})).toHaveValue(70)
   })
 
   it('allows deletion only after an experiment reaches a terminal state', () => {
