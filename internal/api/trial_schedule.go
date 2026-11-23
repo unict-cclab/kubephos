@@ -13,11 +13,50 @@ const maxRestSecondsBetweenTrials = 3600
 type trialScheduleInput struct {
 	RestSecondsBetweenTrials *int  `json:"restSecondsBetweenTrials,omitempty"`
 	FirstTrialPilot          *bool `json:"firstTrialPilot,omitempty"`
+	// ManualStartScope chooses which runs of a manual-start ("twoPhaseStart")
+	// configuration wait for the user's Start: "first" or "every".
+	ManualStartScope *string `json:"manualStartScope,omitempty"`
 }
 
 type trialSchedule struct {
 	RestSeconds int
 	Pilot       bool
+	// ManualStartScope is "" when each configuration keeps its saved choice.
+	ManualStartScope string
+}
+
+// Manual start scopes. With "first" only the first run of each manual-start
+// configuration (the pilot when enabled, otherwise run 1) waits for Start;
+// later runs start by themselves after the rest interval. "every" pauses every
+// run, which was the only behavior before the setting existed. Configurations
+// saved without a scope behave as "first".
+const (
+	manualStartFirst = "first"
+	manualStartEvery = "every"
+)
+
+var errInvalidManualStartScope = fmt.Errorf("Manual start must wait for the first run (%q) or every run (%q).", manualStartFirst, manualStartEvery)
+
+func validManualStartScope(value string) bool {
+	return value == "" || value == manualStartFirst || value == manualStartEvery
+}
+
+// effectiveManualStartScope applies an explicit execution choice over the
+// configuration's saved one, defaulting to "first".
+func effectiveManualStartScope(override, saved string) string {
+	if override != "" {
+		return override
+	}
+	if saved != "" {
+		return saved
+	}
+	return manualStartFirst
+}
+
+// waitsForStart tells whether the run at slotIndex (execution order within one
+// configuration, pilot included) pauses before the load.
+func waitsForStart(scope string, slotIndex int) bool {
+	return scope == manualStartEvery || slotIndex == 0
 }
 
 type trialSlot struct {
@@ -32,16 +71,22 @@ func validRestSeconds(value int) bool {
 }
 
 // resolve applies explicit request values over the saved defaults.
-func (input trialScheduleInput) resolve(savedRest int, savedPilot bool) (trialSchedule, error) {
-	schedule := trialSchedule{RestSeconds: savedRest, Pilot: savedPilot}
+func (input trialScheduleInput) resolve(savedRest int, savedPilot bool, savedScope string) (trialSchedule, error) {
+	schedule := trialSchedule{RestSeconds: savedRest, Pilot: savedPilot, ManualStartScope: savedScope}
 	if input.RestSecondsBetweenTrials != nil {
 		schedule.RestSeconds = *input.RestSecondsBetweenTrials
 	}
 	if input.FirstTrialPilot != nil {
 		schedule.Pilot = *input.FirstTrialPilot
 	}
+	if input.ManualStartScope != nil {
+		schedule.ManualStartScope = *input.ManualStartScope
+	}
 	if !validRestSeconds(schedule.RestSeconds) {
 		return trialSchedule{}, errInvalidTrialSchedule
+	}
+	if !validManualStartScope(schedule.ManualStartScope) {
+		return trialSchedule{}, errInvalidManualStartScope
 	}
 	return schedule, nil
 }
@@ -69,6 +114,9 @@ func (slot trialSlot) runLabel(word string) string {
 func validateDefinitionTrialSchedule(definition experimentConfigurationDefinitionInput) error {
 	if !validRestSeconds(definition.RestSecondsBetweenTrials) {
 		return errInvalidTrialSchedule
+	}
+	if !validManualStartScope(definition.ManualStartScope) {
+		return errInvalidManualStartScope
 	}
 	return nil
 }

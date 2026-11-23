@@ -57,15 +57,16 @@ describe('pilot repetitions', () => {
     render(<ResultsView artifacts={[pilot, ...runs].map(item => item.artifact)} experiments={[experiment]} operations={[]} workspaces={[]} session={session} changed={async () => {}} openOperation={() => {}} focusedExperiment={experiment} />)
     await openSection('Statistics')
     const across = await screen.findByRole('table', {name: 'Statistics across executions'})
-    expect(across).toHaveTextContent('15.0 ms')
+    expect(within(across).getByText('P95 latency — client (Locust)').closest('tr')).toHaveTextContent(/ms.*15\.0/)
     expect(across).not.toHaveTextContent('900')
-    expect(screen.getAllByRole('table', {name: /^Statistics for /})).toHaveLength(2)
+    fireEvent.click(screen.getByRole('tab', {name: 'Per execution'}))
+    expect(within(screen.getByRole('combobox', {name: 'Execution'})).getAllByRole('option')).toHaveLength(2)
     expect(vi.mocked(request).mock.calls.some(([path]) => String(path).includes('/pilot/'))).toBe(false)
     const tab = screen.getByRole('button', {name: /Baseline · Warm-up \(excluded\)/})
     expect(within(tab).getByText('Pilot')).toBeInTheDocument()
     fireEvent.click(tab)
     expect(await screen.findByText(/excluded from every statistic, aggregate and plot/)).toBeInTheDocument()
-    expect(await screen.findByRole('table', {name: 'Statistics for Baseline · Warm-up (excluded)'})).toHaveTextContent('900.0 ms')
+    expect(await screen.findByRole('table', {name: 'Statistics for Baseline · Warm-up (excluded)'})).toHaveTextContent('900')
   })
 
   it('skips pilot trials in run-level values and in comparison preparation', async () => {
@@ -131,17 +132,17 @@ describe('statistics tables', () => {
     expect(intervalText({count: 3, confidence95Low: 4, confidence95High: 6, nEffective: 3}, 'milliseconds')).toBe('4.0 ms–6.0 ms')
     render(<RunStatisticsTable dataset={dataset('single', {series: [series('load.p95_response_time', 'milliseconds', [7])]})} metrics={['load.p95_response_time']} />)
     const cells = screen.getByText('P95 latency — client (Locust)').closest('tr')!.querySelectorAll('td')
-    expect(cells[2]).toHaveTextContent('1')
-    expect(cells[10]).toHaveTextContent('n/a')
+    expect(cells[3]).toHaveTextContent('1')
+    expect(cells[11]).toHaveTextContent('n/a')
   })
 
   it('reports n and the autocorrelation-adjusted n_eff for a run', () => {
     render(<RunStatisticsTable dataset={dataset('ar', {end: at(200), series: [series('load.p95_response_time', 'milliseconds', [1, 2, 3, 4, 5, 6, 7, 8])]})} metrics={['load.p95_response_time']} />)
     const cells = screen.getByText('P95 latency — client (Locust)').closest('tr')!.querySelectorAll('td')
-    expect(cells[2]).toHaveTextContent('8')
+    expect(cells[3]).toHaveTextContent('8')
     // A trend has ρ₁ > 0: n_eff is smaller than n but at least 2.
-    expect(Number(cells[3].textContent)).toBeGreaterThanOrEqual(2)
-    expect(Number(cells[3].textContent)).toBeLessThan(8)
+    expect(Number(cells[4].textContent)).toBeGreaterThanOrEqual(2)
+    expect(Number(cells[4].textContent)).toBeLessThan(8)
     expect(screen.getByRole('columnheader', {name: /n\s*eff/})).toHaveAttribute('title', expect.stringContaining('lag-1 autocorrelation'))
   })
 
@@ -152,6 +153,7 @@ describe('statistics tables', () => {
     const experiment = {id: 'suite', name: 'Suite', kind: 'suite', status: 'succeeded', variants: [variant('a', 'Alpha', ['a1', 'a2', 'a3']), variant('b', 'Beta', ['b1', 'b2', 'b3']), variant('c', 'Gamma', ['c1', 'c2'])]} as unknown as Experiment
     render(<ResultsView artifacts={items.map(item => item.artifact)} experiments={[experiment]} operations={[]} workspaces={[]} session={session} changed={async () => {}} openOperation={() => {}} focusedExperiment={experiment} />)
     await openSection('Statistics')
+    fireEvent.click(await screen.findByRole('tab', {name: 'Differences'}))
     const table = await screen.findByRole('table', {name: 'Differences between strategies'})
     const labelled = items.map(item => ({...item, label: item.artifact.id}))
     const expected = variantComparisons(experiment, labelled, ['load.p95_response_time'])
@@ -200,9 +202,9 @@ describe('Locust summary', () => {
     const table = screen.getByRole('table', {name: 'Locust endpoints for Baseline'})
     const rows = within(table).getAllByRole('row')
     expect(rows.at(-1)).toHaveTextContent('Aggregated')
-    expect(rows.at(-1)).toHaveTextContent('0.025%')
+    expect(rows.at(-1)).toHaveTextContent('0.025')
     expect(rows[1]).toHaveTextContent('/cart')
-    expect(rows[1]).toHaveTextContent('42.0')
+    expect(rows[1]).toHaveTextContent('42')
     expect(within(table).getAllByRole('columnheader').map(cell => cell.textContent)).toEqual(['Endpoint', 'Requests', 'Failures', 'Failure %', 'Mean (ms)', 'P50 (ms)', 'P90 (ms)', 'P95 (ms)', 'P99 (ms)', 'P99.9 (ms)', 'Max (ms)'])
     expect(screen.getByRole('table', {name: 'Locust errors for Baseline'})).toHaveTextContent('HTTPError 503')
     expect(screen.getByText('Load generator saturated — latency may be inflated')).toBeInTheDocument()
@@ -339,7 +341,7 @@ describe('publication figures', () => {
 })
 
 describe('accessibility', () => {
-  it('keeps the overview, every disclosure section, All metrics and the figure studio free of axe violations', async () => {
+  it('keeps the overview, every disclosure section, All metrics and KubeStudio free of axe violations', async () => {
     const items = ['a1', 'a2', 'a3', 'b1', 'b2', 'b3'].map((id, index) => {
       const item = latencyRun(id, 10 + index)
       item.dataset.spec.locustSummary = locustSummary(1000, 1, 20 + index, {workerCpu: [{worker: 'w', maxPercent: 95, warnings: 1}]})
@@ -362,21 +364,28 @@ describe('accessibility', () => {
       await openSection(section)
       await audit(section)
     }
+    fireEvent.click(screen.getByRole('tab', {name: 'Differences'}))
     await screen.findByRole('table', {name: 'Differences between strategies'})
+    await audit('Statistics, differences tab')
     fireEvent.click(screen.getByRole('button', {name: 'P95 latency — client (Locust)'}))
     fireEvent.click(within(screen.getByRole('region', {name: 'P95 latency — client (Locust)'})).getByRole('button', {name: 'View as table'}))
     await audit('All metrics chart and table')
     fireEvent.click(screen.getByRole('button', {name: 'Create figure'}))
-    const dialog = await screen.findByRole('dialog', {name: 'Figure studio'})
+    const dialog = await screen.findByRole('dialog', {name: 'KubeStudio'})
+    const pick = (kind: string) => {fireEvent.click(within(dialog).getByRole('button', {name: /^Figure:/})); fireEvent.click(within(dialog).getByRole('dialog', {name: 'Choose a figure'}).querySelector(`[data-kind="${kind}"]`)!)}
+    await audit('KubeStudio')
+    fireEvent.click(within(dialog).getByRole('button', {name: /^Figure:/}))
+    await audit('KubeStudio figure switcher')
+    fireEvent.click(within(dialog).getByRole('dialog', {name: 'Choose a figure'}).querySelector('[data-kind="fidelity"]')!)
     expect(within(dialog).getByRole('img', {name: 'Offered versus achieved request rate chart'})).toBeInTheDocument()
-    await audit('Figure studio')
-    fireEvent.click(within(dialog).getByRole('radio', {name: /^Run-level dots/}))
+    pick('runlevel')
+    fireEvent.click(within(within(dialog).getByRole('navigation', {name: 'Layers'})).getByRole('button', {name: 'Y axis'}))
     fireEvent.change(within(dialog).getByRole('combobox', {name: 'Metric'}), {target: {value: 'load.p95_response_time'}})
     expect(within(dialog).getByRole('img', {name: 'P95 latency — client (Locust) per repetition: individual repetitions with mean and 95% confidence interval'})).toBeInTheDocument()
-    fireEvent.click(within(dialog).getByRole('radio', {name: /^Percentile ladder/}))
+    pick('ladder')
     expect(within(dialog).getByRole('img', {name: 'Latency percentile ladder: client and server percentiles per configuration'})).toBeInTheDocument()
-    fireEvent.click(within(dialog).getByRole('button', {name: 'More export formats'}))
-    await audit('Figure studio export menu')
+    fireEvent.click(within(dialog).getByRole('button', {name: 'Export'}))
+    await audit('KubeStudio export popover')
   }, 20000)
 })
 

@@ -20,9 +20,15 @@ func initializationStage(definition experimentConfigurationDefinitionInput) stri
 	return ""
 }
 
-func configureInitializationRun(run *domain.PipelineRun, definition experimentConfigurationDefinitionInput) {
+// configureInitializationRun freezes the namespace and the manual-start gate
+// on a run. scope is the effective manual start scope and slotIndex the run's
+// execution order within its configuration (0 = first, pilot included).
+func configureInitializationRun(run *domain.PipelineRun, definition experimentConfigurationDefinitionInput, scope string, slotIndex int) {
 	run.ApplicationNamespace = definition.Namespace
-	run.PauseBeforeStage = initializationStage(definition)
+	run.PauseBeforeStage = ""
+	if waitsForStart(scope, slotIndex) {
+		run.PauseBeforeStage = initializationStage(definition)
+	}
 }
 
 func (s *Server) startExperimentTraffic(w http.ResponseWriter, r *http.Request) {

@@ -28,7 +28,7 @@ describe('experiment configuration actions', () => {
     expect(screen.queryByText('Exact saved configuration')).not.toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', {name: 'Run experiment'}))
     expect(view.container.querySelector('dialog[open]')).toBeInTheDocument()
-    expect(screen.getByRole('spinbutton', {name: 'Number of executions'})).toBeInTheDocument()
+    expect(screen.getByRole('spinbutton', {name: 'Measured repetitions'})).toBeInTheDocument()
   })
 
   it('opens configuration editing as a page with the saved values', () => {

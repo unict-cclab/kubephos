@@ -20,7 +20,7 @@ export function StrategyTargetEditor({componentKey, components, trait, resetKey,
     <div className="target-editor-list">{targets.map(target => {
       const enabled = selected[target.id] !== false
       return <article className={enabled ? 'enabled' : ''} key={target.id}>
-        <div className="target-editor-row"><label className="checkbox-field"><input type="checkbox" checked={enabled} onChange={event => setSelected(current => ({...current, [target.id]: event.target.checked}))} /><span>{target.id}</span></label></div>
+        <div className="target-editor-row"><label className="checkbox-field"><input type="checkbox" data-review-skip="true" checked={enabled} onChange={event => setSelected(current => ({...current, [target.id]: event.target.checked}))} /><span>{target.id}</span></label></div>
       </article>
     })}</div>
     {!targets.length && <p className="details-copy">The application contract does not declare compatible services.</p>}

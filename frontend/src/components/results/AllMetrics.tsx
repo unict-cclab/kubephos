@@ -27,14 +27,14 @@ export function AllMetrics({metrics, plot, byService, groups, provenance, onFigu
         <div className="metric-chips">{items.map(metric => <button key={metric} type="button" className="metric-chip" aria-pressed={selected.includes(metric)} title={metric} onClick={() => toggle(metric)}>{titled.find(item => item.metric === metric)?.title}</button>)}</div>
       </div>)}
     </div>
-    {selected.length === 0 ? <p className="all-metrics-hint">Pick one or more metrics to plot them here.</p> : <div className="all-metrics-charts">{selected.map(metric => {
+    {selected.length === 0 ? <p className="all-metrics-hint">Pick a metric to plot it.</p> : <div className="all-metrics-charts">{selected.map(metric => {
       const curves = isControlMetric(metric) ? [] : split[metric] ? byService?.(metric) ?? [] : plot(metric)
       const unit = curves[0]?.unit ?? ''
       const title = metricTitle(metric, provenance(metric))
       const serviceable = Boolean(byService) && groups.length <= 1 && !isControlMetric(metric) && byService!(metric) !== undefined
-      return <section key={metric} className="results-card metric-card-mini" aria-label={title}>
-        <div className="results-card-head">
-          <div><h4>{title}</h4><p>{provenanceLabel(provenance(metric))}{unit ? ` · ${unitLabel(unit)}` : ''}</p></div>
+      return <section key={metric} className="metric-figure" aria-label={title}>
+        <div className="metric-figure-head">
+          <div><h4>{title}</h4><p>{provenanceLabel(provenance(metric)).replace(/ · /g, ', ')}{unit ? `; ${unitLabel(unit)}` : ''}</p></div>
           <div className="results-card-actions">
             {serviceable && <button type="button" className="link-button" aria-pressed={Boolean(split[metric])} onClick={() => setSplit(current => ({...current, [metric]: !current[metric]}))}>{split[metric] ? 'Total' : 'By service'}</button>}
             {onFigure && <button type="button" className="link-button" aria-label={`Create figure: ${title}`} onClick={() => onFigure(metric)}>Create figure</button>}
@@ -42,7 +42,7 @@ export function AllMetrics({metrics, plot, byService, groups, provenance, onFigu
           </div>
         </div>
         {curves.length ? <TimeChart panelTitles={false} panelHeight={150} ariaLabel={`${title} over time`} panels={[{id: metric, title, unit, series: curves.slice(0, 8).map((series, index) => chartSeries(series, `${index}`, series.label, split[metric] ? `var(--chart-${index % 8 + 1})` : colorOf(groups, series, index)))}]} /> : <p className="empty-inline">This metric has no time series (statistics only).</p>}
-        {split[metric] && curves.length > 8 && <p className="table-footnote">Showing the 8 services with the highest mean; the rest are in Statistics.</p>}
+        {split[metric] && curves.length > 8 && <p className="table-footnote">The 8 services with the highest mean; the rest are in Statistics.</p>}
       </section>
     })}</div>}
   </div>

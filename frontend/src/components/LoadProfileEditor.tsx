@@ -187,7 +187,7 @@ function numericRecord(value: unknown): Record<string, number> {
   return Object.fromEntries(Object.entries(value).flatMap(([key, item]) => Number.isFinite(Number(item)) ? [[key, Number(item)]] : []))
 }
 
-function loadSamples(steps: LoadProfileStep[]): Array<{seconds: number; rps: number}> {
+export function loadSamples(steps: LoadProfileStep[]): Array<{seconds: number; rps: number}> {
   const result: Array<{seconds: number; rps: number}> = []
   let elapsed = 0
   steps.forEach(step => {

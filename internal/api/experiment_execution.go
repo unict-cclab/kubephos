@@ -83,7 +83,7 @@ func (s *Server) createExperimentExecution(response http.ResponseWriter, request
 			writeError(response, http.StatusConflict, "invalid_snapshot", "The suite configuration is invalid.")
 			return
 		}
-		s.executeExperimentSuite(response, request, experimentSuiteInput{Name: input.Name, Description: configuration.Description, Variants: definition.Variants, Runs: definition.Runs, ScheduledFor: input.ScheduledFor, RestSecondsBetweenTrials: definition.RestSecondsBetweenTrials, FirstTrialPilot: definition.FirstTrialPilot, trialScheduleInput: input.trialScheduleInput}, configuration)
+		s.executeExperimentSuite(response, request, experimentSuiteInput{Name: input.Name, Description: configuration.Description, Variants: definition.Variants, Runs: definition.Runs, ScheduledFor: input.ScheduledFor, RestSecondsBetweenTrials: definition.RestSecondsBetweenTrials, FirstTrialPilot: definition.FirstTrialPilot, ManualStartScope: definition.ManualStartScope, trialScheduleInput: input.trialScheduleInput}, configuration)
 		return
 	}
 	var definition experimentConfigurationDefinitionInput
@@ -91,7 +91,7 @@ func (s *Server) createExperimentExecution(response http.ResponseWriter, request
 		writeError(response, http.StatusConflict, "invalid_snapshot", "The saved experiment configuration is invalid.")
 		return
 	}
-	schedule, err := input.trialScheduleInput.resolve(definition.RestSecondsBetweenTrials, definition.FirstTrialPilot)
+	schedule, err := input.trialScheduleInput.resolve(definition.RestSecondsBetweenTrials, definition.FirstTrialPilot, definition.ManualStartScope)
 	if err != nil {
 		writeError(response, http.StatusUnprocessableEntity, "invalid_trial_schedule", err.Error())
 		return
@@ -134,6 +134,10 @@ func (s *Server) createExperimentExecution(response http.ResponseWriter, request
 		return
 	}
 	variantID := id.New("variant")
+	manualStartScope := effectiveManualStartScope(schedule.ManualStartScope, definition.ManualStartScope)
+	if definition.TwoPhaseStart {
+		schedule.ManualStartScope = manualStartScope
+	}
 	experiment := domain.Experiment{
 		ID: instanceID, WorkspaceID: configuration.WorkspaceID, ConfigurationID: configuration.ID,
 		OwnerUserID:              user.ID,
@@ -146,7 +150,7 @@ func (s *Server) createExperimentExecution(response http.ResponseWriter, request
 	}
 	runs := map[string]domain.PipelineRun{}
 	isolationMode := experimentIsolationMode(definition)
-	for _, slot := range schedule.slots(input.Runs) {
+	for slotIndex, slot := range schedule.slots(input.Runs) {
 		trialID := id.New("trial")
 		run := domain.PipelineRun{
 			ID: id.New("run"), PipelineID: pipeline.ID, WorkspaceID: configuration.WorkspaceID, ClusterResourceID: configuration.ClusterResourceID,
@@ -154,7 +158,7 @@ func (s *Server) createExperimentExecution(response http.ResponseWriter, request
 			Name: fmt.Sprintf("%s · %s", input.Name, slot.runLabel("Run")), Status: domain.OperationQueued, PipelineHash: pipeline.Hash,
 			ResultType: experiment.ResultType, ResultVersion: experiment.ResultVersion, ScheduledFor: input.ScheduledFor,
 		}
-		configureInitializationRun(&run, definition)
+		configureInitializationRun(&run, definition, manualStartScope, slotIndex)
 		for stagePosition, stage := range validated.Definition.Stages {
 			run.Stages = append(run.Stages, domain.PipelineRunStage{ID: id.New("runstage"), RunID: run.ID, Position: stagePosition + 1, StageID: stage.ID, PluginID: stage.PluginID, Title: stage.Title, Status: domain.StepPending, CleanupStatus: domain.StepPending})
 		}
@@ -177,8 +181,9 @@ type experimentSuiteInput struct {
 	Runs             int                           `json:"runs"`
 	ScheduledFor     *time.Time                    `json:"scheduledFor"`
 	// Saved suite settings; explicit trialScheduleInput values override them.
-	RestSecondsBetweenTrials int  `json:"-"`
-	FirstTrialPilot          bool `json:"-"`
+	RestSecondsBetweenTrials int    `json:"-"`
+	FirstTrialPilot          bool   `json:"-"`
+	ManualStartScope         string `json:"-"`
 	trialScheduleInput
 }
 
@@ -204,13 +209,13 @@ func (s *Server) createExperimentSuite(response http.ResponseWriter, request *ht
 		writeError(response, http.StatusBadRequest, "invalid_request", err.Error())
 		return
 	}
-	schedule, err := input.trialScheduleInput.resolve(0, false)
+	schedule, err := input.trialScheduleInput.resolve(0, false, "")
 	if err != nil {
 		writeError(response, http.StatusUnprocessableEntity, "invalid_trial_schedule", err.Error())
 		return
 	}
 	suiteDefinition := func() experimentConfigurationDefinitionInput {
-		return experimentConfigurationDefinitionInput{Kind: "suite", Variants: input.Variants, Runs: input.Runs, RestSecondsBetweenTrials: schedule.RestSeconds, FirstTrialPilot: schedule.Pilot}
+		return experimentConfigurationDefinitionInput{Kind: "suite", Variants: input.Variants, Runs: input.Runs, RestSecondsBetweenTrials: schedule.RestSeconds, FirstTrialPilot: schedule.Pilot, ManualStartScope: schedule.ManualStartScope}
 	}
 	configuration, failure := s.validatedComparativeConfiguration(request.Context(), experimentConfigurationInput{Name: input.Name, Description: input.Description, Kind: "suite", Definition: suiteDefinition()})
 	if len(input.Variants) == 0 && len(input.ConfigurationIDs) > 0 {
@@ -236,6 +241,7 @@ func (s *Server) createExperimentSuite(response http.ResponseWriter, request *ht
 	}
 	input.Variants, input.Runs = savedDefinition.Variants, savedDefinition.Runs
 	input.RestSecondsBetweenTrials, input.FirstTrialPilot = savedDefinition.RestSecondsBetweenTrials, savedDefinition.FirstTrialPilot
+	input.ManualStartScope = savedDefinition.ManualStartScope
 	input.trialScheduleInput = trialScheduleInput{}
 	s.executeExperimentSuite(response, request, input, configuration)
 }
@@ -252,7 +258,7 @@ func (s *Server) executeExperimentSuite(response http.ResponseWriter, request *h
 		writeError(response, http.StatusUnprocessableEntity, "invalid_suite", "A suite requires a name, two to eight configurations and one to twenty runs per configuration.")
 		return
 	}
-	schedule, err := input.trialScheduleInput.resolve(input.RestSecondsBetweenTrials, input.FirstTrialPilot)
+	schedule, err := input.trialScheduleInput.resolve(input.RestSecondsBetweenTrials, input.FirstTrialPilot, input.ManualStartScope)
 	if err != nil {
 		writeError(response, http.StatusUnprocessableEntity, "invalid_trial_schedule", err.Error())
 		return
@@ -376,7 +382,8 @@ func (s *Server) executeExperimentSuite(response http.ResponseWriter, request *h
 		}
 		variantID := id.New("variant")
 		variant := domain.ExperimentVariant{ID: variantID, ExperimentID: suiteID, Position: variantPosition + 1, Name: item.Configuration.Name, Alias: item.Alias, Color: item.Color, PipelineID: pipeline.ID, PipelineHash: pipeline.Hash, ConfigurationID: item.Configuration.ID, Configuration: item.Configuration.Definition}
-		for _, slot := range schedule.slots(input.Runs) {
+		manualStartScope := effectiveManualStartScope(schedule.ManualStartScope, item.Definition.ManualStartScope)
+		for slotIndex, slot := range schedule.slots(input.Runs) {
 			trialID := id.New("trial")
 			run := domain.PipelineRun{
 				ID: id.New("run"), PipelineID: pipeline.ID, WorkspaceID: experiment.WorkspaceID, ClusterResourceID: item.Configuration.ClusterResourceID,
@@ -384,7 +391,7 @@ func (s *Server) executeExperimentSuite(response http.ResponseWriter, request *h
 				Name: fmt.Sprintf("%s · %s · %s", input.Name, item.Configuration.Name, slot.runLabel("Run")), Status: domain.OperationQueued,
 				PipelineHash: pipeline.Hash, ResultType: experiment.ResultType, ResultVersion: experiment.ResultVersion, ScheduledFor: input.ScheduledFor,
 			}
-			configureInitializationRun(&run, item.Definition)
+			configureInitializationRun(&run, item.Definition, manualStartScope, slotIndex)
 			for stagePosition, stage := range item.Pipeline.Definition.Stages {
 				run.Stages = append(run.Stages, domain.PipelineRunStage{ID: id.New("runstage"), RunID: run.ID, Position: stagePosition + 1, StageID: stage.ID, PluginID: stage.PluginID, Title: stage.Title, Status: domain.StepPending, CleanupStatus: domain.StepPending})
 			}

@@ -31,8 +31,8 @@ it('shows req/s, restarts and per-service charts for each series of a saved comp
   ]} as unknown as Experiment
   render(<ResultsView artifacts={runs.map(item => item.artifact)} experiments={[]} operations={[]} workspaces={[]} session={{authenticated: true, user: {id: 'alice', role: 'user'}} as Session} changed={async () => {}} openOperation={() => {}} focusedExperiment={comparison} onBack={() => {}} comparison={{sourceConfigurations: {}}} />)
   const table = await screen.findByRole('table', {name: 'Services ranked by bottleneck score'})
-  // Experiment-grade verdict: the bottleneck and the restarts are named.
-  expect(screen.getByRole('region', {name: 'Verdict'})).toHaveTextContent(/Bottleneck: recommendation/)
+  // Experiment-grade summary: the bottleneck is named in a sentence.
+  expect(screen.getByRole('region', {name: 'Verdict'})).toHaveTextContent(/recommendation is the bottleneck/)
   const row = within(table).getByRole('button', {name: 'recommendation'}).closest('tr')!
   expect(row).toHaveTextContent('Bottleneck')
   const cells = within(row).getAllByRole('cell')

@@ -26,7 +26,14 @@ runs cannot share a named namespace on the same cluster.
 to deploy the application and configured components first. The run becomes
 **Initialized** and waits while you prepare any external orchestration tooling.
 Select **Start** in the experiment detail or use the play button in the list to begin the load and measurement
-window. Each repetition waits separately, including runs inside a suite. You can
+window. **Wait for my Start** (`manualStartScope`) chooses which repetitions wait:
+`first` (default, also for configurations saved before the setting existed) pauses
+only the first run of each configuration (the pilot run when enabled, otherwise
+run 1); later repetitions start by themselves after the rest interval. `every`
+pauses every repetition separately, including runs inside a suite. The choice is
+saved with the configuration and can be overridden when starting an execution
+(`/experiments/start`, `/experiment-instances`, `/experiment-suites`); it is
+frozen on each run when the experiment is queued. You can
 stop a waiting experiment to clean up its resources. Editing the configuration
 changes future executions; existing experiments keep their saved settings.
 

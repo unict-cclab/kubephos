@@ -3,9 +3,10 @@ import {ResponsiveTable} from '../ResponsiveTable'
 import {displayValue, formatClock} from './display'
 
 // On-screen time-series chart (not a publication figure): stacked panels that share the
-// x axis and one hover crosshair. Hairline grid, no frame, 2 px lines, CI band as a 12%
-// wash, tooltip listing every series at the hovered instant, keyboard stepping and a
-// table view as the accessible twin.
+// x axis and one hover crosshair. No frame, hairline baseline and grid, lines labelled
+// directly at their right end (a legend only when the plot is too narrow), annotations
+// written on the plot, CI band as a faint wash, keyboard stepping and a table view as the
+// accessible twin.
 
 export interface ChartPoint {t: number; v: number}
 
@@ -20,6 +21,8 @@ export interface ChartSeries {
   // Uncertainty band [low, high] per point (same index as points).
   band?: Array<[number, number]>
   dashed?: boolean
+  // Direct label written at the line's end (defaults to label).
+  short?: string
   // Expected spacing (ms): lines break across gaps larger than 1.5 steps.
   step?: number
 }
@@ -29,9 +32,11 @@ export interface ChartPanel {
   unit: string
   series: ChartSeries[]
   reference?: {value: number; label: string}
+  // Shade where the `lower` series falls below the `upper` one, with a note on the plot.
+  shortfall?: {upper: string; lower: string; label: string}
 }
 
-const margin = {left: 52, right: 16, top: 10, bottom: 8}
+const baseMargin = {left: 48, right: 12, top: 12, bottom: 8}
 const axisBand = 26
 
 export function niceTicks(maximum: number, count = 4): number[] {
@@ -76,6 +81,29 @@ function bandPath(series: ChartSeries, x: (t: number) => number, y: (v: number) 
   return `M${upper.join('L')}L${lower.join('L')}Z`
 }
 
+function shortfallShape(upper: ChartSeries, lower: ChartSeries, x: (t: number) => number, y: (v: number) => number, tolerance: number): {path: string; at?: {t: number; v: number}} {
+  const pairs = lower.points.map(point => ({t: point.t, low: point.v, high: valueAt(upper, point.t, tolerance)?.v})).filter((pair): pair is {t: number; low: number; high: number} => pair.high !== undefined)
+  if (pairs.length < 2) return {path: ''}
+  const top = pairs.map(pair => `${x(pair.t).toFixed(1)},${y(Math.max(pair.high, pair.low)).toFixed(1)}`)
+  const bottom = pairs.map(pair => `${x(pair.t).toFixed(1)},${y(pair.low).toFixed(1)}`).reverse()
+  const widest = pairs.reduce((best, pair) => pair.high - pair.low > best.high - best.low ? pair : best, pairs[0])
+  // Anchor the note around 60 % of the way, where the gap is usually open and clear of the end labels.
+  const middle = pairs[Math.floor(pairs.length * .6)]
+  const at = middle.high - middle.low > (widest.high - widest.low) * .5 ? middle : widest
+  return {path: `M${top.join('L')}L${bottom.join('L')}Z`, at: {t: at.t, v: (at.high + at.low) / 2}}
+}
+
+// End-of-line labels pushed apart so they never overlap (at least `gap` px between baselines).
+function placeLabels(items: Array<{id: string; y: number}>, top: number, bottom: number, gap = 13): Map<string, number> {
+  const sorted = [...items].sort((a, b) => a.y - b.y)
+  const placed = sorted.map(item => ({...item}))
+  for (let index = 1; index < placed.length; index++) placed[index].y = Math.max(placed[index].y, placed[index - 1].y + gap)
+  const overflow = placed.length ? placed[placed.length - 1].y - bottom : 0
+  if (overflow > 0) for (const item of placed) item.y -= overflow
+  for (let index = placed.length - 2; index >= 0; index--) placed[index].y = Math.min(placed[index].y, placed[index + 1].y - gap)
+  return new Map(placed.map(item => [item.id, Math.max(top, item.y)]))
+}
+
 function nearestIndex(times: number[], t: number): number {
   let low = 0
   let high = times.length - 1
@@ -114,6 +142,11 @@ export function TimeChart({panels, ariaLabel, panelHeight = 168, compact = false
   if (!visible.length || !times.length) return <p className="empty-inline">No samples to plot.</p>
   const tMin = Math.min(0, times[0])
   const tMax = Math.max(times[times.length - 1], tMin + 1)
+  const labelText = (series: ChartSeries) => series.short ?? series.label
+  const longest = Math.max(0, ...visible.flatMap(panel => panel.series.filter(series => series.points.length).map(series => labelText(series).length)))
+  // Direct labels need room on the right; on narrow plots (phones) a compact legend replaces them.
+  const direct = !compact && width >= 520 && longest <= 22
+  const margin = {...baseMargin, right: direct ? Math.round(Math.min(150, 14 + longest * 6.6)) : baseMargin.right}
   const plotWidth = Math.max(80, width - margin.left - margin.right)
   const x = (t: number) => margin.left + (t - tMin) / (tMax - tMin) * plotWidth
   const minutes = (tMax - tMin) / 60000
@@ -144,27 +177,36 @@ export function TimeChart({panels, ariaLabel, panelHeight = 168, compact = false
       {visible.map((panel, panelIndex) => {
         const last = panelIndex === visible.length - 1
         const values = panel.series.flatMap(series => [...series.points.map(point => point.v), ...(series.band ?? []).map(band => band[1])]).filter(Number.isFinite)
-        const yTicks = niceTicks(Math.max(...values, panel.reference?.value ?? 0, 0) * 1.05 || 1, compact ? 2 : 4)
+        const yTicks = niceTicks(Math.max(...values, panel.reference?.value ?? 0, 0) * 1.05 || 1, compact ? 2 : 3)
         const yMax = yTicks[yTicks.length - 1]
         const bottom = height - margin.bottom
         const y = (v: number) => bottom - Math.min(1.02, Math.max(0, v / yMax)) * (bottom - margin.top)
         const totalHeight = height + (last ? axisBand : 0)
+        const upper = panel.shortfall && panel.series.find(series => series.id === panel.shortfall!.upper)
+        const lower = panel.shortfall && panel.series.find(series => series.id === panel.shortfall!.lower)
+        const gap = upper && lower ? shortfallShape(upper, lower, x, y, step * .75) : undefined
+        const ends = direct ? panel.series.filter(series => series.points.length).map(series => {const end = series.points[series.points.length - 1]; return {id: series.id, y: y(end.v) + 4, series}}) : []
+        const labelY = placeLabels(ends, margin.top + 4, bottom + 4)
         return <div className="time-chart-panel" key={panel.id}>
-          {!compact && (panelTitles || panel.series.length > 1) && <div className="time-chart-panel-head" aria-hidden="true">
+          {!compact && (panelTitles || (panel.series.length > 1 && !direct)) && <div className="time-chart-panel-head" aria-hidden="true">
             {panelTitles ? <span className="time-chart-panel-title">{panel.title}</span> : <span />}
-            {panel.series.length > 1 && <span className="time-chart-legend">{panel.series.map(series => <span key={series.id} title={notes[series.label]} className={notes[series.label] ? 'legend-adjusted' : undefined}><LegendKey color={series.color} dashed={series.dashed} />{series.label}{notes[series.label] && <sup aria-hidden="true">*</sup>}</span>)}</span>}
+            {panel.series.length > 1 && !direct && <span className="time-chart-legend">{panel.series.map(series => <span key={series.id} title={notes[series.label]} className={notes[series.label] ? 'legend-adjusted' : undefined}><LegendKey color={series.color} dashed={series.dashed} />{series.label}{notes[series.label] && <sup aria-hidden="true">*</sup>}</span>)}</span>}
           </div>}
           <svg width="100%" height={totalHeight} viewBox={`0 0 ${width} ${totalHeight}`} preserveAspectRatio="none" onPointerMove={onPointer} onPointerLeave={() => setHover(undefined)} aria-hidden="true" focusable="false">
             {yTicks.map(tick => <g key={tick}>
               <line className="chart-grid-line" x1={margin.left} x2={width - margin.right} y1={y(tick)} y2={y(tick)} />
               <text className="chart-tick" x={margin.left - 8} y={y(tick) + 4} textAnchor="end">{displayValue(tick, panel.unit, true).text}</text>
             </g>)}
+            <line className="chart-baseline" x1={margin.left} x2={width - margin.right} y1={bottom} y2={bottom} />
+            {gap?.path && <path className="chart-shortfall" d={gap.path} />}
             {panel.reference && <g className="chart-reference">
               <line x1={margin.left} x2={width - margin.right} y1={y(panel.reference.value)} y2={y(panel.reference.value)} />
-              <text x={width - margin.right} y={y(panel.reference.value) - 5} textAnchor="end">{panel.reference.label}</text>
+              <text x={margin.left + 6} y={y(panel.reference.value) - 5}>{panel.reference.label}</text>
             </g>}
             {panel.series.map(series => series.band && <path key={`${series.id}-band`} className="chart-band" d={bandPath(series, x, y)} style={{fill: series.color}} />)}
-            {panel.series.map(series => <path key={series.id} className="chart-line" d={linePath(series.points, x, y, series.step ?? step)} style={{stroke: series.color}} strokeDasharray={series.dashed ? '5 4' : undefined} />)}
+            {panel.series.map(series => <path key={series.id} className={`chart-line ${series.dashed ? 'dashed' : ''}`} d={linePath(series.points, x, y, series.step ?? step)} style={{stroke: series.color}} strokeDasharray={series.dashed ? '5 4' : undefined} />)}
+            {gap?.at && panel.shortfall && <text className="chart-annotation" x={x(gap.at.t)} y={y(gap.at.v) + 4} textAnchor="middle">{panel.shortfall.label}</text>}
+            {ends.map(({id, series}) => <text key={`${id}-label`} className="chart-end-label" x={width - margin.right + 8} y={labelY.get(id)} style={{fill: series.color}}>{labelText(series)}{notes[series.label] ? '*' : ''}</text>)}
             {hoverTime !== undefined && <g className="chart-crosshair">
               <line x1={x(hoverTime)} x2={x(hoverTime)} y1={margin.top - 6} y2={bottom} />
               {panel.series.map(series => {const value = valueAt(series, hoverTime, step * .75); return value && <circle key={series.id} cx={x(hoverTime)} cy={y(value.v)} r="4" style={{fill: series.color}} />})}
@@ -173,6 +215,7 @@ export function TimeChart({panels, ariaLabel, panelHeight = 168, compact = false
           </svg>
         </div>
       })}
+      {direct && visible.some(panel => panel.series.some(series => notes[series.label])) && <p className="time-chart-note">{[...new Set(visible.flatMap(panel => panel.series.filter(series => notes[series.label]).map(series => series.label)))].map(label => <span key={label}>*{label}: {notes[label]}. </span>)}</p>}
       {hoverTime !== undefined && readout.some(item => item.rows.length) && <div className={`chart-tooltip ${flip ? 'flip' : ''}`} style={{left: `${tooltipLeft / width * 100}%`}}>
         <div className="chart-tooltip-time">{formatClock((hoverTime - tMin) / 1000)}{durationLabel ? ` ${durationLabel}` : ''}</div>
         {readout.filter(item => item.rows.length).map(({panel, rows}) => <div key={panel.id} className="chart-tooltip-group">
@@ -183,7 +226,7 @@ export function TimeChart({panels, ariaLabel, panelHeight = 168, compact = false
     </div>
     <p id={`${id}-readout`} className="visually-hidden" aria-live="polite">{hoverTime === undefined ? 'Use the left and right arrow keys to read values.' : `${formatClock((hoverTime - tMin) / 1000)}: ${readout.flatMap(({panel, rows}) => rows.map(({series, value}) => `${panel.title} ${series.label} ${displayValue(value!.v, panel.unit).text}`)).join('; ')}`}</p>
     {!compact && <div className="time-chart-foot">
-      <span className="time-chart-axis-label">Time since start of the measured window (mm:ss)</span>
+      <span className="time-chart-axis-label">Minutes since the measured window began</span>
       <button type="button" className="link-button" aria-expanded={table} onClick={() => setTable(value => !value)}>{table ? 'Hide data table' : 'View as table'}</button>
     </div>}
     {table && <ChartTable panels={visible} times={times} step={step} label={ariaLabel} />}
@@ -212,7 +255,7 @@ export function Sparkline({points, color = 'var(--chart-1)', width = 96, height 
   const y = (v: number) => height - 3 - (v - (hi - lo ? lo : lo - span / 2)) / span * (height - 6)
   const end = finite[finite.length - 1]
   return <svg className="sparkline" width={width} height={height} viewBox={`0 0 ${width} ${height}`} role={label ? 'img' : undefined} aria-label={label} aria-hidden={label ? undefined : true}>
-    <path d={linePath(finite, x, y)} style={{stroke: color}} fill="none" strokeWidth="1.5" strokeLinejoin="round" strokeLinecap="round" />
-    <circle cx={x(end.t)} cy={y(end.v)} r="2.5" style={{fill: color}} />
+    <path d={linePath(finite, x, y)} style={{stroke: color}} fill="none" strokeWidth="1.25" strokeLinejoin="round" strokeLinecap="round" />
+    <circle cx={x(end.t)} cy={y(end.v)} r="2" style={{fill: color}} />
   </svg>
 }

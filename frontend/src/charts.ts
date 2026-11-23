@@ -48,6 +48,8 @@ export interface ChartExportOptions {
   caption?: string
   // Download file name without extension (default kubephos-<metric>).
   fileName?: string
+  // Authoring tool recorded in the PDF /Creator entry and the SVG <metadata>.
+  creator?: string
 }
 
 // Physical page size (pt) and raster size (px) of an SVG figure. Figures marked
@@ -85,6 +87,11 @@ export function svgDocument(source: SVGSVGElement, options: ChartExportOptions =
   }
   ensure('title', options.title)
   ensure('desc', options.caption)
+  if (options.creator && !snapshot.querySelector(':scope > metadata')) {
+    const metadata = document.createElementNS('http://www.w3.org/2000/svg', 'metadata')
+    metadata.textContent = `Created with ${options.creator}`
+    snapshot.insertBefore(metadata, snapshot.querySelector(':scope > desc')?.nextSibling ?? snapshot.firstChild)
+  }
   let serialized = new XMLSerializer().serializeToString(snapshot)
   if (!/^<svg[^>]*\sxmlns="http:\/\/www\.w3\.org\/2000\/svg"/.test(serialized)) serialized = serialized.replace(/^<svg/, '<svg xmlns="http://www.w3.org/2000/svg"')
   return `<?xml version="1.0" encoding="UTF-8"?>\n${serialized}\n`
@@ -332,7 +339,7 @@ function* svgToPDFSteps(source: SVGSVGElement, options: ChartExportOptions = {})
   }
   if (shifted) commands.push('Q')
   const childText = (tag: string) => [...source.children].find(child => child.tagName.toLowerCase() === tag)?.textContent?.trim() ?? ''
-  return pdfFile(commands.join('\n'), pageWidth, pageHeight, [...alphaStates.keys()], {title: options.title || childText('title'), subject: options.caption || childText('desc')})
+  return pdfFile(commands.join('\n'), pageWidth, pageHeight, [...alphaStates.keys()], {title: options.title || childText('title'), subject: options.caption || childText('desc'), creator: options.creator})
 }
 
 function pdfPath(path: string, scale: number, pageHeight: number): string {
@@ -393,7 +400,7 @@ function pdfString(value: string): string {
   return `(${pdfText(value)})`
 }
 
-function pdfFile(content: string, width: number, height: number, alphas: number[] = [], info: {title?: string; subject?: string} = {}): Uint8Array {
+function pdfFile(content: string, width: number, height: number, alphas: number[] = [], info: {title?: string; subject?: string; creator?: string} = {}): Uint8Array {
   const encoder = new TextEncoder()
   const fonts = pdfFonts.map((_, index) => `/F${index + 1} ${5 + index} 0 R`).join(' ')
   const infoIndex = 5 + pdfFonts.length + alphas.length
@@ -404,7 +411,7 @@ function pdfFile(content: string, width: number, height: number, alphas: number[
     `<< /Length ${encoder.encode(content).length} >>\nstream\n${content}\nendstream`,
     ...pdfFonts.map(font => `<< /Type /Font /Subtype /Type1 /BaseFont /${font} /Encoding /WinAnsiEncoding >>`),
     ...alphas.map(alpha => `<< /Type /ExtGState /ca ${alpha} /CA ${alpha} >>`),
-    `<< /Producer (KubePhos)${info.title ? ` /Title ${pdfString(info.title)}` : ''}${info.subject ? ` /Subject ${pdfString(info.subject)}` : ''} >>`
+    `<< /Producer (KubePhos)${info.creator ? ` /Creator ${pdfString(info.creator)}` : ''}${info.title ? ` /Title ${pdfString(info.title)}` : ''}${info.subject ? ` /Subject ${pdfString(info.subject)}` : ''} >>`
   ]
   let document = '%PDF-1.4\n'
   const offsets = [0]

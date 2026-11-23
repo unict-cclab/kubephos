@@ -103,14 +103,14 @@ export function kpiCards({runLevel, comparisons, baseline, slo}: KpiInput): KpiC
     build('throughput', 'Throughput', 'load.achieved_rps', 'requests_per_second', 'higher', group => achievedValues(runLevel, group.id).values, (_, group) => {const share = ratio(group); return share === undefined ? undefined : share < .8 ? 'critical' : share < .95 || share > 1.05 ? 'warning' : 'ok'}, entry => {
       const target = mean(offered(entry.group))
       const share = ratio(entry.group)
-      return target === undefined ? undefined : `of ${Math.round(target).toLocaleString('en-US')} req/s ${offeredLabel}${share === undefined ? '' : ` · ${Math.round(share * 100)} %`}`
+      return target === undefined ? undefined : `of ${Math.round(target).toLocaleString('en-US')} req/s ${offeredLabel}${share === undefined ? '' : ` (${Math.round(share * 100)} %)`}`
     }, ['load.achieved_rps', 'load.successful_rps']),
     build('latency', 'Latency P95', 'load.p95_response_time', 'milliseconds', 'lower', group => valuesOf(runLevel, 'load.p95_response_time', group.id).values, value => slo === undefined ? undefined : value > slo ? 'warning' : 'ok', entry => {
       const parts = [['P50', percentile('load.p50_response_time', entry.group)], ['P99', percentile('load.p99_response_time', entry.group)]].filter((item): item is [string, number] => item[1] !== undefined)
-      return parts.length ? parts.map(([label, value]) => `${label} ${formatShortMs(value)}`).join(' · ') : slo !== undefined ? `${entry.value !== undefined && entry.value > slo ? 'above' : 'within'} SLO ${formatShortMs(slo)}` : 'mean of window P95s'
+      return parts.length ? parts.map(([label, value]) => `${label} ${formatShortMs(value)}`).join(', ') : slo !== undefined ? `${entry.value !== undefined && entry.value > slo ? 'above' : 'within'} SLO ${formatShortMs(slo)}` : 'mean of window P95s'
     }),
-    build('errors', 'Error rate', 'load.failure_percentage', 'percent', 'lower', group => valuesOf(runLevel, 'load.failure_percentage', group.id).values, value => value >= 5 ? 'critical' : value >= 1 ? 'warning' : 'ok', () => 'failed / all requests'),
-    build('slo', 'SLO compliance', 'load.slo_violation_percentage', 'percent', 'higher', group => valuesOf(runLevel, 'load.slo_violation_percentage', group.id).values.map(value => 100 - value), value => value < 50 ? 'critical' : value < 95 ? 'warning' : 'ok', () => slo === undefined ? 'windows meeting the P95 objective' : `windows with P95 ≤ ${formatShortMs(slo)}`)
+    build('errors', 'Error rate', 'load.failure_percentage', 'percent', 'lower', group => valuesOf(runLevel, 'load.failure_percentage', group.id).values, value => value >= 5 ? 'critical' : value >= 1 ? 'warning' : 'ok', () => 'of all requests failed'),
+    build('slo', 'SLO compliance', 'load.slo_violation_percentage', 'percent', 'higher', group => valuesOf(runLevel, 'load.slo_violation_percentage', group.id).values.map(value => 100 - value), value => value < 50 ? 'critical' : value < 95 ? 'warning' : 'ok', () => slo === undefined ? 'of windows met the P95 objective' : `of windows kept P95 under ${formatShortMs(slo)}`)
   ]
   return cards.filter((card): card is KpiCard => Boolean(card))
 }
@@ -126,7 +126,7 @@ export function significance(row: VariantComparison | undefined): {label: string
   const p = row.adjustedPValue
   const g = row.hedgesG
   const pText = p < .001 ? 'p < 0.001' : `p = ${p.toFixed(p < .01 ? 3 : 2)}`
-  return {label: p < .05 ? `${pText}${g !== undefined ? ` · g ${g.toFixed(1)}` : ''}` : 'n.s.', tone: p < .05 ? 'significant' : 'neutral', title: `Welch t-test on repetition means, Holm-adjusted ${pText} (family of ${row.familySize})${g !== undefined ? `; Hedges g = ${g.toFixed(2)}` : ''}.`}
+  return {label: p < .05 ? `${pText}${g !== undefined ? `, g ${g.toFixed(1)}` : ''}` : 'n.s.', tone: p < .05 ? 'significant' : 'neutral', title: `Welch t-test on repetition means, Holm-adjusted ${pText} (family of ${row.familySize})${g !== undefined ? `; Hedges g = ${g.toFixed(2)}` : ''}.`}
 }
 
 // --- time series ---
@@ -166,17 +166,74 @@ export function primaryPanels({groups, plot, slo}: TimelineInput): ChartPanel[] 
   const offeredMetric = plot('load.offered_rps').length ? 'load.offered_rps' : 'load.configured_rps'
   const offered = plot(offeredMetric)
   const rate: ChartSeries[] = []
-  if (offered[0]) rate.push(chartSeries(offered[0], 'offered', offeredMetric === 'load.offered_rps' ? 'Offered (target)' : 'Configured (target)', 'var(--chart-target)', {dashed: true, band: false}))
-  achieved.forEach((series, index) => rate.push(chartSeries(series, `achieved-${index}`, multiple ? series.label : achievedMetric === 'load.achieved_rps' ? 'Achieved' : 'Successful', colorOf(groups, series, index))))
+  if (offered[0]) rate.push({...chartSeries(offered[0], 'offered', offeredMetric === 'load.offered_rps' ? 'Offered (target)' : 'Configured (target)', 'var(--chart-target)', {dashed: true, band: false}), short: 'target'})
+  achieved.forEach((series, index) => rate.push({...chartSeries(series, `achieved-${index}`, multiple ? series.label : achievedMetric === 'load.achieved_rps' ? 'Achieved' : 'Successful', colorOf(groups, series, index)), short: multiple ? series.label : achievedMetric === 'load.achieved_rps' ? 'achieved' : 'successful'}))
   const latency: ChartSeries[] = []
   const p95 = plot('load.p95_response_time')
   const p50 = multiple ? [] : plot('load.p50_response_time')
-  p95.forEach((series, index) => latency.push(chartSeries(series, `p95-${index}`, multiple ? `${series.label} · P95` : 'P95', colorOf(groups, series, index))))
-  p50.forEach((series, index) => latency.push(chartSeries(series, `p50-${index}`, 'P50', 'var(--chart-1-soft)')))
+  p95.forEach((series, index) => latency.push({...chartSeries(series, `p95-${index}`, multiple ? `${series.label}, P95` : 'P95', colorOf(groups, series, index)), short: multiple ? series.label : 'P95'}))
+  p50.forEach((series, index) => latency.push({...chartSeries(series, `p50-${index}`, 'P50', 'var(--chart-quiet)'), short: 'P50'}))
+  const shortfall = !multiple && offered[0] && achieved[0] && ratioOf(achieved[0], offered[0]) < .95 ? {upper: 'offered', lower: 'achieved-0', label: 'achieved falls short'} : undefined
   return [
-    {id: 'rate', title: 'Request rate (req/s)', unit: 'requests_per_second', series: rate},
+    {id: 'rate', title: 'Request rate (req/s)', unit: 'requests_per_second', series: rate, shortfall},
     {id: 'latency', title: 'Client latency', unit: 'milliseconds', series: latency, reference: slo ? {value: slo, label: `SLO ${formatShortMs(slo)}`} : undefined}
   ].filter(panel => panel.series.length)
+}
+
+const meanOf = (series: AggregateSeries) => mean(series.points.map(point => point.value).filter(Number.isFinite))
+function ratioOf(achieved: AggregateSeries, offered: AggregateSeries): number {
+  const a = meanOf(achieved)
+  const o = meanOf(offered)
+  return a !== undefined && o ? a / o : 1
+}
+function quantile(values: number[], q: number): number {
+  const sorted = [...values].sort((a, b) => a - b)
+  return sorted[Math.min(sorted.length - 1, Math.max(0, Math.round(q * (sorted.length - 1))))]
+}
+function roughRps(value: number): string {
+  const step = value >= 200 ? 10 : value >= 50 ? 5 : 1
+  return (Math.round(value / step) * step).toLocaleString('en-US')
+}
+
+// Title of the primary chart: what the curves show, in one sentence (the subtitle says what is plotted).
+export function timelineHeadline({groups, plot, slo}: TimelineInput): string {
+  const fallback = 'Load and latency over the measured window'
+  const achieved = plot('load.achieved_rps').length ? plot('load.achieved_rps') : plot('load.successful_rps')
+  const offered = plot('load.offered_rps').length ? plot('load.offered_rps') : plot('load.configured_rps')
+  const p95 = plot('load.p95_response_time')
+  if (groups.length > 1) {
+    const latencies = p95.map(series => ({label: series.label, value: meanOf(series)})).filter((item): item is {label: string; value: number} => item.value !== undefined).sort((a, b) => a.value - b.value)
+    if (latencies.length > 1) {
+      const best = latencies[0]
+      const worst = latencies[latencies.length - 1]
+      if (worst.value > 1.2 * best.value) return `${best.label} keeps client P95 near ${formatShortMs(best.value)}, against ${formatShortMs(worst.value)} for ${worst.label}`
+    }
+    const rates = achieved.map(series => ({label: series.label, value: meanOf(series)})).filter((item): item is {label: string; value: number} => item.value !== undefined).sort((a, b) => b.value - a.value)
+    if (rates.length > 1 && rates[0].value > 1.1 * rates[rates.length - 1].value) return `${rates[0].label} sustains ${roughRps(rates[0].value)} req/s, against ${roughRps(rates[rates.length - 1].value)} for ${rates[rates.length - 1].label}`
+    return latencies.length > 1 || rates.length > 1 ? 'The variants track each other closely' : fallback
+  }
+  const a = achieved[0]
+  const o = offered[0]
+  const latency = p95[0] && meanOf(p95[0])
+  if (a && o) {
+    const ratio = ratioOf(a, o)
+    const values = a.points.map(point => point.value).filter(Number.isFinite)
+    const targets = o.points.map(point => point.value).filter(Number.isFinite)
+    if (ratio < .95 && values.length && targets.length) {
+      const top = Math.max(...targets)
+      const level = roughRps(quantile(values, .9))
+      return top > 1.1 * Math.min(...targets) ? `Achieved throughput levels off near ${level} req/s while the target climbs to ${roughRps(top)}` : `Achieved throughput stays near ${level} req/s, short of the ${roughRps(top)} req/s target`
+    }
+    if (ratio > 1.05) return `Achieved throughput overshoots the target by ${Math.round((ratio - 1) * 100)} %`
+    if (latency !== undefined && slo !== undefined && latency > slo) return `Throughput follows the target, but client P95 sits above the ${formatShortMs(slo)} SLO`
+    return latency !== undefined ? `Throughput follows the target; client P95 stays near ${formatShortMs(latency)}` : 'Throughput follows the target'
+  }
+  return latency !== undefined ? `Client P95 averages ${formatShortMs(latency)} over the measured window` : fallback
+}
+
+export function timelineSubtitle(variants: number, repetitions: number): string {
+  const what = variants > 1 ? 'Achieved request rate (top) and client P95 latency (bottom) per variant' : 'Offered and achieved request rate (top), client P50 and P95 latency (bottom)'
+  return `${what} over the measured window${repetitions > 1 ? `; lines are means of ${repetitions} repetitions, shading the 95 % confidence band` : ''}.`
 }
 
 // --- services ---
@@ -231,14 +288,14 @@ export function acrossRunsText(values: number[], format: (value: number) => stri
 // the key metrics (Holm-adjusted p < 0.05 on repetition means) and load-fidelity warnings.
 export function comparisonVerdict(cards: KpiCard[], fidelityWarnings: Array<{label: string; text: string}>): Insight[] {
   const insights: Insight[] = []
-  for (const {label, text} of fidelityWarnings.slice(0, 1)) insights.push({id: 'fidelity', severity: 'warning', title: `${label}: target load not sustained`, detail: text, evidence: {metric: 'load.achieved_rps'}, target: 'throughput'})
+  for (const {label, text} of fidelityWarnings.slice(0, 1)) insights.push({id: 'fidelity', severity: 'warning', title: `${label} did not reach its target load`, detail: text, evidence: {metric: 'load.achieved_rps'}, target: 'throughput'})
   for (const card of cards) for (const entry of card.entries) {
     const badge = significance(entry.comparison)
     if (!entry.comparison || badge?.tone !== 'significant' || entry.change === undefined) continue
     const better = card.better === 'higher' ? entry.change > 0 : entry.change < 0
-    insights.push({id: `${card.id}-${entry.group.id}`, severity: better ? 'ok' : 'warning', title: `${entry.group.label}: ${card.title.charAt(0).toLowerCase()}${card.title.slice(1)} ${formatChangeText(entry.change)} vs ${entry.comparison.baseline}`, detail: `${badge.title} ${better ? 'Better' : 'Worse'} than the baseline.`, evidence: {metric: card.metric, value: entry.value, unit: card.unit}, target: card.id === 'latency' || card.id === 'slo' ? 'latency' : 'throughput'})
+    insights.push({id: `${card.id}-${entry.group.id}`, severity: better ? 'ok' : 'warning', title: `${entry.group.label} ${entry.change > 0 ? 'raises' : 'lowers'} ${card.title.charAt(0).toLowerCase()}${card.title.slice(1)} by ${formatChangeText(Math.abs(entry.change)).replace('+', '')} against ${entry.comparison.baseline}`, detail: `${badge.title} ${better ? 'Better' : 'Worse'} than the baseline.`, evidence: {metric: card.metric, value: entry.value, unit: card.unit}, target: card.id === 'latency' || card.id === 'slo' ? 'latency' : 'throughput'})
   }
-  if (cards.some(card => card.entries.length > 1) && !insights.some(item => item.id !== 'fidelity')) insights.push({id: 'no-difference', severity: 'info', title: 'No significant difference on the key metrics', detail: 'Throughput, latency, errors and SLO compliance do not differ from the baseline at Holm-adjusted p < 0.05 (or there are fewer than 3 repetitions per series). See Statistics for every metric.', evidence: {}})
+  if (cards.some(card => card.entries.length > 1) && !insights.some(item => item.id !== 'fidelity')) insights.push({id: 'no-difference', severity: 'info', title: 'The variants do not differ significantly on the key metrics', detail: 'Throughput, latency, errors and SLO compliance stay within Holm-adjusted p ≥ 0.05 of the baseline, or there are fewer than 3 repetitions per series. Statistics has every metric.', evidence: {}})
   return insights.slice(0, 4)
 }
 

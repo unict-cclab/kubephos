@@ -3,12 +3,12 @@ package api
 import "testing"
 
 func TestTrialScheduleDefaultsOverridesAndPilotPositions(t *testing.T) {
-	schedule, err := trialScheduleInput{}.resolve(0, false)
+	schedule, err := trialScheduleInput{}.resolve(0, false, "")
 	if err != nil || schedule.RestSeconds != 0 || schedule.Pilot || len(schedule.slots(3)) != 3 || schedule.slots(3)[0].Position != 1 {
 		t.Fatalf("defaults changed the historical schedule: %+v %v", schedule, err)
 	}
 	rest, pilot := 90, true
-	schedule, err = trialScheduleInput{RestSecondsBetweenTrials: &rest}.resolve(30, true)
+	schedule, err = trialScheduleInput{RestSecondsBetweenTrials: &rest}.resolve(30, true, "")
 	if err != nil || schedule.RestSeconds != 90 || !schedule.Pilot {
 		t.Fatalf("override: %+v %v", schedule, err)
 	}
@@ -18,7 +18,7 @@ func TestTrialScheduleDefaultsOverridesAndPilotPositions(t *testing.T) {
 	}
 	for _, invalid := range []int{-1, 3601} {
 		value := invalid
-		if _, err := (trialScheduleInput{RestSecondsBetweenTrials: &value}).resolve(0, false); err == nil {
+		if _, err := (trialScheduleInput{RestSecondsBetweenTrials: &value}).resolve(0, false, ""); err == nil {
 			t.Fatalf("rest %d accepted", invalid)
 		}
 	}

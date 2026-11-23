@@ -27,7 +27,7 @@ describe('KPI model', () => {
     expect(cards.map(card => card.id)).toEqual(['throughput', 'latency', 'errors', 'slo'])
     const [throughput, latency, errors, slo] = cards
     expect(throughput.entries[0]).toMatchObject({value: 163, tone: 'critical'})
-    expect(throughput.detail(throughput.entries[0])).toBe('of 250 req/s offered · 65 %')
+    expect(throughput.detail(throughput.entries[0])).toBe('of 250 req/s offered (65 %)')
     expect(latency.entries[0].tone).toBe('warning')
     expect(latency.detail(latency.entries[0])).toBe('P50 1.63 s')
     expect(errors.entries[0].tone).toBe('ok')
@@ -39,7 +39,7 @@ describe('KPI model', () => {
     const [throughput] = kpiCards({runLevel: legacy, comparisons: []})
     expect(throughput.entries[0].value).toBe(312)
     expect(throughput.entries[0].tone).toBe('warning')
-    expect(throughput.detail(throughput.entries[0])).toContain('configured · 178 %')
+    expect(throughput.detail(throughput.entries[0])).toContain('configured (178 %)')
   })
 
   it('computes the change vs the baseline and attaches the Holm-adjusted test of that pair', () => {
@@ -48,42 +48,46 @@ describe('KPI model', () => {
     const [alpha, beta] = cards[0].entries
     expect(alpha.baseline).toBe(true)
     expect(beta.change).toBeCloseTo(-69.9, 1)
-    expect(significance(beta.comparison)).toMatchObject({label: 'p = 0.004 · g -3.1', tone: 'significant'})
-    expect(comparisonVerdict(cards, [])[0].title).toBe('Beta: latency P95 −70 % vs Alpha')
+    expect(significance(beta.comparison)).toMatchObject({label: 'p = 0.004, g -3.1', tone: 'significant'})
+    expect(comparisonVerdict(cards, [])[0].title).toBe('Beta lowers latency P95 by 70 % against Alpha')
   })
 })
 
-describe('verdict strip', () => {
-  it('shows at most three findings with evidence links and collapses the rest with the notes', () => {
+describe('written summary', () => {
+  it('writes at most three findings as sentences with evidence references and folds the reasoning and the rest into notes', () => {
     const navigate = vi.fn()
     const insights = ['critical', 'critical', 'warning', 'info'].map((severity, index) => ({id: `i${index}`, severity: severity as 'critical', title: `Finding ${index}`, detail: `Detail ${index}`, evidence: {}, target: index === 1 ? 'services' as const : undefined}))
     render(<VerdictStrip insights={insights} notices={[{kind: 'warning', text: 'Concurrent load'}]} onNavigate={navigate} />)
     const verdict = screen.getByRole('region', {name: 'Verdict'})
-    expect(within(verdict).getAllByRole('listitem').filter(item => item.classList.contains('verdict-item'))).toHaveLength(3)
+    expect(verdict.querySelectorAll('.summary-sentence')).toHaveLength(3)
+    expect(verdict.querySelector('.summary-lede')).toHaveTextContent('Critical: Finding 0. Critical: Finding 1 (Table 1). Warning: Finding 2.')
     expect(screen.getAllByText('Critical:', {exact: false})).toHaveLength(2)
-    fireEvent.click(screen.getByRole('button', {name: /Show services/}))
+    expect(verdict).toHaveClass('severity-critical')
+    fireEvent.click(screen.getByRole('button', {name: 'Go to table 1, services'}))
     expect(navigate).toHaveBeenCalledWith('services')
-    expect(screen.getByText('2 more measurement notes')).toBeInTheDocument()
+    expect(screen.getByText('Reasoning, and 2 more measurement notes')).toBeInTheDocument()
+    expect(screen.getByText('Detail 3', {exact: false})).toBeInTheDocument()
   })
 
   it('says so when nothing stands out', () => {
     render(<VerdictStrip insights={[]} notices={[]} onNavigate={() => {}} />)
-    expect(screen.getByText('No issue detected')).toBeInTheDocument()
+    expect(screen.getByText(/No issue detected/)).toBeInTheDocument()
   })
 })
 
-describe('KPI cards', () => {
-  it('renders one big value per card for one variant and side-by-side rows with Δ and significance for several', () => {
+describe('key figures', () => {
+  it('sets one large figure per metric for one variant, rows with Δ and significance for several, and the source as a footnote', () => {
     const cards = kpiCards({runLevel: [metric('load.achieved_rps', 'requests_per_second', [163]), metric('load.offered_rps', 'requests_per_second', [250])], comparisons: []})
-    const {unmount} = render(<KpiCards cards={cards} provenance={provenance} sparklines={{throughput: curve('Alpha', [150, 160, 170])}} />)
+    const {unmount} = render(<KpiCards cards={cards} provenance={provenance} />)
     const card = screen.getByRole('listitem', {name: 'Throughput'})
     expect(card).toHaveTextContent('163 req/s')
     expect(card).toHaveTextContent('(critical)')
-    expect(within(card).getByText('Locust · client side')).toBeInTheDocument()
-    expect(within(card).getByRole('tooltip')).toHaveTextContent(/load generator/)
+    expect(card.querySelector('.sparkline')).toBeNull()
+    expect(screen.getByText('Locust, client side')).toBeInTheDocument()
+    expect(screen.getByRole('tooltip')).toHaveTextContent(/load generator/)
     unmount()
     const multi = kpiCards({runLevel: [metric('load.achieved_rps', 'requests_per_second', [160, 165, 164], [220, 225, 230])], comparisons: [{metric: 'load.achieved_rps', baselineId: 'a', groupId: 'b', insufficient: false, adjustedPValue: .2, groupCount: 3, baselineCount: 3, familySize: 1} as unknown as VariantComparison]})
-    render(<KpiCards cards={multi} provenance={provenance} sparklines={{}} />)
+    render(<KpiCards cards={multi} provenance={provenance} />)
     const rows = within(screen.getByRole('listitem', {name: 'Throughput'})).getAllByRole('listitem')
     expect(rows[0]).toHaveTextContent('Alpha163 req/sbaseline')
     expect(rows[1]).toHaveTextContent('+38 %')
@@ -106,12 +110,13 @@ describe('services table', () => {
     expect(rows).toHaveLength(8)
     expect(rows[0]).toHaveClass('bottleneck')
     expect(rows[0]).toHaveTextContent('Bottleneck')
-    expect(rows[0]).toHaveTextContent('2.31 s')
-    expect(rows[1]).toHaveTextContent('0.07 · 70 %')
+    expect(screen.getByText(/^Server P95 2\.3 s × 87 %; CPU flat at 0\.20 cores\.$/)).toHaveClass('table-note')
+    expect(rows[0]).toHaveTextContent('2,310')
+    expect(rows[1]).toHaveTextContent('0.07 (70 %)')
     fireEvent.click(within(rows[0]).getByRole('button', {name: 'recommendationservice'}))
     expect(detail).toHaveBeenCalledWith('recommendationservice')
     expect(screen.getByRole('img', {name: 'recommendationservice: Server P95 over time'})).toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', {name: 'Show all 10 services'}))
+    fireEvent.click(screen.getByRole('button', {name: 'All 10 services'}))
     expect(within(table).getAllByRole('row').filter(row => !row.classList.contains('service-detail-row'))).toHaveLength(11)
   })
 
@@ -166,23 +171,26 @@ describe('time chart', () => {
   })
 })
 
-describe('figure studio', () => {
+describe('KubeStudio', () => {
   it('opens on the requested figure, filters series and exports the plotted data', async () => {
     const series = [curve('Alpha', [1, 2, 3], 'milliseconds'), curve('Beta', [2, 3, 4], 'milliseconds')]
     const data: StudioData = {metrics: ['load.p95_response_time'], plot: () => series, runLevel: [metric('load.p95_response_time', 'milliseconds', [1, 2, 3], [2, 3, 4])], ladder: [], fidelity: [], services: () => undefined, serviceMetrics: [], provenance, omitSLO: true}
     const groups = [{id: 'a', label: 'Alpha', color: 'red'}, {id: 'b', label: 'Beta', color: 'blue'}]
     render(<FigureStudio open onClose={() => {}} request={{kind: 'timeseries', metric: 'load.p95_response_time'}} data={data} groups={groups} settings={defaultFigureSettings} onSettings={() => {}} />)
-    const dialog = screen.getByRole('dialog', {name: 'Figure studio'})
-    expect(within(dialog).getByRole('radio', {name: /^Time series/})).toBeChecked()
+    const dialog = screen.getByRole('dialog', {name: 'KubeStudio'})
+    expect(within(dialog).getByRole('button', {name: /^Figure: Latency over time/})).toBeInTheDocument()
     const figure = within(dialog).getByRole('img', {name: 'P95 latency — client (Locust) comparison chart'})
     expect(figure).toHaveTextContent('Beta')
-    fireEvent.click(within(dialog).getByRole('checkbox', {name: 'Beta'}))
+    fireEvent.click(within(dialog).getByRole('button', {name: 'Hide Beta'}))
     expect(within(dialog).getByRole('img', {name: 'P95 latency — client (Locust) comparison chart'})).not.toHaveTextContent('Beta')
-    fireEvent.click(within(dialog).getByRole('button', {name: 'More export formats'}))
-    expect(within(dialog).getAllByRole('menuitem').map(item => item.querySelector('strong')?.textContent)).toEqual(['PDF', 'SVG', 'PNG 300 dpi', 'PNG 600 dpi', 'Data CSV', 'Python (matplotlib)', 'pgfplots (LaTeX)'])
-    fireEvent.click(within(dialog).getByRole('menuitem', {name: /Data CSV/}))
+    fireEvent.click(within(dialog).getByRole('button', {name: 'Export'}))
+    const popover = within(within(dialog).getByRole('dialog', {name: 'Export figure'}))
+    expect(popover.getAllByRole('radio').map(item => item.closest('label')?.querySelector('strong')?.textContent)).toEqual(['PDF', 'SVG', 'PNG 300 dpi', 'PNG 600 dpi', 'Data CSV', 'Python (matplotlib)', 'pgfplots (LaTeX)'])
+    fireEvent.click(popover.getByRole('radio', {name: /Data CSV/}))
+    fireEvent.click(popover.getByRole('button', {name: 'Download Data CSV'}))
     await vi.waitFor(() => expect(downloadBlob).toHaveBeenCalledWith(expect.stringContaining('p95-latency-client-locust'), expect.any(Blob)))
-    fireEvent.click(within(dialog).getByRole('radio', {name: /^Run-level dots/}))
+    fireEvent.click(within(dialog).getByRole('button', {name: /^Figure:/}))
+    fireEvent.click(within(dialog).getByRole('dialog', {name: 'Choose a figure'}).querySelector('[data-kind="runlevel"]')!)
     expect(within(dialog).getByRole('img', {name: /per repetition/})).toBeInTheDocument()
   })
 })

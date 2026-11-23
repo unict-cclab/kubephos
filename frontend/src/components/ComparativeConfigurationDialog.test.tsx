@@ -136,6 +136,25 @@ describe('suite repetition schedule', () => {
     expect(JSON.parse(String(vi.mocked(request).mock.calls[0][1]?.body)).definition).toMatchObject({runs: 3, restSecondsBetweenTrials: 120, firstTrialPilot: true})
   })
 
+  it('offers the manual start choice only for manual-start members and saves it in the suite', async () => {
+    vi.mocked(request).mockReset().mockResolvedValue({id: 'suite'} as never)
+    const view = render(<ComparativeConfigurationDialog {...props} item={item} />)
+    fireEvent.click(screen.getByRole('button', {name: 'Continue'}))
+    expect(screen.queryByLabelText('Wait for my Start')).not.toBeInTheDocument()
+    view.unmount()
+    const manual = [{...configurations[0], definition: {...configurations[0].definition, twoPhaseStart: true}}, configurations[1]]
+    render(<ComparativeConfigurationDialog {...props} configurations={manual} item={item} />)
+    fireEvent.click(screen.getByRole('button', {name: 'Continue'}))
+    const scope = screen.getByLabelText('Wait for my Start')
+    expect(scope).toHaveValue('')
+    fireEvent.change(scope, {target: {value: 'every'}})
+    expect(scope).toHaveAccessibleDescription('Every repetition waits for your Start after its setup.')
+    fireEvent.click(screen.getByRole('button', {name: 'Continue'}))
+    fireEvent.click(screen.getByRole('button', {name: 'Save comparison'}))
+    await waitFor(() => expect(request).toHaveBeenCalled())
+    expect(JSON.parse(String(vi.mocked(request).mock.calls[0][1]?.body)).definition).toMatchObject({runs: 3, manualStartScope: 'every'})
+  })
+
   it('marks the rest field when the API rejects the schedule', async () => {
     vi.mocked(request).mockReset().mockRejectedValue(Object.assign(new Error('Rest between runs must be between 0 and 3600 seconds.'), {status: 422, body: {code: 'invalid_trial_schedule'}}))
     render(<ComparativeConfigurationDialog {...props} item={item} />)

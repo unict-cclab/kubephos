@@ -198,3 +198,38 @@ export function controlMetricDescription(metric: string, scope: string, reason?:
 export function toCSV(rows: Array<Array<string | number | boolean | undefined>>): string {
   return rows.map(row => row.map(value => {const text = value === undefined || (typeof value === 'number' && !Number.isFinite(value)) ? '' : String(value); return /[",\r\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text}).join(',')).join('\n')
 }
+
+// Statistics tables: one display unit and one precision per row, chosen from the row's
+// typical value, so the unit is written once (Unit column) and every number of the row
+// has the same number of decimals ("157–216" instead of "156.7 ms–216.4 ms").
+export interface RowScale {unit: string; factor: number; digits: number}
+
+export function rowScale(unit: string, reference: number | undefined): RowScale {
+  const magnitude = reference === undefined || !Number.isFinite(reference) ? 0 : Math.abs(reference)
+  let label = unitLabel(unit)
+  let factor = 1
+  if (unit === 'milliseconds' && magnitude >= 10000) {label = 's'; factor = 1 / 1000}
+  else if (unit === 'seconds' && magnitude > 0 && magnitude < 1) {label = 'ms'; factor = 1000}
+  else if (unit === 'cores' && magnitude < 1) {label = 'mCPU'; factor = 1000}
+  else if (unit === 'bytes' || unit === 'bytes_per_second') {
+    const steps: Array<[number, string]> = [[1024 ** 3, 'GiB'], [1024 ** 2, 'MiB'], [1024, 'KiB'], [1, 'B']]
+    const [divisor, name] = steps.find(([size]) => magnitude >= size) ?? [1, 'B']
+    label = unit === 'bytes' ? name : `${name}/s`
+    factor = 1 / divisor
+  } else if (unit === 'count') label = ''
+  const scaled = magnitude * factor
+  const integral = unit === 'count' || unit === 'replicas'
+  const digits = scaled >= 100 || (integral && (scaled >= 10 || Number.isInteger(scaled))) ? 0 : scaled >= 10 ? 1 : scaled >= 1 || scaled === 0 ? 2 : 3
+  return {unit: label, factor, digits}
+}
+
+export function scaledValue(value: number | undefined, scale: RowScale): string {
+  if (value === undefined || !Number.isFinite(value)) return '—'
+  const text = Math.abs(value * scale.factor).toLocaleString('en-US', {minimumFractionDigits: scale.digits, maximumFractionDigits: scale.digits})
+  return value * scale.factor < 0 && Number(text.replace(/,/g, '')) !== 0 ? `−${text}` : text
+}
+
+export function scaledInterval(low: number | undefined, high: number | undefined, scale: RowScale): string {
+  if (low === undefined || high === undefined || !Number.isFinite(low) || !Number.isFinite(high)) return 'n/a'
+  return `${scaledValue(low, scale)}–${scaledValue(high, scale)}`
+}

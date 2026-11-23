@@ -8,6 +8,7 @@ import {fidelityPlot, loadFidelity, type FidelitySeries, type LoadFidelity} from
 import {locustGroups, type LocustGroup} from './components/results/locust'
 import {percentileLadder, type LadderSeries} from './components/results/percentiles'
 import {executedPilotCount, provenanceFor, withoutPilots, type ResolvedProvenance} from './components/results/runs'
+import {hasAutoscaler, resourceSummary, type ResourceSummary} from './components/results/resources'
 import type {Artifact, Experiment, MetricSeries, TimeSeriesDataset} from './types'
 
 export interface ComparisonJob {
@@ -45,6 +46,8 @@ export interface PreparedComparison {
   omitSLO: boolean
   // Verdict and services table with experiment-page parity (absent in older payloads).
   overview?: PreparedServiceOverview
+  // Scaling, CPU, memory and restarts per series (key-number row; absent in older payloads).
+  resources?: ResourceSummary[]
 }
 // Down-sampled curve (mean across a series' runs, standard deviation across runs per point)
 // as typed arrays: compact and transferable from the worker without copying.
@@ -116,11 +119,13 @@ export async function prepareComparison(job: ComparisonJob, signal: AbortSignal,
     methods: methodsParagraph({experiment, datasets, metrics: statisticsMetrics, configurations: job.configurations, pilots})
   }
   const seriesOf = experiment.variants.map(variant => ({id: variant.id, items: datasets.filter(item => byArtifact.get(item.artifact.id)?.id === variant.id)})).filter(entry => entry.items.length)
+  const autoscaled = (variant: Experiment['variants'][number]) => hasAutoscaler(variant.configuration as Record<string, unknown> | undefined) || variant.trials.some(trial => hasAutoscaler(job.configurations[trial.resultArtifactId]))
+  const resources = seriesOf.map(entry => resourceSummary(entry.id, entry.items, autoscaled(experiment.variants.find(variant => variant.id === entry.id)!)))
   const insightsOf = (items: LoadedDataset[]) => {
     try {return runInsights(items, experiment)} catch (cause) {console.error('Could not compute insights', cause); return {insights: [], services: []}}
   }
   const overview: PreparedServiceOverview = {insights: insightsOf(datasets).insights, series: seriesOf.map(entry => ({id: entry.id, services: insightsOf(entry.items).services}))}
-  statisticsReady({complete: false, metrics, statisticsMetrics, columns, effects, comparisons, warnings, csv: '', omitSLO, plots: {}, services: {}, fidelity: [], overview, ...extras})
+  statisticsReady({complete: false, metrics, statisticsMetrics, columns, effects, comparisons, warnings, csv: '', omitSLO, plots: {}, services: {}, fidelity: [], overview, resources, ...extras})
   const csv = statisticsCSV(datasets, statisticsMetrics, experiment)
   progress('Preparing plots…')
   const plots: PreparedComparison['plots'] = {}
@@ -134,7 +139,7 @@ export async function prepareComparison(job: ComparisonJob, signal: AbortSignal,
     if (signal.aborted) throw new DOMException('Aborted', 'AbortError')
     return {...entry, curves: serviceCurves(seriesOf.find(item => item.id === entry.id)!.items, entry.services.map(row => row.service), experiment)}
   })}
-  return {complete: true, metrics, statisticsMetrics, columns, effects, comparisons, plots, services, warnings, csv, omitSLO, fidelity: fidelityPlot(datasets, experiment), overview: curved, ...extras}
+  return {complete: true, metrics, statisticsMetrics, columns, effects, comparisons, plots, services, warnings, csv, omitSLO, fidelity: fidelityPlot(datasets, experiment), overview: curved, resources, ...extras}
 }
 
 // Metrics of the services table's sparkline and expanded-row charts (serviceDetailMetrics).

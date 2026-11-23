@@ -35,14 +35,17 @@ function Studio({storageKey = 'experiment:spec', kind = 'timeseries' as const}: 
   const [settings, setSettings] = useState<FigureSettings>(defaultFigureSettings)
   return <FigureStudio open onClose={() => {}} request={{kind}} data={data} groups={groups} settings={settings} onSettings={setSettings} storageKey={storageKey} />
 }
-const studio = () => screen.getByRole('dialog', {name: 'Figure studio'})
+const studio = () => screen.getByRole('dialog', {name: 'KubeStudio'})
 const figure = () => studio().querySelector('svg.pub-figure') as SVGSVGElement
-const left = () => within(studio().querySelector('.studio-left') as HTMLElement)
-const right = () => within(studio().querySelector('.studio-right') as HTMLElement)
+const layers = () => within(within(studio()).getByRole('navigation', {name: 'Layers'}))
+const right = () => within(studio().querySelector('.ks-right') as HTMLElement)
+const layer = (name: string | RegExp) => fireEvent.click(layers().getByRole('button', {name}))
+const chartProps = () => fireEvent.click(layers().getAllByRole('button', {name: /^Chart/})[0])
+const expand = (name: string) => {const toggle = right().getByRole('button', {name}); if (toggle.getAttribute('aria-expanded') !== 'true') fireEvent.click(toggle)}
 const seriesGroup = (key: string) => figure().querySelector(`g.series[data-series-key="${key}"]`) as SVGGElement
 const addRight = (metric = 'load.achieved_rps') => {
-  fireEvent.change(left().getByLabelText('Add metric'), {target: {value: metric}})
-  fireEvent.click(left().getByRole('button', {name: 'Add to right axis'}))
+  layer(/^(Left )?Y axis$/)
+  fireEvent.change(right().getByLabelText('Add a metric on a right Y axis'), {target: {value: metric}})
 }
 
 beforeEach(() => window.localStorage.clear())
@@ -101,7 +104,7 @@ describe('FigureSpec model', () => {
   })
 })
 
-describe('Spec-driven figure studio', () => {
+describe('Spec-driven KubeStudio figures', () => {
   it('puts a second metric on a distinct right axis, with axis-grouped legend and real PDF dashes', () => {
     render(<Studio />)
     expect(figure().querySelector('.tick-right')).toBeNull()
@@ -119,7 +122,7 @@ describe('Spec-driven figure studio', () => {
     const pdf = new TextDecoder().decode(svgToPDF(figure()))
     expect(pdf).toMatch(/\[[\d. ]+\] 0 d/)
     // One series per axis: axis titles and ticks wear the series colour.
-    fireEvent.click(left().getByRole('checkbox', {name: 'Beta'}))
+    fireEvent.click(layers().getAllByRole('button', {name: 'Hide Beta'})[0])
     expect(figure().querySelector('.axis-title-right text')).toHaveAttribute('fill', '#d55e00')
     expect(figure().querySelector('.axis-title-left text')).toHaveAttribute('fill', '#0072b2')
   })
@@ -127,7 +130,9 @@ describe('Spec-driven figure studio', () => {
   it('edits one series from its legend entry: colour, marker, line, width, opacity, label and order', () => {
     render(<Studio />)
     fireEvent.click(figure().querySelector('.legend-item[data-series-key="load.p95_response_time|Beta"] text')!)
-    const editor = within(left().getByRole('group', {name: 'Style of Beta'}))
+    // Clicking the legend entry selects the series: its style opens in the inspector.
+    expect(layers().getByRole('button', {name: 'Beta'})).toHaveAttribute('aria-current', 'true')
+    const editor = within(right().getByRole('group', {name: 'Style of Beta'}))
     fireEvent.click(editor.getByRole('radio', {name: 'Diamond'}))
     expect(seriesGroup('load.p95_response_time|Beta').querySelector('polygon')).not.toBeNull()
     fireEvent.change(editor.getByLabelText('Hex'), {target: {value: '#f0e442'}})
@@ -141,36 +146,38 @@ describe('Spec-driven figure studio', () => {
     fireEvent.change(editor.getByLabelText('Label'), {target: {value: 'Raised'}})
     expect(figure().querySelector('.figure-legend')).toHaveTextContent('Raised')
     // Order: Beta first in the legend and drawn first.
-    fireEvent.click(left().getByRole('button', {name: 'Move Raised up'}))
+    fireEvent.click(editor.getByRole('button', {name: 'Move up'}))
     expect([...figure().querySelectorAll('.legend-label')].map(item => item.textContent)).toEqual(['Raised', 'Alpha'])
     expect(figure().querySelector('g.series')).toHaveAttribute('data-series-key', 'load.p95_response_time|Beta')
-    fireEvent.click(editor.getByRole('button', {name: 'Reset this series'}))
+    fireEvent.click(editor.getByRole('button', {name: 'Reset'}))
     expect(seriesGroup('load.p95_response_time|Beta').querySelector('path.series-line')).toHaveAttribute('stroke', '#d55e00')
   })
 
   it('switches palettes and draws every repeated-run mode', () => {
     render(<Studio />)
+    chartProps()
     fireEvent.change(right().getByLabelText('Palette'), {target: {value: 'grayscale'}})
     expect(seriesGroup('load.p95_response_time|Alpha').querySelector('path.series-line')).toHaveAttribute('stroke', '#000000')
     expect(seriesGroup('load.p95_response_time|Beta').querySelector('path.series-line')!.getAttribute('stroke-dasharray')).toBeTruthy()
-    const mode = (name: RegExp) => fireEvent.click(left().getByRole('radio', {name}))
+    const mode = (value: string) => fireEvent.change(right().getByLabelText('Repeated runs'), {target: {value}})
     expect(figure().querySelectorAll('.deviation-band path')).toHaveLength(2)
-    mode(/^All runs \+ mean/)
+    mode('spaghetti')
     expect(seriesGroup('load.p95_response_time|Alpha').querySelectorAll('path.series-run')).toHaveLength(3)
     expect(seriesGroup('load.p95_response_time|Alpha').querySelector('path.series-line')).not.toBeNull()
-    mode(/^Runs only/)
+    mode('runs')
     expect(seriesGroup('load.p95_response_time|Alpha').querySelectorAll('path.series-run')).toHaveLength(3)
     expect(seriesGroup('load.p95_response_time|Alpha').querySelector('path.series-line')).toBeNull()
-    mode(/^Median \+ IQR/)
+    mode('iqr')
     expect(figure().querySelectorAll('.deviation-band path')).toHaveLength(2)
-    expect((within(studio()).getByLabelText('Caption') as HTMLTextAreaElement).value).toMatch(/interquartile range/)
-    mode(/^Mean only/)
+    expect((within(studio()).getByLabelText('Caption', {selector: 'textarea'}) as HTMLTextAreaElement).value).toMatch(/interquartile range/)
+    mode('mean')
     expect(figure().querySelector('.deviation-band')).toBeNull()
   })
 
   it('applies axis ranges, ticks, units, number format, time format and grid', () => {
     render(<Studio />)
-    const axes = within(right().getByRole('region', {name: 'Axes'}))
+    layer('Y axis')
+    let axes = right()
     fireEvent.change(axes.getByLabelText('Unit'), {target: {value: 's'}})
     fireEvent.change(axes.getByLabelText('Decimals'), {target: {value: '2'}})
     expect(figure().querySelector('.axis-title-left')).toHaveTextContent('(s)')
@@ -183,11 +190,14 @@ describe('Spec-driven figure studio', () => {
     fireEvent.change(axes.getByLabelText('Ticks'), {target: {value: 'step'}})
     fireEvent.change(axes.getByLabelText('Tick step'), {target: {value: '100'}})
     expect([...figure().querySelectorAll('.tick-left text')].map(item => item.textContent)).toEqual(['0', '100', '200', '300', '400'])
-    fireEvent.click(axes.getByRole('radio', {name: 'X'}))
+    layer('X axis')
+    axes = right()
     fireEvent.change(axes.getByLabelText('Time as'), {target: {value: 'mmss'}})
     expect([...figure().querySelectorAll('.tick-x text')].map(item => item.textContent)).toContain('0:30')
     expect(figure()).toHaveTextContent('Time (mm:ss)')
-    fireEvent.click(axes.getByRole('radio', {name: 'Major + minor'}))
+    chartProps()
+    axes = within(right().getByRole('group', {name: 'Grid'}))
+    fireEvent.click(axes.getByRole('radio', {name: 'Minor'}))
     expect(figure().querySelectorAll('.grid-minor').length).toBeGreaterThan(0)
     fireEvent.click(axes.getByRole('radio', {name: 'None'}))
     expect(figure().querySelector('.grid-major')).toBeNull()
@@ -196,26 +206,28 @@ describe('Spec-driven figure studio', () => {
   it('draws automatic and user annotations', () => {
     render(<Studio />)
     expect(figure().querySelector('.annotation-phase')).toHaveTextContent('20 req/s')
-    expect(figure().querySelector('.annotation-slo')).toHaveTextContent('SLO 180.0 ms')
-    fireEvent.click(left().getByRole('checkbox', {name: 'Warm-up end'}))
+    expect(figure().querySelector('.annotation-slo')).toHaveTextContent('SLO 180 ms')
+    fireEvent.click(layers().getByRole('button', {name: 'Show warm-up end'}))
     expect(figure().querySelector('.annotation-warmup')).toHaveTextContent('after 60 s warm-up')
-    fireEvent.click(left().getByRole('button', {name: '+ Reference line'}))
-    fireEvent.change(left().getByLabelText('Value (axis units)'), {target: {value: '120'}})
-    expect(figure().querySelector('.annotation-user.annotation-hline')).toHaveTextContent('Reference')
-    fireEvent.click(left().getByRole('button', {name: '+ Shaded range'}))
+    const add = (name: string) => {fireEvent.click(layers().getByRole('button', {name: 'Add annotation'})); fireEvent.click(layers().getByRole('button', {name}))}
+    add('Threshold line')
+    fireEvent.change(right().getByLabelText('Value (ms)'), {target: {value: '120'}})
+    expect(figure().querySelector('.annotation-user.annotation-hline')).toHaveTextContent('Threshold 120 ms')
+    add('Shaded range')
     expect(figure().querySelector('.annotation-xrange rect')).toHaveAttribute('fill-opacity', '0.07')
-    fireEvent.click(left().getByRole('button', {name: '+ Text'}))
-    fireEvent.change(left().getByLabelText('Text'), {target: {value: 'GC pause'}})
+    add('Text label')
+    fireEvent.change(right().getByLabelText('Text'), {target: {value: 'GC pause'}})
     expect(figure().querySelector('.annotation-text')).toHaveTextContent('GC pause')
-    fireEvent.click(left().getByRole('checkbox', {name: 'Load-phase boundaries'}))
+    fireEvent.click(layers().getByRole('button', {name: 'Hide load phases'}))
     expect(figure().querySelector('.annotation-phase')).toBeNull()
-    fireEvent.click(left().getByRole('button', {name: 'Remove reference line 1'}))
+    layer('Threshold line')
+    fireEvent.click(right().getByRole('button', {name: 'Delete threshold line'}))
     expect(figure().querySelector('.annotation-user.annotation-hline')).toBeNull()
   })
 
-  it('lays out 2 × 2 panels with letters, shared X and one legend', () => {
+  it('still draws saved charts with 2 × 2 panels inside: letters, shared X and one legend', () => {
+    window.localStorage.setItem('kubephos.figureStudio.v1:experiment:spec', JSON.stringify({kind: 'timeseries', metric: 'load.p95_response_time', specs: {timeseries: {version: 1, type: 'timeseries', layout: {grid: '2x2'}, panels: [{metrics: [{metric: 'load.p95_response_time', axis: 'left'}]}, {metrics: [{metric: 'load.achieved_rps', axis: 'left'}]}]}}}))
     render(<Studio />)
-    fireEvent.click(left().getByRole('radio', {name: '2 × 2'}))
     expect(figure().querySelectorAll('.figure-panel')).toHaveLength(4)
     expect([...figure().querySelectorAll('.panel-letter')].map(item => item.textContent)).toEqual(['(a)', '(b)', '(c)', '(d)'])
     expect(figure().querySelectorAll('.figure-legend')).toHaveLength(1)
@@ -223,7 +235,7 @@ describe('Spec-driven figure studio', () => {
     // Shared X: tick labels only on the bottom row.
     expect(figure().querySelector('[data-panel="1"] .tick-x text')).toBeNull()
     expect(figure().querySelector('[data-panel="3"] .tick-x text')).not.toBeNull()
-    expect((within(studio()).getByLabelText('Caption') as HTMLTextAreaElement).value).toMatch(/^\(a\) P95 latency/)
+    expect((within(studio()).getByLabelText('Caption', {selector: 'textarea'}) as HTMLTextAreaElement).value).toMatch(/^\(a\) P95 latency/)
   })
 
   it('remembers the spec per experiment and copies / pastes it as JSON', async () => {
@@ -231,11 +243,14 @@ describe('Spec-driven figure studio', () => {
     vi.stubGlobal('navigator', {...navigator, clipboard: {writeText: async (value: string) => {clipboard = value}, readText: async () => clipboard}})
     const view = render(<Studio />)
     addRight()
-    fireEvent.click(left().getByRole('radio', {name: /^All runs \+ mean/}))
+    chartProps()
+    fireEvent.change(right().getByLabelText('Repeated runs'), {target: {value: 'spaghetti'}})
     view.unmount()
     render(<Studio />)
     expect(figure().querySelectorAll('.tick-right').length).toBeGreaterThan(0)
     expect(figure().querySelectorAll('path.series-run').length).toBeGreaterThan(0)
+    chartProps()
+    expand('Presets and spec')
     fireEvent.click(right().getByRole('button', {name: 'Copy spec'}))
     await vi.waitFor(() => expect(clipboard).toContain('"runMode": "spaghetti"'))
     const copied = JSON.parse(clipboard) as FigureSpec
@@ -244,6 +259,8 @@ describe('Spec-driven figure studio', () => {
     cleanup()
     render(<Studio storageKey="experiment:other" />)
     expect(figure().querySelector('.tick-right')).toBeNull()
+    chartProps()
+    expand('Presets and spec')
     fireEvent.click(right().getByRole('button', {name: 'Paste spec'}))
     await vi.waitFor(() => expect(figure().querySelectorAll('.tick-right').length).toBeGreaterThan(0))
     expect(figure().querySelectorAll('path.series-run').length).toBeGreaterThan(0)
@@ -255,6 +272,8 @@ describe('Spec-driven figure studio', () => {
 
   it('saves style presets and applies built-in ones', () => {
     render(<Studio />)
+    chartProps()
+    expand('Presets and spec')
     fireEvent.change(right().getByLabelText('Style preset'), {target: {value: 'Slides'}})
     fireEvent.click(right().getByRole('button', {name: 'Apply'}))
     expect(figure().getAttribute('viewBox')).toMatch(/^0 0 720 /)
@@ -268,8 +287,11 @@ describe('Spec-driven figure studio', () => {
     addRight()
     for (const [label, script, type] of [[/Python/, 'kubephos-p95-latency-client-locust-and-achieved-request-rate.py', 'text/x-python'], [/pgfplots/, 'kubephos-p95-latency-client-locust-and-achieved-request-rate.tex', 'text/x-tex']] as const) {
       vi.mocked(downloadBlob).mockReset()
-      fireEvent.click(within(studio()).getByRole('button', {name: 'More export formats'}))
-      fireEvent.click(within(studio()).getByRole('menuitem', {name: label}))
+      fireEvent.click(within(studio()).getByRole('button', {name: 'Export'}))
+      const popover = within(within(studio()).getByRole('dialog', {name: 'Export figure'}))
+      fireEvent.click(popover.getByRole('radio', {name: label}))
+      expect(popover.getByText(/\.(py|tex) \+ .*-plot-data\.csv$/)).toBeInTheDocument()
+      fireEvent.click(popover.getByRole('button', {name: /^Download/}))
       await vi.waitFor(() => expect(downloadBlob).toHaveBeenCalledTimes(2))
       const [[name, blob], [csvName, csv]] = vi.mocked(downloadBlob).mock.calls
       expect(name).toBe(script)
@@ -278,6 +300,78 @@ describe('Spec-driven figure studio', () => {
       expect((await (csv as Blob).text()).split('\n')[0]).toMatch(/^p1s1_x,p1s1_y,p1s1_lo,p1s1_hi/)
       expect(await (blob as Blob).text()).toContain(csvName)
     }
+  })
+
+  it('changes the SLO threshold from its layer; the label follows', () => {
+    render(<Studio />)
+    expect(figure().querySelector('.annotation-slo')).toHaveTextContent('SLO 180 ms')
+    layer('SLO line')
+    fireEvent.change(right().getByLabelText('Threshold (ms)'), {target: {value: '200'}})
+    expect(figure().querySelector('.annotation-slo')).toHaveTextContent('SLO 200 ms')
+    expect((within(studio()).getByLabelText('Caption', {selector: 'textarea'}) as HTMLTextAreaElement).value).toMatch(/SLO of 200\.0 ms/)
+    fireEvent.click(right().getByRole('button', {name: 'Use the experiment SLO'}))
+    expect(figure().querySelector('.annotation-slo')).toHaveTextContent('SLO 180 ms')
+  })
+
+  it('adds charts to one image with letters and a layout picker, and exports them as one SVG', async () => {
+    render(<Studio />)
+    const add = () => fireEvent.click(layers().getByRole('button', {name: 'Add chart'}))
+    add()
+    // Chart (b) gets the next suggested metric; the page widens to double column.
+    expect(layers().getByRole('button', {name: 'Chart (b): Achieved request rate'})).toHaveAttribute('aria-current', 'true')
+    expect(studio().querySelectorAll('svg.pub-figure')).toHaveLength(2)
+    expect([...studio().querySelectorAll('.ks-letter')].map(item => item.textContent)).toEqual(['(a)', '(b)'])
+    layer('Page')
+    expect(within(right().getByRole('group', {name: 'Layout'})).getAllByRole('radio').map(radio => radio.closest('label')?.textContent)).toEqual(['1 × 2', '2 × 1'])
+    add()
+    add()
+    expect(studio().querySelectorAll('svg.pub-figure')).toHaveLength(4)
+    expect(layers().queryByRole('button', {name: 'Add chart'})).not.toBeInTheDocument()
+    layer('Page')
+    expect(within(right().getByRole('group', {name: 'Layout'})).getByRole('radio', {name: '2 × 2'})).toBeChecked()
+    // Each chart has its own form: chart (d) becomes a scatter.
+    fireEvent.click(layers().getByRole('button', {name: /^Chart \(d\)/}))
+    fireEvent.click(within(right().getByRole('group', {name: 'Chart form'})).getByRole('radio', {name: 'Scatter X–Y'}))
+    expect(within(studio()).getByRole('img', {name: /^Scatter of/})).toBeInTheDocument()
+    fireEvent.change(right().getByLabelText('Y'), {target: {value: 'load.p95_response_time'}})
+    // Export: one composed SVG with each chart translated into its cell and the letters.
+    let composed = ''
+    vi.mocked(exportChart).mockImplementation(async id => {const svg = document.getElementById(id)!; composed = svg.outerHTML})
+    fireEvent.click(within(studio()).getByRole('button', {name: 'Export'}))
+    fireEvent.click(within(within(studio()).getByRole('dialog', {name: 'Export figure'})).getByRole('button', {name: 'Download PDF'}))
+    await vi.waitFor(() => expect(composed).not.toBe(''))
+    expect(composed.match(/<g transform="translate\(/g)?.length).toBeGreaterThanOrEqual(4)
+    expect(composed).toContain('>(d)</text>')
+    expect(composed).toMatch(/viewBox="0 0 515.52 /)
+    // Remove and reorder.
+    fireEvent.click(layers().getByRole('button', {name: /^Chart \(d\)/}))
+    fireEvent.click(right().getByRole('button', {name: 'Remove chart'}))
+    expect(studio().querySelectorAll('svg.pub-figure')).toHaveLength(3)
+  })
+
+  it('makes a custom scatter from the chart switcher and keeps recipes to one chart', () => {
+    window.localStorage.setItem('kubephos.figureStudio.v1:experiment:spec', JSON.stringify({kind: 'timeseries', specs: {timeseries: {version: 1, type: 'timeseries', layout: {grid: '2x2'}, panels: [{metrics: []}]}}}))
+    render(<Studio />)
+    expect(figure().querySelectorAll('.figure-panel')).toHaveLength(4)
+    fireEvent.click(within(studio()).getByRole('button', {name: /^Figure:/}))
+    fireEvent.click(within(studio()).getByRole('dialog', {name: 'Choose a figure'}).querySelector('[data-kind="timeseries"]')!)
+    expect(figure().querySelectorAll('.figure-panel')).toHaveLength(1)
+    fireEvent.click(within(studio()).getByRole('button', {name: /^Figure:/}))
+    fireEvent.click(within(studio()).getByRole('dialog', {name: 'Choose a figure'}).querySelector('[data-form="xy"]')!)
+    expect(within(studio()).getByRole('img', {name: /^Scatter of/})).toBeInTheDocument()
+    fireEvent.change(right().getByLabelText('X'), {target: {value: 'load.achieved_rps'}})
+    fireEvent.change(right().getByLabelText('Y'), {target: {value: 'load.p95_response_time'}})
+    expect(within(studio()).getByRole('img', {name: 'Scatter of P95 latency — client (Locust) vs Achieved request rate'})).toBeInTheDocument()
+  })
+})
+
+describe('PDF writer', () => {
+  it('honours group translations (legends drawn above the plot by other figure types)', () => {
+    const host = document.createElement('div')
+    host.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 50" data-export-size="physical"><g transform="translate(0 12)"><line x1="0" y1="0" x2="10" y2="0" stroke="#000" /></g><line x1="0" y1="0" x2="10" y2="0" stroke="#000" /></svg>'
+    const pdf = new TextDecoder().decode(svgToPDF(host.querySelector('svg')!))
+    expect(pdf).toContain('q 1 0 0 1 0.000 -12.000 cm')
+    expect(pdf.match(/ cm\n/g)).toHaveLength(1)
   })
 })
 

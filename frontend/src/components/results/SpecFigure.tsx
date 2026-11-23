@@ -113,6 +113,19 @@ function LegendSymbol({series, x, y, width, metrics}: {series: ModelSeries; x: n
   </>
 }
 
+// Pixel ↔ data mapping of each drawn panel (points), for direct manipulation in KubeStudio.
+export interface PanelGeometry {index: number; box: Box; x: (pt: number) => number | undefined; y: (side: 'left' | 'right', pt: number) => number | undefined}
+export interface FigureGeometry {width: number; height: number; panels: PanelGeometry[]}
+
+const invert = (axis: ModelAxis | undefined, from: number, to: number) => (pt: number) => {
+  if (!axis) return undefined
+  const t = (pt - from) / (to - from)
+  const {lower, upper, log} = axis.scale
+  if (!log) return lower + t * (upper - lower)
+  if (lower <= 0 || upper <= 0) return undefined
+  return 10 ** (Math.log10(lower) + t * (Math.log10(upper) - Math.log10(lower)))
+}
+
 export interface SpecFigureProps {
   id: string
   name: string
@@ -122,9 +135,10 @@ export interface SpecFigureProps {
   strokeScale: number
   provenance: Array<{metric: string; provenance: ResolvedProvenance}>
   ariaLabel: string
+  geometry?: {current: FigureGeometry | undefined}
 }
 
-export function SpecFigure({id, name, model, settings, grid, strokeScale, provenance, ariaLabel}: SpecFigureProps) {
+export function SpecFigure({id, name, model, settings, grid, strokeScale, provenance, ariaLabel, geometry}: SpecFigureProps) {
   const metrics = figureMetrics(settings)
   const fs = metrics.fontSize
   const axisLine = metrics.line * Math.sqrt(strokeScale)
@@ -176,7 +190,13 @@ export function SpecFigure({id, name, model, settings, grid, strokeScale, proven
   const height = blockTop + blockHeight + (metrics.legend === 'bottom' ? legendHeight + fs * .2 : 0)
   const text = (props: {x: number; y: number; children: ReactNode; anchor?: 'start' | 'middle' | 'end'; size?: number; fill?: string; rotate?: number; className?: string; weight?: 'bold'}) => <SvgText {...props} size={props.size ?? fs} family={metrics.family} />
 
+  if (geometry) geometry.current = {width: metrics.width, height, panels: model.panels.map((panel, index) => {
+    const box = boxes[index]
+    return {index: panel.index, box, x: invert(panel.x, box.left, box.right), y: (side, pt) => invert(side === 'left' ? panel.left : panel.right, box.bottom, box.top)(pt)}
+  })}
+
   const drawPanel = (panel: ModelPanel, box: typeof boxes[number]) => {
+    const select = (item: ModelPanel['annotations'][number]) => `annotation:${panel.index}:${item.id ?? item.source}`
     const px = position(panel.x, box.left, box.right)
     const yOf = (side: 'left' | 'right') => position(side === 'left' ? panel.left : panel.right, box.bottom, box.top)
     const gridAxis = panel.left ?? panel.right
@@ -197,7 +217,7 @@ export function SpecFigure({id, name, model, settings, grid, strokeScale, proven
       const from = Math.max(box.left, Math.min(a, b))
       const to = Math.min(box.right, Math.max(a, b))
       if (to <= from) return
-      children.push(<g key={`xr-${index}`} className="annotation annotation-xrange"><rect x={r(from)} y={r(box.top)} width={r(to - from)} height={r(box.bottom - box.top)} fill="#000000" fillOpacity="0.07" />{item.label && text({x: (from + to) / 2, y: box.top + fs * 1.9, anchor: 'middle', size: fs * .85, fill: '#333333', className: 'annotation-label', children: item.label})}</g>)
+      children.push(<g key={`xr-${index}`} className="annotation annotation-xrange" data-select={select(item)}><rect x={r(from)} y={r(box.top)} width={r(to - from)} height={r(box.bottom - box.top)} fill="#000000" fillOpacity="0.07" />{item.label && text({x: (from + to) / 2, y: box.top + fs * 1.9, anchor: 'middle', size: fs * .85, fill: '#333333', className: 'annotation-label', children: item.label})}</g>)
     })
     // Data, in legend order (later on top).
     panel.series.forEach(series => {
@@ -225,7 +245,7 @@ export function SpecFigure({id, name, model, settings, grid, strokeScale, proven
         const d = linePath(series.fit.x, series.fit.y, px, py, box)
         if (d) parts.push(<path key="fit" className="series-fit" d={d} fill="none" stroke={color} strokeWidth={r(style.lineWidth)} strokeDasharray={series.axis === 'right' ? dashArray('dashed', style.lineWidth) : undefined} />)
       }
-      children.push(<g key={`s-${series.key}`} className="series" data-series-key={series.key}>{parts}</g>)
+      children.push(<g key={`s-${series.key}`} className="series" data-series-key={series.key} data-select={`series:${series.key}`}>{parts}</g>)
     })
     // Lines and labels on top of the data.
     panel.annotations.forEach((item, index) => {
@@ -234,16 +254,16 @@ export function SpecFigure({id, name, model, settings, grid, strokeScale, proven
         if (x === undefined || x < box.left - .01 || x > box.right + .01) return
         const user = item.source === 'user'
         const near = x > box.right - fs * 4
-        children.push(<g key={`v-${index}`} className={`annotation annotation-vline annotation-${item.source}`}><line x1={r(x)} x2={r(x)} y1={r(box.top)} y2={r(box.bottom)} stroke={item.color} strokeWidth={r(axisLine * (user ? .8 : .6))} strokeDasharray={user ? '3 2' : '1 1.6'} />{item.label && text({x: near ? x - fs * .25 : x + fs * .25, y: box.top + fs * (item.source === 'warmup' ? 1.75 : .85), anchor: near ? 'end' : 'start', size: fs * .78, fill: '#555555', className: 'annotation-label', children: item.label})}</g>)
+        children.push(<g key={`v-${index}`} className={`annotation annotation-vline annotation-${item.source}`} data-select={select(item)}><line x1={r(x)} x2={r(x)} y1={r(box.top)} y2={r(box.bottom)} stroke={item.color} strokeWidth={r(axisLine * (user ? .8 : .6))} strokeDasharray={user ? '3 2' : '1 1.6'} />{item.label && text({x: near ? x - fs * .25 : x + fs * .25, y: box.top + fs * (item.source === 'warmup' ? 1.75 : .85), anchor: near ? 'end' : 'start', size: fs * .78, fill: '#555555', className: 'annotation-label', children: item.label})}</g>)
       } else if (item.kind === 'hline') {
         const y = yOf(item.axis)(item.y!)
         if (y === undefined || y < box.top - .01 || y > box.bottom + .01) return
-        children.push(<g key={`h-${index}`} className={`annotation annotation-hline annotation-${item.source}`}><line x1={r(box.left)} x2={r(box.right)} y1={r(y)} y2={r(y)} stroke={item.color} strokeWidth={r(axisLine * (item.source === 'slo' ? 1 : .8))} strokeDasharray={item.source === 'slo' ? '4 3' : '3 2'} />{item.label && text({x: box.right - fs * .3, y: y - fs * .35, anchor: 'end', size: fs * .9, fill: item.color, className: 'annotation-label slo-label', children: item.label})}</g>)
+        children.push(<g key={`h-${index}`} className={`annotation annotation-hline annotation-${item.source}`} data-select={select(item)}><line x1={r(box.left)} x2={r(box.right)} y1={r(y)} y2={r(y)} stroke={item.color} strokeWidth={r(axisLine * (item.source === 'slo' ? 1 : .8))} strokeDasharray={item.source === 'slo' ? '4 3' : '3 2'} />{item.label && text({x: box.right - fs * .3, y: y - fs * .35, anchor: 'end', size: fs * .9, fill: item.color, className: 'annotation-label slo-label', children: item.label})}</g>)
       } else if (item.kind === 'text') {
         const x = px(item.x!)
         const y = yOf(item.axis)(item.y!)
         if (x === undefined || y === undefined) return
-        children.push(<g key={`t-${index}`} className="annotation annotation-text">{text({x: Math.min(box.right, Math.max(box.left, x)), y: Math.min(box.bottom, Math.max(box.top + fs, y)), size: fs * .9, fill: item.color, className: 'annotation-label', children: item.label})}</g>)
+        children.push(<g key={`t-${index}`} className="annotation annotation-text" data-select={select(item)}>{text({x: Math.min(box.right, Math.max(box.left, x)), y: Math.min(box.bottom, Math.max(box.top + fs, y)), size: fs * .9, fill: item.color, className: 'annotation-label', children: item.label})}</g>)
       }
     })
     // Axes.
@@ -258,18 +278,18 @@ export function SpecFigure({id, name, model, settings, grid, strokeScale, proven
       axis.scale.ticks.forEach(value => {
         const at = y(value)
         if (at === undefined || at < box.top - .01 || at > box.bottom + .01) return
-        children.push(<g key={`${side}-${value}`} className={`tick-${side}`}><line x1={r(edge)} x2={r(edge + sign * tick)} y1={r(at)} y2={r(at)} stroke={axis.color ?? '#111111'} strokeWidth={r(axisLine * .6)} />{labels && text({x: edge + sign * fs * .55, y: at + fs * .35, anchor: side === 'left' ? 'end' : 'start', fill: ink, className: 'tick', children: axis.format(value)})}</g>)
+        children.push(<g key={`${side}-${value}`} className={`tick-${side}`} data-select={`axis:${side}:${panel.index}`}><line x1={r(edge)} x2={r(edge + sign * tick)} y1={r(at)} y2={r(at)} stroke={axis.color ?? '#111111'} strokeWidth={r(axisLine * .6)} />{labels && text({x: edge + sign * fs * .55, y: at + fs * .35, anchor: side === 'left' ? 'end' : 'start', fill: ink, className: 'tick', children: axis.format(value)})}</g>)
       })
-      if (labels) children.push(<g key={`${side}-title`} className={`axis-title-${side}`}>{text({x: side === 'left' ? box.cellLeft + fs * .95 : box.cellRight - fs * .7, y: (box.top + box.bottom) / 2, anchor: 'middle', rotate: side === 'left' ? -90 : 90, fill: ink, className: 'axis-label', children: axis.label})}</g>)
+      if (labels) children.push(<g key={`${side}-title`} className={`axis-title-${side}`} data-select={`axis:${side}:${panel.index}`}>{text({x: side === 'left' ? box.cellLeft + fs * .95 : box.cellRight - fs * .7, y: (box.top + box.bottom) / 2, anchor: 'middle', rotate: side === 'left' ? -90 : 90, fill: ink, className: 'axis-label', children: axis.label})}</g>)
     }
     yTicks('left', panel.left)
     yTicks('right', panel.right)
     panel.x.scale.ticks.forEach(value => {
       const x = px(value)
       if (x === undefined || x < box.left - .01 || x > box.right + .01) return
-      children.push(<g key={`x-${value}`} className="tick-x"><line x1={r(x)} x2={r(x)} y1={r(box.bottom)} y2={r(box.bottom + tick)} stroke="#111111" strokeWidth={r(axisLine * .6)} />{showX(panel) && text({x, y: box.bottom + fs * 1.3, anchor: 'middle', className: 'tick', children: panel.x.format(value)})}</g>)
+      children.push(<g key={`x-${value}`} className="tick-x" data-select={`axis:x:${panel.index}`}><line x1={r(x)} x2={r(x)} y1={r(box.bottom)} y2={r(box.bottom + tick)} stroke="#111111" strokeWidth={r(axisLine * .6)} />{showX(panel) && text({x, y: box.bottom + fs * 1.3, anchor: 'middle', className: 'tick', children: panel.x.format(value)})}</g>)
     })
-    if (showX(panel)) children.push(<g key="x-title">{text({x: (box.left + box.right) / 2, y: box.bottom + fs * 2.55, anchor: 'middle', className: 'axis-label', children: panel.x.label})}</g>)
+    if (showX(panel)) children.push(<g key="x-title" data-select={`axis:x:${panel.index}`}>{text({x: (box.left + box.right) / 2, y: box.bottom + fs * 2.55, anchor: 'middle', className: 'axis-label', children: panel.x.label})}</g>)
     if (panel.letter) children.push(<g key="letter" className="panel-letter">{text({x: box.cellLeft + fs * .3, y: box.top - fs * .7, weight: 'bold', children: panel.letter})}</g>)
     return <g key={`panel-${panel.index}`} className="figure-panel" data-panel={panel.index + 1}>{children}</g>
   }
@@ -279,7 +299,7 @@ export function SpecFigure({id, name, model, settings, grid, strokeScale, proven
     const items: ReactNode[] = []
     const draw = (entry: LegendEntry, x: number, y: number, index: number) => {
       if (entry.kind === 'header') {items.push(<g key={`h-${index}`} className="legend-header">{text({x, y: y + fs * .35, fill: '#555555', children: entry.text})}</g>); return}
-      items.push(<g key={`i-${index}`} className="legend-item" data-series-key={entry.series!.key}><LegendSymbol series={entry.series!} x={x} y={y} width={symbol} metrics={metrics} />{text({x: x + symbol + fs * .4, y: y + fs * .35, className: 'legend-label', children: entry.text})}</g>)
+      items.push(<g key={`i-${index}`} className="legend-item" data-series-key={entry.series!.key} data-select={`series:${entry.series!.key}`}><LegendSymbol series={entry.series!} x={x} y={y} width={symbol} metrics={metrics} />{text({x: x + symbol + fs * .4, y: y + fs * .35, className: 'legend-label', children: entry.text})}</g>)
     }
     if (metrics.legend === 'top' || metrics.legend === 'bottom') {
       const origin = metrics.legend === 'top' ? titleHeight + fs * .1 : blockTop + blockHeight + fs * .2
@@ -292,7 +312,7 @@ export function SpecFigure({id, name, model, settings, grid, strokeScale, proven
       if (inside) items.push(<rect key="box" x={r(x - fs * .35)} y={r(y - fs * .1)} width={r(legendColumnWidth + fs * .7)} height={r(entries.length * rowHeight + fs * .25)} fill="#ffffff" fillOpacity="0.88" stroke="#bdbdbd" strokeWidth={r(metrics.line * .4)} />)
       entries.forEach((entry, index) => draw(entry, x, y + index * rowHeight + fs * .5, index))
     }
-    return <g className="figure-legend">{items}</g>
+    return <g className="figure-legend" data-select="legend">{items}</g>
   })()
 
   const first = model.panels[0]

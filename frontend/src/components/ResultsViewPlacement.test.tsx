@@ -5,7 +5,7 @@ import {request} from '../api'
 import type {Artifact,Experiment,TimeSeriesDataset} from '../types'
 vi.mock('../api',()=>({request:vi.fn()}))
 afterEach(cleanup)
-it('keeps replay execution-specific while exposing the aggregate heatmap in the figure studio',async()=>{
+it('keeps replay execution-specific while exposing the aggregate heatmap in KubeStudio',async()=>{
  const artifacts=['one','two'].map(id=>({id,operationId:'op',workspaceId:'ws',name:id,type:'TimeSeriesDataset',version:'v1alpha1',sensitive:false,verifiedAt:'2026-11-15T10:00:00Z'})) as Artifact[]
  const data=(id:string)=>({apiVersion:'artifacts.kubephos.dev/v1alpha1',kind:'TimeSeriesDataset',metadata:{name:id,version:'v1alpha1'},spec:{applicationRef:'app:test',namespace:'app',clusterServer:'https://cluster',start:'2026-11-15T09:59:45Z',end:'2026-11-15T10:00:00Z',stepSeconds:15,source:{kind:'prometheus-v1',version:'1',profile:'test'},summary:{metrics:1,series:1,samples:1},series:[{metric:'cpu.cores',unit:'cores',aggregation:'sum',labels:{},points:[{timestamp:'2026-11-15T10:00:00Z',value:1}]}],placement:{status:'available',source:'test',stepSeconds:15,nodes:[{name:`node-${id}`,cluster:'cluster'}],snapshots:[{timestamp:'2026-11-15T10:00:00Z',observed:true,pods:[{uid:id,name:id,service:'api',node:`node-${id}`,cluster:'cluster'}]}]}}}) as TimeSeriesDataset
  vi.mocked(request).mockImplementation(async(path)=>path.endsWith('/figures')?{items:[]} as never:data(path.includes('/one/')?'one':'two') as never)
@@ -23,8 +23,9 @@ it('keeps replay execution-specific while exposing the aggregate heatmap in the 
  await waitFor(()=>expect(screen.queryByRole('button',{name:/^Placement/})).not.toBeInTheDocument())
  expect(screen.queryByLabelText('Placement replay')).not.toBeInTheDocument()
  fireEvent.click(await screen.findByRole('button',{name:'Create figure'}))
- const dialog=await screen.findByRole('dialog',{name:'Figure studio'})
- fireEvent.click(within(dialog).getByRole('radio',{name:/^Placement/}))
+ const dialog=await screen.findByRole('dialog',{name:'KubeStudio'})
+ fireEvent.click(within(dialog).getByRole('button',{name:/^Figure:/}))
+ fireEvent.click(within(dialog).getByRole('dialog',{name:'Choose a figure'}).querySelector('[data-kind="placement"]')!)
  await within(dialog).findByRole('img',{name:'Application placement by zone heatmap'})
  expect(within(dialog).getByText('Mean replicas')).toBeInTheDocument()
 })

@@ -12,7 +12,7 @@ import {CloneDialog} from './CloneDialog'
 import {ErrorFeedback, useErrorState} from './ToastRegion'
 import {ResourceListHeading} from './ResourceListHeading'
 import {ConfigurationReadout} from './ConfigurationReadout'
-import {savedTrialSchedule, trialScheduleRows} from './TrialScheduleFields'
+import {ManualStartScopeField, manualStartScopeOf, savedTrialSchedule, trialScheduleRows, type ManualStartScope} from './TrialScheduleFields'
 import {FormTabs} from './FormTabs'
 import {WizardForm, WizardStep, WizardReview} from './WizardForm'
 import {ResourceSharing, canManageResource} from './ResourceSharing'
@@ -27,14 +27,20 @@ import {readSchemaValues} from '../lib'
 import type {Application, ApplicationComponent, Artifact, CatalogStrategy, Experiment, ExperimentConfiguration, JsonSchema, ManagedResource, Operation, Plugin, Session, Workspace} from '../types'
 import {Dialog} from './Dialog'
 import {EditorPage} from './EditorPage'
-import {AutoscalerTargetEditor} from './AutoscalerTargetEditor'
+// Target editors load with the first scheduling component; until then the saved targets are submitted unchanged.
+const AutoscalerTargetEditor = lazy(() => import('./AutoscalerTargetEditor').then(module => ({default: module.AutoscalerTargetEditor})))
 import {runsStrategyImage} from '../strategies'
 // Loaded with the scheduling step: keeps the initial bundle within budget.
-const SchedulingPrerequisites = lazy(() => import('./SchedulingPrerequisites').then(module => ({default: module.SchedulingPrerequisites})))
+const prerequisites = () => import('./SchedulingPrerequisites')
+const SchedulingPrerequisites = lazy(() => prerequisites().then(module => ({default: module.SchedulingPrerequisites})))
+const NetworkPrerequisites = lazy(() => prerequisites().then(module => ({default: module.NetworkPrerequisites})))
+const AgentPrerequisites = lazy(() => prerequisites().then(module => ({default: module.AgentPrerequisites})))
+const RunSummary = lazy(() => import('./RunSummary').then(module => ({default: module.RunSummary})))
 import {InputData} from './InputData'
-import {StrategyTargetEditor} from './StrategyTargetEditor'
+const StrategyTargetEditor = lazy(() => import('./StrategyTargetEditor').then(module => ({default: module.StrategyTargetEditor})))
 import {LoadProfileEditor} from './LoadProfileEditor'
-import {NetworkInjectionEditor} from './NetworkPhasesEditor'
+// Loaded once injection is enabled; the Monitoring step stays blocked until it reports valid phases.
+const NetworkInjectionEditor = lazy(() => import('./NetworkPhasesEditor').then(module => ({default: module.NetworkInjectionEditor})))
 import {SchemaFields, hasConfigurableFields} from './SchemaFields'
 import {ResultsView} from './LazyResultsView'
 import {DetailBreadcrumb} from './DetailBreadcrumb'
@@ -219,6 +225,8 @@ export function ExperimentConfigurationDialog({open, close, clusters, workspaces
   const [clusterResourceId, setClusterResourceId] = useState(item?.clusterResourceId ?? '')
   const workspaceId = clusters.find(cluster => cluster.id === clusterResourceId)?.workspaceId ?? item?.workspaceId ?? workspaces[0]?.id ?? ''
 	const [applicationRef, setApplicationRef] = useState(item?.applicationRef ?? availableApplications[0]?.reference ?? '')
+  const [startMode, setStartMode] = useState<'automatic' | 'manual'>(item?.definition.twoPhaseStart ? 'manual' : 'automatic')
+  const [manualStartScope, setManualStartScope] = useState<ManualStartScope>(manualStartScopeOf(item?.definition.manualStartScope) ?? 'first')
   const [destinationMode, setDestinationMode] = useState<DestinationMode>(item?.definition.destinationMode === 'external' ? 'external' : 'application')
   const [externalEndpoints, setExternalEndpoints] = useState(item?.definition.externalDestination?.endpoints?.length ? item.definition.externalDestination.endpoints : [{label: '', url: item?.definition.externalDestination?.targetUrl ?? ''}])
   const normalizedEndpoints = externalEndpoints.map((endpoint, index) => ({label: endpoint.label.trim() || `Endpoint ${index + 1}`, url: endpoint.url.trim()}))
@@ -261,7 +269,7 @@ export function ExperimentConfigurationDialog({open, close, clusters, workspaces
   const networkComponent = components.find(item => item.capability.startsWith('chaos.'))
  const [experimentDuration,setExperimentDuration]=useState(0)
  const [loadTimelineValid,setLoadTimelineValid]=useState(true)
- const [networkTimelineValid,setNetworkTimelineValid]=useState(true)
+ const [networkTimelineValid,setNetworkTimelineValid]=useState(false)
   const networkPlugin = compatiblePlugins.find(item => primaryCapabilities(item).some(capability => capability.startsWith('chaos.')))
   const monAgentComponent = components.find(item => item.capability.startsWith('monitoring.'))
   const monAgentPlugin = compatiblePlugins.find(item => primaryCapabilities(item).some(capability => capability.startsWith('monitoring.')))
@@ -457,6 +465,7 @@ export function ExperimentConfigurationDialog({open, close, clusters, workspaces
 		  destinationMode,
           namespace: destinationMode==='application'?String(values.get('namespace')??'').trim():undefined,
           twoPhaseStart:!deploymentMode && values.get('startMode')==='manual',
+          manualStartScope:!deploymentMode && values.get('startMode')==='manual' ? manualStartScopeOf(values.get('manualStartScope')) ?? 'first' : undefined,
 		  externalDestination: destinationMode === 'external' ? {targetUrl: normalizedEndpoints[0].url, endpoints: normalizedEndpoints, runtimeImage: externalRuntimeImage, script: externalScript, parameters: externalParameterValues} : undefined,
 		  applicationValues: destinationMode === 'application' ? readSchemaValues(form, application?.descriptor.spec?.valuesSchema ?? emptySchema, 'applicationValues', availableApplications) : {},
           applicationPlacement: destinationMode === 'application' ? JSON.parse(String(values.get('applicationPlacement') ?? 'null')) ?? undefined : undefined,
@@ -489,7 +498,7 @@ export function ExperimentConfigurationDialog({open, close, clusters, workspaces
       setPending(false)
     }
   }
-  const namespaceField = <label>Namespace<input aria-label="Namespace" name="namespace" required={deploymentMode} defaultValue={item?.definition.namespace??''} maxLength={63} pattern={'[a-z0-9]([a-z0-9\\-]*[a-z0-9])?'}/></label>
+  const namespaceField = <label>Namespace<input aria-label="Namespace" name="namespace" required={deploymentMode} defaultValue={item?.definition.namespace??''} maxLength={63} pattern={'[a-z0-9]([a-z0-9\\-]*[a-z0-9])?'} placeholder={deploymentMode ? undefined : 'Generated for each run'}/></label>
   const form = readOnly && item ? <ConfigurationReadout session={session} item={item} clusters={clusters} applications={applications} plugins={plugins} strategies={strategies} /> : <WizardForm ref={formRef} onSubmit={submit} onCancel={close} pending={pending} error={error} submitLabel={deploymentMode ? 'Deploy' : item ? 'Save changes' : 'Create configuration'} submitDisabled={!loadTimelineValid || topologyPending || Boolean(topologyError) || !workspaceId || !clusterResourceId || destinationMode === 'application' && !application || destinationMode === 'external' && (Boolean(endpointLabelError) || externalEndpoints.some(endpoint => !endpoint.url.trim()) || !externalRuntimeImage || !externalScript)} onChange={event => {
         const target = event.nativeEvent.target as HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement
         if (target.name.startsWith('applicationValues.')) resolveApplicationTopology(event.currentTarget)
@@ -501,7 +510,8 @@ export function ExperimentConfigurationDialog({open, close, clusters, workspaces
       {istioUnavailable && <ValidationMessage message="This cluster does not run Istio: the configuration will be saved without Istio settings."/>}
       <div className={deploymentMode ? 'field-row' : 'field-row field-row-destination'}>{!deploymentMode && <label>Destination type<select aria-label="Destination type" value={destinationMode} onChange={event => changeDestinationMode(event.target.value as DestinationMode)}><option value="application">Catalog application</option><option value="external">External destination</option></select></label>}
       {destinationMode === 'application' && <label>Application<select value={applicationRef} onChange={event => setApplicationRef(event.target.value)} required disabled={!availableApplications.length}>{availableApplications.length ? availableApplications.map(item => <option key={item.reference} value={item.reference}>{item.name}</option>) : <option value="">No catalog application available</option>}</select></label>}{deploymentMode && namespaceField}</div>
-      {!deploymentMode && <div className="field-row">{destinationMode==='application'&&namespaceField}<label>Start mode<select name="startMode" defaultValue={item?.definition.twoPhaseStart?'manual':'automatic'}><option value="automatic">Automatic</option><option value="manual">Manual</option></select></label></div>}
+      {!deploymentMode && <div className="field-row">{destinationMode==='application'&&namespaceField}<label>Start mode<select name="startMode" value={startMode} onChange={event => setStartMode(event.target.value === 'manual' ? 'manual' : 'automatic')}><option value="automatic">Automatic</option><option value="manual">Manual · wait for me before the load starts</option></select></label></div>}
+      {!deploymentMode && startMode === 'manual' && <div className="field-row"><ManualStartScopeField value={manualStartScope} onChange={value => setManualStartScope(value ?? 'first')} /></div>}
       </WizardStep><WizardStep key="application" status={topologyStatus} title={destinationMode === 'external' ? 'External destination' : 'Application'} blocked={topologyPending || Boolean(topologyError)}>
       {destinationMode === 'application' ? <>
         {!hasParameters && application && <div hidden><SchemaFields schema={parametersSchema} prefix="applicationValues" values={applicationValues} applications={availableApplications} artifacts={[]} connections={[]} credentials={[]} /></div>}
@@ -535,14 +545,16 @@ export function ExperimentConfigurationDialog({open, close, clusters, workspaces
 <FormTabs label="Monitoring settings" items={[
  {id:'metrics',title:'Metrics',content:<>      {metricsComponent && (() => {const plugin = compatiblePlugins.find(item => item.id === metricsComponent.pluginId)!; return <section className="experiment-component"><SchemaFields schema={experimentSchema(plugin.schema, metricsComponent.capability)} prefix={`component-${metricsComponent.key}`} values={metricsComponent.configuration ?? {}} applications={applications} artifacts={[]} connections={[]} credentials={[]} /></section>})()}
 </>},
- ...(destinationMode==='application'?[{id:'network',title:'Network',content:<>      {destinationMode === 'application' && (Boolean(networkComponent) || networkAvailable && managedNetworkAvailable && zones.length > 1) && <section className="network-injection-settings form-stack"><div className="network-section-heading"><h4>{selectedCluster?.spec.mode==='multi'?'Network between clusters':'Network between zones'}</h4><label className="checkbox-field"><input type="checkbox" checked={Boolean(networkComponent)} disabled={!networkPlugin || !managedNetworkAvailable || zones.length < 2 || !networkComponent && !networkAvailable} onChange={event => setNetworkEnabled(event.target.checked)} /><span>Enable injection</span></label></div>
-      {networkComponent && networkPlugin && <section className="experiment-component"><NetworkInjectionEditor durationSeconds={experimentDuration} onValidityChange={setNetworkTimelineValid} key={`${item?.id ?? 'new'}-${networkComponent.key}`} prefix={`component-${networkComponent.key}`} zones={zones} distribution={selectedCluster?.spec.mode === 'multi' ? 'cluster' : 'zone'} values={selectedCluster?.spec.mode === 'multi' ? {...networkComponent.configuration, nodeGroupLabel: 'kubephos.dev/cluster', networkInterface: 'cilium_vxlan', hostNetwork: false} : networkComponent.configuration} /></section>}</section>}
+ ...(destinationMode==='application'?[{id:'network',title:'Network',content:<>      {destinationMode === 'application' && <section className="network-injection-settings form-stack"><div className="network-section-heading"><h4>{selectedCluster?.spec.mode==='multi'?'Network between clusters':'Network between zones'}</h4><label className="checkbox-field"><input type="checkbox" checked={Boolean(networkComponent)} disabled={!networkPlugin || !managedNetworkAvailable || zones.length < 2 || !networkComponent && !networkAvailable} onChange={event => setNetworkEnabled(event.target.checked)} /><span>Enable injection</span></label></div>
+      {!networkComponent && !(networkAvailable && managedNetworkAvailable && zones.length > 1) && <Suspense fallback={null}><NetworkPrerequisites plugin={networkPlugin} cluster={selectedCluster} clusters={availableClusters} zones={zones.length} managed={managedNetworkAvailable} multi={selectedCluster?.spec.mode === 'multi'} componentTitle={id => clusterComponentTitle(componentCatalog, id)} /></Suspense>}
+      {networkComponent && networkPlugin && <section className="experiment-component"><Suspense fallback={<p role="status">Loading network settings…</p>}><NetworkInjectionEditor durationSeconds={experimentDuration} onValidityChange={setNetworkTimelineValid} key={`${item?.id ?? 'new'}-${networkComponent.key}`} prefix={`component-${networkComponent.key}`} zones={zones} distribution={selectedCluster?.spec.mode === 'multi' ? 'cluster' : 'zone'} values={selectedCluster?.spec.mode === 'multi' ? {...networkComponent.configuration, nodeGroupLabel: 'kubephos.dev/cluster', networkInterface: 'cilium_vxlan', hostNetwork: false} : networkComponent.configuration} /></Suspense></section>}</section>}
 </>},{id:'agent',title:'Agent',content:<>      {destinationMode === 'application' && <><label className="checkbox-field"><input type="checkbox" checked={Boolean(monAgentComponent)} disabled={!monAgentPlugin || !managedNetworkAvailable} onChange={event => setMonAgentEnabled(event.target.checked)} /><span>Customize mon-agent for this experiment</span></label>
+      {!monAgentComponent && <Suspense fallback={null}><AgentPrerequisites plugin={monAgentPlugin} cluster={selectedCluster} managed={managedNetworkAvailable} /></Suspense>}
       {monAgentComponent && monAgentPlugin && <section className="experiment-component"><SchemaFields schema={experimentSchema(monAgentPlugin.schema, monAgentComponent.capability)} prefix={`component-${monAgentComponent.key}`} values={monAgentComponent.configuration ?? {}} applications={applications} artifacts={[]} connections={[]} credentials={[]} /></section>}</>}
       </>}]:[])
  ]}/></WizardStep>{destinationMode === 'application' && <WizardStep key="scheduling" title="Scheduling and scaling">
       <FormTabs label="Scheduling and scaling settings" items={schedulingGroups.map(kind => ({id: kind, title: kind === 'other' ? 'Other' : componentTitle(`${kind}.`), content: <><div className="component-add-options">{advancedPlugins.filter(plugin => schedulingGroup(primaryCapabilities(plugin)[0] ?? '') === kind && !components.some(component => component.pluginId === plugin.id) && pluginAvailableOnCluster(plugin, selectedCluster) && hasCatalogImage(plugin)).map(plugin => <button className="button secondary compact" type="button" key={plugin.id} disabled={components.length >= 15} onClick={() => addAdvancedComponent(plugin.id)}><ActionIcon name="create" />Add {pluginTitle(plugin, advancedPlugins, selectedCluster?.spec.mode === 'multi').toLowerCase()}</button>)}</div>
-      <Suspense fallback={null}><SchedulingPrerequisites kind={kind} plugins={advancedPlugins.filter(plugin => schedulingGroup(primaryCapabilities(plugin)[0] ?? '') === kind && !components.some(component => component.pluginId === plugin.id))} cluster={selectedCluster} componentTitle={id => clusterComponentTitle(componentCatalog, id)} hasImage={hasCatalogImage} pluginTitle={plugin => pluginTitle(plugin, advancedPlugins, selectedCluster?.spec.mode === 'multi')} /></Suspense>
+      <Suspense fallback={null}><SchedulingPrerequisites kind={kind} plugins={advancedPlugins.filter(plugin => schedulingGroup(primaryCapabilities(plugin)[0] ?? '') === kind && !components.some(component => component.pluginId === plugin.id))} cluster={selectedCluster} clusters={availableClusters} configured={advancedComponents.filter(component => schedulingGroup(component.capability) === kind).length} componentTitle={id => clusterComponentTitle(componentCatalog, id)} hasImage={hasCatalogImage} pluginTitle={plugin => pluginTitle(plugin, advancedPlugins, selectedCluster?.spec.mode === 'multi')} /></Suspense>
       <div className="experiment-component-list">{advancedComponents.filter(component => schedulingGroup(component.capability) === kind).map(component => {
         const plugin = compatiblePlugins.find(item => item.id === component.pluginId)
         const strategyKind = ['scheduler', 'descheduler', 'autoscaler'].find(kind => component.capability.startsWith(`${kind}.`))
@@ -560,11 +572,10 @@ export function ExperimentConfigurationDialog({open, close, clusters, workspaces
           {!plugin && <ErrorFeedback message="Component unavailable. Remove or replace it."/>}
           {plugin && !editable && selectedStrategy && <InputData value={selectedStrategy.defaultConfiguration} schema={plugin.schema} />}
           {plugin && editable && <SchemaFields key={`${plugin.id}-${component.strategyId ?? ''}`} layout={strategyKind === 'autoscaler' ? 'inline' : undefined} schema={experimentSchema(plugin.schema, component.capability)} prefix={`component-${component.key}`} values={{...(selectedStrategy?.defaultConfiguration ?? {}), ...(component.configuration ?? {})}} applications={applications} artifacts={[]} connections={[]} credentials={[]} />}
-	          {strategyKind === 'autoscaler' && plugin && <AutoscalerTargetEditor prefix={`component-${component.key}`} schema={plugin.schema} overridable={editable} components={effectiveApplicationComponents} defaults={selectedStrategy?.defaultConfiguration ?? {}} resetKey={`${item?.id ?? 'new'}-${applicationRef}-${component.strategyId ?? ''}-${effectiveApplicationComponents.map(item => item.id).join(':')}`} excluded={component.targets?.exclude ?? []} targetOverrides={record(component.configuration?.targetOverrides)} />}
-          {(strategyKind === 'scheduler' || strategyKind === 'descheduler') && <StrategyTargetEditor componentKey={component.key} components={effectiveApplicationComponents} trait={strategyKind !== 'scheduler' ? 'deschedulable' : 'schedulable'} resetKey={`${item?.id ?? 'new'}-${applicationRef}-${component.strategyId ?? ''}-${effectiveApplicationComponents.map(item => item.id).join(':')}`} included={component.targets?.include ?? []} excluded={component.targets?.exclude ?? []} />}
+	          {strategyKind && plugin && <Suspense fallback={<><input type="hidden" name={`include-${component.key}`} value="" readOnly /><input type="hidden" name={`exclude-${component.key}`} value={component.targets?.exclude.join(',') ?? ''} readOnly />{strategyKind === 'autoscaler' && <input type="hidden" name={`component-${component.key}.targetOverrides`} value={editable ? JSON.stringify(record(component.configuration?.targetOverrides)) : '{}'} readOnly />}</>}>{strategyKind === 'autoscaler' ? <AutoscalerTargetEditor prefix={`component-${component.key}`} schema={plugin.schema} overridable={editable} components={effectiveApplicationComponents} defaults={selectedStrategy?.defaultConfiguration ?? {}} resetKey={`${item?.id ?? 'new'}-${applicationRef}-${component.strategyId ?? ''}-${effectiveApplicationComponents.map(item => item.id).join(':')}`} excluded={component.targets?.exclude ?? []} targetOverrides={record(component.configuration?.targetOverrides)} /> : <StrategyTargetEditor componentKey={component.key} components={effectiveApplicationComponents} trait={strategyKind !== 'scheduler' ? 'deschedulable' : 'schedulable'} resetKey={`${item?.id ?? 'new'}-${applicationRef}-${component.strategyId ?? ''}-${effectiveApplicationComponents.map(item => item.id).join(':')}`} included={component.targets?.include ?? []} excluded={component.targets?.exclude ?? []} />}</Suspense>}
         </section>
       })}</div></>}))} /></WizardStep>}
-      </>}<WizardStep key="review" title="Review"><WizardReview /></WizardStep>
+      </>}<WizardStep key="review" title="Review">{!deploymentMode && <Suspense fallback={null}><RunSummary /></Suspense>}<WizardReview /></WizardStep>
     </WizardForm>
 
   return open ? <EditorPage title={deploymentMode ? 'Deploy application' : item ? `${readOnly ? 'View' : 'Edit'} configuration` : 'Create experiment configuration'} onClose={close} className="experiment-modal">{form}</EditorPage> : null

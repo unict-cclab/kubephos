@@ -34,8 +34,8 @@ export function AutoscalerTargetEditor({prefix, schema, components, defaults, re
       const values = overrides[target.id] ?? settings(fields, defaults)
       const enabled = selected[target.id] !== false
       return <article className={enabled ? 'enabled' : ''} key={target.id}>
-        <div className="target-editor-row"><label className="checkbox-field"><input type="checkbox" checked={enabled} onChange={event => setSelected(current => ({...current, [target.id]: event.target.checked}))} /><span>{target.id}</span></label>{overridable && <label className="checkbox-field target-override-toggle"><input type="checkbox" checked={Boolean(custom[target.id])} disabled={!enabled} onChange={event => setCustom(current => ({...current, [target.id]: event.target.checked}))} /><span>Custom values</span></label>}</div>
-        {overridable && enabled && custom[target.id] && <div className="target-override-fields">{fields.map(([name, property]) => {
+        <div className="target-editor-row"><label className="checkbox-field"><input type="checkbox" data-review-skip="true" checked={enabled} onChange={event => setSelected(current => ({...current, [target.id]: event.target.checked}))} /><span>{target.id}</span></label>{overridable && <label className="checkbox-field target-override-toggle"><input type="checkbox" data-review-skip="true" checked={Boolean(custom[target.id])} disabled={!enabled} onChange={event => setCustom(current => ({...current, [target.id]: event.target.checked}))} /><span>Custom values</span></label>}</div>
+        {overridable && enabled && custom[target.id] && <div className="target-override-fields" data-review-group={`Override · ${target.id}`}>{fields.map(([name, property]) => {
           const label = shortLabels[name] ?? property.title ?? name
           if (property.type !== 'integer') return <label key={name}>{label}<textarea value={String(values[name])} rows={3} spellCheck={false} onChange={event => update(target.id, values, name, event.target.value)} /></label>
           const minimum = name === 'maxReplicas' ? Number(values.minReplicas ?? property.minimum) : property.minimum

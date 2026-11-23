@@ -87,7 +87,8 @@ export interface FigureSpec {
   series: Record<string, SeriesStyleSpec>
   // Legend and drawing order (later = drawn on top); keys not listed keep their default order.
   order: string[]
-  auto: {phases: boolean; warmup: boolean; slo: boolean}
+  // sloValue: the SLO threshold in milliseconds when the figure overrides the experiment's.
+  auto: {phases: boolean; warmup: boolean; slo: boolean; sloValue?: number}
   grid: GridMode
   // Line and marker scale of the style preset (1 = paper).
   strokeScale: number
@@ -197,7 +198,7 @@ export function normalizeSpec(value: unknown, fallbackType: SpecType = 'timeseri
     palette: oneOf(source.palette, Object.keys(palettes) as PaletteId[], base.palette),
     series,
     order: Array.isArray(source.order) ? source.order.filter((item): item is string => typeof item === 'string').slice(0, 200) : [],
-    auto: {phases: auto.phases !== false, warmup: auto.warmup === true, slo: auto.slo !== false},
+    auto: {phases: auto.phases !== false, warmup: auto.warmup === true, slo: auto.slo !== false, ...(finite(auto.sloValue) !== undefined && finite(auto.sloValue)! > 0 ? {sloValue: finite(auto.sloValue)} : {})},
     grid: oneOf(source.grid, ['none', 'major', 'minor'] as const, base.grid),
     strokeScale: clamp(finite(source.strokeScale), .5, 3) ?? 1,
     labels: normalizeLabels(source.labels),
@@ -270,10 +271,11 @@ export function resolveStyle({spec, key, side, index, count, dual, pageColor, fo
   const base: ResolvedStyle = {
     color: defaultColor(spec.palette, side, index, count, dual, pageColor),
     marker: defaultShapes[index % defaultShapes.length],
-    markerSize: fontSize * .24 * spec.strokeScale,
+    // Defaults on a 0.25 pt grid, so the inspector shows round numbers.
+    markerSize: Math.max(.5, Math.round(fontSize * .24 * spec.strokeScale * 4) / 4),
     hollow: right,
     line: spec.palette === 'grayscale' ? grayDashes[(index + (right ? 1 : 0)) % grayDashes.length] : right ? 'dashed' : 'solid',
-    lineWidth: Math.round(line * 100) / 100,
+    lineWidth: Math.max(.25, Math.round(line * 4) / 4),
     opacity: 1
   }
   const override = spec.series[key] ?? {}

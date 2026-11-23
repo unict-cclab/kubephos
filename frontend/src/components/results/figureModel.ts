@@ -62,7 +62,7 @@ export interface ModelAxis {
   unit: string
 }
 
-export interface ModelAnnotation {kind: 'vline' | 'hline' | 'xrange' | 'text'; axis: AxisSide; x?: number; x2?: number; y?: number; label?: string; source: 'phase' | 'warmup' | 'slo' | 'user'; color: string}
+export interface ModelAnnotation {kind: 'vline' | 'hline' | 'xrange' | 'text'; axis: AxisSide; x?: number; x2?: number; y?: number; label?: string; source: 'phase' | 'warmup' | 'slo' | 'user'; color: string; id?: string}
 
 export interface ModelPanel {index: number; letter?: string; x: ModelAxis; left?: ModelAxis; right?: ModelAxis; series: ModelSeries[]; annotations: ModelAnnotation[]; title: string; metrics: string[]}
 
@@ -206,6 +206,13 @@ function withGaps(t: number[], columns: number[][], step: number): {t: number[];
 
 // ---------------------------------------------------------------------------------------
 
+// Display suffix of an axis unit ("ms", "s", "req/s", "%"…) for threshold labels.
+const unitSuffixes: Record<string, string> = {milliseconds: 'ms', seconds: 's', requests_per_second: 'req/s', percent: '%', cores: 'cores', bytes: 'B', bytes_per_second: 'B/s'}
+export const unitSuffix = (unit: string, choice?: string) => displayUnit(unit, choice)?.label ?? unitSuffixes[unit] ?? ''
+export const thresholdText = (value: number, suffix: string) => `${Number(value.toPrecision(4)).toLocaleString('en-US', {maximumFractionDigits: 6})}${suffix === '%' ? '%' : suffix ? ` ${suffix}` : ''}`
+// Labels may carry a {value} token, replaced by the line's value in the axis display unit.
+const fillValue = (items: ModelAnnotation[], suffix: (side: AxisSide) => string) => items.map(item => item.kind === 'hline' && item.label?.includes('{value}') ? {...item, label: item.label.replaceAll('{value}', thresholdText(item.y!, suffix(item.axis)))} : item)
+
 const xValue = (seconds: number, format: TimeFormat) => format === 'min' ? seconds / 60 : seconds
 
 function phaseAnnotations(profile: LoadProfile | undefined, spec: FigureSpec, format: TimeFormat): ModelAnnotation[] {
@@ -226,10 +233,10 @@ function phaseAnnotations(profile: LoadProfile | undefined, spec: FigureSpec, fo
 function userAnnotations(items: Annotation[], format: TimeFormat | undefined): ModelAnnotation[] {
   const x = (value: number) => format ? xValue(value, format) : value
   return items.map((item): ModelAnnotation => {
-    if (item.kind === 'hline') return {kind: 'hline', axis: item.axis, y: item.value, label: item.label, source: 'user', color: '#333333'}
-    if (item.kind === 'vline') return {kind: 'vline', axis: 'left', x: x(item.at), label: item.label, source: 'user', color: '#333333'}
-    if (item.kind === 'xrange') return {kind: 'xrange', axis: 'left', x: x(item.from), x2: x(item.to), label: item.label, source: 'user', color: '#000000'}
-    return {kind: 'text', axis: item.axis, x: x(item.at), y: item.value, label: item.text, source: 'user', color: '#111111'}
+    if (item.kind === 'hline') return {kind: 'hline', axis: item.axis, y: item.value, label: item.label, source: 'user', color: '#333333', id: item.id}
+    if (item.kind === 'vline') return {kind: 'vline', axis: 'left', x: x(item.at), label: item.label, source: 'user', color: '#333333', id: item.id}
+    if (item.kind === 'xrange') return {kind: 'xrange', axis: 'left', x: x(item.from), x2: x(item.to), label: item.label, source: 'user', color: '#000000', id: item.id}
+    return {kind: 'text', axis: item.axis, x: x(item.at), y: item.value, label: item.text, source: 'user', color: '#111111', id: item.id}
   })
 }
 
@@ -381,16 +388,20 @@ function timeModel(spec: FigureSpec, data: ModelData, fontSize: number, hidden: 
   const sharedX = spec.layout.sharedX ? seriesByPanel.flat().flatMap(item => item.x) : undefined
   const sharedLeft = spec.layout.sharedY ? seriesByPanel.flatMap(series => values(series, 'left')) : undefined
   const unitOf = (metric: string) => data.plot(metric)[0]?.unit ?? ''
+  // The SLO line: the experiment's objective unless the figure sets its own threshold.
+  const slo = spec.auto.sloValue ?? data.slo
   const modelPanels: ModelPanel[] = panels.map((panel, index) => {
     const series = seriesByPanel[index]
     const metricsOn = (side: AxisSide) => panel.metrics.filter(item => item.axis === side).map(item => item.metric)
     const annotations = [...phaseAnnotations(data.profile, spec, format), ...userAnnotations(panel.annotations, format)]
     const sloAxis = (['left', 'right'] as const).find(side => metricsOn(side).some(metric => /^load\.(p\d+|mean)_response_time$/.test(metric)))
-    if (spec.auto.slo && data.slo && sloAxis) {
+    if (spec.auto.slo && slo && sloAxis) {
       const unit = unitOf(metricsOn(sloAxis).find(metric => metric.endsWith('response_time'))!)
       const factor = displayUnit(unit, panel[sloAxis].unit)?.factor ?? 1
-      annotations.push({kind: 'hline', axis: sloAxis, y: data.slo * factor, label: `SLO ${formatMetric(data.slo, 'milliseconds')}`, source: 'slo', color: '#b42318'})
+      annotations.push({kind: 'hline', axis: sloAxis, y: slo * factor, label: `SLO ${thresholdText(slo * factor, unitSuffix(unit, panel[sloAxis].unit))}`, source: 'slo', color: '#b42318'})
     }
+    const suffixOf = (side: AxisSide) => {const metric = metricsOn(side)[0]; return metric ? unitSuffix(unitOf(metric), panel[side].unit) : ''}
+    annotations.splice(0, annotations.length, ...fillValue(annotations, suffixOf))
     const extra = (side: AxisSide) => annotations.filter(item => item.axis === side && (item.kind === 'hline' || item.kind === 'text')).map(item => item.y!)
     const yAxis = (side: AxisSide): ModelAxis | undefined => {
       const metrics = metricsOn(side)
@@ -419,7 +430,7 @@ function timeModel(spec: FigureSpec, data: ModelData, fontSize: number, hidden: 
     `${modelPanels.length > 1 ? modelPanels.map(panel => `${panel.letter ? `${panel.letter} ` : ''}${describePanel(panel)}`).join('; ') + '.' : dual ? `${describePanel(modelPanels[0])}.` : ''} ${modelPanels.length > 1 || dual ? 'Measured window' : `${title} over the measured window`} (time 0 = start of the measured window).`.trim(),
     all.some(item => item.n > 1) ? `${mode === 'iqr' ? 'Lines: median' : mode === 'runs' ? 'Thin lines: individual repetitions' : 'Lines: mean'} across repetitions at each sampling window (n = ${n.join('/')} per series)${mode === 'ci' ? '; shaded band: 95% confidence interval of the mean (exact Student t, n − 1 df)' : mode === 'sd' ? '; shaded band: ±1 sample standard deviation' : mode === 'iqr' ? '; shaded band: interquartile range (25th–75th percentile, linear interpolation)' : mode === 'spaghetti' ? '; thin lines: individual repetitions' : ''}.` : '',
     fallback ? 'Individual repetitions are not available for this view; the 95% CI of the mean is shown instead.' : '',
-    modelPanels.some(panel => panel.annotations.some(item => item.source === 'slo')) ? `Dashed red line: SLO of ${formatMetric(data.slo, 'milliseconds')}.` : '',
+    modelPanels.some(panel => panel.annotations.some(item => item.source === 'slo')) ? `Dashed red line: SLO of ${formatMetric(slo, 'milliseconds')}.` : '',
     modelPanels.some(panel => panel.annotations.some(item => item.source === 'phase')) ? 'Dotted vertical lines: load-profile phase boundaries.' : '',
     modelPanels.some(panel => panel.left?.spec.log || panel.right?.spec.log) ? 'Logarithmic y axis.' : ''
   ].filter(Boolean).join(' ')
@@ -478,7 +489,7 @@ function xyModel(spec: FigureSpec, data: ModelData, fontSize: number, hidden: (g
   })
   const [series] = finishStyles([drafts], spec, fontSize, labels)
   const dual = series.some(item => item.axis === 'right') && series.some(item => item.axis === 'left')
-  const annotations = userAnnotations(panel.annotations, undefined)
+  const annotations = fillValue(userAnnotations(panel.annotations, undefined), side => {const entry = built.find(item => item.axis === side); return entry ? unitSuffix(entry.data.y.unit, panel[side].unit) : ''})
   const axisValues = (side: AxisSide) => [...series.filter(item => item.axis === side).flatMap(item => [...item.y, ...(item.fit?.y ?? [])]), ...annotations.filter(item => item.axis === side && item.y !== undefined).map(item => item.y!)]
   const yAxis = (side: AxisSide): ModelAxis | undefined => {
     const entry = built.find(item => item.axis === side)

@@ -67,3 +67,19 @@ export function formatSpan(milliseconds: number): string {
   if (minutes >= 1) return `${minutes} min`
   return `${Math.round(milliseconds / 1000)} s`
 }
+
+// Table numbers: three significant digits with thousands separators (1,720 / 61.2 / 0.0154),
+// integers above 1,000 rounded to the unit. Unitless — the unit sits in the column header.
+export function formatSignificant(value: number | undefined, digits = 3): string {
+  if (value === undefined || !Number.isFinite(value)) return '—'
+  if (value === 0) return '0'
+  const absolute = Math.abs(value)
+  const text = absolute >= 10 ** digits ? absolute.toLocaleString('en-US', {maximumFractionDigits: 0}) : absolute.toLocaleString('en-US', {maximumSignificantDigits: digits})
+  return value < 0 ? `−${text}` : text
+}
+
+// Whole counts with thousands separators.
+export function formatCount(value: number | undefined): string {
+  if (value === undefined || !Number.isFinite(value)) return '—'
+  return Math.round(value).toLocaleString('en-US')
+}

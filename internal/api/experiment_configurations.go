@@ -47,6 +47,7 @@ type experimentConfigurationDefinitionInput struct {
 	ApplicationPlacement    *placement.ApplicationSettings `json:"applicationPlacement,omitempty"`
 	Namespace               string                         `json:"namespace,omitempty"`
 	TwoPhaseStart           bool                           `json:"twoPhaseStart,omitempty"`
+	ManualStartScope        string                         `json:"manualStartScope,omitempty"` // "first" (default) or "every", see trial_schedule.go
 	IstioInjection          *bool                          `json:"istioInjection,omitempty"`
 	IstioInjectionOverrides map[string]bool                `json:"istioInjectionOverrides,omitempty"`
 	// IstioDataPlane is "sidecar" (default when empty) or "ambient", which enrolls the whole namespace.

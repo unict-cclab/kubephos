@@ -331,7 +331,7 @@ export function rankServices(group: Pick<GroupFacts, 'services' | 'clientRps'>):
     if (facts.p95Ms !== undefined && !isInfrastructure(service)) {
       score = facts.p95Ms * (share ?? 1)
       reasons.push(share !== undefined
-        ? `server P95 ${formatMs(facts.p95Ms)} × ${formatPercent(share * 100)} of client requests ≈ ${formatMs(score)} latency contribution`
+        ? `server P95 ${formatMs(facts.p95Ms)} on ${formatPercent(share * 100)} of client requests, about ${formatMs(score)} of client latency`
         : `server P95 ${formatMs(facts.p95Ms)} (call share unknown)`)
       if (cpuAtLimit) score *= cpuLimitWeight
       if (atMax) score *= replicasAtMaxWeight
@@ -350,7 +350,7 @@ export function rankServices(group: Pick<GroupFacts, 'services' | 'clientRps'>):
   const [top, second] = rows
   if (top && top.score > 0 && (top.p95Ms ?? 0) >= insightThresholds.bottleneckMinP95Ms && (!second || top.score >= insightThresholds.bottleneckDominance * second.score)) {
     top.bottleneck = true
-    top.reasons.push(second?.score ? `score ${formatPercent(100 * (top.score / second.score - 1))} above the runner-up (${second.service})` : 'only service with measurable latency')
+    top.reasons.push(second?.score ? `${top.score / second.score >= 10 ? Math.round(top.score / second.score) : (top.score / second.score).toFixed(1)}× the score of the next service (${second.service})` : 'the only service with measurable latency')
   }
   return rows
 }
@@ -370,28 +370,28 @@ function groupInsights(group: GroupFacts, services: ServiceHealth[]): Candidate[
 
   // 1. Load fidelity: did the system receive the load the experiment describes?
   if (group.ratio !== undefined && group.offered !== undefined && group.achieved !== undefined) {
-    const numbers = `${formatRps(group.achieved)} of ${formatRps(group.offered)} req/s (${formatPercent(group.ratio * 100)})`
+    const numbersOf = `${formatRps(group.achieved)} of the ${formatRps(group.offered)} req/s ${target} (${formatPercent(group.ratio * 100)})`
     if (group.ratio < insightThresholds.sustained) {
       const saturated = highLatency || group.clientP95Rising
-      const late = group.lateShare !== undefined && group.lateShare >= .01 ? ` ${formatPercent(group.lateShare * 100)} of requests left later than scheduled (coordinated-omission evidence).` : ''
+      const late = group.lateShare !== undefined && group.lateShare >= .01 ? ` ${formatPercent(group.lateShare * 100)} of requests left later than scheduled (coordinated omission).` : ''
       add(0, 1 - group.ratio, {id: 'target-not-sustained', severity: saturated || group.ratio < insightThresholds.criticalShortfall ? 'critical' : 'warning',
-        title: `Target load not sustained: ${numbers}`,
-        detail: `Over the measured window the generator achieved ${formatPercent(group.ratio * 100)} of the ${target} rate (threshold ${formatPercent(insightThresholds.sustained * 100)}).${saturated
-          ? ` With ${latencyEvidence} the system under test was saturated: Locust users waited for slow responses instead of issuing new requests${bottleneck ? `, most likely because of ${bottleneck.service}` : ''}.`
-          : ' Latency stayed low, so check the load generator (workers, CPU, user count) before blaming the system.'}${late} Results describe the system at ${formatRps(group.achieved)} req/s, not at the configured load.`,
+        title: `The system handled only ${numbersOf}`,
+        detail: `${saturated
+          ? `With ${latencyEvidence}, the system was saturated: Locust users waited on slow responses instead of sending new requests${bottleneck ? `, mostly because of ${bottleneck.service}` : ''}.`
+          : 'Latency stayed low, so the load generator (workers, CPU, users) is the first suspect, not the system.'}${late} Read every other number as the system at ${formatRps(group.achieved)} req/s, not at the configured load. Threshold: ${formatPercent(insightThresholds.sustained * 100)} of target.`,
         evidence: {metric: 'load.achieved_rps', value: group.ratio * 100, unit: 'percent'}, target: 'throughput'})
     } else if (group.ratio > insightThresholds.overDelivery) {
       add(0, group.ratio - 1, {id: 'target-exceeded', severity: group.legacy ? 'critical' : 'warning',
         title: group.legacy
-          ? `Load generator exceeded target: ${formatRps(group.achieved)} vs ${formatRps(group.offered)} req/s (${formatPercent(group.ratio * 100)}) — legacy generator bug, data not comparable`
-          : `Load generator exceeded target: ${formatRps(group.achieved)} vs ${formatRps(group.offered)} req/s (${formatPercent(group.ratio * 100)})`,
+          ? `The generator sent more than asked: ${formatRps(group.achieved)} against ${formatRps(group.offered)} req/s (${formatPercent(group.ratio * 100)}), a legacy generator bug, so the data are not comparable`
+          : `The generator sent more than asked: ${formatRps(group.achieved)} against ${formatRps(group.offered)} req/s (${formatPercent(group.ratio * 100)})`,
         detail: group.legacy
-          ? `The achieved rate was ${formatPercent(group.ratio * 100)} of the ${target} rate. Datasets recorded before the load fixes were over-driven by the old generator (each worker sent the full target instead of its share): latency, CPU and scaling describe a load the experiment did not specify, so do not compare this run with current runs.`
-          : `The achieved rate was ${formatPercent(group.ratio * 100)} of the ${target} rate (threshold ${formatPercent(insightThresholds.overDelivery * 100)}). Check for concurrent load generators or a misconfigured profile before interpreting latency.`,
+          ? `Before the load fixes, every worker sent the full target instead of its share. Latency, CPU and scaling here describe a load the experiment never specified; compare this run only with other legacy runs.`
+          : `Above the ${formatPercent(insightThresholds.overDelivery * 100)} threshold. Look for a concurrent generator or a misconfigured profile before reading the latency.`,
         evidence: {metric: 'load.achieved_rps', value: group.ratio * 100, unit: 'percent'}, target: 'throughput'})
     } else {
-      add(0, 0, {id: 'target-sustained', severity: 'ok', title: `Target load sustained: ${numbers}`,
-        detail: `The achieved rate stayed within ${formatPercent((1 - insightThresholds.sustained) * 100)} of the ${target} rate over the measured window.`,
+      add(0, 0, {id: 'target-sustained', severity: 'ok', title: `The system kept up with the load: ${numbersOf}`,
+        detail: `Achieved and ${target} rates stayed within ${formatPercent((1 - insightThresholds.sustained) * 100)} of each other over the measured window.`,
         evidence: {metric: 'load.achieved_rps', value: group.ratio * 100, unit: 'percent'}, target: 'throughput'})
     }
   }
@@ -406,17 +406,17 @@ function groupInsights(group: GroupFacts, services: ServiceHealth[]): Candidate[
     const p95 = formatMs(bottleneck.p95Ms!)
     const cpuText = cpu === undefined ? 'CPU not measured' : limit ? `${formatCores(cpu)} of ${formatCores(limit)} cores limit` : `${formatCores(cpu)} cores, no CPU limit`
     const title = throttled
-      ? `Bottleneck: ${bottleneck.service} — server P95 ${p95}, CPU-throttled (${cpuText})`
-      : cpu !== undefined ? `Bottleneck: ${bottleneck.service} — server P95 ${p95} without CPU saturation (${cpuText})` : `Bottleneck: ${bottleneck.service} — server P95 ${p95}`
+      ? `${bottleneck.service} is the bottleneck: its P95 reached ${p95} with CPU pinned at its limit (${formatCores(cpu!)} of ${formatCores(limit!)} cores), so it is being throttled`
+      : cpu !== undefined ? `${bottleneck.service} is the bottleneck: its P95 reached ${p95} while CPU stayed at ${limit ? `${formatCores(cpu)} of ${formatCores(limit)} cores allowed` : `${formatCores(cpu)} cores`}, which points to queueing rather than CPU` : `${bottleneck.service} is the bottleneck: its P95 reached ${p95}`
     const others = services.filter(item => item !== bottleneck && item.p95Ms !== undefined && !isInfrastructure(item.service)).map(item => item.p95Ms!)
     const next = others.length ? Math.max(...others) : undefined
     const share = bottleneck.rps !== undefined && group.clientRps ? Math.min(1, bottleneck.rps / group.clientRps) : undefined
-    const evidence = `${bottleneck.service} answers with P95 ${p95}${next !== undefined ? ` while no other instrumented service exceeds ${formatMs(next)}` : ''}${share !== undefined ? `, and it handles ${formatRps(bottleneck.rps!)} req/s (≈ ${formatPercent(share * 100)} of client requests)` : ''}.`
+    const evidence = `No other instrumented service exceeds ${next !== undefined ? formatMs(next) : 'it'}${share !== undefined ? `; it serves ${formatRps(bottleneck.rps!)} req/s, about ${formatPercent(share * 100)} of client requests` : ''}.`
     const hypothesis = throttled
-      ? ` Its CPU sits at ${formatPercent(100 * cpu! / limit!)} of its limit, so CFS throttling is the likely cause: raise the limit or add replicas.`
+      ? ` CPU sits at ${formatPercent(100 * cpu! / limit!)} of its limit: raise the limit or add replicas.`
       : cpu !== undefined
-        ? ` Its CPU (${cpuText}${facts.cpuPlateau !== undefined ? `, flat at ${formatCores(facts.cpuPlateau)} cores per pod` : ''}) does not show CPU saturation${limit ? '' : ' (no limit series, so no CPU cap can be inferred)'}. Hypothesis: a concurrency limit (worker thread or connection pool) or a slow dependency queues requests; check its server configuration and downstream calls.`
-        : ' No CPU data was collected for it, so the cause cannot be narrowed down.'
+        ? ` CPU (${cpuText}${facts.cpuPlateau !== undefined ? `, flat at ${formatCores(facts.cpuPlateau)} cores per pod` : ''}) is not saturated${limit ? '' : ', and with no limit series no CPU cap can be inferred'}. A concurrency limit (worker threads, connection pool) or a slow dependency is queueing requests; look at its server configuration and downstream calls.`
+        : ' No CPU data were collected for it, so the cause cannot be narrowed further.'
     add(1, bottleneck.score, {id: 'bottleneck', severity: highLatency || (group.ratio !== undefined && group.ratio < insightThresholds.sustained) ? 'critical' : 'warning', title,
       detail: `${evidence}${hypothesis}${atMax ? ' Its ready replicas stayed at their maximum, possibly the autoscaler\'s maxReplicas.' : ''}`,
       evidence: {metric: 'application.p95_response_time', service: bottleneck.service, value: bottleneck.p95Ms, unit: 'milliseconds'}, target: 'services'})
@@ -427,16 +427,16 @@ function groupInsights(group: GroupFacts, services: ServiceHealth[]): Candidate[
     const percent = group.sloViolationPercent
     const severity: InsightSeverity = percent >= insightThresholds.sloCriticalPercent ? 'critical' : percent >= insightThresholds.sloWarningPercent ? 'warning' : 'ok'
     add(2, percent, {id: 'slo', severity,
-      title: severity === 'ok' ? `SLO ${formatMs(group.sloMs)} met (${latencyEvidence ?? 'client P95'})` : `SLO ${formatMs(group.sloMs)} violated ${formatPercent(percent)} of the time${group.clientP95 !== undefined ? ` (client P95 ${formatMs(group.clientP95)})` : ''}`,
-      detail: `The client-side P95 exceeded ${formatMs(group.sloMs)} in ${formatPercent(percent)} of the measured windows (critical ≥ ${insightThresholds.sloCriticalPercent} %, warning ≥ ${insightThresholds.sloWarningPercent} %).`,
+      title: severity === 'ok' ? `The ${formatMs(group.sloMs)} SLO held (${latencyEvidence ?? 'client P95'})` : `The ${formatMs(group.sloMs)} SLO was missed in ${formatPercent(percent)} of windows${group.clientP95 !== undefined ? ` (client P95 ${formatMs(group.clientP95)})` : ''}`,
+      detail: `Share of measured windows whose client P95 exceeded ${formatMs(group.sloMs)}; critical from ${insightThresholds.sloCriticalPercent} %, warning from ${insightThresholds.sloWarningPercent} %.`,
       evidence: {metric: 'load.slo_violation_percentage', value: percent, unit: 'percent'}, target: 'latency'})
   }
 
   // 4. Errors.
   if (group.failurePercent !== undefined && group.failurePercent >= insightThresholds.errorWarningPercent) {
     add(3, group.failurePercent, {id: 'errors', severity: group.failurePercent >= insightThresholds.errorCriticalPercent ? 'critical' : 'warning',
-      title: `Errors: ${formatPercent(group.failurePercent)} of requests failed`,
-      detail: `Failed requests exceed ${insightThresholds.errorWarningPercent} % (critical ≥ ${insightThresholds.errorCriticalPercent} %).${group.topError ? ` Most frequent: ${group.topError}.` : ''} Latency percentiles include fast failures.`,
+      title: `${formatPercent(group.failurePercent)} of requests failed`,
+      detail: `${group.topError ? `Most frequent: ${group.topError}. ` : ''}Latency percentiles include these fast failures. Warning from ${insightThresholds.errorWarningPercent} %, critical from ${insightThresholds.errorCriticalPercent} %.`,
       evidence: {metric: 'load.failure_percentage', value: group.failurePercent, unit: 'percent'}, target: 'endpoints'})
   }
 
@@ -446,8 +446,8 @@ function groupInsights(group: GroupFacts, services: ServiceHealth[]): Candidate[
     const highest = Math.max(...serverP95)
     if (group.clientP50 > insightThresholds.upstreamGapRatio * highest && group.clientP50 - highest > insightThresholds.upstreamGapMs) {
       add(4, group.clientP50 - highest, {id: 'upstream-latency', severity: 'warning',
-        title: `Latency arises upstream of the instrumented services: client P50 ${formatMs(group.clientP50)} vs highest server P95 ${formatMs(highest)}`,
-        detail: 'The median client request is slower than the worst server-side P95, so most of the delay is spent outside the services in the mesh: e.g. a frontend or ingress proxy that is not instrumented, the network path, or the load generator itself.',
+        title: `Most of the latency is upstream of the mesh: client P50 ${formatMs(group.clientP50)} against at most ${formatMs(highest)} at any service`,
+        detail: 'The median request is slower than the worst server-side P95, so the time goes somewhere the mesh does not see: an uninstrumented frontend or ingress, the network, or the load generator.',
         evidence: {metric: 'load.p50_response_time', value: group.clientP50, unit: 'milliseconds'}, target: 'latency'})
     }
   }
@@ -456,27 +456,27 @@ function groupInsights(group: GroupFacts, services: ServiceHealth[]): Candidate[
   const restarted = services.filter(item => (item.restarts ?? 0) > 0)
   if (restarted.length) {
     const total = restarted.reduce((sum, item) => sum + item.restarts!, 0)
-    add(5, total, {id: 'restarts', severity: 'warning', title: `Pod restarts during the run: ${list(restarted.slice(0, 3).map(item => `${item.service} (${Math.round(item.restarts!)})`))}${restarted.length > 3 ? ' and others' : ''}`,
-      detail: 'Containers restarted inside the measured window (OOM kills, failed probes or crashes); requests in flight were lost and the affected windows are not steady state.',
+    add(5, total, {id: 'restarts', severity: 'warning', title: `Pods restarted during the run: ${list(restarted.slice(0, 3).map(item => `${item.service} (${Math.round(item.restarts!)})`))}${restarted.length > 3 ? ' and others' : ''}`,
+      detail: 'Requests in flight were lost and the affected windows are not steady state (OOM kill, failed probe or crash).',
       evidence: {metric: 'pod.restarts', service: restarted[0].service, value: total, unit: 'count'}, target: 'services'})
   }
 
   // 7. Measurement quality.
   if (group.generatorCpu) add(6, group.generatorCpu.maxPercent, {id: 'generator-cpu', severity: 'warning',
-    title: `Load generator CPU saturated (${formatPercent(group.generatorCpu.maxPercent)} on ${group.generatorCpu.worker})`,
-    detail: `A Locust worker exceeded ${insightThresholds.generatorCpuPercent} % CPU: client-side latency includes generator delay and the offered rate may not have been sent. Add workers or CPU to the load generator.`,
+    title: `The load generator ran out of CPU (${formatPercent(group.generatorCpu.maxPercent)} on ${group.generatorCpu.worker})`,
+    detail: `Above ${insightThresholds.generatorCpuPercent} %, client latency includes time spent inside Locust and the offered rate may not have gone out. Add workers or CPU.`,
     evidence: {value: group.generatorCpu.maxPercent, unit: 'percent'}, target: 'quality'})
   if (group.concurrentLoad.length) add(7, group.concurrentLoad.length, {id: 'concurrent-load', severity: 'warning',
-    title: `Concurrent load in the cluster: ${list([...new Set(group.concurrentLoad.map(item => item.namespace))])}`,
-    detail: 'Other KubePhos load generators were active during the measured window; shared nodes may have interfered with the results.',
+    title: `Another load test was running at the same time (${list([...new Set(group.concurrentLoad.map(item => item.namespace))])})`,
+    detail: 'Shared nodes may have interfered with these results.',
     evidence: {value: group.concurrentLoad.length, unit: 'count'}, target: 'quality'})
-  if (group.legacy) add(8, 1, {id: 'legacy-dataset', severity: 'warning', title: 'Legacy dataset: provenance, run context and Locust summary missing',
-    detail: 'Collected before KubePhos recorded methods metadata: the offered rate is the configured profile, the measured window was reconstructed from collection times (± one scrape interval), client percentiles come from histogram buckets only and there are no per-endpoint statistics. Compare it only with other legacy runs.',
+  if (group.legacy) add(8, 1, {id: 'legacy-dataset', severity: 'warning', title: 'This is a legacy dataset, without provenance, run context or Locust summary',
+    detail: 'The offered rate is the configured profile, the window was rebuilt from collection times (± one scrape interval), client percentiles come from histogram buckets and there are no per-endpoint statistics. Compare it only with other legacy runs.',
     evidence: {}, target: 'quality'})
-  else if (group.legacyClock) add(10, 0, {id: 'legacy-clock', severity: 'info', title: 'Measured window without a recorded clock source',
-    detail: 'Window boundaries were reconstructed from the collection time and can be off by up to one scrape interval.', evidence: {}, target: 'quality'})
+  else if (group.legacyClock) add(10, 0, {id: 'legacy-clock', severity: 'info', title: 'The measured window has no recorded clock source',
+    detail: 'Its boundaries were rebuilt from the collection time and may be off by one scrape interval.', evidence: {}, target: 'quality'})
   if (group.scheduleWarning && !(group.ratio !== undefined && group.ratio < insightThresholds.sustained)) add(9, group.lateShare ?? group.meanLagSeconds ?? 0, {id: 'schedule-lag', severity: 'warning',
-    title: `Requests issued late${group.lateShare !== undefined ? `: ${formatPercent(group.lateShare * 100)} behind schedule` : ''}`,
+    title: group.lateShare !== undefined ? `${formatPercent(group.lateShare * 100)} of requests left behind schedule` : 'Requests left behind schedule',
     detail: group.scheduleWarning, evidence: {metric: 'load.schedule_lag', value: group.meanLagSeconds, unit: 'seconds'}, target: 'quality'})
 
   // 8. Autoscaling.
@@ -486,8 +486,8 @@ function groupInsights(group: GroupFacts, services: ServiceHealth[]): Candidate[
     const maxReplicas = Math.max(...scaled.map(([, facts]) => facts.replicasMax!))
     const describe = ([service, facts]: [string, ServiceFacts]) => `${service} ${Math.round(facts.replicasMin!)}→${Math.round(facts.replicasMax!)} (mean ${+facts.replicas!.toFixed(1)})`
     const pinned = scaled.filter(([, facts]) => (facts.replicasAtMaxShare ?? 0) >= insightThresholds.replicasAtMaxShare).map(([service]) => service)
-    add(11, scaled.length, {id: 'autoscaling', severity: 'info', title: `Autoscaling active: ${scaled.length} service${scaled.length === 1 ? '' : 's'} scaled, up to ${maxReplicas} replicas`,
-      detail: `${scaled.map(describe).join('; ')}.${pinned.length ? ` ${list(pinned)} stayed at their maximum for most of the window (possibly the autoscaler's maxReplicas).` : ''} Per-replica load and latency changed during the run, so window means mix scaling states.`,
+    add(11, scaled.length, {id: 'autoscaling', severity: 'info', title: `Autoscaling was active: ${scaled.length} service${scaled.length === 1 ? '' : 's'} scaled, up to ${maxReplicas} replicas`,
+      detail: `${scaled.map(describe).join('; ')}.${pinned.length ? ` ${list(pinned)} stayed at their maximum for most of the window (possibly the autoscaler's maxReplicas).` : ''} Window means therefore mix scaling states.`,
       evidence: {metric: 'deployment.ready_replicas', service: scaled[0][0], value: maxReplicas, unit: 'replicas'}, target: 'services'})
   }
 
@@ -507,8 +507,8 @@ function groupInsights(group: GroupFacts, services: ServiceHealth[]): Candidate[
       const fastNames = [...new Set(fast.map(item => item.name))]
       const fastP50 = Math.max(...fast.map(item => item.p50Ms))
       add(12, jump, {id: 'endpoint-split', severity: 'info',
-        title: `Endpoints split: ${list(fastNames.slice(0, 3))}${fastNames.length > 3 ? ' and others' : ''} P50 ≤ ${formatMs(fastP50)}, ${slow.length} other${slow.length === 1 ? '' : 's'} ≈ ${formatMs(slowMedian)}`,
-        detail: `Locust per-endpoint medians jump ${jump.toFixed(1)}× between the fast and the slow group. The slow endpoints share a dependency the fast ones avoid${bottleneck ? ` — consistent with ${bottleneck.service} being on their path` : ''}.`,
+        title: `Endpoints fall into two groups: ${list(fastNames.slice(0, 3))}${fastNames.length > 3 ? ' and others' : ''} answer within ${formatMs(fastP50)}, the other ${slow.length === 1 ? 'one takes' : `${slow.length} take`} about ${formatMs(slowMedian)}`,
+        detail: `Medians jump ${jump.toFixed(1)}× between the groups, so the slow endpoints share a dependency the fast ones avoid${bottleneck ? `, consistent with ${bottleneck.service} on their path` : ''}.`,
         evidence: {metric: 'load.p50_response_time', value: slowMedian, unit: 'milliseconds'}, target: 'endpoints'})
     }
   }
@@ -527,6 +527,9 @@ function groupsOf(datasets: LoadedDataset[], experiment?: Experiment): Array<{la
   return [...groups.values()]
 }
 
+// Sentence-case title after a leading clause (keeps acronyms such as SLO and service names).
+const lowerFirst = (text: string) => /^[A-Z][a-z]/.test(text) ? text.charAt(0).toLowerCase() + text.slice(1) : text
+
 // Insights for the experiment (worst variant per rule, the others named in the detail) and
 // the services ranked by bottleneck score over all given runs. For per-variant services
 // tables call it with one variant's datasets.
@@ -543,7 +546,7 @@ export function runInsights(datasets: LoadedDataset[], experiment?: Experiment):
     const [worst, ...rest] = entries
     if (groups.length === 1) return worst.candidate
     const also = rest.filter(entry => entry.candidate.severity === worst.candidate.severity).map(entry => entry.group)
-    return {...worst.candidate, title: `${worst.group}: ${worst.candidate.title}`, detail: also.length ? `${worst.candidate.detail} Also in ${list(also)}.` : worst.candidate.detail}
+    return {...worst.candidate, title: `In ${worst.group}, ${lowerFirst(worst.candidate.title)}`, detail: also.length ? `${worst.candidate.detail} Also in ${list(also)}.` : worst.candidate.detail}
   })
   const insights = merged.sort((a, b) => severityRank[a.severity] - severityRank[b.severity] || a.priority - b.priority).slice(0, insightThresholds.maxInsights)
     .map((item): Insight => ({id: item.id, severity: item.severity, title: item.title, detail: item.detail, evidence: item.evidence, ...(item.target ? {target: item.target} : {})}))

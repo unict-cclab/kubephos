@@ -28,16 +28,21 @@ import {fidelityPlot, loadFidelity} from './results/loadFidelity'
 import {percentileLadder} from './results/percentiles'
 import {locustGroups, type LocustGroup} from './results/locust'
 import {comparisonMethodsSentence, concurrentLoadWarning, loadProfileOf, measuredSeconds, methodsParagraph, runContextSummary, type RunContextSummary} from './results/context'
-import {AcrossRunsTable, ComparisonTable, ServiceStatisticsTable, StrategyComparison, WithinRunStatistics, type ProvenanceOf} from './results/StatisticsTables'
+import {AcrossRunsTable, ComparisonTable, ServiceStatisticsTable, StatisticsTabs, StrategyComparison, WithinRunStatistics, type ProvenanceOf, type StatisticsView} from './results/StatisticsTables'
+import {SectionNav, scrollToElement, type SectionLink} from './results/SectionNav'
+import {hasAutoscaler, resourceCards, resourceSummary, type ResourceSummary} from './results/resources'
+import {ShowEverything} from './results/DataTable'
 import {cpuSaturationNotices, experimentCleanupNotices, FidelitySummaryTable, LocustSummaryPanel, type QualityNotice} from './results/LoadPanels'
 import {MethodsPanel, RunContextPanel} from './results/ContextPanel'
 import {CallChainPanel, hasCallChainData} from './results/CallChainPanel'
 import {formatDuration, metricTitle} from './results/format'
 import {runInsights, type Insight, type ServiceHealth} from './results/insights'
-import {comparisonVerdict, kpiCards, overviewGroups, overviewMetrics, paletteColor, primaryPanels, rankServiceSummaries, serviceCurve, serviceDetailMetrics, type OverviewGroup} from './results/overview'
-import {Disclosure, HeaderMenu, KpiCards, PrimaryChart, ServicesTable, useSparklines, VerdictStrip, type InsightTarget, type ServiceDetail} from './results/Overview'
+import {comparisonVerdict, kpiCards, overviewGroups, overviewMetrics, paletteColor, primaryPanels, timelineHeadline, timelineSubtitle, rankServiceSummaries, serviceCurve, serviceDetailMetrics, type OverviewGroup} from './results/overview'
+import {Disclosure, HeaderMenu, KpiCards, PrimaryChart, QualityLine, ServicesTable, VerdictStrip, type InsightTarget, type ServiceDetail} from './results/Overview'
 import {AllMetrics} from './results/AllMetrics'
+import {RunFacts} from './results/RunFacts'
 import {FigureStudio, type StudioData, type StudioRequest} from './results/FigureStudio'
+import {KubeStudioMark} from './results/KubeStudioMark'
 import {formatSpan} from './results/display'
 import type {ServiceRow} from './results/Figures'
 import type {LoadFidelity} from './results/loadFidelity'
@@ -94,7 +99,7 @@ function useProvenance(datasets: LoadedDataset[]): ProvenanceOf {
   }, [datasets])
 }
 
-// Memoised per-metric curves: the overview, All metrics and the figure studio share them.
+// Memoised per-metric curves: the overview, All metrics and KubeStudio share them.
 function usePlots(datasets: LoadedDataset[], experiment?: Experiment): (metric: string) => AggregateSeries[] {
   return useMemo(() => {
     const cache = new Map<string, AggregateSeries[]>()
@@ -132,15 +137,45 @@ function useSections(initial: Sections = {}) {
     requestAnimationFrame(() => {
       const element = document.getElementById(anchor.id)
       if (!element) return
-      element.scrollIntoView?.({behavior: 'smooth', block: 'start'})
+      scrollToElement(element)
       element.querySelector<HTMLElement>('button, h3')?.focus?.({preventScroll: true})
     })
   }, [])
-  return {sections, toggle, navigate}
+  // Section bar: a collapsed section opens before the jump; focus moves to its heading.
+  const jump = useCallback((link: SectionLink) => {
+    const section = link.target.startsWith('section-') ? link.target.slice('section-'.length) as SectionID : undefined
+    if (section) setSections(current => ({...current, [section]: true}))
+    requestAnimationFrame(() => {
+      const element = document.getElementById(link.target)
+      if (!element) return
+      scrollToElement(element)
+      element.querySelector<HTMLElement>('.disclosure-heading button, h3')?.focus?.({preventScroll: true})
+    })
+  }, [])
+  return {sections, toggle, navigate, jump}
+}
+
+// Links of the section bar, in page order; absent sections are left out.
+function sectionLinks({overview, figure, services, endpoints, callchain, statistics, environment, placement, metrics, sources}: Partial<Record<'overview' | 'figure' | 'services' | 'endpoints' | 'callchain' | 'statistics' | 'environment' | 'placement' | 'metrics' | 'sources', boolean>>): SectionLink[] {
+  const all: Array<[boolean | undefined, SectionLink]> = [
+    [overview, {id: 'overview', label: 'Overview', target: 'results-overview'}],
+    [figure, {id: 'figure', label: 'Fig. 1', target: 'results-timeline'}],
+    [services, {id: 'services', label: 'Services', target: 'results-services'}],
+    [sources, {id: 'sources', label: 'Sources', target: 'section-sources'}],
+    [endpoints, {id: 'endpoints', label: 'Endpoints', target: 'section-endpoints'}],
+    [callchain, {id: 'callchain', label: 'Call chain', target: 'section-callchain'}],
+    [statistics, {id: 'statistics', label: 'Statistics', target: 'section-statistics'}],
+    [environment, {id: 'environment', label: 'Environment', target: 'section-environment'}],
+    [placement, {id: 'placement', label: 'Placement', target: 'section-placement'}],
+    [metrics, {id: 'metrics', label: 'All metrics', target: 'section-metrics'}]
+  ]
+  return all.filter(([present]) => present).map(([, link]) => link)
 }
 
 // "2 variants × 3 repetitions · 5 min measured · 19 Nov 2026".
-function ResultsMeta({experiment, datasets, status}: {experiment?: Experiment; datasets: LoadedDataset[]; status?: ReactNode}) {
+function ResultsMeta({experiment, datasets, status, run}: {experiment?: Experiment; datasets: LoadedDataset[]; status?: ReactNode; run?: string}) {
+  // One execution: its name; the timing facts sit in the facts row below.
+  if (run) return <p className="results-meta">{status}<span>{run}</span></p>
   const variants = experiment?.variants.length ?? 0
   const repetitions = experiment ? Math.max(0, ...experiment.variants.map(variant => variant.trials.filter(trial => !isPilot(trial)).length)) : 0
   const measured = datasets.map(measuredSeconds).filter((value): value is number => value !== undefined)
@@ -167,12 +202,15 @@ interface OverviewModel {
   servicesNote?: string
   // The verdict already lists the between-variant differences (comparison page).
   comparisonVerdict?: boolean
+  // Scaling, CPU, memory and restarts per group (absent in older comparison payloads).
+  resources?: ResourceSummary[]
 }
 
 // Verdict, KPI cards, the primary chart and the services table: the default view.
-function ResultsOverview({model, onNavigate}: {model: OverviewModel; onNavigate: (target: InsightTarget) => void}) {
+// single: one execution — no summary paragraph, only the measurement warnings that matter.
+function ResultsOverview({model, onNavigate, single = false}: {model: OverviewModel; onNavigate: (target: InsightTarget) => void; single?: boolean}) {
   const cards = useMemo(() => kpiCards({runLevel: model.runLevel, comparisons: model.comparisons, baseline: model.baseline, slo: model.slo}), [model.runLevel, model.comparisons, model.baseline, model.slo])
-  const sparklines = useSparklines(model.plot, model.groups)
+  const resources = useMemo(() => resourceCards(model.groups, model.resources), [model.groups, model.resources])
   // Several variants: the strongest significant difference sits right after the first finding.
   const insights = useMemo(() => {
     if (model.comparisonVerdict || model.groups.length < 2) return model.insights
@@ -180,14 +218,15 @@ function ResultsOverview({model, onNavigate}: {model: OverviewModel; onNavigate:
     return [...model.insights.slice(0, 1), ...differences.slice(0, 1), ...model.insights.slice(1), ...differences.slice(1)]
   }, [model.insights, model.comparisonVerdict, model.groups.length, cards])
   const panels = useMemo(() => primaryPanels({groups: model.groups, plot: model.plot, slo: model.slo}), [model.groups, model.plot, model.slo])
+  const headline = useMemo(() => timelineHeadline({groups: model.groups, plot: model.plot, slo: model.slo}), [model.groups, model.plot, model.slo])
   const [group, setGroup] = useState<string | undefined>(model.groups[0]?.id)
   const activeGroup = model.groups.some(item => item.id === group) ? group : model.groups[0]?.id
   const services = useMemo(() => model.services(model.groups.length > 1 ? activeGroup : undefined), [model, activeGroup])
   const scope = model.groups.length > 1 ? activeGroup : undefined
   return <>
-    <VerdictStrip insights={insights} notices={model.notices} onNavigate={onNavigate} />
-    <KpiCards cards={cards} provenance={model.provenance} sparklines={sparklines} />
-    <PrimaryChart panels={panels} subtitle={model.subtitle} />
+    {single ? <QualityLine notices={model.notices} /> : <VerdictStrip insights={insights} notices={model.notices} onNavigate={onNavigate} />}
+    <KpiCards cards={cards} provenance={model.provenance} resources={resources} />
+    <PrimaryChart panels={panels} subtitle={model.subtitle} title={headline} />
     {(services.length > 0 || model.groups.length > 1) && <ServicesTable services={services} groups={model.groups} group={activeGroup} onGroup={setGroup} note={model.servicesNote}
       trend={model.serviceTrend ? service => model.serviceTrend!(scope, service) : undefined}
       detail={model.serviceDetail ? service => model.serviceDetail!(scope, service) : undefined} />}
@@ -213,7 +252,7 @@ function ExperimentResultsView({artifacts, experiments, operations, workspaces, 
   const [saving, setSaving] = useState(false)
   const [printPending, setPrintPending] = useState(false)
   const [activeExperiment, setActiveExperiment] = useState<string | null>(focusedExperiment?.id ?? null)
-  const {sections, toggle: toggleSection, navigate} = useSections()
+  const {sections, toggle: toggleSection, navigate, jump} = useSections()
   const [studio, setStudio] = useState<StudioRequest | null>(null)
   const chartMode = useChartMode()
   const [runTab, setRunTab] = useState('summary')
@@ -351,8 +390,9 @@ function ExperimentResultsView({artifacts, experiments, operations, workspaces, 
     }
     const slos = new Set(displayed.map(item => item.dataset.spec.sloMilliseconds))
     const runs = overviewExperiment.variants.reduce((total, variant) => Math.max(total, variant.trials.filter(trial => displayed.some(item => item.artifact.id === trial.resultArtifactId)).length), 0)
+    const resources = groups.map(group => resourceSummary(group.id, datasetsOf(group.id), hasAutoscaler(overviewExperiment.variants.find(variant => variant.id === group.id)?.configuration as Record<string, unknown> | undefined)))
     return {
-      groups, insights: all.insights, notices, runLevel: kpiRunLevel,
+      groups, insights: all.insights, notices, runLevel: kpiRunLevel, resources,
       comparisons: comparisonRows, baseline: comparisonOptions.baseline,
       slo: slos.size === 1 ? [...slos][0] : undefined,
       plot, provenance: metric => metrics.includes(metric) ? provenance(metric) : undefined,
@@ -363,7 +403,7 @@ function ExperimentResultsView({artifacts, experiments, operations, workspaces, 
       },
       serviceTrend: (group, service) => curve(group, 'application.p95_response_time', service)[0],
       serviceDetail: (group, service) => serviceDetailMetrics.map(item => ({title: item.title, unit: item.unit, series: curve(group, item.metric, service)})),
-      subtitle: `Measured window${runs > 1 ? ` · mean of ${runs} repetitions with 95% CI band` : ''}${groups.length > 1 ? ` · ${groups.length} variants` : ''}. Hover or use the arrow keys to read values.`
+      subtitle: timelineSubtitle(groups.length, runs)
     }
   }, [overviewExperiment, displayed, metrics, notices, comparisonRows, comparisonOptions.baseline, plot, provenance, chartMode])
   // X–Y relationship: one point per sampling window of each run, paired by timestamp.
@@ -484,12 +524,21 @@ function ExperimentResultsView({artifacts, experiments, operations, workspaces, 
   const callChain = displayed.some(item => hasCallChainData(item.dataset))
   const groupsForStudio = overview?.groups ?? []
   const seriesNotes = useMemo(() => colorNotes(overview?.groups), [overview])
-  return <SeriesNotesContext.Provider value={seriesNotes}><div className="results-page">
+  // A single execution (a run tab, or an experiment with one measured run) gets its key facts on top.
+  const singleRun = useMemo(() => {
+    if (!focusedExperiment || comparison || displayed.length !== 1) return undefined
+    const measuredRuns = focusedRuns.filter(item => !isPilot(item.trial))
+    const run = activeRun ?? (measuredRuns.length === 1 ? measuredRuns[0] : undefined)
+    return run ? {name: `${run.variant.alias || run.variant.name} · ${trialLabel(run.trial)}`, item: displayed[0]} : undefined
+  }, [focusedExperiment, comparison, displayed, activeRun?.trial.id, focusedRuns.length])
+  const hasPlacement = Boolean(activeRun && !comparison && placementDatasets.some(item => item.dataset.spec.placement))
+  const links = sectionLinks({overview: Boolean(overview), figure: Boolean(overview), services: Boolean(overview), endpoints: locust.length > 0, callchain: callChain, statistics: true, environment: true, placement: hasPlacement, metrics: true})
+  return <ShowEverything.Provider value={printPending}><SeriesNotesContext.Provider value={seriesNotes}><div className="results-page">
     {confirmationDialog}
-    <header className="page-header">{focusedExperiment && onBack && <DetailBreadcrumb parent={comparison ? 'Comparisons' : 'Experiments'} current={focusedExperiment.name} back={onBack} />}
+    <header className="page-header" id="results-top">{focusedExperiment && onBack && <DetailBreadcrumb parent={comparison ? 'Comparisons' : 'Experiments'} current={focusedExperiment.name} back={onBack} />}
       <div className={`results-heading ${focusedExperiment ? 'focused' : ''}`}>
-        <div className="results-title"><h2>{focusedExperiment?.name ?? 'Results'}</h2>
-          {focusedExperiment && <ResultsMeta experiment={activeRun ? undefined : withoutPilots(focusedExperiment)} datasets={displayed} status={!comparison ? <span className={`status ${activeRun?.trial.status ?? displayStatus}`}>{activeRun?.trial.status ?? displayStatus}</span> : undefined} />}
+        <div className="results-title"><h2 tabIndex={-1}>{focusedExperiment?.name ?? 'Results'}</h2>
+          {focusedExperiment && <ResultsMeta run={singleRun?.name} experiment={activeRun ? undefined : withoutPilots(focusedExperiment)} datasets={displayed} status={!comparison ? <span className={`status ${activeRun?.trial.status ?? displayStatus}`}>{activeRun?.trial.status ?? displayStatus}</span> : undefined} />}
         </div>
         <div className="results-detail-actions">
           {comparison?.actions}
@@ -497,7 +546,7 @@ function ExperimentResultsView({artifacts, experiments, operations, workspaces, 
           {!comparison && focusedExperiment?.status === 'initialized' && canManage && !stopRequested && <button className="button primary" disabled={startingTraffic} onClick={startTraffic}>{startingTraffic ? 'Starting…' : 'Start'}</button>}
           {!comparison && focusedExperiment && canManage && canStop && <button className="button danger" disabled={stopping || stopRequested} onClick={stopExperiment}>{stopping || stopRequested ? `Stopping ${stopLabel}…` : `Stop ${stopLabel}`}</button>}
           {!comparison && focusedExperiment && <ResourceSharing kind="experiments" id={focusedExperiment.id} name={focusedExperiment.name} ownerUserId={focusedExperiment.ownerUserId} session={session} changed={changed} />}
-          {displayed.length > 0 && <button type="button" className="button secondary" onClick={() => setStudio({})}><ActionIcon name="chart" />Create figure</button>}
+          {displayed.length > 0 && <button type="button" className="button secondary" title="Open KubeStudio to build a publication figure" onClick={() => setStudio({})}><KubeStudioMark size={18} className="kubestudio-entry" />Create figure</button>}
           {displayed.length > 0 && <HeaderMenu label="Export" icon={<ActionIcon name="download" />}>{close => <ExportPanel experiment={statsExperiment} savedFigures={!comparison} datasets={displayed} csv={() => statisticsCSV(displayed, statisticsMetrics, statsExperiment)} comparisonRows={comparisonRows} onPrint={() => {close(); toggleSection('statistics', true); setPrintPending(true)}} />}</HeaderMenu>}
           {!comparison && focusedExperiment && canManage && <HeaderMenu label="" icon={<><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><circle cx="3" cy="8" r="1.4" /><circle cx="8" cy="8" r="1.4" /><circle cx="13" cy="8" r="1.4" /></svg><span className="visually-hidden">More actions</span></>} buttonClass="icon-button more-actions">{close => <div className="menu-list"><button type="button" className="menu-item danger" disabled={deleting || !isTerminalExperiment(focusedExperiment.status)} title={isTerminalExperiment(focusedExperiment.status) ? undefined : `Stop this ${stopLabel} before deleting it`} onClick={() => {close(); void removeExperiment()}}><ActionIcon name="delete" />{deleting ? 'Deleting…' : `Delete ${stopLabel}`}</button></div>}</HeaderMenu>}
           {!focusedExperiment && <div className="results-count" aria-label={`${selectable.length} datasets`}><strong>{selectable.length}</strong><span>datasets</span></div>}
@@ -509,7 +558,7 @@ function ExperimentResultsView({artifacts, experiments, operations, workspaces, 
     {comparison?.sources}
     <ErrorFeedback message={actionError} />
     {!focusedExperiment && experiments.length > 0 && <div className="experiment-history"><div className="experiment-history-title"><span><b>1</b><strong>Choose an experiment</strong></span><span>{experiments.length} saved</span></div><div className="experiment-cards">{experiments.map(item => <button key={item.id} className={activeExperiment === item.id ? 'active' : ''} onClick={() => openExperiment(item)}><span className={`status-dot ${experimentDisplayStatus(item)}`} /><span><strong>{item.name}</strong><small>{item.status === 'queued' && item.scheduledFor && new Date(item.scheduledFor).getTime() > Date.now() ? `Scheduled ${formatDate(item.scheduledFor)}` : `${experimentDisplayStatus(item)} · ${item.variants.length} strategies · ${item.variants.reduce((total, variant) => total + variant.trials.filter(trial => !isPilot(trial)).length, 0)} executions`}</small></span><ActionIcon name="right" /></button>)}</div></div>}
-    {focusedExperiment && !comparison && focusedRuns.length > 0 && <nav className="experiment-run-tabs" aria-label="Run executions"><button className="run-tab summary" aria-current={runTab === 'summary' ? 'page' : undefined} data-active={runTab === 'summary'} onClick={() => setRunTab('summary')}><span className="run-tab-label">All executions</span></button>{focusedRuns.map(({variant, trial}) => <RunTab key={trial.id} name={`${variant.name} · ${trialLabel(trial)}`} trial={trial} active={runTab === trial.id} select={() => setRunTab(trial.id)} />)}</nav>}
+    {focusedExperiment && !comparison && focusedRuns.length > 0 && <nav className="experiment-run-tabs" aria-label="Run executions"><button type="button" className="run-tab all-runs" aria-current={runTab === 'summary' ? 'page' : undefined} data-active={runTab === 'summary'} onClick={() => setRunTab('summary')}><span className="run-tab-label">All executions</span></button>{focusedRuns.map(({variant, trial}) => <RunTab key={trial.id} name={`${variant.name} · ${trialLabel(trial)}`} trial={trial} active={runTab === trial.id} select={() => setRunTab(trial.id)} />)}</nav>}
     {experiment && (!activeRun ? <>{experiment.status !== 'succeeded' && <ExperimentProgress experiment={experiment} />}{liveRun && <RunLoadProgress name={`${liveRun.variant.name} · ${trialLabel(liveRun.trial)}`} trial={liveRun.trial} configuration={liveRun.variant.configuration} operation={operations.find(item => item.id === liveRun.trial.operationId)} />}</> : <><RunDiagnostics trial={activeRun.trial} openPipelineRun={openPipelineRun} openOperation={openOperation} /><RunLoadProgress trial={activeRun.trial} configuration={activeRun.variant.configuration} operation={operations.find(item => item.id === activeRun.trial.operationId)} /></>)}
     {!selectable.length || activeRun && !viewSelected.length ? <EmptyResults experiment={experiment} runStatus={activeRun?.trial.status} /> : <div className={`results-layout ${focusedExperiment ? 'focused' : ''}`}>
       {!focusedExperiment ? <aside className="dataset-picker" aria-label="Available datasets">
@@ -535,22 +584,24 @@ function ExperimentResultsView({artifacts, experiments, operations, workspaces, 
             <div><h3>{experiment?.name ?? displayed[0].label}</h3><p>{displayed.length} execution{displayed.length === 1 ? '' : 's'} · {metrics.length} metric{metrics.length === 1 ? '' : 's'}</p></div>
             <div className="results-heading-actions"><button className="button primary" disabled={selected.length < 2} onClick={() => setSaving(true)}>Save comparison</button></div>
           </div>}
-          {overview && <ResultsOverview key={activeRun?.trial.id ?? 'all'} model={overview} onNavigate={navigate} />}
+          <SectionNav links={links} onJump={jump} top="results-top" />
+          <div id="results-overview" className="section-anchor" />
+          {singleRun && <RunFacts item={singleRun.item} name={singleRun.name} />}
+          {overview && <ResultsOverview key={activeRun?.trial.id ?? 'all'} model={overview} onNavigate={navigate} single={Boolean(singleRun)} />}
           <div className="results-sections" role="region" aria-label="Details">
-            {locust.length > 0 && <Disclosure id="endpoints" title="Endpoints" summary={`${locust.reduce((total, group) => total + group.rows.filter(row => !row.aggregated).length, 0)} Locust endpoints`} open={Boolean(sections.endpoints)} onToggle={open => toggleSection('endpoints', open)}><LocustSummaryPanel groups={locust} /></Disclosure>}
-            {callChain && <Disclosure id="callchain" title="Call chain" summary="Measured calls per request and predicted vs measured rates" open={Boolean(sections.callchain)} onToggle={open => toggleSection('callchain', open)}><CallChainPanel datasets={displayed} /></Disclosure>}
-            <Disclosure id="statistics" title="Statistics" summary={multipleVariants ? 'Comparison tests, n_eff, CSV' : 'Per-execution statistics, n_eff, CSV'} open={Boolean(sections.statistics)} onToggle={open => toggleSection('statistics', open)}>
-              <ExperimentStatistics datasets={displayed} metrics={statisticsMetrics} experiment={statsExperiment} provenance={provenance} comparisonRows={comparisonRows} comparisonOptions={comparisonOptions} setComparisonOptions={setComparisonOptions} />
-              <FidelitySection rows={fidelityRows} />
+            {locust.length > 0 && <Disclosure id="endpoints" title="Endpoints" summary={`${locust.reduce((total, group) => total + group.rows.filter(row => !row.aggregated).length, 0)} measured by Locust`} open={Boolean(sections.endpoints)} onToggle={open => toggleSection('endpoints', open)}><LocustSummaryPanel groups={locust} /></Disclosure>}
+            {callChain && <Disclosure id="callchain" title="Call chain" summary="calls per request, predicted against measured" open={Boolean(sections.callchain)} onToggle={open => toggleSection('callchain', open)}><CallChainPanel datasets={displayed} /></Disclosure>}
+            <Disclosure id="statistics" title="Statistics" summary={multipleVariants ? 'comparison tests, effective sample size, CSV' : 'per-execution summaries, effective sample size, CSV'} open={Boolean(sections.statistics)} onToggle={open => toggleSection('statistics', open)}>
+              <ExperimentStatistics datasets={displayed} metrics={statisticsMetrics} experiment={statsExperiment} provenance={provenance} comparisonRows={comparisonRows} comparisonOptions={comparisonOptions} setComparisonOptions={setComparisonOptions} fidelityRows={fidelityRows} />
             </Disclosure>
-            <Disclosure id="environment" title="Environment & methods" summary="Cluster, versions, measurement windows, methods paragraph" open={Boolean(sections.environment)} onToggle={open => toggleSection('environment', open)}>
+            <Disclosure id="environment" title="Environment & methods" summary="cluster, versions, windows and a methods paragraph" open={Boolean(sections.environment)} onToggle={open => toggleSection('environment', open)}>
               <RunContextPanel context={runContextSummary(displayed)} /><MethodsPanel text={methods} />
             </Disclosure>
-            {activeRun && !comparison && placementDatasets.some(item => item.dataset.spec.placement) && <Disclosure id="placement" title="Placement" summary="Pod placement replay and zone heatmap for this execution" open={Boolean(sections.placement)} onToggle={open => toggleSection('placement', open)}>
+            {hasPlacement && <Disclosure id="placement" title="Placement" summary="pod placement replay and zone heatmap" open={Boolean(sections.placement)} onToggle={open => toggleSection('placement', open)}>
               <PlacementReplay datasets={placementDatasets} />
               {heatmap && <div className="chart-grid figure-grid">{heatmap}</div>}
             </Disclosure>}
-            <Disclosure id="metrics" title="All metrics" summary={`${metrics.length} recorded metrics, plotted on demand`} open={Boolean(sections.metrics)} onToggle={open => toggleSection('metrics', open)}>
+            <Disclosure id="metrics" title="All metrics" summary={`${metrics.length} recorded, plotted on request`} open={Boolean(sections.metrics)} onToggle={open => toggleSection('metrics', open)}>
               <AllMetrics metrics={metrics} plot={plot} byService={byService} groups={overview?.groups ?? []} provenance={provenance} onFigure={metric => setStudio({kind: 'timeseries', metric})} xy={xySource} onXYFigure={xy => setStudio({kind: 'xy', xy})} />
             </Disclosure>
           </div>
@@ -561,12 +612,14 @@ function ExperimentResultsView({artifacts, experiments, operations, workspaces, 
       await request<ExperimentFigure>(`/experiments/${focusedExperiment.id}/figures?metric=${encodeURIComponent(metric)}&format=${format}`, {method: 'POST', headers: {'Content-Type': 'application/pdf', 'X-KubePhos-Source-Artifacts': displayed.map(item => item.artifact.id).slice(0, 20).join(',')}, body: new Blob([bytes.buffer as ArrayBuffer])}, session.csrfToken)
     } : undefined} />}
     {!comparison && <SaveExperimentDialog open={saving} close={() => setSaving(false)} selected={selected.map(id => availableByID.get(id)).filter((item): item is Artifact => Boolean(item))} operations={operations} workspaces={workspaces} session={session} changed={changed} />}
-  </div></SeriesNotesContext.Provider>
+  </div></SeriesNotesContext.Provider></ShowEverything.Provider>
 }
 
+const hasFidelity = (rows: Array<{fidelity: LoadFidelity}>) => rows.some(row => row.fidelity.ratio !== undefined || row.fidelity.schedule)
+
 function FidelitySection({rows}: {rows: Array<{label: string; fidelity: LoadFidelity}>}) {
-  if (!rows.some(row => row.fidelity.ratio !== undefined || row.fidelity.schedule)) return null
-  return <section className="statistics-card" aria-label="Load fidelity"><h3>Load fidelity</h3>
+  if (!hasFidelity(rows)) return null
+  return <section className="statistics-card" aria-label="Load fidelity">
     <p className="table-lead">Request rate the generator was asked to send vs what it actually sent. A shortfall or a late schedule means the closed-loop generator could not keep the open-loop schedule (coordinated omission), which hides slow responses from client-side latency.</p>
     <FidelitySummaryTable rows={rows} />
   </section>
@@ -575,7 +628,7 @@ function FidelitySection({rows}: {rows: Array<{label: string; fidelity: LoadFide
 function RunTab({name, trial, active, select}: {name: string; trial: ExperimentTrial; active: boolean; select: () => void}) {
   const resting = restingUntil(trial)
   const cleanup = cleanupWarning(trial)
-  return <button className={`run-tab ${trial.status}`} aria-current={active ? 'page' : undefined} data-active={active} onClick={select} title={cleanup}>
+  return <button type="button" className={`run-tab ${trial.status}`} aria-current={active ? 'page' : undefined} data-active={active} onClick={select} title={cleanup}>
     <span className={`status-dot ${trial.status}`} /><span className="run-tab-label">{name}</span>
     {isPilot(trial) && <span className="run-badge pilot">Pilot</span>}
     {resting && <span className="run-badge resting">{resting}</span>}
@@ -583,20 +636,25 @@ function RunTab({name, trial, active, select}: {name: string; trial: ExperimentT
   </button>
 }
 
-function ExperimentStatistics({datasets, metrics, experiment, provenance, comparisonRows, comparisonOptions, setComparisonOptions}: {datasets: LoadedDataset[]; metrics: string[]; experiment?: Experiment; provenance: ProvenanceOf; comparisonRows: ReturnType<typeof compareRunValues>; comparisonOptions: {baseline: string; mode: 'baseline' | 'all-pairs'}; setComparisonOptions: (value: {baseline: string; mode: 'baseline' | 'all-pairs'}) => void}) {
+function ExperimentStatistics({datasets, metrics, experiment, provenance, comparisonRows, comparisonOptions, setComparisonOptions, fidelityRows}: {datasets: LoadedDataset[]; metrics: string[]; experiment?: Experiment; provenance: ProvenanceOf; comparisonRows: ReturnType<typeof compareRunValues>; comparisonOptions: {baseline: string; mode: 'baseline' | 'all-pairs'}; setComparisonOptions: (value: {baseline: string; mode: 'baseline' | 'all-pairs'}) => void; fidelityRows: Array<{label: string; fidelity: LoadFidelity}>}) {
   const runPositions = new Map(experiment?.variants.flatMap(variant => variant.trials.map(trial => [trial.resultArtifactId, trial.position] as const)) ?? [])
   const orderedDatasets = [...datasets].sort((left, right) => {
     const position = (dataset: LoadedDataset) => runPositions.get(dataset.artifact.id) ?? Number(dataset.label.match(/(?:Run|Execution) (\d+)/i)?.[1] ?? 0)
     return position(left) - position(right)
   })
   const comparison = Boolean(experiment && (experiment.kind === 'comparison' || experiment.variants.length > 1))
-  return <>
-    {experiment && comparison && <StrategyComparison datasets={datasets} metrics={metrics} experiment={experiment} provenance={provenance} />}
-    {experiment && comparison && <ComparisonTable rows={comparisonRows} variants={experiment.variants.map(variant => ({id: variant.id, label: variant.alias || variant.name}))} baseline={comparisonOptions.baseline} mode={comparisonOptions.mode} onChange={setComparisonOptions} provenance={provenance} title={experiment.kind === 'comparison' ? 'Differences between experiments' : 'Differences between strategies'} />}
-    {experiment && !comparison && <AcrossRunsTable experiment={experiment} datasets={datasets} metrics={metrics} provenance={provenance} />}
-    {!comparison && <WithinRunStatistics datasets={orderedDatasets} metrics={metrics} />}
-    {!comparison && experiment && serviceStatisticsRows(datasets, experiment).some(row => row.acrossRuns) && <section className="statistics-card"><ServiceStatisticsTable datasets={datasets} experiment={experiment} /></section>}
-  </>
+  const acrossServices = !comparison && experiment && datasets.length > 1 && serviceStatisticsRows(datasets, experiment).some(row => row.acrossRuns)
+  const runServices = !comparison && datasets.length === 1 && serviceStatisticsRows(datasets).length > 0
+  const views: StatisticsView[] = []
+  if (experiment && comparison) {
+    views.push({id: 'comparison', title: 'Comparison', metrics: true, render: match => <StrategyComparison datasets={datasets} metrics={metrics.filter(match)} experiment={experiment} provenance={provenance} />})
+    views.push({id: 'differences', title: 'Differences', metrics: true, render: match => <ComparisonTable rows={comparisonRows} variants={experiment.variants.map(variant => ({id: variant.id, label: variant.alias || variant.name}))} baseline={comparisonOptions.baseline} mode={comparisonOptions.mode} onChange={setComparisonOptions} provenance={provenance} title={experiment.kind === 'comparison' ? 'Differences between experiments' : 'Differences between strategies'} match={match} />})
+  }
+  if (experiment && !comparison && datasets.length > 1) views.push({id: 'across', title: 'Across executions', metrics: true, render: match => <AcrossRunsTable experiment={experiment} datasets={datasets} metrics={metrics.filter(match)} provenance={provenance} />})
+  if (!comparison) views.push({id: 'runs', title: datasets.length > 1 ? 'Per execution' : 'Execution', metrics: true, render: match => <WithinRunStatistics datasets={orderedDatasets} metrics={metrics.filter(match)} />})
+  if (acrossServices || runServices) views.push({id: 'services', title: 'By service', metrics: true, render: match => <section className="statistics-card">{acrossServices ? <ServiceStatisticsTable datasets={datasets} experiment={experiment} match={match} /> : <ServiceStatisticsTable datasets={datasets} match={match} />}</section>})
+  if (hasFidelity(fidelityRows)) views.push({id: 'fidelity', title: 'Load fidelity', render: () => <FidelitySection rows={fidelityRows} />})
+  return <StatisticsTabs views={views} />
 }
 
 // Export menu: CSV, print, saved figures and the raw run data.
@@ -789,7 +847,7 @@ function ComparisonResults({artifacts, experiment, comparison, onBack, session}:
   const data = state.result
   const [options, setOptions] = useState(initialOptions)
   const [figureSettings, setFigureSettings] = useFigureSettings(`comparison:${experiment.id}`)
-  const {sections, toggle: toggleSection, navigate} = useSections()
+  const {sections, toggle: toggleSection, navigate, jump} = useSections()
   const [studio, setStudio] = useState<StudioRequest | null>(null)
   const chartMode = useChartMode()
   const [printPending, setPrintPending] = useState(false)
@@ -824,23 +882,23 @@ function ComparisonResults({artifacts, experiment, comparison, onBack, session}:
       }
       const curves = prepared.series.some(entry => entry.curves)
       return {
-        groups, insights: prepared.insights, notices: [...fidelityWarnings.map(item => ({kind: 'warning' as const, text: `${item.label}: ${item.text}`})), ...notices],
+        groups, insights: prepared.insights, notices: [...fidelityWarnings.map(item => ({kind: 'warning' as const, text: `${item.label}: ${item.text}`})), ...notices], resources: data.resources,
         runLevel: data.runLevel ?? [], comparisons: rows, baseline: options.baseline, slo: undefined,
         plot, provenance: metric => data.provenance?.[metric],
         services: group => seriesOf(group)?.services ?? [],
         serviceTrend: curves ? (group, service) => curve(group, service, 'application.p95_response_time') : undefined,
         serviceDetail: curves ? (group, service) => serviceDetailMetrics.map(item => {const series = curve(group, service, item.metric); return {title: item.title, unit: item.unit, series: series ? [series] : []}}) : undefined,
-        subtitle: data.complete ? 'Measured window of each series · mean across repetitions with 95% CI band. Hover or use the arrow keys to read values.' : 'Preparing curves…'
+        subtitle: data.complete ? timelineSubtitle(groups.length, 2) : 'Preparing curves…'
       }
     }
     return {
-      groups, insights: comparisonVerdict(cards, fidelityWarnings), notices: [...fidelityWarnings.slice(1).map(item => ({kind: 'warning' as const, text: `${item.label}: ${item.text}`})), ...notices],
+      groups, insights: comparisonVerdict(cards, fidelityWarnings), notices: [...fidelityWarnings.slice(1).map(item => ({kind: 'warning' as const, text: `${item.label}: ${item.text}`})), ...notices], resources: data.resources,
       runLevel: data.runLevel ?? [], comparisons: rows, baseline: options.baseline, slo: undefined,
       plot, provenance: metric => data.provenance?.[metric],
       services: group => rankServiceSummaries(group ?? groups[0]?.id ?? '', services),
-      subtitle: data.complete ? 'Measured window of each series · mean across repetitions with 95% CI band. Hover or use the arrow keys to read values.' : 'Preparing curves…',
+      subtitle: data.complete ? timelineSubtitle(groups.length, 2) : 'Preparing curves…',
       comparisonVerdict: true,
-      servicesNote: 'Ranked by mean server P95 across repetitions (per-service time series are not part of a saved comparison).'
+      servicesNote: 'Services ranked by mean server P95 across repetitions. A saved comparison keeps no per-service time series.'
     }
   }, [data, rows, options.baseline, plot, chartMode])
   // Saved comparisons keep the mean curve per series only: X–Y points are its windows.
@@ -855,13 +913,19 @@ function ComparisonResults({artifacts, experiment, comparison, onBack, session}:
     services: metric => data.services?.[metric], xy: xySource, profile: sharedLoadProfile(Object.values(comparison?.sourceConfigurations ?? {}) as Array<Record<string, unknown> | undefined>)
   }, [Boolean(studio), data, plot, provenance, xySource])
   const rawData = artifacts.map(artifact => ({id: artifact.id, label: experiment.variants.find(variant => variant.trials.some(trial => trial.resultArtifactId === artifact.id))?.alias || artifact.name}))
-  return <SeriesNotesContext.Provider value={colorNotes(overview?.groups)}><div className="results-page">
-    <header className="page-header">{onBack && <DetailBreadcrumb parent="Comparisons" current={experiment.name} back={onBack} />}
+  const links = data ? sectionLinks({overview: true, figure: Boolean(data.complete), services: true, sources: Boolean(comparison?.sources), endpoints: (data.locust ?? []).length > 0, statistics: true, environment: Boolean(data.context), metrics: true}) : []
+  const comparisonViews: StatisticsView[] = data ? [
+    {id: 'comparison', title: 'Comparison', metrics: true, render: match => <StrategyComparison datasets={[]} metrics={data.statisticsMetrics.filter(match)} experiment={experiment} prepared={data.columns} provenance={provenance} />},
+    {id: 'differences', title: 'Differences', metrics: true, render: match => <ComparisonTable rows={rows} variants={analysis.variants.map(variant => ({id: variant.id, label: variant.alias || variant.name}))} baseline={options.baseline} mode={options.mode} onChange={setOptions} provenance={provenance} title="Differences between experiments" match={match} />},
+    ...hasFidelity(data.fidelityRows ?? []) ? [{id: 'fidelity', title: 'Load fidelity', render: () => <FidelitySection rows={data.fidelityRows ?? []} />}] : []
+  ] : []
+  return <ShowEverything.Provider value={printPending}><SeriesNotesContext.Provider value={colorNotes(overview?.groups)}><div className="results-page">
+    <header className="page-header" id="results-top">{onBack && <DetailBreadcrumb parent="Comparisons" current={experiment.name} back={onBack} />}
       <div className="results-heading focused">
-        <div className="results-title"><h2>{experiment.name}</h2><ResultsMeta experiment={analysis} datasets={[]} /></div>
+        <div className="results-title"><h2 tabIndex={-1}>{experiment.name}</h2><ResultsMeta experiment={analysis} datasets={[]} /></div>
         <div className="results-detail-actions">
           {comparison?.actions}
-          {data?.complete && <button type="button" className="button secondary" onClick={() => setStudio({})}><ActionIcon name="chart" />Create figure</button>}
+          {data?.complete && <button type="button" className="button secondary" title="Open KubeStudio to build a publication figure" onClick={() => setStudio({})}><KubeStudioMark size={18} className="kubestudio-entry" />Create figure</button>}
           {data && <HeaderMenu label="Export" icon={<ActionIcon name="download" />}>{close => <ExportPanel datasets={[]} csv={() => data.csv} comparisonRows={rows} savedFigures={false} rawData={rawData} onPrint={() => {close(); toggleSection('statistics', true); setPrintPending(true)}} />}</HeaderMenu>}
         </div>
       </div>
@@ -869,23 +933,23 @@ function ComparisonResults({artifacts, experiment, comparison, onBack, session}:
     {comparison?.notice}
     <ResourceAttribution resource={experiment} editable />
     <ErrorFeedback message={state.error} />
+    {data && <SectionNav links={links} onJump={jump} top="results-top" />}
     {state.error ? <div className="results-placeholder"><button className="button secondary" onClick={() => setRevision(value => value + 1)}>Retry loading results</button></div> : !data ? <div className="results-placeholder" role="status"><span className="results-spinner" /><strong>{state.progress}</strong></div> : <div className="results-content">
+      <div id="results-overview" className="section-anchor" />
       {data.warnings.map(warning => <div key={warning} className="validation-item warning">{warning}</div>)}
       {overview && <ResultsOverview model={overview} onNavigate={navigate} />}
     </div>}
     <div className="results-sections" role="region" aria-label="Details">
       {comparison?.sources && <Disclosure id="sources" title="Sources" summary={`${experiment.variants.length} source experiment${experiment.variants.length === 1 ? '' : 's'}`} open={Boolean(sections.sources)} onToggle={open => toggleSection('sources', open)}>{comparison.sources}</Disclosure>}
-      {data && (data.locust ?? []).length > 0 && <Disclosure id="endpoints" title="Endpoints" summary="Locust per-endpoint statistics" open={Boolean(sections.endpoints)} onToggle={open => toggleSection('endpoints', open)}><LocustSummaryPanel groups={data.locust as LocustGroup[]} /></Disclosure>}
-      {data && <Disclosure id="statistics" title="Statistics" summary="Comparison tests (Holm-adjusted), effect sizes, CSV" open={Boolean(sections.statistics)} onToggle={open => toggleSection('statistics', open)}>
-        <StrategyComparison datasets={[]} metrics={data.statisticsMetrics} experiment={experiment} prepared={data.columns} provenance={provenance} />
-        <ComparisonTable rows={rows} variants={analysis.variants.map(variant => ({id: variant.id, label: variant.alias || variant.name}))} baseline={options.baseline} mode={options.mode} onChange={setOptions} provenance={provenance} title="Differences between experiments" />
-        <FidelitySection rows={data.fidelityRows ?? []} />
+      {data && (data.locust ?? []).length > 0 && <Disclosure id="endpoints" title="Endpoints" summary="per-endpoint statistics from Locust" open={Boolean(sections.endpoints)} onToggle={open => toggleSection('endpoints', open)}><LocustSummaryPanel groups={data.locust as LocustGroup[]} /></Disclosure>}
+      {data && <Disclosure id="statistics" title="Statistics" summary="Holm-adjusted tests, effect sizes, CSV" open={Boolean(sections.statistics)} onToggle={open => toggleSection('statistics', open)}>
+        <StatisticsTabs views={comparisonViews} />
       </Disclosure>}
-      {data?.context && <Disclosure id="environment" title="Environment & methods" summary="Cluster, versions, measurement windows, methods paragraph" open={Boolean(sections.environment)} onToggle={open => toggleSection('environment', open)}><RunContextPanel context={data.context as RunContextSummary} /><MethodsPanel text={methods} /></Disclosure>}
-      {data && <Disclosure id="metrics" title="All metrics" summary={`${data.metrics.length} metrics, plotted on demand`} open={Boolean(sections.metrics)} onToggle={open => toggleSection('metrics', open)}>
+      {data?.context && <Disclosure id="environment" title="Environment & methods" summary="cluster, versions, windows and a methods paragraph" open={Boolean(sections.environment)} onToggle={open => toggleSection('environment', open)}><RunContextPanel context={data.context as RunContextSummary} /><MethodsPanel text={methods} /></Disclosure>}
+      {data && <Disclosure id="metrics" title="All metrics" summary={`${data.metrics.length} recorded, plotted on request`} open={Boolean(sections.metrics)} onToggle={open => toggleSection('metrics', open)}>
         {data.complete ? <AllMetrics metrics={data.metrics} plot={plot} groups={overview?.groups ?? []} provenance={provenance} onFigure={metric => setStudio({kind: 'timeseries', metric})} xy={xySource} onXYFigure={xy => setStudio({kind: 'xy', xy})} /> : <div className="results-placeholder" role="status"><span className="results-spinner" /><strong>{state.progress ?? 'Preparing plots…'}</strong></div>}
       </Disclosure>}
     </div>
     {studio && <FigureStudio open onClose={() => setStudio(null)} request={studio} data={studioData} groups={overview?.groups ?? []} settings={figureSettings} onSettings={setFigureSettings} storageKey={`comparison:${experiment.id}`} />}
-  </div></SeriesNotesContext.Provider>
+  </div></SeriesNotesContext.Provider></ShowEverything.Provider>
 }

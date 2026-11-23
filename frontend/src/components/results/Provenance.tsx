@@ -40,6 +40,7 @@ export function AboutMetric({metric, provenance}: {metric: string; provenance: R
 }
 
 // Table cell content: the badge is the disclosure summary, so details stay one keypress away.
-export function ProvenanceDisclosure({metric, provenance}: {metric: string; provenance: ResolvedProvenance}) {
-  return <details className="provenance-disclosure"><summary aria-label={`${provenanceLabel(provenance)}: about ${metricTitle(metric, provenance)}`}><ProvenanceBadge provenance={provenance} /></summary><Details metric={metric} provenance={provenance} /></details>
+// plain: small source text instead of the coloured badge (dense statistics tables).
+export function ProvenanceDisclosure({metric, provenance, plain = false}: {metric: string; provenance: ResolvedProvenance; plain?: boolean}) {
+  return <details className={`provenance-disclosure ${plain ? 'plain' : ''}`.trim()}><summary aria-label={`${provenanceLabel(provenance)}: about ${metricTitle(metric, provenance)}`}>{plain ? <span className="provenance-text" title={provenance.description || undefined}>{provenanceLabel(provenance)}{provenance.legacy && ' · catalog'}{provenance.mixed && ' · mixed'}</span> : <ProvenanceBadge provenance={provenance} />}</summary><Details metric={metric} provenance={provenance} /></details>
 }

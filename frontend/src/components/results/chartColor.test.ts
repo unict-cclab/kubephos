@@ -73,12 +73,12 @@ describe('user-chosen series colours', () => {
 })
 
 describe('legend notice', () => {
-  it('shows why a variant colour was adjusted in the legend tooltip', async () => {
+  it('notes under the chart why a variant colour was adjusted', async () => {
     const {render, screen} = await import('@testing-library/react')
     const {SeriesNotesContext, TimeChart} = await import('./TimeChart')
     const {createElement} = await import('react')
     const series = (label: string, color: string) => ({id: label, label, color, points: [{t: 0, v: 1}, {t: 15000, v: 2}]})
     render(createElement(SeriesNotesContext.Provider, {value: {Tuned: 'Shown darker than the chosen colour #ffe680'}}, createElement(TimeChart, {ariaLabel: 'chart', panels: [{id: 'p', title: 'P', unit: 'cores', series: [series('Baseline', 'var(--chart-1)'), series('Tuned', '#c9a800')]}]})))
-    expect(screen.getByTitle('Shown darker than the chosen colour #ffe680')).toHaveTextContent('Tuned')
+    expect(screen.getByText('*Tuned: Shown darker than the chosen colour #ffe680.')).toBeInTheDocument()
   })
 })

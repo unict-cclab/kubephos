@@ -15,7 +15,7 @@ import {NumericInput} from './NumericInput'
 import {ComparativeConfigurationView} from './ComparativeConfigurationView'
 import {ActionIcon} from './ActionIcon'
 import type {ReadoutTableData} from './ReadoutTable'
-import {TrialScheduleFields, isTrialScheduleError, savedTrialSchedule, trialScheduleError, type TrialSchedule} from './TrialScheduleFields'
+import {TrialScheduleFields, isTrialScheduleError, savedTrialSchedule, trialScheduleError, trialSchedulePayload, type TrialSchedule} from './TrialScheduleFields'
 const suiteColors = ['#1f77b4', '#d55e00', '#009e73', '#cc79a7', '#e69f00', '#56b4e9', '#000000', '#7f7f7f']
 
 export function ComparativeConfigurationDialog({open, close, configurations, applications, clusters, session, changed, item, readOnly = false}: {open: boolean; close: () => void; configurations: ExperimentConfiguration[]; applications: Application[]; clusters: ManagedResource[]; session: Session; changed: () => Promise<void>; item?: ExperimentConfiguration; readOnly?: boolean}) {
@@ -40,6 +40,8 @@ export function ComparativeConfigurationDialog({open, close, configurations, app
   const [revision, setRevision] = useState(item?.updatedAt)
   const [pending, setPending] = useState(false)
   const [error, setError] = useErrorState()
+  // The "Wait for my Start" choice matters only for manual-start members repeated more than once.
+  const manualStartShown = selected.some(id => available.find(configuration => configuration.id === id)?.definition.twoPhaseStart) && runs + (schedule.firstTrialPilot ? 1 : 0) > 1
   const reviewMembers: ReadoutTableData = {headers: ['Order', 'Configuration', 'Plot label', 'Color'], rows: selected.map((id, index) => {
     const source = available.find(configuration => configuration.id === id)
     const alias = presentation[id]?.alias ?? source?.name ?? 'Unavailable configuration'
@@ -68,7 +70,7 @@ export function ComparativeConfigurationDialog({open, close, configurations, app
     setPending(true)
     setError('')
     try {
-      await request<ExperimentConfiguration>(item ? `/experiment-configurations/${item.id}` : '/experiment-configurations', {method: item ? 'PUT' : 'POST', body: JSON.stringify({name: values.get('name'), description: item?.description ?? '', kind: 'suite', updatedAt: revision, definition: {kind: 'suite', variants: selected.map(configurationId => ({configurationId, alias: presentation[configurationId]?.alias, color: presentation[configurationId]?.color})), runs, ...schedule}})}, session.csrfToken)
+      await request<ExperimentConfiguration>(item ? `/experiment-configurations/${item.id}` : '/experiment-configurations', {method: item ? 'PUT' : 'POST', body: JSON.stringify({name: values.get('name'), description: item?.description ?? '', kind: 'suite', updatedAt: revision, definition: {kind: 'suite', variants: selected.map(configurationId => ({configurationId, alias: presentation[configurationId]?.alias, color: presentation[configurationId]?.color})), runs, ...trialSchedulePayload(schedule, manualStartShown)}})}, session.csrfToken)
       setSelected([])
       setPresentation({})
       close()
@@ -96,7 +98,7 @@ export function ComparativeConfigurationDialog({open, close, configurations, app
     {selected.filter(id => !available.some(configuration => configuration.id === id)).map((id, index) => <div key={`${id}-${index}`}><ErrorFeedback message={`Unavailable single configuration ${id || '(deleted)'}`}/><button type="button" className="button secondary compact" onClick={() => setSelected(current => current.filter(value => value !== id))}>Remove unavailable configuration</button></div>)}
     </WizardStep><WizardStep title="Execution">{selected.length > 0 && <>{selected.map((id, index) => <div className="suite-order-row" key={`${id}-${index}`}><span>{index + 1}. {presentation[id]?.alias ?? available.find(configuration => configuration.id === id)?.name ?? 'Unavailable configuration'}</span><button type="button" className="button secondary icon-button" aria-label={`Move configuration ${index + 1} up`} disabled={index === 0} onClick={() => setSelected(current => {const next = [...current]; [next[index - 1], next[index]] = [next[index], next[index - 1]]; return next})}><ActionIcon name="up" /></button><button type="button" className="button secondary icon-button" aria-label={`Move configuration ${index + 1} down`} disabled={index === selected.length - 1} onClick={() => setSelected(current => {const next = [...current]; [next[index], next[index + 1]] = [next[index + 1], next[index]]; return next})}><ActionIcon name="down" /></button></div>)}</>}
     <label>Executions per configuration<NumericInput name="runs" min={1} max={20} value={runs} onValueChange={setRuns} required /></label>
-    <TrialScheduleFields value={schedule} error={scheduleError} onChange={value => {setSchedule(value); setScheduleError('')}} />
+    <TrialScheduleFields value={schedule} error={scheduleError} manualStart={manualStartShown} perConfiguration onChange={value => {setSchedule(value); setScheduleError('')}} />
     </WizardStep><WizardStep title="Review"><WizardReview /></WizardStep>
   </WizardForm></Dialog>{adding && <ResourcePickerDialog resource="configurations" items={available} selectedIds={selected} session={session} close={() => setAdding(false)} add={add} />}</>
 }

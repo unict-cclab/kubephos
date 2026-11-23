@@ -56,7 +56,7 @@ describe('experiments history creation', () => {
     fireEvent.change(select, {target: {value: 'cfg_2'}})
     const suggestedName = (screen.getByRole('textbox', {name: 'Name'}) as HTMLInputElement).value
     expect(suggestedName).toMatch(/^Scheduler plugin-\d{2}\/\d{2}\/\d{4}-\d{2}:\d{2}$/)
-    fireEvent.change(screen.getByRole('spinbutton', {name: 'Number of executions'}), {target: {value: '2'}})
+    fireEvent.change(screen.getByRole('spinbutton', {name: 'Measured repetitions'}), {target: {value: '2'}})
     fireEvent.click(screen.getByRole('button', {name: 'Validate and run'}))
 
     await waitFor(() => expect(request).toHaveBeenCalledWith('/experiments/start', expect.objectContaining({method: 'POST'}), 'token'))

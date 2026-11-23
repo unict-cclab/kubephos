@@ -80,15 +80,15 @@ describe('runInsights', () => {
     const {insights, services} = runInsights([saturatedRun()])
     expect(insights.length).toBeLessThanOrEqual(insightThresholds.maxInsights)
     expect(insights.map(item => item.id)).toEqual(['target-not-sustained', 'bottleneck', 'slo', 'endpoint-split'])
-    expect(insights[0]).toMatchObject({severity: 'critical', title: 'Target load not sustained: 163 of 250 req/s (65 %)', target: 'throughput'})
+    expect(insights[0]).toMatchObject({severity: 'critical', title: 'The system handled only 163 of the 250 req/s offered (65 %)', target: 'throughput'})
     expect(insights[0].detail).toContain('saturated')
     expect(insights[0].detail).toContain('recommendationservice')
     expect(insights[1].severity).toBe('critical')
-    expect(insights[1].title).toBe('Bottleneck: recommendationservice — server P95 2.3 s without CPU saturation (0.20 cores, no CPU limit)')
+    expect(insights[1].title).toBe('recommendationservice is the bottleneck: its P95 reached 2.3 s while CPU stayed at 0.20 cores, which points to queueing rather than CPU')
     expect(insights[1].detail).toMatch(/concurrency limit .*slow dependency/)
     expect(insights[1].detail).not.toMatch(/CPU-throttled|possible CPU limit/)
-    expect(insights[2].title).toBe('SLO 350 ms violated 100 % of the time (client P95 2.4 s)')
-    expect(insights[3].title).toBe('Endpoints split: / and /setCurrency P50 ≤ 230 ms, 4 others ≈ 1.7 s')
+    expect(insights[2].title).toBe('The 350 ms SLO was missed in 100 % of windows (client P95 2.4 s)')
+    expect(insights[3].title).toBe('Endpoints fall into two groups: / and /setCurrency answer within 230 ms, the other 4 take about 1.7 s')
     expect(services[0]).toMatchObject({service: 'recommendationservice', bottleneck: true})
     expect(services.filter(item => item.bottleneck)).toHaveLength(1)
     // The load generator never appears among the services.
@@ -98,10 +98,10 @@ describe('runInsights', () => {
 
   it('calls the bottleneck CPU-throttled only with a known limit', () => {
     const {insights, services} = runInsights([saturatedRun('limited', {limit: .2})])
-    expect(insights[1].title).toBe('Bottleneck: recommendationservice — server P95 2.3 s, CPU-throttled (0.20 of 0.20 cores limit)')
+    expect(insights[1].title).toBe('recommendationservice is the bottleneck: its P95 reached 2.3 s with CPU pinned at its limit (0.20 of 0.20 cores), so it is being throttled')
     expect(services[0].cpuLimitCores).toBeCloseTo(.2)
     const below = runInsights([saturatedRun('unlimited', {limit: 2})]).insights[1]
-    expect(below.title).toContain('without CPU saturation (0.20 of 2.00 cores limit)')
+    expect(below.title).toContain('while CPU stayed at 0.20 of 2.00 cores allowed, which points to queueing')
   })
 
   it('does not declare a bottleneck when no service dominates', () => {
@@ -113,9 +113,9 @@ describe('runInsights', () => {
   it('flags legacy over-delivery as not comparable and shows autoscaling', () => {
     const {insights} = runInsights([legacyRun()])
     expect(insights.map(item => item.id)).toEqual(['target-exceeded', 'slo', 'legacy-dataset', 'autoscaling'])
-    expect(insights[0]).toMatchObject({severity: 'critical', title: 'Load generator exceeded target: 311 vs 175 req/s (178 %) — legacy generator bug, data not comparable'})
-    expect(insights[1].title).toBe('SLO 350 ms violated 67 % of the time (client P95 1.3 s)')
-    expect(insights[3].title).toBe('Autoscaling active: 3 services scaled, up to 10 replicas')
+    expect(insights[0]).toMatchObject({severity: 'critical', title: 'The generator sent more than asked: 311 against 175 req/s (178 %), a legacy generator bug, so the data are not comparable'})
+    expect(insights[1].title).toBe('The 350 ms SLO was missed in 67 % of windows (client P95 1.3 s)')
+    expect(insights[3].title).toBe('Autoscaling was active: 3 services scaled, up to 10 replicas')
     expect(insights[3].detail).toContain('recommendationservice 1→10')
   })
 
@@ -127,7 +127,7 @@ describe('runInsights', () => {
       ...service('cartservice', 100, 20, .05)
     ]})
     const first = runInsights([run])
-    expect(first.insights).toEqual([expect.objectContaining({id: 'target-sustained', severity: 'ok', title: 'Target load sustained: 99 of 100 req/s (99 %)'})])
+    expect(first.insights).toEqual([expect.objectContaining({id: 'target-sustained', severity: 'ok', title: 'The system kept up with the load: 99 of the 100 req/s offered (99 %)'})])
     expect(runInsights([run])).toEqual(first)
   })
 
@@ -150,9 +150,9 @@ describe('runInsights', () => {
       {id: 'b', name: 'Tuned', configuration: {}, trials: [{id: 't2', position: 0, status: 'succeeded', resultArtifactId: 'b1'}]}
     ]} as unknown as Experiment
     const {insights} = runInsights([saturatedRun('a1'), saturatedRun('b1', {recommendationP95: 2500})], experiment)
-    expect(insights[0].title).toMatch(/^Baseline: Target load not sustained/)
+    expect(insights[0].title).toMatch(/^In Baseline, the system handled only/)
     expect(insights[0].detail).toContain('Also in Tuned.')
-    expect(insights[1].title).toMatch(/^Tuned: Bottleneck: recommendationservice — server P95 2.5 s/)
+    expect(insights[1].title).toMatch(/^In Tuned, recommendationservice is the bottleneck: its P95 reached 2.5 s/)
   })
 })
 
@@ -175,9 +175,9 @@ describe.skipIf(!realDirectory)('runInsights on real datasets', () => {
     if (!item) return
     const {insights, services} = runInsights([item])
     expect(insights[0]).toMatchObject({id: 'target-not-sustained', severity: 'critical'})
-    expect(insights[0].title).toMatch(/16\d of 250 req\/s \(6\d %\)/)
-    expect(insights.find(entry => entry.id === 'bottleneck')?.title).toMatch(/^Bottleneck: recommendationservice — server P95 2\.3 s without CPU saturation/)
-    expect(insights.find(entry => entry.id === 'slo')?.title).toMatch(/^SLO 350 ms violated 100 %/)
+    expect(insights[0].title).toMatch(/16\d of the 250 req\/s offered \(6\d %\)/)
+    expect(insights.find(entry => entry.id === 'bottleneck')?.title).toMatch(/^recommendationservice is the bottleneck: its P95 reached 2\.3 s while CPU stayed/)
+    expect(insights.find(entry => entry.id === 'slo')?.title).toMatch(/^The 350 ms SLO was missed in 100 %/)
     expect(services[0]).toMatchObject({service: 'recommendationservice', bottleneck: true})
     expect(services[0].cpuCores).toBeCloseTo(.2, 1)
   })
@@ -187,7 +187,7 @@ describe.skipIf(!realDirectory)('runInsights on real datasets', () => {
     if (!item) return
     const {insights} = runInsights([item])
     expect(insights[0]).toMatchObject({id: 'target-exceeded', severity: 'critical'})
-    expect(insights[0].title).toContain('legacy generator bug, data not comparable')
+    expect(insights[0].title).toContain('legacy generator bug, so the data are not comparable')
     expect(insights.map(entry => entry.id)).toContain('legacy-dataset')
     expect(insights.map(entry => entry.id)).toContain('autoscaling')
   })

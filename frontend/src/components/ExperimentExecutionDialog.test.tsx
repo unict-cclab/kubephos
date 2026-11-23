@@ -16,7 +16,7 @@ describe('unified experiment execution', () => {
   const onCreated = vi.fn()
   render(<ExperimentExecutionDialog open configurations={[single, suite]} initialConfigurationId="suite" close={() => {}} session={{authenticated: true, csrfToken: 'csrf'}} changed={async () => {}} onCreated={onCreated} />)
   expect(screen.queryByText(/runs per configuration ×/)).not.toBeInTheDocument()
-  expect(screen.queryByLabelText('Number of executions')).not.toBeInTheDocument()
+  expect(screen.queryByLabelText('Measured repetitions')).not.toBeInTheDocument()
   fireEvent.click(screen.getByRole('button', {name: 'Validate and run'}))
   await waitFor(() => expect(onCreated).toHaveBeenCalledWith('experiment'))
   const call = vi.mocked(request).mock.calls.at(-1)!
@@ -26,7 +26,7 @@ describe('unified experiment execution', () => {
  it('keeps single repetition controls when switching from comparative to single', () => {
   render(<ExperimentExecutionDialog open configurations={[single, suite]} initialConfigurationId="suite" close={() => {}} session={{authenticated: true}} changed={async () => {}} onCreated={() => {}} />)
   fireEvent.change(screen.getByLabelText('Configuration'), {target: {value: 'single'}})
-  expect(screen.getByLabelText('Number of executions')).toHaveValue(3)
+  expect(screen.getByLabelText('Measured repetitions')).toHaveValue(3)
   expect(screen.queryByText('4 runs per configuration × 2 configurations')).not.toBeInTheDocument()
  })
 })
@@ -94,6 +94,77 @@ it('keeps the repetition schedule fields accessible, including a rejected value'
  const {TrialScheduleFields} = await import('./TrialScheduleFields')
  const axe = (await import('axe-core')).default
  render(<main><h1>Run</h1><form><TrialScheduleFields value={{restSecondsBetweenTrials: 0, firstTrialPilot: true}} error="Rest between runs must be between 0 and 3600 seconds." onChange={() => {}} /></form></main>)
+ const results = await axe.run(document.body, {runOnly: {type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag21aa', 'wcag22aa']}, rules: {'color-contrast': {enabled: false}}})
+ expect(results.violations.map(({id}) => id)).toEqual([])
+})
+
+describe('manual start scope', () => {
+ const load = {id: 'component-1', pluginId: 'load', capability: 'load.session.control', configuration: {steps: [{type: 'constant', durationSeconds: 300, rps: 10}]}, targets: {include: [], exclude: []}}
+ const manual: ExperimentConfiguration = {...single, id: 'manual', name: 'Manual', definition: {...single.definition, twoPhaseStart: true, components: [load]}}
+ const open = (configurations: ExperimentConfiguration[], initial: string) => render(<ExperimentExecutionDialog open configurations={configurations} initialConfigurationId={initial} close={() => {}} session={{authenticated: true, csrfToken: 'csrf'}} changed={async () => {}} onCreated={() => {}} />)
+ const body = () => JSON.parse(String(vi.mocked(request).mock.calls.at(-1)![1]?.body))
+ it('is hidden for automatic start and for a single repetition', () => {
+  const view = open([single], 'single')
+  expect(screen.queryByLabelText('Wait for my Start')).not.toBeInTheDocument()
+  view.unmount()
+  open([manual], 'manual')
+  fireEvent.change(screen.getByLabelText('Measured repetitions'), {target: {value: '1'}})
+  expect(screen.queryByLabelText('Wait for my Start')).not.toBeInTheDocument()
+  // The warm-up adds a second repetition, which brings the choice back.
+  fireEvent.click(screen.getByRole('checkbox', {name: /warm-up/}))
+  expect(screen.getByLabelText('Wait for my Start')).toHaveValue('first')
+ })
+ it('defaults to the first repetition, explains it and sends the choice', async () => {
+  vi.mocked(request).mockReset().mockResolvedValue({id: 'experiment'} as never)
+  open([manual], 'manual')
+  const scope = screen.getByLabelText('Wait for my Start')
+  expect(scope).toHaveValue('first')
+  expect(scope).toHaveAccessibleDescription('Later repetitions start by themselves after the rest interval.')
+  expect(await screen.findByText(/Only the first repetition waits for your Start/)).toBeInTheDocument()
+  expect(screen.getByRole('table', {name: 'Execution settings'})).toHaveTextContent('Wait for my StartFirst repetition only')
+  fireEvent.click(screen.getByRole('button', {name: 'Validate and run'}))
+  await waitFor(() => expect(request).toHaveBeenCalled())
+  expect(body()).toMatchObject({configurationId: 'manual', runs: 3, manualStartScope: 'first'})
+ })
+ it('keeps every repetition waiting when chosen or saved', async () => {
+  vi.mocked(request).mockReset().mockResolvedValue({id: 'experiment'} as never)
+  open([{...manual, definition: {...manual.definition, manualStartScope: 'every'}}], 'manual')
+  const scope = screen.getByLabelText('Wait for my Start')
+  expect(scope).toHaveValue('every')
+  fireEvent.change(scope, {target: {value: 'first'}})
+  fireEvent.change(scope, {target: {value: 'every'}})
+  expect(await screen.findByText(/Every repetition waits for your Start/, {selector: 'dd'})).toBeInTheDocument()
+  fireEvent.click(screen.getByRole('button', {name: 'Validate and run'}))
+  await waitFor(() => expect(request).toHaveBeenCalled())
+  expect(body().manualStartScope).toBe('every')
+ })
+ it('does not send the scope when the control is hidden', async () => {
+  vi.mocked(request).mockReset().mockResolvedValue({id: 'experiment'} as never)
+  open([single], 'single')
+  fireEvent.click(screen.getByRole('button', {name: 'Validate and run'}))
+  await waitFor(() => expect(request).toHaveBeenCalled())
+  expect(body()).not.toHaveProperty('manualStartScope')
+ })
+ it('lets comparative runs keep each configuration choice or override it', async () => {
+  vi.mocked(request).mockReset().mockResolvedValue({id: 'experiment'} as never)
+  const members = [{...manual, id: 'a'}, {...single, id: 'b'}]
+  open([...members, suite], 'suite')
+  const scope = screen.getByLabelText('Wait for my Start')
+  expect(scope).toHaveValue('')
+  fireEvent.click(screen.getByRole('button', {name: 'Validate and run'}))
+  await waitFor(() => expect(request).toHaveBeenCalled())
+  expect(body()).not.toHaveProperty('manualStartScope')
+  fireEvent.change(scope, {target: {value: 'first'}})
+  fireEvent.click(screen.getByRole('button', {name: 'Validate and run'}))
+  await waitFor(() => expect(request).toHaveBeenCalledTimes(2))
+  expect(body()).toMatchObject({configurationId: 'suite', manualStartScope: 'first'})
+ })
+})
+
+it('keeps the manual start choice accessible', async () => {
+ const {TrialScheduleFields} = await import('./TrialScheduleFields')
+ const axe = (await import('axe-core')).default
+ render(<main><h1>Run</h1><form><TrialScheduleFields value={{restSecondsBetweenTrials: 60, firstTrialPilot: false, manualStartScope: 'first'}} manualStart onChange={() => {}} /></form></main>)
  const results = await axe.run(document.body, {runOnly: {type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag21aa', 'wcag22aa']}, rules: {'color-contrast': {enabled: false}}})
  expect(results.violations.map(({id}) => id)).toEqual([])
 })

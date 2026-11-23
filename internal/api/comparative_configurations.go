@@ -94,7 +94,7 @@ func validateComparativeConfiguration(input experimentConfigurationInput, load f
 	}
 	// Only comparative settings belong to a suite; workload settings remain in
 	// the selected single configurations and are frozen when the run starts.
-	definition = experimentConfigurationDefinitionInput{Kind: "suite", Variants: definition.Variants, Runs: definition.Runs, RestSecondsBetweenTrials: definition.RestSecondsBetweenTrials, FirstTrialPilot: definition.FirstTrialPilot}
+	definition = experimentConfigurationDefinitionInput{Kind: "suite", Variants: definition.Variants, Runs: definition.Runs, RestSecondsBetweenTrials: definition.RestSecondsBetweenTrials, FirstTrialPilot: definition.FirstTrialPilot, ManualStartScope: definition.ManualStartScope}
 	value, err := json.Marshal(definition)
 	if err != nil {
 		return fail("invalid_suite", "Could not encode the suite configuration.")
@@ -113,7 +113,8 @@ func executionConfigurationSnapshot(configuration domain.ExperimentConfiguration
 		Runs                     int                              `json:"runs"`
 		RestSecondsBetweenTrials int                              `json:"restSecondsBetweenTrials,omitempty"`
 		FirstTrialPilot          bool                             `json:"firstTrialPilot,omitempty"`
-	}{configuration, members, runs, schedule.RestSeconds, schedule.Pilot})
+		ManualStartScope         string                           `json:"manualStartScope,omitempty"`
+	}{configuration, members, runs, schedule.RestSeconds, schedule.Pilot, schedule.ManualStartScope})
 	return value
 }
 

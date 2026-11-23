@@ -215,7 +215,7 @@ export function XYChart({data, options, groups = []}: {data: XYData; options: XY
 }
 
 // ---------------------------------------------------------------------------------------
-// Publication figure (Figure studio): same data, exported as SVG/PDF/PNG/CSV.
+// Publication figure (KubeStudio): same data, exported as SVG/PDF/PNG/CSV.
 
 export function XYFigure({data, options, settings}: {data: XYData; options: XYOptions; settings: FigureSettings}) {
   const labels = useFigureLabels()

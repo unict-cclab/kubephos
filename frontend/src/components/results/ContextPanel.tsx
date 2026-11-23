@@ -1,10 +1,23 @@
 import {useState} from 'react'
 import {copyText} from '../../clipboard'
-import {ResponsiveTable} from '../ResponsiveTable'
+import {TableScroll} from './DataTable'
 import {concurrentLoadWarning, describeValues, legacyClockNote, type RunContextSummary} from './context'
 
 function Fact({label, value}: {label: string; value?: string}) {
   return value ? <div><dt>{label}</dt><dd>{value}</dd></div> : null
+}
+
+const nodeColumns = [['zone', 'Zone'], ['region', 'Region'], ['instanceType', 'Instance type'], ['kubelet', 'Kubelet'], ['containerRuntime', 'Container runtime'], ['kernel', 'Kernel']] as const
+
+// Columns no node reports are left out and named in a note instead of a column of dashes.
+function NodesTable({nodes}: {nodes: RunContextSummary['nodes']}) {
+  const present = nodeColumns.filter(([key]) => nodes.some(node => node[key]))
+  const missing = nodeColumns.filter(([key]) => !nodes.some(node => node[key])).map(([, label]) => label.toLowerCase())
+  return <><TableScroll label="Cluster nodes, scrollable"><table className="report-table text-table sticky-first" aria-label="Cluster nodes">
+    <thead><tr><th scope="col">Node</th>{present.map(([key, label]) => <th key={key} scope="col">{label}</th>)}</tr></thead>
+    <tbody>{nodes.map(node => <tr key={node.name}><th scope="row">{node.name}</th>{present.map(([key]) => <td key={key}>{node[key] ?? '—'}</td>)}</tr>)}</tbody>
+  </table></TableScroll>
+  <p className="table-footnote">{nodes.length} node{nodes.length === 1 ? '' : 's'}. — not reported by that node.{missing.length ? ` Not reported by any node: ${missing.join(', ')}.` : ''}</p></>
 }
 
 export function RunContextPanel({context}: {context: RunContextSummary}) {
@@ -27,10 +40,7 @@ export function RunContextPanel({context}: {context: RunContextSummary}) {
       <Fact label="Locust workers" value={describeValues(context.workers, value => String(value))} />
       <Fact label="Concurrent KubePhos load" value={context.concurrentLoad.length ? `${context.concurrentLoad.length} run${context.concurrentLoad.length === 1 ? '' : 's'} affected` : context.withoutContext.length === 0 && context.nodes.length ? 'None observed' : undefined} />
     </dl>
-    {context.nodes.length > 0 && <div className="statistics-table-wrap"><ResponsiveTable aria-label="Cluster nodes">
-      <thead><tr><th>Node</th><th>Zone</th><th>Region</th><th>Instance type</th><th>Kubelet</th><th>Container runtime</th><th>Kernel</th></tr></thead>
-      <tbody>{context.nodes.map(node => <tr key={node.name}><td>{node.name}</td><td>{node.zone ?? '—'}</td><td>{node.region ?? '—'}</td><td>{node.instanceType ?? '—'}</td><td>{node.kubelet ?? '—'}</td><td>{node.containerRuntime ?? '—'}</td><td>{node.kernel ?? '—'}</td></tr>)}</tbody>
-    </ResponsiveTable></div>}
+    {context.nodes.length > 0 && <NodesTable nodes={context.nodes} />}
   </section>
 }
 

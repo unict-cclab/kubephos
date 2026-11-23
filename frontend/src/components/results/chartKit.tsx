@@ -43,7 +43,7 @@ export function figureMetrics(settings: FigureSettings): FigureMetrics {
 }
 
 // ---------------------------------------------------------------------------------------
-// Figure host (the Figure studio): label overrides in, figure description out. Without a
+// Figure host (KubeStudio): label overrides in, figure description out. Without a
 // host a figure renders as a self-contained card with its own export actions and caption.
 
 export interface FigureLabelOverrides {title?: string; x?: string; y?: string; series?: Record<string, string>}
@@ -212,7 +212,7 @@ export function FigureCard({id, title: defaultTitle, name, caption, methods = ''
   })
   const svg = <svg id={id} className="pub-figure" viewBox={`0 0 ${r(width)} ${r(height)}`} xmlns="http://www.w3.org/2000/svg" role="img" aria-label={ariaLabel} data-export-size="physical" data-figure-size={settings.size} fontFamily={metrics.family}>
     <rect width={r(width)} height={r(height)} fill="#ffffff" />
-    {settings.showTitle && <SvgText x={width / 2} y={settings.fontSize * 1.3} anchor="middle" size={settings.fontSize * 1.1} family={metrics.family} weight="bold" className="figure-title">{title}</SvgText>}
+    {settings.showTitle && <g data-select="title"><SvgText x={width / 2} y={settings.fontSize * 1.3} anchor="middle" size={settings.fontSize * 1.1} family={metrics.family} weight="bold" className="figure-title">{title}</SvgText></g>}
     {shift ? <g transform={`translate(0 ${r(shift)})`}>{children}</g> : children}
   </svg>
   if (host) return svg

@@ -525,6 +525,8 @@ export interface ExperimentConfiguration extends ResourceAttributionFields {
 	definition: {
     namespace?: string
     twoPhaseStart?: boolean
+    /** With twoPhaseStart: which repetitions wait for Start. Absent means "first". */
+    manualStartScope?: 'first' | 'every'
     kind?: 'single' | 'suite'
     variants?: Array<{configurationId: string; alias: string; color: string}>
     runs?: number

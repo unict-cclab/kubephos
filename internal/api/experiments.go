@@ -272,7 +272,7 @@ func (s *Server) createPipelineExperiment(response http.ResponseWriter, request 
 		writeError(response, http.StatusUnprocessableEntity, "invalid_experiment", err.Error())
 		return
 	}
-	schedule, err := input.trialScheduleInput.resolve(0, false)
+	schedule, err := input.trialScheduleInput.resolve(0, false, "")
 	if err != nil {
 		writeError(response, http.StatusUnprocessableEntity, "invalid_trial_schedule", err.Error())
 		return

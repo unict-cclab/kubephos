@@ -1,124 +1,97 @@
-import {useId, type ReactNode} from 'react'
-import type {FigureLabelOverrides} from './chartKit'
-import {customLimits, defaultFigureSettings, figureSizes, type FigureLegend, type FigureSettings, type FigureSize, type FigureUncertainty} from './figureSettings'
+import {useId, useState, type ReactNode} from 'react'
 
-// Style panel of the Figure studio: page size, type, uncertainty, axes, legend, colour and
-// labels. Every group is visible (nothing collapsed); chips are native radio groups, so arrow
-// keys move between them.
+// KubeStudio property controls: one visual system for every inspector field. Labels sit
+// above their control, every control is 32 px tall, groups are separated by 16 px with a
+// quiet 12 px heading. Choice groups are native radios (arrow keys move between them).
 
-interface Choice<T extends string> {value: T; label: string; hint?: string; icon?: ReactNode}
+export interface Choice<T extends string> {value: T; label: string; hint?: string; icon?: ReactNode}
 
+// Segmented control (radio group). With icons, the label becomes the accessible name and tooltip.
 export function Chips<T extends string>({legend, name, value, choices, onChange, className = '', disabled = false, hideLegend = false}: {legend: string; name: string; value: T; choices: Array<Choice<T>>; onChange: (value: T) => void; className?: string; disabled?: boolean; hideLegend?: boolean}) {
-  return <fieldset className={`studio-chips ${className}`} disabled={disabled}>
-    <legend className={hideLegend ? 'visually-hidden' : 'studio-field-label'}>{legend}</legend>
-    <div className="studio-chip-row">
-      {choices.map(choice => <label key={choice.value} className="studio-chip" data-checked={choice.value === value}>
-        <input type="radio" className="visually-hidden" name={name} value={choice.value} checked={choice.value === value} onChange={() => onChange(choice.value)} />
-        {choice.icon}
-        <span className="studio-chip-text"><span>{choice.label}</span>{choice.hint && <small>{choice.hint}</small>}</span>
+  return <fieldset className={`ks-field ks-segmented ${className}`} disabled={disabled}>
+    <legend className={hideLegend ? 'visually-hidden' : 'ks-label'}>{legend}</legend>
+    <div className="ks-segments">
+      {choices.map(choice => <label key={choice.value} className="ks-segment" data-checked={choice.value === value} title={choice.hint ?? (choice.icon ? choice.label : undefined)}>
+        <input type="radio" className="visually-hidden" name={name} value={choice.value} checked={choice.value === value} onChange={() => onChange(choice.value)} aria-label={choice.icon ? choice.label : undefined} />
+        {choice.icon ?? <span>{choice.label}</span>}
       </label>)}
     </div>
   </fieldset>
 }
 
-export function Section({title, children, action}: {title: string; children: ReactNode; action?: ReactNode}) {
-  return <section className="studio-section" aria-label={title}>
-    <div className="studio-section-head"><h3>{title}</h3>{action}</div>
-    {children}
+// A titled group of properties.
+export function Group({title, children, action}: {title: string; children: ReactNode; action?: ReactNode}) {
+  return <section className="ks-group" aria-label={title}>
+    <div className="ks-group-head"><h3>{title}</h3>{action}</div>
+    <div className="ks-group-body">{children}</div>
   </section>
 }
 
-// Page outline drawn to scale (width and plot height) inside a 28×20 box.
-function PageIcon({width, height}: {width: number; height: number}) {
-  const scale = Math.min(26 / width, 18 / height)
-  const w = Math.max(6, width * scale)
-  const h = Math.max(4, height * scale)
-  return <svg className="studio-chip-icon" width="28" height="20" viewBox="0 0 28 20" aria-hidden="true" focusable="false"><rect x={(28 - w) / 2} y={(20 - h) / 2} width={w} height={h} rx="1.5" fill="none" stroke="currentColor" strokeWidth="1.4" /></svg>
+// Collapsed-by-default group for rarely used settings.
+export function MoreGroup({title, children}: {title: string; children: ReactNode}) {
+  const id = useId()
+  const [open, setOpen] = useState(false)
+  return <section className="ks-group" aria-label={title}>
+    <div className="ks-group-head"><h3><button type="button" className="ks-disclosure" aria-expanded={open} aria-controls={id} onClick={() => setOpen(!open)}>
+      <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><path d="M4 2.5 7.5 6 4 9.5" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" /></svg>{title}
+    </button></h3></div>
+    <div id={id} className="ks-group-body" hidden={!open}>{children}</div>
+  </section>
 }
 
-const sizeChoices: Array<Choice<FigureSize>> = [
-  {value: 'single', label: 'Single column', hint: '3.5 in · IEEE/ACM'},
-  {value: 'onehalf', label: '1.5 column', hint: '5.5 in'},
-  {value: 'double', label: 'Double column', hint: '7.16 in · IEEE/ACM'},
-  {value: 'slide', label: 'Slide 16:9', hint: '10 × 5.63 in'},
-  {value: 'custom', label: 'Custom', hint: 'W × H'}
-].map(choice => ({...choice, value: choice.value as FigureSize, icon: <PageIcon width={choice.value === 'custom' ? 300 : figureSizes[choice.value as FigureSize].width} height={choice.value === 'custom' ? 220 : figureSizes[choice.value as FigureSize].height} />}))
+export const ResetIcon = () => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M4 12a8 8 0 1 0 2.3-5.7M4 5v6h6" /></svg>
 
-const legendChoices: Array<Choice<FigureLegend>> = [
-  {value: 'top', label: 'Top'}, {value: 'right', label: 'Right'}, {value: 'bottom', label: 'Bottom'}, {value: 'inside', label: 'Inside'}, {value: 'none', label: 'None'}
-]
-
-export interface StyleLabels {title: string; x?: string; y?: string; series: string[]}
-
-function LabelField({label, value, fallback, onChange}: {label: string; value: string | undefined; fallback: string; onChange: (value: string | undefined) => void}) {
+// Text field with a reset-to-automatic button.
+export function LabelField({label, value, fallback, onChange}: {label: string; value: string | undefined; fallback: string; onChange: (value: string | undefined) => void}) {
   const id = useId()
   const edited = value !== undefined && value !== fallback
-  return <div className="studio-text-field">
-    <label htmlFor={id}>{label}</label>
-    <div className="studio-input-row">
+  return <div className="ks-field">
+    <label className="ks-label" htmlFor={id}>{label}</label>
+    <div className="ks-input-row">
       <input id={id} type="text" value={value ?? fallback} onChange={event => onChange(event.target.value === fallback ? undefined : event.target.value)} />
-      <button type="button" className="icon-button studio-reset" aria-label={`Reset ${label.toLowerCase()}`} title="Reset to the default" disabled={!edited} onClick={() => onChange(undefined)}>
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M4 12a8 8 0 1 0 2.3-5.7M4 5v6h6" /></svg>
-      </button>
+      <button type="button" className="ks-icon-button" aria-label={`Reset ${label.toLowerCase()}`} title="Back to the automatic text" disabled={!edited} onClick={() => onChange(undefined)}><ResetIcon /></button>
     </div>
   </div>
 }
 
-export function FigureStylePanel({settings, onChange, labels, overrides, onOverrides, logX, onLogX, uncertainty = true, publication = true, spec = false}: {
-  settings: FigureSettings
-  onChange: (next: FigureSettings) => void
-  labels?: StyleLabels
-  overrides: FigureLabelOverrides
-  onOverrides: (next: FigureLabelOverrides) => void
-  // X–Y figures: their own log axes replace the global log y setting.
-  logX?: {x: boolean; y: boolean}
-  onLogX?: (next: {x: boolean; y: boolean}) => void
-  uncertainty?: boolean
-  publication?: boolean
-  // Spec-driven figures (time series, X–Y) edit runs, axes and colour in their own sections.
-  spec?: boolean
-}) {
+// Labelled select.
+export function SelectField({label, value, onChange, children, hint}: {label: string; value: string; onChange: (value: string) => void; children: ReactNode; hint?: string}) {
   const id = useId()
-  const set = <K extends keyof FigureSettings>(key: K, value: FigureSettings[K]) => onChange({...settings, [key]: value})
-  const inches = (key: 'customWidth' | 'customHeight', text: string) => {const value = Number(text); if (Number.isFinite(value) && value >= customLimits.min && value <= customLimits.max) set(key, value)}
-  const series = (label: string, value: string | undefined) => {
-    const next = {...overrides.series}
-    if (value === undefined) delete next[label]
-    else next[label] = value
-    onOverrides({...overrides, series: next})
-  }
-  if (!publication) return <div className="studio-style"><p className="studio-hint">This figure keeps its on-screen layout. Size, type and label settings apply to publication figures (time series, X–Y, run-level, percentiles, services, load fidelity).</p></div>
-  return <div className="studio-style">
-    <Section title="Size">
-      <Chips legend="Page size" name={`${id}-size`} value={settings.size} choices={sizeChoices} onChange={value => set('size', value)} className="studio-size-chips" hideLegend />
-      {settings.size === 'custom' && <div className="studio-two">
-        <label>Width (in)<input type="number" min={customLimits.min} max={customLimits.max} step="0.05" defaultValue={settings.customWidth} onChange={event => inches('customWidth', event.target.value)} /></label>
-        <label>Plot height (in)<input type="number" min={customLimits.min} max={customLimits.max} step="0.05" defaultValue={settings.customHeight} onChange={event => inches('customHeight', event.target.value)} /></label>
-      </div>}
-    </Section>
-    <Section title="Type">
-      <Chips legend="Font family" name={`${id}-font`} value={settings.font} choices={[{value: 'serif', label: 'Serif', hint: 'Times'}, {value: 'sans', label: 'Sans', hint: 'Helvetica'}]} onChange={value => set('font', value)} className="studio-segmented" />
-      <label className="studio-inline-field">Font size<select value={settings.fontSize} onChange={event => set('fontSize', Number(event.target.value))}>{[7, 8, 9, 10, 11, 12].map(size => <option key={size} value={size}>{size} pt</option>)}</select></label>
-    </Section>
-    {!spec && <Section title="Uncertainty & axes">
-      <Chips legend="Uncertainty" name={`${id}-uncertainty`} value={settings.uncertainty} choices={[{value: 'none', label: 'None'}, {value: 'sd', label: '±1 SD'}, {value: 'ci', label: '95 % CI'}] as Array<Choice<FigureUncertainty>>} onChange={value => set('uncertainty', value)} className="studio-segmented" disabled={!uncertainty} />
-      <div className="studio-checks" role="group" aria-label="Axes">
-        <label className="checkbox-row"><input type="checkbox" checked={settings.zeroBased} disabled={Boolean(logX)} onChange={event => set('zeroBased', event.target.checked)} />Y axis from zero</label>
-        {logX && onLogX && <label className="checkbox-row"><input type="checkbox" checked={logX.x} onChange={event => onLogX({...logX, x: event.target.checked})} />Log X axis</label>}
-        <label className="checkbox-row"><input type="checkbox" checked={logX ? logX.y : settings.logY} onChange={event => logX && onLogX ? onLogX({...logX, y: event.target.checked}) : set('logY', event.target.checked)} />Log Y axis{logX ? '' : ' (latency)'}</label>
-      </div>
-    </Section>}
-    <Section title={spec ? 'Legend' : 'Legend & colour'}>
-      <Chips legend="Legend position" name={`${id}-legend`} value={settings.legend} choices={legendChoices} onChange={value => set('legend', value)} className="studio-segmented" />
-      {!spec && <label className="checkbox-row"><input type="checkbox" checked={settings.grayscale} onChange={event => set('grayscale', event.target.checked)} />Grayscale-safe (Okabe–Ito, dashes, markers)</label>}
-    </Section>
-    {labels && <Section title="Labels">
-      <label className="checkbox-row"><input type="checkbox" checked={settings.showTitle} onChange={event => set('showTitle', event.target.checked)} />Show title in figure</label>
-      <LabelField label="Title" value={overrides.title} fallback={labels.title} onChange={value => onOverrides({...overrides, title: value})} />
-      {labels.x !== undefined && <LabelField label="X axis label" value={overrides.x} fallback={labels.x} onChange={value => onOverrides({...overrides, x: value})} />}
-      {labels.y !== undefined && <LabelField label="Y axis label" value={overrides.y} fallback={labels.y} onChange={value => onOverrides({...overrides, y: value})} />}
-      {labels.series.map((label, index) => <LabelField key={`${label}-${index}`} label={`Series ${index + 1} label`} value={overrides.series?.[label]} fallback={label} onChange={value => series(label, value)} />)}
-    </Section>}
-    <button type="button" className="button ghost compact studio-reset-all" onClick={() => onChange({...defaultFigureSettings, customWidth: settings.customWidth, customHeight: settings.customHeight})}>Reset style to defaults</button>
+  return <div className="ks-field">
+    <label className="ks-label" htmlFor={id}>{label}</label>
+    <select id={id} value={value} onChange={event => onChange(event.target.value)}>{children}</select>
+    {hint && <p className="ks-hint">{hint}</p>}
+  </div>
+}
+
+// Switch-style checkbox row.
+export function Toggle({label, checked, onChange, disabled, hint}: {label: string; checked: boolean; onChange: (checked: boolean) => void; disabled?: boolean; hint?: string}) {
+  return <label className="ks-toggle" title={hint}>
+    <input type="checkbox" checked={checked} disabled={disabled} onChange={event => onChange(event.target.checked)} />
+    <span>{label}</span>
+  </label>
+}
+
+const snap = (value: number, step: number, direction: 1 | -1) => {
+  const index = value / step
+  const next = direction > 0 ? Math.floor(index + 1e-9) + 1 : Math.ceil(index - 1e-9) - 1
+  return Math.round(next * step * 1000) / 1000
+}
+export const shortNumber = (value: number) => String(Number(value.toFixed(2)))
+
+// Numeric input with − / + buttons that snap to the step grid; shows at most 2 decimals.
+export function Stepper({label, value, min, max, step, unit, onChange}: {label: string; value: number; min: number; max: number; step: number; unit?: string; onChange: (value: number) => void}) {
+  const id = useId()
+  const [text, setText] = useState<string>()
+  const clamp = (next: number) => Math.min(max, Math.max(min, next))
+  const fullLabel = unit ? `${label} (${unit})` : label
+  return <div className="ks-field">
+    <label className="ks-label" htmlFor={id}>{fullLabel}</label>
+    <div className="ks-stepper">
+      <button type="button" aria-label={`Decrease ${label.toLowerCase()}`} disabled={value <= min} onClick={() => {setText(undefined); onChange(clamp(snap(value, step, -1)))}}>−</button>
+      <input id={id} type="number" inputMode="decimal" min={min} max={max} step={step} value={text ?? shortNumber(value)} onBlur={() => setText(undefined)}
+        onChange={event => {setText(event.target.value); const next = Number(event.target.value); if (event.target.value.trim() !== '' && Number.isFinite(next) && next >= min && next <= max) onChange(next)}} />
+      <button type="button" aria-label={`Increase ${label.toLowerCase()}`} disabled={value >= max} onClick={() => {setText(undefined); onChange(clamp(snap(value, step, 1)))}}>+</button>
+    </div>
   </div>
 }
