@@ -93,6 +93,12 @@ spec:
         port: 80
         protocol: http
         path: /
+        # The frontend answers these with a redirect, which Locust follows.
+        redirects:
+          - {method: POST, path: /setCurrency}
+          - {method: POST, path: /cart}
+          - {method: POST, path: /cart/empty}
+          - {method: GET, path: /logout}
     loadScenarios:
       - id: storefront-journey
         engine: locust

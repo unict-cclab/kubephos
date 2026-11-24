@@ -140,11 +140,13 @@ describe('Request mix editor', () => {
     expect(JSON.parse(hidden(container).value)).toEqual({checkout: 2})
   })
 
-  it('shows the plain Locust users equivalent to each rate without renaming the field', async () => {
+  it('shows the virtual users and server-side rate of each rate without renaming the field', async () => {
     stubApi({withModel: false})
-    render(<form><LoadProfileEditor prefix="load" zones={[]} values={{steps: [{type: 'constant', durationSeconds: 600, rps: 300}]}} requestMix={context} /></form>)
-    // between(1, 10) waits 5.5 s per task of 23/19 requests: 300 x 5.5 x 19 / 23.
-    expect(await screen.findByText('(≈ 1,363 virtual users)')).toBeInTheDocument()
+    const redirects = [{method: 'POST', path: '/setCurrency'}, {method: 'POST', path: '/cart'}]
+    render(<form><LoadProfileEditor prefix="load" zones={[]} values={{steps: [{type: 'constant', durationSeconds: 600, rps: 300}]}} requestMix={{...context, redirects}} /></form>)
+    // between(1, 10) waits 5.5 s per task of 23/19 requests: 300 x 5.5 x 19 / 23 users;
+    // five of those 23 requests are redirected: 300 x 28 / 23 at the server.
+    expect(await screen.findByText('≈ 1,363 virtual users · ≈ 365 req/s server side', {exact: false})).toHaveTextContent('Rate 300 req/s: ≈ 1,363 virtual users · ≈ 365 req/s server side')
     expect(screen.getByLabelText('Requests / second')).toBeInTheDocument()
     await audit()
   })

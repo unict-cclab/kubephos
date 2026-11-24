@@ -20,15 +20,20 @@ function intervals(phases: {durationSeconds?: unknown}[]): string[] {
 }
 function minutes(seconds: number) {return Number((seconds / 60).toFixed(2)).toLocaleString('en-US')}
 
-export function workloadTable(phases: LoadProfileStep[]): ReadoutTableData {
+// describeRate adds what a rate means elsewhere (e.g. virtual users) next to each rate.
+export function workloadTable(phases: LoadProfileStep[], describeRate?: (rps: number) => string | undefined): ReadoutTableData {
+  const rate = (rps: number) => {
+    const description = describeRate?.(rps)
+    return description ? `${rps} (${description})` : String(rps)
+  }
   const fields: Array<{title: string; show: boolean; value: (phase: LoadProfileStep) => string}> = [
-    {title: 'Rate (req/s)', show: phases.some(phase => phase.type === 'constant'), value: (phase: LoadProfileStep) => phase.type === 'constant' ? String(phase.rps) : '—'},
-    {title: 'Minimum (req/s)', show: phases.some(phase => phase.type === 'sinusoidal'), value: (phase: LoadProfileStep) => phase.type === 'sinusoidal' ? String(sinusoidalRange(phase).min) : '—'},
-    {title: 'Maximum (req/s)', show: phases.some(phase => phase.type === 'sinusoidal'), value: (phase: LoadProfileStep) => phase.type === 'sinusoidal' ? String(sinusoidalRange(phase).max) : '—'},
+    {title: 'Rate (req/s)', show: phases.some(phase => phase.type === 'constant'), value: (phase: LoadProfileStep) => phase.type === 'constant' ? rate(phase.rps) : '—'},
+    {title: 'Minimum (req/s)', show: phases.some(phase => phase.type === 'sinusoidal'), value: (phase: LoadProfileStep) => phase.type === 'sinusoidal' ? rate(sinusoidalRange(phase).min) : '—'},
+    {title: 'Maximum (req/s)', show: phases.some(phase => phase.type === 'sinusoidal'), value: (phase: LoadProfileStep) => phase.type === 'sinusoidal' ? rate(sinusoidalRange(phase).max) : '—'},
     {title: 'Period (min)', show: phases.some(phase => phase.type === 'sinusoidal'), value: (phase: LoadProfileStep) => phase.type === 'sinusoidal' ? minutes(phase.periodSeconds) : '—'},
     {title: 'Phase offset (min)', show: phases.some(phase => phase.type === 'sinusoidal'), value: (phase: LoadProfileStep) => phase.type === 'sinusoidal' ? minutes(phase.phaseSeconds) : '—'},
-    {title: 'Start (req/s)', show: phases.some(phase => phase.type === 'exponential'), value: (phase: LoadProfileStep) => phase.type === 'exponential' ? String(phase.startRps) : '—'},
-    {title: 'End (req/s)', show: phases.some(phase => phase.type === 'exponential'), value: (phase: LoadProfileStep) => phase.type === 'exponential' ? String(phase.endRps) : '—'},
+    {title: 'Start (req/s)', show: phases.some(phase => phase.type === 'exponential'), value: (phase: LoadProfileStep) => phase.type === 'exponential' ? rate(phase.startRps) : '—'},
+    {title: 'End (req/s)', show: phases.some(phase => phase.type === 'exponential'), value: (phase: LoadProfileStep) => phase.type === 'exponential' ? rate(phase.endRps) : '—'},
     {title: 'Curve', show: phases.some(phase => phase.type === 'exponential'), value: (phase: LoadProfileStep) => phase.type === 'exponential' ? String(phase.curve) : '—'}
   ].filter(field => field.show)
   const ranges = intervals(phases)

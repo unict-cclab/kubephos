@@ -1,5 +1,6 @@
 import {useEffect, useId, useMemo, useRef, useState} from 'react'
 import {loadScenarioPreview} from '../scenarioScripts'
+import type {ScenarioContext} from './useRateEquivalents'
 import {mixOverrides, mixRunnable, parseLocustfile, requestsPerExecution, taskShares, type LocustParseResult, type LocustTask} from '../locustParser'
 import {findCallModel, modelRequestsPerExecution, predictChain, type FoundCallModel} from '../callChain'
 import type {ApplicationComponent} from '../types'
@@ -11,10 +12,8 @@ import './RequestMix.css'
 // file, editable weights, call-chain profiling settings and the predicted call
 // chain at the profile's peak. Loaded lazily with the load profile tabs.
 
-export interface RequestMixContext {
-  applicationId: string
+export interface RequestMixContext extends ScenarioContext {
   applicationRef: string
-  scenarioId: string
   components: ApplicationComponent[]
 }
 

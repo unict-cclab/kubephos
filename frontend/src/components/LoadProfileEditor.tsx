@@ -8,8 +8,8 @@ import {lazy, Suspense, useEffect, useId, useMemo, useRef, useState, type Dispat
 import {niceAxis, timeAxis} from '../charts'
 import {NumericInput} from './NumericInput'
 import type {RequestMixContext} from './RequestMixEditor'
-import {equivalentUsers, useUserPacing} from './useUserPacing'
-import type {UserPacing} from '../virtualUsers'
+import {rateEquivalentsText, useFormTaskWeights, useRateEquivalents} from './useRateEquivalents'
+import type {RateEquivalents as RateEquivalentsValue} from '../rateEquivalents'
 
 // Loaded with the Generator tab so the initial bundle stays within its budget.
 const LoadGeneratorSettings = lazy(() => import('./LoadGeneratorAdvice').then(module => ({default: module.LoadGeneratorSettings})))
@@ -48,9 +48,8 @@ export function LoadProfileEditor({prefix, zones, values = {}, distribution = 'z
   const initialSteps = loadProfileSteps(values.steps)
   const initialGeography = geographicProfileSteps(values.geographicSteps, zones)
   const root = useRef<HTMLDivElement>(null)
-  // Plain Locust users equivalent to each rate, shown under the rate fields.
-  const pacing = useUserPacing(requestMix, prefix, values.taskWeights, root)
-  const users = (rps: number) => pacing && <EquivalentUsers rps={rps} pacing={pacing} />
+  // Virtual users and server-side rate of each Locust rate, listed under the phase fields.
+  const equivalents = useRateEquivalents(requestMix, useFormTaskWeights(prefix, values.taskWeights, root))
   const [activeLoad,setActiveLoad]=useState<string>()
   const [activeGeography,setActiveGeography]=useState<string>()
   const [sequence, setSequence] = useState(Math.max(3, initialSteps.length + initialGeography.length + 1))
@@ -92,10 +91,11 @@ export function LoadProfileEditor({prefix, zones, values = {}, distribution = 'z
     <FormTabs label="Workload phases" selectedId={activeLoad} onSelect={setActiveLoad} items={steps.map((step,index)=>({id:String(step.id),title:`Phase ${index+1}`,content:<article className="timeline-card">
       <div className="timeline-card-head"><h4>Phase {index + 1}</h4><TimelineActions index={index} count={steps.length} clone={() => {setSteps(current => [...current.slice(0,index+1), {...structuredClone(step),id:sequence}, ...current.slice(index+1)]);setActiveLoad(String(sequence));setSequence(value=>value+1)}} move={direction => setSteps(items => move(items, index, direction))} remove={() => setSteps(items => items.filter(item => item.id !== step.id))} /></div>
       <div className="timeline-fields"><label>Type<select aria-label={`Workload phase ${index + 1} type`} value={step.type} onChange={event => updateLoadStep(setSteps, step.id, {type: event.target.value as LoadStep['type']})}><option value="constant">Constant</option><option value="sinusoidal">Sinusoidal</option><option value="exponential">Exponential</option></select></label><Minutes label="Duration" value={step.durationSeconds} set={value => updateLoadStep(setSteps, step.id, {durationSeconds: value})} />
-        {step.type === 'constant' && <NumberField label="Requests / second" hint={users(step.rps)} value={step.rps} min={0} set={value => updateLoadStep(setSteps, step.id, {rps: value})} />}
-        {step.type === 'sinusoidal' && <><NumberField label="Minimum (req/s)" hint={users(sinusoidalRange(step).min)} value={sinusoidalRange(step).min} min={0} step="any" set={value => updateLoadStep(setSteps, step.id, {minRps: value, maxRps: sinusoidalRange(step).max})} /><NumberField label="Maximum (req/s)" hint={users(sinusoidalRange(step).max)} value={sinusoidalRange(step).max} min={0} max={200000} step="any" validationMessage={sinusoidalRange(step).max > sinusoidalRange(step).min ? '' : 'Maximum must exceed minimum.'} set={value => updateLoadStep(setSteps, step.id, {minRps: sinusoidalRange(step).min, maxRps: value})} /><Minutes label="Period" value={step.periodSeconds} set={value => updateLoadStep(setSteps, step.id, {periodSeconds: value})} /><Minutes label="Phase offset" value={step.phaseSeconds} allowZero set={value => updateLoadStep(setSteps, step.id, {phaseSeconds: value})} /></>}
-        {step.type === 'exponential' && <><NumberField label="Start RPS" hint={users(step.startRps)} value={step.startRps} min={0} set={value => updateLoadStep(setSteps, step.id, {startRps: value})} /><NumberField label="End RPS" hint={users(step.endRps)} value={step.endRps} min={0} set={value => updateLoadStep(setSteps, step.id, {endRps: value})} /><NumberField label="Curve" value={step.curve} min={-20} max={20} step={0.1} set={value => updateLoadStep(setSteps, step.id, {curve: value})} /></>}
+        {step.type === 'constant' && <NumberField label="Requests / second" value={step.rps} min={0} set={value => updateLoadStep(setSteps, step.id, {rps: value})} />}
+        {step.type === 'sinusoidal' && <><NumberField label="Minimum (req/s)" value={sinusoidalRange(step).min} min={0} step="any" set={value => updateLoadStep(setSteps, step.id, {minRps: value, maxRps: sinusoidalRange(step).max})} /><NumberField label="Maximum (req/s)" value={sinusoidalRange(step).max} min={0} max={200000} step="any" validationMessage={sinusoidalRange(step).max > sinusoidalRange(step).min ? '' : 'Maximum must exceed minimum.'} set={value => updateLoadStep(setSteps, step.id, {minRps: sinusoidalRange(step).min, maxRps: value})} /><Minutes label="Period" value={step.periodSeconds} set={value => updateLoadStep(setSteps, step.id, {periodSeconds: value})} /><Minutes label="Phase offset" value={step.phaseSeconds} allowZero set={value => updateLoadStep(setSteps, step.id, {phaseSeconds: value})} /></>}
+        {step.type === 'exponential' && <><NumberField label="Start RPS" value={step.startRps} min={0} set={value => updateLoadStep(setSteps, step.id, {startRps: value})} /><NumberField label="End RPS" value={step.endRps} min={0} set={value => updateLoadStep(setSteps, step.id, {endRps: value})} /><NumberField label="Curve" value={step.curve} min={-20} max={20} step={0.1} set={value => updateLoadStep(setSteps, step.id, {curve: value})} /></>}
       </div>
+      <RateEquivalents rates={phaseRates(step)} equivalents={equivalents} />
     </article>}))}/>
     <ResourceAction action="add" label="Add workload phase" onClick={addLoadStep} /></div>
   const geography = <div className="form-stack" data-review-skip="true"><div className="timeline-duration-summary"><div><strong>Traffic duration</strong><span>{formatDuration(geographicDuration)}</span></div><div><strong>Workload duration</strong><span>{formatDuration(duration)}</span></div></div>
@@ -112,7 +112,7 @@ export function LoadProfileEditor({prefix, zones, values = {}, distribution = 'z
   // The chart sits beside the phases so every edit is visible as it is made.
   const workspace = <div className="load-profile-workspace">{workload}<aside className="load-profile-live" aria-label="Live preview">{preview}</aside></div>
   return <div ref={root} className={`load-profile-editor${tabbed ? ' load-profile-editor-tabbed' : ''}`}>
-    <input type="hidden" data-review-title="Workload phases" data-review-table={JSON.stringify(workloadTable(previewSteps))} name={`${prefix}.steps`} value={JSON.stringify(serializedSteps)} readOnly />
+    <input type="hidden" data-review-title="Workload phases" data-review-table={JSON.stringify(workloadTable(previewSteps, rps => rateEquivalentsText(rps, equivalents)))} name={`${prefix}.steps`} value={JSON.stringify(serializedSteps)} readOnly />
     <input type="hidden" data-review-title={distribution === 'endpoint' ? 'Traffic phases by endpoint' : distribution === 'cluster' ? 'Traffic phases by cluster' : 'Traffic phases by zone'} data-review-table={zones.length ? JSON.stringify(trafficTable(serializedGeography, distribution === 'cluster', distribution === 'endpoint')) : undefined} name={`${prefix}.geographicSteps`} value={JSON.stringify(serializedGeography)} readOnly />
     {tabbed ? <FormTabs label="Load profile settings" items={[
       {id: 'workload', title: 'Workload', content: workspace},
@@ -243,14 +243,26 @@ function TimelineActions({index, count, move: moveItem, remove, clone}: {clone: 
   return <div className="timeline-actions"><button type="button" className="button secondary compact" aria-label={`Clone ${index+1}`} disabled={count>=100} onClick={clone}>Clone</button>{count>1&&<><button type="button" className="icon-button" aria-label="Move up" title="Move up" disabled={index === 0} onClick={() => moveItem(-1)}><ActionIcon name="up" /></button><button type="button" className="icon-button" aria-label="Move down" title="Move down" disabled={index === count - 1} onClick={() => moveItem(1)}><ActionIcon name="down" /></button><button type="button" className="icon-button" aria-label="Remove" title="Remove" disabled={count === 1} onClick={remove}><ActionIcon name="delete" /></button></>}</div>
 }
 
-// A hint sits under the field, outside its label, so it is not part of the field name.
-function NumberField({label, hint, value, set, min, max = 100000, step = 1, validationMessage}: {validationMessage?: string; label: string; hint?: ReactNode; value: number; set: (value: number) => void; min: number; max?: number; step?: number | 'any'}) {
-  const field = <label>{label}<NumericInput validationMessage={validationMessage} value={value} min={min} max={max} step={step} required onValueChange={set} /></label>
-  return hint ? <div className="timeline-field">{field}{hint}</div> : field
+function NumberField({label, value, set, min, max = 100000, step = 1, validationMessage}: {validationMessage?: string; label: string; value: number; set: (value: number) => void; min: number; max?: number; step?: number | 'any'}) {
+  return <label>{label}<NumericInput validationMessage={validationMessage} value={value} min={min} max={max} step={step} required onValueChange={set} /></label>
 }
 
-function EquivalentUsers({rps, pacing}: {rps: number; pacing: UserPacing}) {
-  return <small className="field-equivalent">(≈ {equivalentUsers(rps, pacing).toLocaleString('en-US')} virtual users)</small>
+// The rates a phase is defined by, named as in its fields.
+function phaseRates(step: LoadProfileStep): Array<[string, number]> {
+  if (step.type === 'sinusoidal') return [['Minimum', sinusoidalRange(step).min], ['Maximum', sinusoidalRange(step).max]]
+  if (step.type === 'exponential') return [['Start', step.startRps], ['End', step.endRps]]
+  return [['Rate', step.rps]]
+}
+
+// One line per rate under the phase fields, full width, so long figures wrap
+// instead of running under the neighbouring field or the chart.
+function RateEquivalents({rates, equivalents}: {rates: Array<[string, number]>; equivalents?: RateEquivalentsValue}) {
+  const rows = rates.flatMap(([label, rps]) => {
+    const text = rateEquivalentsText(rps, equivalents)
+    return text ? [{label, rps, text}] : []
+  })
+  if (!rows.length) return null
+  return <ul className="rate-equivalents">{rows.map(row => <li key={row.label}><strong>{row.label} {row.rps.toLocaleString('en-US')} req/s:</strong> {row.text}</li>)}</ul>
 }
 
 // Profiles are stored in whole seconds: any second must stay valid here (a 0.1 minute

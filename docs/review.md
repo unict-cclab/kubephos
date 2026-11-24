@@ -1,12 +1,23 @@
 # Load profile review — 24 November 2026
 
-- Each rate field of the workload phases shows, in brackets, the plain Locust
-  users that would send that rate: rate × mean `wait_time` / requests per task,
+- Each rate of the workload phases shows the plain Locust users that would send
+  that rate: rate × mean `wait_time` / requests per task,
   with the request mix currently in the form and without response time (a lower
   bound). The `wait_time` of the scenario's User classes is read from the Locust
   file (`between`, `constant`, `constant_pacing`, `constant_throughput` with
   literal arguments, also inherited from a local base class); without one no
   figure is shown. The generator is unchanged: it still paces the rate itself.
+- Next to the virtual users, each rate also shows the estimated server-side
+  rate: Locust counts a request whose redirect it follows once, the entry point
+  receives both. Catalog endpoints declare their redirects
+  (`spec.interface.endpoints[].redirects`, method and path, validated); the
+  extra requests per task come from the Locust file's calls and the current
+  mix. Online Boutique declares `POST /setCurrency`, `POST /cart`,
+  `POST /cart/empty` and `GET /logout`: 28 server requests per 23 Locust
+  requests, so 300 req/s reach the node proxies as about 365, as measured.
+  Both figures appear in a full-width list under each phase's fields (one line
+  per rate, wrapping when long), in the wizard's review step and in the
+  configuration's workload phases (`rateEquivalents.ts`).
 - The scenario's Locust file is fetched once per application and shared by the
   Request mix tab and the workload phases (`scenarioScripts.ts`); the parser is
   still loaded on demand.

@@ -660,6 +660,8 @@ export interface ApplicationEndpoint {
   port?: number
   protocol?: string
   path?: string
+  // Requests answered with an HTTP redirect, which the client follows with one more request.
+  redirects?: Array<{method: string; path: string}>
 }
 
 export interface ApplicationLoadScenario {

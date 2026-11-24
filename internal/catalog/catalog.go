@@ -32,6 +32,7 @@ var (
 	groupPattern    = regexp.MustCompile(`^[A-Za-z0-9](?:[-_.A-Za-z0-9]{0,61}[A-Za-z0-9])?$`)
 	commitPattern   = regexp.MustCompile(`^[0-9a-fA-F]{40}$`)
 	digestReference = regexp.MustCompile(`^.+@sha256:[0-9a-fA-F]{64}$`)
+	httpMethods     = map[string]bool{"GET": true, "POST": true, "PUT": true, "PATCH": true, "DELETE": true, "HEAD": true, "OPTIONS": true}
 )
 
 type Descriptor struct {
@@ -101,6 +102,15 @@ type Endpoint struct {
 	Port      int    `json:"port" yaml:"port"`
 	Protocol  string `json:"protocol" yaml:"protocol"`
 	Path      string `json:"path,omitempty" yaml:"path,omitempty"`
+	// Redirects lists the requests this endpoint answers with an HTTP redirect:
+	// the client follows each with one more request through the endpoint, so the
+	// server receives more requests than the load generator counts.
+	Redirects []Redirect `json:"redirects,omitempty" yaml:"redirects,omitempty"`
+}
+
+type Redirect struct {
+	Method string `json:"method" yaml:"method"`
+	Path   string `json:"path" yaml:"path"`
 }
 
 type LoadScenario struct {
@@ -322,6 +332,14 @@ func validate(descriptor Descriptor, origin string) error {
 		}
 		if endpoint.Path != "" && !strings.HasPrefix(endpoint.Path, "/") {
 			return fmt.Errorf("%s.path must start with /", path)
+		}
+		redirects := map[string]bool{}
+		for index, redirect := range endpoint.Redirects {
+			key := redirect.Method + " " + redirect.Path
+			if !httpMethods[redirect.Method] || !strings.HasPrefix(redirect.Path, "/") || strings.ContainsAny(redirect.Path, " \n\r") || redirects[key] {
+				return fmt.Errorf("%s.redirects[%d] needs an upper-case HTTP method and a path starting with /, once each", path, index)
+			}
+			redirects[key] = true
 		}
 	}
 	loadScenarioIDs := map[string]bool{}

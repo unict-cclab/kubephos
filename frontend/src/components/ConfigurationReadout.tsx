@@ -1,12 +1,13 @@
 import {networkMetricValue} from '../networkUnits'
-import type {ReactNode} from 'react'
+import {useMemo,type ReactNode} from 'react'
 import {workloadTable,trafficTable} from './PhaseReadout'
 import type {Application,CatalogStrategy,ExperimentConfiguration,ExperimentConfigurationComponent,ManagedResource,Plugin,Session} from '../types'
 import {ReadoutTable,type ReadoutTableData} from './ReadoutTable'
 import {FormTabs} from './FormTabs'
 import {FormDisclosure} from './FormDisclosure'
 import {InputData} from './InputData'
-import {LoadProfilePreview,loadProfileSteps} from './LoadProfileEditor'
+import {LoadProfilePreview,loadProfileSteps,type LoadProfileStep} from './LoadProfileEditor'
+import {rateEquivalentsText,scenarioRedirects,taskWeights,useRateEquivalents} from './useRateEquivalents'
 import {WizardReadout} from './WizardReadout'
 import {ApplicationSettingsReadout} from './ApplicationSettingsReadout'
 
@@ -17,6 +18,15 @@ const schedulingKinds=[
  {prefix:'autoscaler.',title:'Autoscaler',empty:'No autoscaler: services keep their initial replicas and resources.'},
  {prefix:'',title:'Other',empty:'No other scheduling or scaling component.'}
 ]
+
+// Workload phases with what each rate means for plain Locust users and the server.
+function WorkloadPhases({steps,application,scenarioId,savedWeights}:{steps:LoadProfileStep[];application?:Application;scenarioId?:string;savedWeights:unknown}) {
+ const scenario=scenarioId??application?.descriptor.spec?.interface?.loadScenarios?.[0]?.id
+ const context=application&&scenario?{applicationId:application.id,scenarioId:scenario,redirects:scenarioRedirects(application.descriptor,scenario)}:undefined
+ const weights=useMemo(()=>taskWeights(savedWeights),[savedWeights])
+ const equivalents=useRateEquivalents(context,weights)
+ return <div className="load-profile-workspace"><PhaseTables label="Workload phases" table={workloadTable(steps,rps=>rateEquivalentsText(rps,equivalents))}/><aside className="load-profile-live" aria-label="Live preview"><LoadProfilePreview steps={steps}/></aside></div>
+}
 
 function PhaseTables({table,label}:{table:ReadoutTableData;label:string}) {
  return <FormTabs label={label} items={table.rows.map((row,index)=>({id:String(index),title:`Phase ${index+1}`,content:<ReadoutTable label={`${label} · Phase ${index+1}`} data={{headers:table.headers,rows:[row]}}/>}))}/>
@@ -54,7 +64,7 @@ export function ConfigurationReadout({session,item,clusters,applications,plugins
   const {steps:_steps,geographicSteps,action:_action,interactive:_interactive,scenarioId,...settings}=component.configuration
   if((application?.descriptor.spec?.interface?.loadScenarios?.length??0)>1)settings.scenarioId=scenarioId
   return <FormTabs key={component.id} label="Load profile settings" items={[
-   {id:'workload',title:'Workload',content:<div className="load-profile-workspace"><PhaseTables label="Workload phases" table={workloadTable(steps)}/><aside className="load-profile-live" aria-label="Live preview"><LoadProfilePreview steps={steps}/></aside></div>},
+   {id:'workload',title:'Workload',content:<WorkloadPhases steps={steps} application={application} scenarioId={typeof scenarioId==='string'?scenarioId:undefined} savedWeights={component.configuration.taskWeights}/>},
    ...(Array.isArray(geographicSteps)&&geographicSteps.length?[{id:'distribution',title:'Traffic distribution',content:<PhaseTables label={external?'Traffic phases by endpoint':multi?'Traffic phases by cluster':'Traffic phases by zone'} table={trafficTable(geographicSteps as Record<string,unknown>[],multi,external)}/>}]:[]),
    {id:'generator',title:'Generator',content:<InputData value={settings} schema={plugins.find(value=>value.id===component.pluginId)?.schema}/>}
   ]}/>
