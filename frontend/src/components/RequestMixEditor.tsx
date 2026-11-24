@@ -1,5 +1,5 @@
 import {useEffect, useId, useMemo, useRef, useState} from 'react'
-import {request} from '../api'
+import {loadScenarioPreview} from '../scenarioScripts'
 import {mixOverrides, mixRunnable, parseLocustfile, requestsPerExecution, taskShares, type LocustParseResult, type LocustTask} from '../locustParser'
 import {findCallModel, modelRequestsPerExecution, predictChain, type FoundCallModel} from '../callChain'
 import type {ApplicationComponent} from '../types'
@@ -16,22 +16,6 @@ export interface RequestMixContext {
   applicationRef: string
   scenarioId: string
   components: ApplicationComponent[]
-}
-
-interface ScenarioPreview {loadScenarios?: Array<{id: string; script?: string; scriptDigest?: string}>}
-
-const previews = new Map<string, Promise<ScenarioPreview>>()
-
-function loadPreview(applicationId: string, refresh = false): Promise<ScenarioPreview> {
-  if (!refresh && previews.has(applicationId)) return previews.get(applicationId)!
-  const pending = request<ScenarioPreview>(`/catalog/applications/${encodeURIComponent(applicationId)}/manifest`)
-  previews.set(applicationId, pending)
-  pending.catch(() => previews.delete(applicationId))
-  return pending
-}
-
-export function clearRequestMixCache() {
-  previews.clear()
 }
 
 type Script = {status: 'loading'} | {status: 'error'; message: string} | {status: 'ready'; result: LocustParseResult; digest?: string}
@@ -97,7 +81,7 @@ export function RequestMixEditor({prefix, values = {}, samples, context}: {prefi
   useEffect(() => {
     let active = true
     setScript({status: 'loading'})
-    loadPreview(context.applicationId, revision > 0).then(preview => {
+    loadScenarioPreview(context.applicationId, revision > 0).then(preview => {
       if (!active) return
       const scenario = preview.loadScenarios?.find(item => item.id === context.scenarioId)
       if (!scenario?.script) { setScript({status: 'error', message: 'The Locust file of this scenario is not available.'}); return }

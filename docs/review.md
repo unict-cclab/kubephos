@@ -1,3 +1,33 @@
+# Load profile review — 24 November 2026
+
+- Each rate field of the workload phases shows, in brackets, the plain Locust
+  users that would send that rate: rate × mean `wait_time` / requests per task,
+  with the request mix currently in the form and without response time (a lower
+  bound). The `wait_time` of the scenario's User classes is read from the Locust
+  file (`between`, `constant`, `constant_pacing`, `constant_throughput` with
+  literal arguments, also inherited from a local base class); without one no
+  figure is shown. The generator is unchanged: it still paces the rate itself.
+- The scenario's Locust file is fetched once per application and shared by the
+  Request mix tab and the workload phases (`scenarioScripts.ts`); the parser is
+  still loaded on demand.
+- Online Boutique's node proxies run an nginx-prometheus-exporter sidecar that
+  reads nginx `stub_status` (served on 127.0.0.1 only) and is scraped by the
+  managed Prometheus through the usual pod annotations. Results gain
+  `ingress.request_rps` (source nginx): requests that reach the entry point,
+  including the redirects Locust follows within one of its requests; it is
+  optional and absent for applications without nginx counters. The results'
+  load chart shows it as "Request rate, server side" right under the Locust
+  rate, now titled "Request rate, Locust side".
+- In a configuration's Scheduling and scaling tabs, a kind without a component
+  says what happens instead (default Kubernetes scheduler, no descheduling,
+  initial replicas and resources kept).
+- The browser tab icon is the sidebar brand mark (Geist "K" on the primary
+  color, inverted in dark mode) instead of the older blue drawing.
+- Validation: typecheck, all frontend tests (one navigation test failed once
+  under full-suite load and passed three times alone), the asset budget, and
+  Go vet and tests of the catalog, metrics collector, application inspector and
+  deployer passed. Not yet run on a cluster.
+
 # Istio settings review — 10 November 2026
 
 - The Istio tab asks first whether the run uses Istio. "No" submits no sidecar,

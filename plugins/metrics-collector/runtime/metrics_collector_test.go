@@ -38,9 +38,9 @@ func TestCollectorPrecheckExecuteAndVerify(t *testing.T) {
 	if err := json.Unmarshal(raw, &value); err != nil {
 		t.Fatal(err)
 	}
-	// 29 queried metrics (12 Locust, 6 Istio, 8 resource, 3 network), the
-	// configured load and the SLO: two samples each, five configured samples.
-	if value.Dataset.Spec.Summary.Metrics != 31 || value.Dataset.Spec.Summary.Series != 31 || value.Dataset.Spec.Summary.Samples != 65 {
+	// 30 queried metrics (12 Locust, 6 Istio, 1 nginx, 8 resource, 3 network),
+	// the configured load and the SLO: two samples each, five configured samples.
+	if value.Dataset.Spec.Summary.Metrics != 32 || value.Dataset.Spec.Summary.Series != 32 || value.Dataset.Spec.Summary.Samples != 67 {
 		t.Fatalf("unexpected dataset summary %#v", value.Dataset.Spec.Summary)
 	}
 	if value.Dataset.Spec.SLOMilliseconds != 250 {
@@ -112,7 +112,7 @@ func TestCollectorOmitsSLOMetricsWhenObjectiveIsNotConfigured(t *testing.T) {
 	if err := json.Unmarshal(raw, &value); err != nil {
 		t.Fatal(err)
 	}
-	if value.Dataset.Spec.SLOMilliseconds != 0 || value.Dataset.Spec.Summary.Metrics != 30 {
+	if value.Dataset.Spec.SLOMilliseconds != 0 || value.Dataset.Spec.Summary.Metrics != 31 {
 		t.Fatalf("unexpected dataset without SLO %#v", value.Dataset.Spec)
 	}
 	for _, series := range value.Dataset.Spec.Series {

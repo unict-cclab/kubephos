@@ -37,11 +37,22 @@ export interface LocustTask {
   calls: LocustCall[]
 }
 
+// Locust `wait_time` of a User class: the pause after every task execution.
+export interface LocustWaitTime {
+  kind: 'between' | 'constant' | 'constant_pacing' | 'constant_throughput'
+  args: number[]
+  // Normalized call, e.g. "between(1, 10)".
+  text: string
+}
+
 export interface LocustParseResult {
   status: 'ok' | 'partial' | 'failed'
   tasks: LocustTask[]
   users: LocustUserClass[]
   warnings: string[]
+  // Literal wait times by User class name (own or inherited from a local base);
+  // a class whose wait time is computed or absent has no entry.
+  waitTimes?: Record<string, LocustWaitTime>
 }
 
 interface Line {indent: number; text: string; children: Line[]}
@@ -328,6 +339,19 @@ class LocustModule {
     return undefined
   }
 
+  // A class attribute as written, own or inherited from a local base class.
+  attribute(cls: ClassInfo | undefined, name: string, seen = new Set<string>()): string | undefined {
+    if (!cls || seen.has(cls.name)) return undefined
+    seen.add(cls.name)
+    const own = cls.attributes.get(name)
+    if (own !== undefined) return own
+    for (const base of cls.bases) {
+      const inherited = this.attribute(this.classes.get(base), name, seen)
+      if (inherited !== undefined) return inherited
+    }
+    return undefined
+  }
+
   method(cls: ClassInfo | undefined, name: string, seen = new Set<string>()): {fn: FunctionInfo; cls: ClassInfo} | undefined {
     if (!cls || seen.has(cls.name)) return undefined
     seen.add(cls.name)
@@ -511,6 +535,19 @@ export function mixRunnable(users: LocustUserClass[], overrides: Record<string, 
   return shares.length > 0 && shares.every(map => [...map.values()].some(value => value > 0))
 }
 
+const waitFunctions: Record<LocustWaitTime['kind'], number> = {between: 2, constant: 1, constant_pacing: 1, constant_throughput: 1}
+
+// Reads `between(1, 10)`, `constant(2)`, `locust.constant_pacing(5)`, … with
+// numeric literal arguments; anything else (a computed or custom wait) is unknown.
+export function readWaitTime(text: string | undefined): LocustWaitTime | undefined {
+  const match = /^(?:[A-Za-z_]\w*\.)*([a-z_]+)\s*\((.*)\)$/.exec(text?.trim() ?? '')
+  if (!match || !Object.hasOwn(waitFunctions, match[1])) return undefined
+  const kind = match[1] as LocustWaitTime['kind']
+  const args = splitTopLevel(match[2], ',').filter(Boolean).map(value => Number(value.replace(/^[A-Za-z_]\w*\s*=\s*/, '')))
+  if (args.length !== waitFunctions[kind] || args.some(value => !Number.isFinite(value) || value < 0)) return undefined
+  return {kind, args, text: `${kind}(${args.join(', ')})`}
+}
+
 export function parseLocustfile(source: string): LocustParseResult {
   let module: LocustModule
   try {
@@ -547,7 +584,11 @@ export function parseLocustfile(source: string): LocustParseResult {
   const tasks = [...leaves.values()].map(task => ({...task, share: shares.get(task.name) ?? 0}))
   const warnings = [...module.warnings]
   if (!tasks.length) return {status: 'failed', tasks: [], users: [], warnings: [roots.length || classes.length ? 'No Locust task was found in the User classes of this file.' : 'No Locust User class was found in this file.', ...warnings]}
-  return {status: warnings.length ? 'partial' : 'ok', tasks, users, warnings}
+  const waitTimes = Object.fromEntries(roots.flatMap(cls => {
+    const wait = readWaitTime(module.attribute(cls, 'wait_time'))
+    return wait ? [[cls.name, wait] as const] : []
+  }))
+  return {status: warnings.length ? 'partial' : 'ok', tasks, users, warnings, waitTimes}
 }
 
 // Number of HTTP requests one execution of the task sends, as written (≥ 1 assumed

@@ -2,7 +2,8 @@ import {fireEvent, render, screen, waitFor, within} from '@testing-library/react
 import userEvent from '@testing-library/user-event'
 import axe from 'axe-core'
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest'
-import {clearRequestMixCache, RequestMixEditor, type RequestMixContext} from './RequestMixEditor'
+import {RequestMixEditor, type RequestMixContext} from './RequestMixEditor'
+import {clearScenarioPreviews} from '../scenarioScripts'
 import {LoadProfileEditor} from './LoadProfileEditor'
 import {clearCallModelCache} from '../callChain'
 import {onlineBoutiqueLocustfile} from '../test/locustFixtures'
@@ -43,7 +44,7 @@ async function audit() {
 const hidden = (container: HTMLElement) => container.querySelector<HTMLInputElement>('input[name="load.taskWeights"]')!
 
 describe('Request mix editor', () => {
-  beforeEach(() => {clearRequestMixCache(); clearCallModelCache()})
+  beforeEach(() => {clearScenarioPreviews(); clearCallModelCache()})
   afterEach(() => vi.unstubAllGlobals())
 
   it('shows the Locust tasks, edits weights and writes them only when they differ from the defaults', async () => {
@@ -137,5 +138,14 @@ describe('Request mix editor', () => {
     expect(await screen.findByRole('table', {name: 'Request mix by Locust task'})).toBeInTheDocument()
     await waitFor(() => expect(screen.getByRole('checkbox', {name: 'Measure call chain before warmup'})).toBeChecked())
     expect(JSON.parse(hidden(container).value)).toEqual({checkout: 2})
+  })
+
+  it('shows the plain Locust users equivalent to each rate without renaming the field', async () => {
+    stubApi({withModel: false})
+    render(<form><LoadProfileEditor prefix="load" zones={[]} values={{steps: [{type: 'constant', durationSeconds: 600, rps: 300}]}} requestMix={context} /></form>)
+    // between(1, 10) waits 5.5 s per task of 23/19 requests: 300 x 5.5 x 19 / 23.
+    expect(await screen.findByText('(≈ 1,363 virtual users)')).toBeInTheDocument()
+    expect(screen.getByLabelText('Requests / second')).toBeInTheDocument()
+    await audit()
   })
 })

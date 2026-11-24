@@ -378,7 +378,7 @@ export interface CallModel {
   tasks: CallModelTask[]
 }
 
-export type MetricSource = 'locust' | 'istio' | 'cadvisor' | 'kube-state-metrics' | 'mentat' | 'cilium' | 'kubephos' | 'kube-scheduler' | 'descheduler'
+export type MetricSource = 'locust' | 'istio' | 'nginx' | 'cadvisor' | 'kube-state-metrics' | 'mentat' | 'cilium' | 'kubephos' | 'kube-scheduler' | 'descheduler'
 export type MetricVantage = 'client' | 'server' | 'resource' | 'network' | 'control-plane' | 'configuration'
 
 export interface MetricProvenanceEntry {

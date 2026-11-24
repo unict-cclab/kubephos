@@ -1,5 +1,5 @@
 import {describe, expect, it} from 'vitest'
-import {evaluatePath, logicalLines, mixOverrides, mixRunnable, parseLocustfile, splitTopLevel, taskShares} from './locustParser'
+import {evaluatePath, logicalLines, mixOverrides, mixRunnable, parseLocustfile, readWaitTime, splitTopLevel, taskShares} from './locustParser'
 import {bookinfoLocustfile, onlineBoutiqueLocustfile, trainTicketLocustfile} from './test/locustFixtures'
 
 const byName = (result: ReturnType<typeof parseLocustfile>) => Object.fromEntries(result.tasks.map(task => [task.name, task]))
@@ -34,6 +34,30 @@ describe('Online Boutique upstream load generator', () => {
     expect(tasks.logout).toBeUndefined()
     expect(tasks.empty_cart).toBeUndefined()
     expect(tasks.on_start).toBeUndefined()
+  })
+
+  it('reads the wait time of the User class', () => {
+    expect(result.waitTimes).toEqual({WebsiteUser: {kind: 'between', args: [1, 10], text: 'between(1, 10)'}})
+  })
+})
+
+describe('Locust wait times', () => {
+  it('reads literal wait functions, qualified or with keyword arguments', () => {
+    expect(readWaitTime('constant(2)')).toEqual({kind: 'constant', args: [2], text: 'constant(2)'})
+    expect(readWaitTime('locust.constant_pacing(5)')?.text).toBe('constant_pacing(5)')
+    expect(readWaitTime('between(min_wait=0.5, max_wait=3)')?.args).toEqual([0.5, 3])
+  })
+
+  it('leaves computed or custom waits unknown', () => {
+    expect(readWaitTime('between(1, MAX_WAIT)')).toBeUndefined()
+    expect(readWaitTime('my_wait()')).toBeUndefined()
+    expect(readWaitTime('constant(1, 2)')).toBeUndefined()
+    expect(readWaitTime(undefined)).toBeUndefined()
+  })
+
+  it('inherits the wait time of a local base class', () => {
+    const source = 'from locust import HttpUser, task, constant\n\nclass Base(HttpUser):\n    abstract = True\n    wait_time = constant(3)\n\nclass Shopper(Base):\n    @task\n    def home(self):\n        self.client.get("/")\n'
+    expect(parseLocustfile(source).waitTimes).toEqual({Shopper: {kind: 'constant', args: [3], text: 'constant(3)'}})
   })
 })
 

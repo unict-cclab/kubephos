@@ -791,6 +791,7 @@ func metricDefinitions(namespace, _ string) []metricDefinition {
 const (
 	sourceLocust           = "locust"
 	sourceIstio            = "istio"
+	sourceNginx            = "nginx"
 	sourceCadvisor         = "cadvisor"
 	sourceKubeStateMetrics = "kube-state-metrics"
 	sourceMentat           = "mentat"
@@ -831,6 +832,9 @@ func namespaceMetricDefinitions(namespace string, exclude workloadExclusion) []m
 		{ID: "application.mean_response_time", Unit: "milliseconds", Aggregation: "mean", Source: sourceIstio, Vantage: vantageServer, Optional: true,
 			Query:       `sum by (destination_workload) (rate(istio_request_duration_milliseconds_sum` + istio + rateWindowRange + `)) / sum by (destination_workload) (rate(istio_request_duration_milliseconds_count` + istio + rateWindowRange + `))`,
 			Description: "Mean server response time (rate of the latency sum divided by the rate of the request count) " + istioServerVantage + "."},
+		{ID: "ingress.request_rps", Unit: "requests_per_second", Aggregation: "sum", Source: sourceNginx, Vantage: vantageServer, Optional: true,
+			Query:       `sum(rate(nginx_http_requests_total{namespace=` + selector + `,` + exclude.pod + `}` + rateWindowRange + `))`,
+			Description: "Rate of HTTP requests received by the application's nginx ingress proxies (stub_status counters read by nginx-prometheus-exporter), summed over all proxies: what reaches the entry point, including the redirects Locust follows within one request; absent when the application exposes no nginx counters."},
 		{ID: "cpu.cores", Unit: "cores", Aggregation: "sum", Source: sourceCadvisor, Vantage: vantageResource,
 			Query:       `sum by (pod) (rate(container_cpu_usage_seconds_total{namespace=` + selector + `,container!="",container!="POD",` + exclude.pod + `}` + rateWindowRange + `))`,
 			Description: "CPU used by each pod in cores: rate of container CPU seconds reported by cAdvisor (kubelet), summed over the pod's containers, excluding pause containers and KubePhos helper pods. Labels workload/workload_kind/node/zone are resolved from kube-state-metrics."},

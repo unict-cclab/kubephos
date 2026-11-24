@@ -167,7 +167,17 @@ describe('time chart', () => {
     const plot = screen.getByRole('img', {name: 'Load'})
     expect(plot).toHaveTextContent('SLO 350 ms')
     fireEvent.keyDown(plot, {key: 'End'})
-    expect(screen.getByText(/0:15: Request rate \(req\/s\) Offered \(target\) 180 req\/s; .* Client latency P95 2.41 s/)).toBeInTheDocument()
+    expect(screen.getByText(/0:15: Request rate, Locust side \(req\/s\) Offered \(target\) 180 req\/s; .* Client latency P95 2.41 s/)).toBeInTheDocument()
+  })
+
+  it('shows the server-side ingress rate under the Locust-side rate when it was measured', () => {
+    const plot = (name: string) => name === 'load.achieved_rps' ? [curve('Default', [150, 160])] : name === 'ingress.request_rps' ? [curve('Default', [183, 195])] : name === 'load.p95_response_time' ? [curve('Default', [90, 95], 'milliseconds')] : []
+    const panels = primaryPanels({groups: [{id: 'a', label: 'Default', color: 'var(--chart-1)'}], plot})
+    expect(panels.map(panel => [panel.title, panel.series.map(series => series.label)])).toEqual([
+      ['Request rate, Locust side (req/s)', ['Achieved']],
+      ['Request rate, server side (req/s)', ['Ingress proxies']],
+      ['Client latency', ['P95']]
+    ])
   })
 })
 
