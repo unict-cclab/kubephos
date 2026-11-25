@@ -14,7 +14,10 @@ export function SidebarNavigation({sections, view, navigate, badges = {}, collap
  // Only the group holding the current page stays open after navigation, so the sidebar never outgrows the viewport.
  const expandedFor=(current:View)=>Object.fromEntries(sections.map(section=>[section.id,section.items.some(item=>item.view===current)]))
  const [expanded,setExpanded]=useState<Record<string,boolean>>(()=>expandedFor(view))
- useEffect(()=>setExpanded(expandedFor(view)),[view])
+ // Reset during render when the page changes: an effect would also run after mount, a moment
+ // late, and close a group the user had just opened.
+ const [expandedView,setExpandedView]=useState(view)
+ if(expandedView!==view){setExpandedView(view);setExpanded(expandedFor(view))}
  return <nav className="app-nav app-nav-direct" aria-label="Main navigation">{sections.map(section=>{
   const grouped=Boolean(section.label)
   const current=section.items.some(item=>item.view===view)
