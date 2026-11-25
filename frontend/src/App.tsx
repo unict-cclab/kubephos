@@ -61,7 +61,7 @@ function PlatformApp() {
   const railCollapsed = navigationCollapsed && wideViewport
   const [paletteOpen, setPaletteOpen] = useState(false)
   const mobileNavigationButton = useRef<HTMLButtonElement>(null)
-  const [serviceKind, setServiceKind] = useState<'harbor' | 'nfs'>('harbor')
+  const [serviceKind, setServiceKind] = useState<'harbor' | 'nfs' | 'vm'>('harbor')
 
   const {data, connected, refreshing, ready, load} = usePlatformData(session, setSession, notify)
 
@@ -160,10 +160,11 @@ function PlatformApp() {
   }
 
   const deleteInfrastructureService = async (serviceID: string, name: string) => {
-    if (!await confirmDelete(`Delete service ${name} and its dedicated VM?`)) return
+    const vm = data.infrastructureServices.find(item => item.id === serviceID)?.kind === 'vm'
+    if (!await confirmDelete(vm ? `Delete VM ${name}?` : `Delete service ${name} and its dedicated VM?`)) return
     try {
       await request(`/infrastructure-services/${serviceID}`, {method: 'DELETE'}, session?.csrfToken)
-      await afterMutation('Service deletion validated and queued.')
+      await afterMutation(vm ? 'VM deletion queued.' : 'Service deletion validated and queued.')
     } catch (cause) {
       notify(cause instanceof Error ? cause.message : 'Could not delete the service.', true)
     }

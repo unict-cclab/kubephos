@@ -116,7 +116,9 @@ it('keeps the active catalog creation action in the shared heading and opens its
   HTMLDialogElement.prototype.showModal = function () {this.setAttribute('open', '')}
   HTMLDialogElement.prototype.close = function () {this.removeAttribute('open')}
   try {
-    const {container} = render(createElement(Views, viewProps('catalog')))
+    const props = viewProps('catalog')
+    props.plugins = ['scheduler', 'descheduler', 'autoscaler'].map(kind => ({id: kind, name: kind, version: '1.0.0', description: '', schema: {type: 'object', properties: {image: {type: 'string', format: 'kubephos-strategy-image'}}}, capabilities: [`${kind}.kubernetes.install`], runtime: {kind: 'process'}}))
+    const {container} = render(createElement(Views, props))
     const heading = within(container.querySelector<HTMLElement>('.resource-list-heading')!)
     expect(heading.getByRole('button', {name: 'Import application'})).toBeInTheDocument()
     for (const [tab, action] of [['Schedulers0', 'Add scheduler'], ['Deschedulers0', 'Add descheduler'], ['Autoscalers0', 'Add autoscaler'], ['AI models0', 'Add model']]) {

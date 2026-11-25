@@ -13,22 +13,32 @@ import (
 )
 
 func (s *Server) downloadClusterSSHKey(response http.ResponseWriter, request *http.Request) {
+	vm := strings.HasPrefix(request.URL.Path, "/api/v1/infrastructure-services/")
+	wantedKind := "kubernetes-cluster"
+	label := "Kubernetes cluster"
+	if vm {
+		wantedKind = "vm"
+		label = "VM"
+	}
 	resource, err := s.store.GetManagedResource(request.Context(), request.PathValue("id"))
-	if errors.Is(err, storage.ErrNotFound) || err == nil && resource.Kind != "kubernetes-cluster" {
-		writeError(response, http.StatusNotFound, "not_found", "Kubernetes cluster not found.")
+	if errors.Is(err, storage.ErrNotFound) || err == nil && resource.Kind != wantedKind {
+		writeError(response, http.StatusNotFound, "not_found", label+" not found.")
 		return
 	}
 	if err != nil {
-		writeError(response, http.StatusInternalServerError, "database_error", "Could not read the Kubernetes cluster.")
+		writeError(response, http.StatusInternalServerError, "database_error", "Could not read the "+label+".")
 		return
 	}
 	if resource.Status != "ready" {
-		writeError(response, http.StatusConflict, "cluster_not_ready", "SSH access is available only after every cluster health gate passes.")
+		writeError(response, http.StatusConflict, "cluster_not_ready", "SSH access is available after provisioning completes.")
 		return
 	}
 	stage, name := "machines", resource.Name
+	if vm {
+		stage = "machine"
+	}
 	memberName := request.URL.Query().Get("cluster")
-	if saved, multi := multiClusterSpec(resource.Spec); multi {
+	if saved, multi := multiClusterSpec(resource.Spec); multi && !vm {
 		stage = ""
 		if saved.SharedSSHKey && memberName == "" {
 			stage = "c1-machines"

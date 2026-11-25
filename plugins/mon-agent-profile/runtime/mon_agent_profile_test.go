@@ -134,3 +134,14 @@ func (runner *fakeRunner) Run(_ context.Context, _ string, _ []byte, args ...str
 	}
 	return "", errors.New("unexpected command: " + command)
 }
+
+func TestMonAgentProfileShortRanges(t *testing.T) {
+	for _, window := range []string{"10s", "15s", "30s"} {
+		t.Run(window, func(t *testing.T) {
+			raw := json.RawMessage(`{"clusterConnectionRef":"art_cluster","applicationDeploymentRef":"art_application","observabilityRef":"art_observability","scrapePeriodSeconds":5,"promQLRange":"` + window + `"}`)
+			if report := (Plugin{}).Validate(context.Background(), Invocation{Input: raw}); !report.Valid {
+				t.Fatalf("unexpected validation report: %#v", report)
+			}
+		})
+	}
+}

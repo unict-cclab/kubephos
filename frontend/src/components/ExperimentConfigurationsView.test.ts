@@ -220,7 +220,7 @@ describe('experiment configuration helpers', () => {
     scheduler.schema.properties!.image = {type: 'string', format: 'kubephos-strategy-image'}
     render(createElement(ExperimentConfigurationDialog, {open: true, close: () => {}, items: [item], experiments: [], clusters: [cluster], workspaces: [workspace], applications: [application], plugins: [loadPlugin, metricsPlugin, scheduler], strategies: [], session: {authenticated: true}, isAdmin: true, changed: async () => {}, openOperation: () => {}, item}))
     await goToStep('Scheduling and scaling')
-    expect(screen.getByRole('combobox', {name: 'Image'})).toHaveValue('strategy_removed')
+    expect(screen.getByRole('combobox', {name: 'Name'})).toHaveValue('strategy_removed')
     expect(screen.getByRole('option', {name: 'strategy_removed · unavailable'})).toBeInTheDocument()
   })
 
@@ -236,13 +236,37 @@ describe('experiment configuration helpers', () => {
     fireEvent.click(screen.getByRole('tab', {name: 'Autoscaler'}))
     // The catalog has no Custom Pod Autoscaler image, so only HPA can be added.
     expect(screen.queryByRole('button', {name: 'Add custom pod autoscaler'})).not.toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', {name: 'Add horizontal pod autoscaler'}))
+    fireEvent.click(screen.getByRole('button', {name: 'Add autoscaler'}))
+    expect(screen.getByRole('combobox', {name: 'Type'})).toHaveValue('hpa')
+    expect(screen.getByRole('option', {name: 'Custom autoscaler'})).toBeDisabled()
     const settings = screen.getByRole('combobox', {name: 'Settings'})
     expect(settings).toHaveValue('hpa-50')
     expect(within(settings).getAllByRole('option').map(option => option.textContent)).toEqual(['Custom', 'hpa-50'])
     expect(screen.queryByRole('spinbutton', {name: /Target CPU/})).not.toBeInTheDocument()
     expect(screen.queryByRole('checkbox', {name: 'Custom values'})).not.toBeInTheDocument()
     fireEvent.change(settings, {target: {value: ''}})
+    expect(screen.getByRole('spinbutton', {name: /Target CPU/})).toHaveValue(70)
+  })
+
+  it('switches autoscaler type without retaining settings from the previous type', async () => {
+    const cpa = plugin('cpa', ['autoscaler.kubernetes.install'])
+    cpa.schema = {type: 'object', properties: {image: {type: 'string', format: 'kubephos-strategy-image'}, intervalSeconds: {type: 'integer', title: 'Interval (s)', default: 30}}}
+    const hpa = plugin('hpa', ['autoscaler.kubernetes.install'])
+    hpa.schema = {type: 'object', properties: {cpuUtilization: {type: 'integer', title: 'Target CPU (%)', default: 70}, targetOverrides: {type: 'string'}}}
+    const entry: CatalogStrategy = {id: 'custom-one', workspaceId: workspace.id, name: 'Custom one', kind: 'autoscaler', pluginId: 'cpa', sourceImage: 'example/custom:1', defaultConfiguration: {intervalSeconds: 40}, status: 'succeeded', createdAt: '2026-09-12T00:00:00Z', updatedAt: '2026-09-12T00:00:00Z'}
+    const item: ExperimentConfiguration = {id: 'cfg_switch', workspaceId: workspace.id, clusterResourceId: cluster.id, name: 'Autoscaling', description: '', applicationRef: application.reference, applicationDigest: application.digest, definition: {applicationValues: {}, components: []}, validation: {valid: true, issues: []}, createdAt: '2026-09-12T00:00:00Z', updatedAt: '2026-09-12T00:00:00Z'}
+    render(createElement(ExperimentConfigurationDialog, {open: true, close: () => {}, items: [item], experiments: [], clusters: [cluster], workspaces: [workspace], applications: [application], plugins: [loadPlugin, metricsPlugin, cpa, hpa], strategies: [entry], session: {authenticated: true}, isAdmin: true, changed: async () => {}, openOperation: () => {}, item}))
+    await goToStep('Scheduling and scaling')
+    fireEvent.click(screen.getByRole('tab', {name: 'Autoscaler'}))
+    fireEvent.click(screen.getByRole('button', {name: 'Add autoscaler'}))
+    expect(screen.queryByRole('button', {name: 'Add autoscaler'})).not.toBeInTheDocument()
+    fireEvent.change(screen.getByRole('spinbutton', {name: /Target CPU/}), {target: {value: '85'}})
+    fireEvent.change(screen.getByRole('combobox', {name: 'Type'}), {target: {value: 'cpa'}})
+    expect(screen.getByRole('combobox', {name: 'Name'})).toHaveValue('custom-one')
+    expect(screen.getByRole('spinbutton', {name: 'Interval (s)'})).toHaveValue(40)
+    expect(screen.queryByRole('spinbutton', {name: /Target CPU/})).not.toBeInTheDocument()
+    fireEvent.change(screen.getByRole('combobox', {name: 'Type'}), {target: {value: 'hpa'}})
+    expect(screen.queryByRole('combobox', {name: 'Name'})).not.toBeInTheDocument()
     expect(screen.getByRole('spinbutton', {name: /Target CPU/})).toHaveValue(70)
   })
 

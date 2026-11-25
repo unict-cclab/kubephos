@@ -13,7 +13,7 @@ export {figureDimensions, niceAxis, setPNGResolution, svgToPDF} from '../charts'
 import {useDeleteConfirmation} from './ConfirmationDialog'
 import {useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode} from 'react'
 import {request} from '../api'
-import {openLiveDashboard} from '../liveDashboard'
+import {openClusterLens, openLiveDashboard} from '../liveDashboard'
 import {experimentDeletionMessage, experimentDisplayStatus, formatBytes, formatDate, isTerminalExperiment} from '../lib'
 import type {Artifact, Experiment, ExperimentFigure, ExperimentTrial, Operation, Session, TimeSeriesDataset, Workspace} from '../types'
 import {Dialog} from './Dialog'
@@ -507,6 +507,20 @@ function ExperimentResultsView({artifacts, experiments, operations, workspaces, 
       setOpeningDashboard(false)
     }
   }
+  const [openingLens, setOpeningLens] = useState(false)
+  const configurationId = activeRun?.variant.configurationId ?? focusedExperiment?.configurationId
+  const openLens = async () => {
+    if (!focusedExperiment) return
+    setOpeningLens(true)
+    try {
+      const query = activeRun ? `?trialId=${encodeURIComponent(activeRun.trial.id)}` : ''
+      await openClusterLens(`/experiments/${encodeURIComponent(focusedExperiment.id)}/cluster-lens${query}`)
+    } catch (cause) {
+      setActionError(cause instanceof Error ? cause.message : 'Could not open ClusterLens.')
+    } finally {
+      setOpeningLens(false)
+    }
+  }
   const displayStatus = focusedExperiment ? experimentDisplayStatus({...focusedExperiment, cancelRequested: stopRequested}) : ''
   const canStop = Boolean(focusedExperiment && ['queued', 'running', 'initializing', 'initialized'].includes(focusedExperiment.status))
   const canManage = Boolean(focusedExperiment && canManageResource(session, focusedExperiment.ownerUserId))
@@ -560,7 +574,9 @@ function ExperimentResultsView({artifacts, experiments, operations, workspaces, 
         </div>
         <div className="results-detail-actions">
           {comparison?.actions}
-          {liveDashboard && <button type="button" className="button secondary live-dashboard-button" disabled={openingDashboard} onClick={() => void openDashboard()}><ActionIcon name="pulse" />{openingDashboard ? 'Opening…' : 'Live dashboard'}</button>}
+          {!comparison && focusedExperiment && configurationId && <a className="button secondary" href={`#experiments/configuration/${encodeURIComponent(configurationId)}`}>Configuration</a>}
+          {!comparison && focusedExperiment?.status === 'running' && <button type="button" className="button secondary" disabled={openingLens || !(activeRun ? activeRun.trial.pipelineRunId : focusedRuns.some(item => item.trial.pipelineRunId))} onClick={() => void openLens()}>{openingLens ? 'Opening…' : 'ClusterLens'}</button>}
+          {liveDashboard &&<button type="button" className="button secondary live-dashboard-button" disabled={openingDashboard} onClick={() => void openDashboard()}><ActionIcon name="pulse" />{openingDashboard ? 'Opening…' : 'Live dashboard'}</button>}
           {!comparison && focusedExperiment?.status === 'initialized' && canManage && !stopRequested && <button className="button primary" disabled={startingTraffic} onClick={startTraffic}>{startingTraffic ? 'Starting…' : 'Start'}</button>}
           {!comparison && focusedExperiment && canManage && canStop && <button className="button danger" disabled={stopping || stopRequested} onClick={stopExperiment}>{stopping || stopRequested ? `Stopping ${stopLabel}…` : `Stop ${stopLabel}`}</button>}
           {!comparison && focusedExperiment && <ResourceSharing kind="experiments" id={focusedExperiment.id} name={focusedExperiment.name} ownerUserId={focusedExperiment.ownerUserId} session={session} changed={changed} />}

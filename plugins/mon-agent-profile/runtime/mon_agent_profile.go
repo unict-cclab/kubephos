@@ -138,7 +138,7 @@ func (Plugin) Manifest() plugins.Manifest {
 	return plugins.Manifest{
 		ID: pluginID, Name: "Mon-agent experiment profile", Version: "0.1.0",
 		Description:     "Applies and restores the two experiment-sensitive mon-agent sampling parameters.",
-		Schema:          json.RawMessage(`{"type":"object","additionalProperties":false,"required":["clusterConnectionRef","applicationDeploymentRef","observabilityRef","scrapePeriodSeconds","promQLRange"],"properties":{"clusterConnectionRef":{"type":"string","title":"Kubernetes cluster","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ClusterConnection","x-kubephos-artifact-version":"v1alpha1"},"applicationDeploymentRef":{"type":"string","title":"Application deployment","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ApplicationDeployment","x-kubephos-artifact-version":"v1alpha1"},"observabilityRef":{"type":"string","title":"Managed observability","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ObservabilityCapability","x-kubephos-artifact-version":"v1alpha1"},"scrapePeriodSeconds":{"type":"integer","title":"Mon-agent sampling period in seconds","minimum":5,"maximum":300,"default":30},"promQLRange":{"type":"string","title":"Mon-agent PromQL range","enum":["1m","5m","10m","15m","30m","1h"],"default":"5m"}}}`),
+		Schema:          json.RawMessage(`{"type":"object","additionalProperties":false,"required":["clusterConnectionRef","applicationDeploymentRef","observabilityRef","scrapePeriodSeconds","promQLRange"],"properties":{"clusterConnectionRef":{"type":"string","title":"Kubernetes cluster","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ClusterConnection","x-kubephos-artifact-version":"v1alpha1"},"applicationDeploymentRef":{"type":"string","title":"Application deployment","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ApplicationDeployment","x-kubephos-artifact-version":"v1alpha1"},"observabilityRef":{"type":"string","title":"Managed observability","format":"kubephos-artifact-ref","x-kubephos-artifact-type":"ObservabilityCapability","x-kubephos-artifact-version":"v1alpha1"},"scrapePeriodSeconds":{"type":"integer","title":"Mon-agent sampling period in seconds","minimum":5,"maximum":300,"default":30},"promQLRange":{"type":"string","title":"Mon-agent PromQL range","enum":["10s","15s","30s","1m","5m","10m","15m","30m","1h"],"default":"5m"}}}`),
 		ArtifactInputs:  []domain.ArtifactContract{{Type: "ClusterConnection", Version: "v1alpha1"}, {Type: "ApplicationDeployment", Version: "v1alpha1"}, {Type: "ObservabilityCapability", Version: "v1alpha1"}},
 		ArtifactOutputs: []domain.ArtifactContract{{Type: "MonAgentProfile", Version: "v1alpha1"}},
 		Capabilities:    []string{"monitoring.mon-agent.configure", "monitoring.mon-agent.preflight", "monitoring.mon-agent.cleanup", "lifecycle.cleanup"},
@@ -163,7 +163,7 @@ func (Plugin) Validate(ctx context.Context, invocation Invocation) domain.Valida
 	if spec.ScrapePeriodSeconds < 5 || spec.ScrapePeriodSeconds > 300 {
 		return invalid(report, "scrapePeriodSeconds", "Sampling period must be between 5 and 300 seconds.")
 	}
-	if !oneOf(spec.PromQLRange, "1m", "5m", "10m", "15m", "30m", "1h") {
+	if !oneOf(spec.PromQLRange, "10s", "15s", "30s", "1m", "5m", "10m", "15m", "30m", "1h") {
 		return invalid(report, "promQLRange", "Select a supported PromQL range.")
 	}
 	report.Issues = append(report.Issues, domain.ValidationIssue{Level: "info", Message: "The managed mon-agent and its current settings will be revalidated before they are changed."})

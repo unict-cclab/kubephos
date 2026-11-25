@@ -210,3 +210,26 @@ func TestControllerDeploymentRequiresManagementNode(t *testing.T) {
 		t.Fatalf("expected one dedescheduler deployment, got %d", deployments)
 	}
 }
+
+func TestDeschedulerFiveSecondInterval(t *testing.T) {
+	spec := Spec{ClusterConnectionRef: "art_cluster", ApplicationDeploymentRef: "art_application", TargetBindingRef: "art_binding", Image: testImage, ConfigFile: testDeschedulerPolicy, IntervalSeconds: 5}
+	plugin := Plugin{Kind: "descheduler"}
+	if report := plugin.Validate(context.Background(), Invocation{Input: marshal(t, spec)}); !report.Valid {
+		t.Fatalf("5s interval rejected: %+v", report.Issues)
+	}
+	application := applicationDeployment{}
+	application.Spec.Namespace = "application"
+	binding := targetBinding{}
+	binding.Spec.Targets = []workloadTarget{{ID: "frontend", APIVersion: "apps/v1", Kind: "Deployment", Name: "frontend"}}
+	manifest, err := deschedulerManifest(stepInput{Spec: spec, Name: "test", Namespace: "control", Marker: "owner"}, application, binding)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(manifest), "--descheduling-interval=5s") {
+		t.Fatal("5s interval missing from manifest")
+	}
+	spec.IntervalSeconds = 4
+	if report := plugin.Validate(context.Background(), Invocation{Input: marshal(t, spec)}); report.Valid {
+		t.Fatal("interval below 5s accepted")
+	}
+}

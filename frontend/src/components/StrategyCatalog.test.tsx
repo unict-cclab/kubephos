@@ -99,21 +99,17 @@ describe('catalog categories', () => {
     vi.unstubAllGlobals()
   })
 
-  it('adds a built-in HPA entry with its scaling settings and no image', async () => {
-    const fetch = vi.fn().mockResolvedValue(new Response('{}', {status: 201, headers: {'Content-Type': 'application/json'}}))
-    vi.stubGlobal('fetch', fetch)
-    const item = {...strategy('autoscaler', 'hpa-50'), pluginId: 'hpa', sourceImage: '', status: 'succeeded', defaultConfiguration: {minReplicas: 1, cpuUtilization: 50}}
-    render(<StrategyCatalog kind="autoscaler" items={[item]} plugins={[...plugins, hpa]} workspaces={[]} session={{authenticated: true}} isAdmin changed={async () => {}} openOperation={() => {}} />)
-    expect(screen.getByText('Horizontal Pod Autoscaler')).toBeInTheDocument()
+  it('offers only custom autoscalers when adding to the catalog', () => {
+    render(<StrategyCatalog kind="autoscaler" items={[]} plugins={[...plugins, hpa]} workspaces={[]} session={{authenticated: true}} isAdmin changed={async () => {}} openOperation={() => {}} />)
     fireEvent.click(screen.getByRole('button', {name: 'Add autoscaler'}))
-    fireEvent.change(screen.getByRole('combobox', {name: 'Type'}), {target: {value: 'hpa'}})
-    expect(screen.queryByRole('textbox', {name: 'Image'})).not.toBeInTheDocument()
-    expect(screen.queryByRole('textbox', {name: /overrides/i})).not.toBeInTheDocument()
-    fireEvent.change(screen.getByRole('textbox', {name: 'Name'}), {target: {value: 'hpa-70'}})
-    fireEvent.change(screen.getByRole('spinbutton', {name: /Target CPU/}), {target: {value: '70'}})
-    fireEvent.click(screen.getByRole('button', {name: 'Validate and save'}))
-    await waitFor(() => expect(fetch).toHaveBeenCalled())
-    expect(JSON.parse(fetch.mock.calls[0][1].body)).toEqual({workspaceId: '', name: 'hpa-70', kind: 'autoscaler', pluginId: 'hpa', sourceImage: '', defaultConfiguration: {minReplicas: 1, cpuUtilization: 70}})
-    vi.unstubAllGlobals()
+    expect(screen.queryByRole('combobox', {name: 'Type'})).not.toBeInTheDocument()
+    expect(screen.queryByRole('option', {name: 'Horizontal Pod Autoscaler'})).not.toBeInTheDocument()
+    expect(screen.getByRole('textbox', {name: 'Image'})).toBeRequired()
+    expect(screen.queryByRole('spinbutton', {name: /Target CPU/})).not.toBeInTheDocument()
+  })
+
+  it('disables catalog creation when only HPA is installed', () => {
+    render(<StrategyCatalog kind="autoscaler" items={[]} plugins={[hpa]} workspaces={[]} session={{authenticated: true}} isAdmin changed={async () => {}} openOperation={() => {}} />)
+    expect(screen.getByRole('button', {name: 'Add autoscaler'})).toBeDisabled()
   })
 })

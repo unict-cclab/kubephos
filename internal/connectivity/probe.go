@@ -2,6 +2,7 @@
 package connectivity
 
 import (
+	"bufio"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
@@ -17,6 +18,25 @@ import (
 	"kubephos.dev/kubephos/internal/domain"
 	"kubephos.dev/kubephos/internal/kubeconfig"
 )
+
+// SSH checks the guest's SSH transport without changing the guest or its keys.
+func SSH(ctx context.Context, name, address string) domain.ConnectivityTarget {
+	conn, err := (&net.Dialer{Timeout: 5 * time.Second}).DialContext(ctx, "tcp", address)
+	if err != nil {
+		return Result(name, "unreachable", "The VM SSH endpoint is not reachable.")
+	}
+	defer conn.Close()
+	deadline := time.Now().Add(5 * time.Second)
+	if end, ok := ctx.Deadline(); ok && end.Before(deadline) {
+		deadline = end
+	}
+	_ = conn.SetReadDeadline(deadline)
+	banner, err := bufio.NewReader(io.LimitReader(conn, 256)).ReadString('\n')
+	if err != nil || !strings.HasPrefix(banner, "SSH-2.0-") {
+		return Result(name, "unavailable", "The VM SSH service is not ready.")
+	}
+	return Result(name, "reachable", "The VM SSH service is reachable.")
+}
 
 func Result(name, status, message string) domain.ConnectivityTarget {
 	return domain.ConnectivityTarget{Name: name, Status: status, Message: message}

@@ -15,7 +15,7 @@ export interface SidebarSection { id: string; label: string; items: SidebarItem[
 
 const destinations: NavigationItem[] = [
   {view: 'overview', label: 'Overview', description: 'Setup progress and recent activity'},
-  {view: 'infrastructure', label: 'Infrastructure', description: 'Proxmox connections, VM templates, Harbor and NFS', adminOnly: true},
+  {view: 'infrastructure', label: 'Infrastructure', description: 'Proxmox connections, VM templates, standalone VMs, Harbor and NFS', adminOnly: true},
   {view: 'kubernetes', label: 'Kubernetes', description: 'Provision infrastructure, create clusters and deploy applications'},
   {view: 'deployments', label: 'Deployments', description: 'Applications installed on clusters'},
   {view: 'catalog', label: 'Catalog', description: 'Applications, strategies and AI models'},
@@ -42,7 +42,7 @@ export function visibleNavigation(admin: boolean): SidebarSection[] {
   return [
     {id:'overview',label:'',items:[item('overview')]},
     {id:'infrastructure',label:'Infrastructure',items:[...(admin?[
-      item('infrastructure','Proxmox connections','infrastructure/connections'),item('infrastructure','VM templates','infrastructure/templates'),item('infrastructure','Harbor','infrastructure/harbor'),item('infrastructure','NFS','infrastructure/nfs')
+      item('infrastructure','Proxmox connections','infrastructure/connections'),item('infrastructure','VM templates','infrastructure/templates'),item('infrastructure','VM','infrastructure/vm'),item('infrastructure','Harbor','infrastructure/harbor'),item('infrastructure','NFS','infrastructure/nfs')
     ]:[]),item('kubernetes','Kubernetes clusters')]},
     {id:'deployments',label:'',items:[item('deployments')]},
     {id:'catalog',label:'',items:[item('catalog')]},

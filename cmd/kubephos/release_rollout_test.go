@@ -21,7 +21,7 @@ func TestManagedComponentVersionsAreReleaseLocked(t *testing.T) {
 func TestManagedPreviousClusterLensImage(t *testing.T) {
 	host := "harbor.example.test"
 	prefix := host + "/kubephos-dev/cluster-lens:v1.1.0@sha256:"
-	for _, version := range []string{"v1.3.0", "v1.1.0", "v1.2.0", "v1.2.1", "v1.2.2", "v1.2.3", "v1.2.4", "v1.2.5", "v1.2.6"} {
+	for _, version := range []string{"v1.3.2", "v1.3.1", "v1.3.0", "v1.1.0", "v1.2.0", "v1.2.1", "v1.2.2", "v1.2.3", "v1.2.4", "v1.2.5", "v1.2.6"} {
 		if !managedPreviousClusterLensImage(host+"/kubephos-dev/cluster-lens:"+version, host) {
 			t.Fatalf("valid managed previous tag rejected: %s", version)
 		}

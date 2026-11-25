@@ -35,6 +35,7 @@ export function StrategyCatalog(props: Props) {
   const [error, setError] = useErrorState()
   const catalogItems = props.items.filter(item => item.kind === props.kind)
   const kindPlugins = strategyPlugins(props.plugins, props.kind)
+  const importPlugins = kindPlugins.filter(plugin => props.kind !== 'autoscaler' || runsStrategyImage(plugin))
   const pluginName = (item: CatalogStrategy) => kindPlugins.find(plugin => plugin.id === item.pluginId)?.name ?? item.kind
   const remove = async (item: CatalogStrategy) => {
     if (!await confirmDelete(`Remove ${item.name} from the catalog? Previous experiment results will be retained.`)) return
@@ -47,7 +48,7 @@ export function StrategyCatalog(props: Props) {
     }
   }
   const edit = (item: CatalogStrategy) => { setEditing(item); setOpen(true) }
-  const editor = <StrategyDialog key={editing?.id ?? 'new'} editing={editing} open={open} kind={props.kind} plugins={kindPlugins} close={() => setOpen(false)} workspaces={props.workspaces} session={props.session} changed={props.changed} failed={setError} />
+  const editor = <StrategyDialog key={editing?.id ?? 'new'} editing={editing} open={open} kind={props.kind} plugins={editing ? kindPlugins : importPlugins} close={() => setOpen(false)} workspaces={props.workspaces} session={props.session} changed={props.changed} failed={setError} />
   const selected = detail.route?.kind === 'strategy' ? props.items.find(item => item.id === detail.route?.id) : undefined
   if (selected) return <>{editor}{error && <ErrorFeedback message={error} />}<div className="detail-page"><header className="page-header"><DetailBreadcrumb parent="Catalog" current={selected.name} back={detail.close} /><div className="detail-page-heading"><div><h2>{selected.name}</h2></div></div></header><ResourceAttribution resource={selected} editable /><article className="detail-page-card">
     <div className="details-summary"><div><span>Status</span><strong>{strategyStatus(selected.status)}</strong></div><div><span>Type</span><strong>{pluginName(selected)}</strong></div>{selected.sourceImage && <div><span>Image</span><strong>{selected.sourceImage}</strong></div>}</div>
@@ -57,7 +58,7 @@ export function StrategyCatalog(props: Props) {
   </article></div></>
   return <>
     {confirmationDialog}
-    {props.isAdmin && <ResourceListAction><ResourceAction action="create" label={`Add ${props.kind}`} onClick={() => { setEditing(undefined); setOpen(true) }} /></ResourceListAction>}
+    {props.isAdmin && <ResourceListAction><ResourceAction action="create" label={`Add ${props.kind}`} disabled={!importPlugins.length} onClick={() => { setEditing(undefined); setOpen(true) }} /></ResourceListAction>}
     {error && <ErrorFeedback message={error} />}
     <ResourceListTable open={item => detail.open('strategy', item.id)} items={catalogItems} label={`${props.kind.charAt(0).toUpperCase()}${props.kind.slice(1)}s`} editable searchText={item => `${item.name} ${item.sourceImage}`} columns={[
       {label: 'Name', render: item => <h3>{item.name}</h3>},
@@ -123,7 +124,7 @@ function StrategyDialog({editing, open, kind, plugins, close, workspaces, sessio
       {runsImage && <label>Image<input name="sourceImage" defaultValue={editing?.sourceImage} placeholder={`ghcr.io/team/${kind}:v1.2.0`} required autoFocus /></label>}
       {plugin && !runsImage ? <SchemaFields schema={strategySettingsSchema(plugin)} prefix="settings" values={editing?.defaultConfiguration ?? {}} applications={[]} artifacts={[]} connections={[]} credentials={[]} /> : <details className="advanced-fields" open={!!editing}><summary>Default settings</summary>
         {kind === 'scheduler' && <label>Configuration<textarea className="strategy-config-editor" name="configFile" rows={20} defaultValue={String(editing?.defaultConfiguration.configFile ?? schedulerConfiguration)} spellCheck={false} required /></label>}
-        {kind === 'descheduler' && <><label>Configuration<textarea className="strategy-config-editor" name="configFile" rows={20} defaultValue={String(editing?.defaultConfiguration.configFile ?? deschedulerConfiguration)} spellCheck={false} required /></label><label>Interval (s)<input name="intervalSeconds" type="number" min={10} max={86400} defaultValue={Number(editing?.defaultConfiguration.intervalSeconds ?? 60)} required /></label></>}
+        {kind === 'descheduler' && <><label>Configuration<textarea className="strategy-config-editor" name="configFile" rows={20} defaultValue={String(editing?.defaultConfiguration.configFile ?? deschedulerConfiguration)} spellCheck={false} required /></label><label>Interval (s)<input name="intervalSeconds" type="number" min={5} max={86400} defaultValue={Number(editing?.defaultConfiguration.intervalSeconds ?? 60)} required /></label></>}
         {kind === 'autoscaler' && <><div className="field-row"><label>Interval (s)<input name="intervalSeconds" type="number" min={5} max={3600} defaultValue={Number(editing?.defaultConfiguration.intervalSeconds ?? 15)} required /></label><label>Minimum replicas<input name="minReplicas" type="number" min={1} max={1000} defaultValue={Number(editing?.defaultConfiguration.minReplicas ?? 1)} required /></label><label>Maximum replicas<input name="maxReplicas" type="number" min={1} max={1000} defaultValue={Number(editing?.defaultConfiguration.maxReplicas ?? 10)} required /></label></div><label>Configuration<textarea className="strategy-config-editor" name="parameters" rows={20} defaultValue={typeof editing?.defaultConfiguration.parameters === 'string' ? editing.defaultConfiguration.parameters : JSON.stringify(editing?.defaultConfiguration.parameters ?? {}, null, 2)} spellCheck={false} required /></label></>}
       </details>}
       <div className="modal-actions"><button type="button" className="button secondary" onClick={close}>Cancel</button><button className="button primary" disabled={pending}>{pending ? 'Validating…' : 'Validate and save'}</button></div>
@@ -155,6 +156,9 @@ profiles:
           minCommunicationCost: 0
           minCostImprovement: 0
           maxPodsToEvict: 1
+          latencyWeight: 1
+          bandwidthWeight: 1
+          packetLossWeight: 1
           ignoreSameZoneNetworkCost: true
     plugins:
       deschedule:

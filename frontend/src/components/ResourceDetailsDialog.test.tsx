@@ -37,6 +37,18 @@ describe('resource detail', () => {
   beforeEach(() => serve())
   afterEach(() => vi.clearAllMocks())
 
+  it('shows standalone VM resources, activity and protected SSH access consistently', () => {
+    const vm={...resource,id:'vm_01',name:'vm-01',kind:'vm',spec:{templateId:'template',node:'pve-2',address:'192.0.2.20',vmid:201,cores:2,memoryMiB:2048,diskGiB:32}}
+    const template={...resource,id:'template',kind:'machine-template',spec:{sshUser:'ubuntu'}}
+    render(createElement(ResourceDetailsPage,{resource:vm,resources:[template],connections:[],workspaces:[],runs:[],session:{authenticated:true,user:{role:'admin'}} as Session,close:()=>{},openOperation:()=>{}}))
+    expect(screen.getByRole('heading',{name:'vm-01'})).toBeInTheDocument()
+    expect(screen.getByRole('button',{name:'Activity'})).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button',{name:'Access'}))
+    expect(screen.getByText('ubuntu')).toBeInTheDocument()
+    expect(screen.getByText('192.0.2.20')).toBeInTheDocument()
+    expect(screen.getByRole('link',{name:'Download SSH key'})).toHaveAttribute('href','/api/v1/infrastructure-services/vm_01/ssh-key')
+  })
+
   it('shows only form values for infrastructure resources', () => {
     const template = {...resource, id: 'template_01', name: 'Ubuntu template', kind: 'machine-template', connectionId: 'connection_01', spec: {node: 'pve-1', vmid: 9000, datastore: 'local-lvm', sourceImage: 'ubuntu-24.04'}}
     render(createElement(ResourceDetailsPage, {resource: template, close: () => {}, connections: [{id: 'connection_01', name: 'Lab Proxmox', provider: 'proxmox', pluginId: 'proxmox', createdAt: '', updatedAt: ''}], workspaces: [], resources: [template], runs: [], session: {authenticated: true} as Session, openOperation: () => {}}))

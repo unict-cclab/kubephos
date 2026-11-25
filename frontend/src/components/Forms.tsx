@@ -172,11 +172,11 @@ export function MachineTemplateDialog({open, close, plugins, workspaces, ...comm
   </Dialog>
 }
 
-export function InfrastructureServiceDialog({open, close, workspaces, templates, initialKind = 'harbor', ...common}: CommonProps & {open: boolean; close: () => void; workspaces: Workspace[]; templates: ManagedResource[]; initialKind?: 'harbor' | 'nfs'}) {
+export function InfrastructureServiceDialog({open, close, workspaces, templates, initialKind = 'harbor', ...common}: CommonProps & {open: boolean; close: () => void; workspaces: Workspace[]; templates: ManagedResource[]; initialKind?: 'harbor' | 'nfs' | 'vm'}) {
   const defaultWorkspaceID = workspaces[0]?.id ?? ''
   const defaultConnectionID = common.connections[0]?.id ?? ''
   const [connectionID, setConnectionID] = useState(defaultConnectionID)
-  const [kind, setKind] = useState<'harbor' | 'nfs'>(initialKind)
+  const [kind, setKind] = useState<'harbor' | 'nfs' | 'vm'>(initialKind)
   const [error, setError] = useErrorState()
   const [pending, setPending] = useState(false)
   useEffect(() => {
@@ -213,24 +213,25 @@ export function InfrastructureServiceDialog({open, close, workspaces, templates,
         diskGiB: Number(values.get('diskGiB'))
       })}, common.session.csrfToken)
       close()
-      await common.onDone(`${kind === 'harbor' ? 'Harbor' : 'NFS'} validation passed and provisioning started.`)
+      await common.onDone(`${kind === 'vm' ? 'VM' : kind === 'harbor' ? 'Harbor' : 'NFS'} validation passed and provisioning started.`)
     } catch (cause) {
       setError(validationMessage(cause))
     } finally {
       setPending(false)
     }
   }
-  const defaults = kind === 'harbor' ? {cores: 4, memory: 8192, disk: 100} : {cores: 2, memory: 4096, disk: 200}
-  return <Dialog open={open} onClose={close} title={`New ${kind === 'harbor' ? 'Harbor registry' : 'NFS server'}`} className="template-modal" presentation="page">
-    <WizardForm onSubmit={submit} key={`${kind}-${workspaceID}-${connectionID}`} onCancel={close} pending={pending} error={error} submitDisabled={!availableTemplates.length || !workspaceID || !connectionID} submitLabel={`Create ${kind === 'harbor' ? 'Harbor' : 'NFS'}`}>
+  const minimumDisk = Number(availableTemplates.find(item => item.id === selectedTemplateID)?.spec.diskGiB ?? 8)
+  const defaults = kind === 'vm' ? {cores: 2, memory: 2048, disk: Math.max(32, minimumDisk)} : kind === 'harbor' ? {cores: 4, memory: 8192, disk: 100} : {cores: 2, memory: 4096, disk: 200}
+  return <Dialog open={open} onClose={close} title={`New ${kind === 'vm' ? 'VM' : kind === 'harbor' ? 'Harbor registry' : 'NFS server'}`} className="template-modal" presentation="page">
+    <WizardForm onSubmit={submit} key={`${kind}-${workspaceID}-${connectionID}`} onCancel={close} pending={pending} error={error} submitDisabled={!availableTemplates.length || !workspaceID || !connectionID} submitLabel={`Create ${kind === 'vm' ? 'VM' : kind === 'harbor' ? 'Harbor' : 'NFS'}`}>
       <WizardStep title="General">
-<div className="field-row"><label>Name<ValidatedInput aria-label="Name" name="name" pattern="[a-z0-9][a-z0-9-]{0,31}" maxLength={32} placeholder={kind === 'harbor' ? 'main-registry' : 'shared-data'} required autoFocus /></label>
+<div className="field-row"><label>Name<ValidatedInput aria-label="Name" name="name" pattern="[a-z0-9][a-z0-9-]{0,31}" maxLength={32} placeholder={kind === 'vm' ? 'vm-01' : kind === 'harbor' ? 'main-registry' : 'shared-data'} required autoFocus /></label>
       <label>Proxmox connection<select value={connectionID} onChange={event => setConnectionID(event.target.value)} required>{common.connections.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label></div>
       <div className="field-row"><label>VM template<select name="templateId" value={selectedTemplateID} onChange={event => setTemplateID(event.target.value)} required>{availableTemplates.length ? availableTemplates.map(item => <option key={item.id} value={item.id}>{item.name}</option>) : <option value="">No ready VM template</option>}</select></label>
       <ProxmoxNodeSelect connectionID={connectionID} defaultNode={String(availableTemplates.find(item => item.id === selectedTemplateID)?.spec.node ?? '')} /></div>
       </WizardStep>
       <WizardStep title="Resources">
-      <div className="capacity-grid"><label>CPU (cores)<ValidatedInput aria-label="CPU (cores)" name="cores" type="number" min={1} max={32} defaultValue={defaults.cores} /></label><label>Memory (MiB)<ValidatedInput aria-label="Memory (MiB)" name="memoryMiB" type="number" min={512} max={131072} defaultValue={defaults.memory} /></label><label>Disk (GiB)<ValidatedInput aria-label="Disk (GiB)" name="diskGiB" type="number" min={8} max={2048} defaultValue={defaults.disk} /></label></div>
+      <div className="capacity-grid"><label>CPU (cores)<ValidatedInput aria-label="CPU (cores)" name="cores" type="number" min={1} max={32} defaultValue={defaults.cores} /></label><label>Memory (MiB)<ValidatedInput aria-label="Memory (MiB)" name="memoryMiB" type="number" min={512} max={131072} defaultValue={defaults.memory} /></label><label>Disk (GiB)<ValidatedInput aria-label="Disk (GiB)" name="diskGiB" type="number" min={minimumDisk} max={2048} defaultValue={defaults.disk} required /></label></div>
       </WizardStep>
       <WizardStep title="Network">
 <label className="field-short">Proxmox VM ID<ValidatedInput aria-label="Proxmox VM ID" name="vmid" {...allocation.field('vmid')} type="number" min={100} max={999999999} required /></label>

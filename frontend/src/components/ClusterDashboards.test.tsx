@@ -1,4 +1,4 @@
-import {fireEvent, render, screen, waitFor, within} from '@testing-library/react'
+import {fireEvent, render, screen, within} from '@testing-library/react'
 import {describe, expect, it, vi} from 'vitest'
 import type {ManagedResource} from '../types'
 import {ClusterDashboards} from './ClusterDashboards'
@@ -44,7 +44,7 @@ describe('cluster dashboards', () => {
     const {rerender} = render(<ClusterDashboards resource={{...resource, spec: single}} />)
     expect(await screen.findByRole('link', {name: /Cluster Lens/})).toHaveAttribute('href', 'http://192.0.2.10:32088')
     expect(screen.getByRole('link', {name: /Kiali/})).toHaveAttribute('href', 'http://192.0.2.10:30001/kiali')
-    expect(screen.getByRole('button', {name: /Live experiment/})).toBeInTheDocument()
+    expect(screen.queryByRole('button', {name: /Live experiment/})).not.toBeInTheDocument()
     expect(screen.queryByRole('combobox')).not.toBeInTheDocument()
     expect(screen.queryByRole('link', {name: /Hubble|Jaeger/})).not.toBeInTheDocument()
     rerender(<ClusterDashboards resource={{...resource, status: 'failed'}} />)
@@ -53,26 +53,4 @@ describe('cluster dashboards', () => {
     expect(screen.queryByRole('link')).not.toBeInTheDocument()
   })
 
-  it('prepares the live dashboard on the server before opening it', async () => {
-    mockApi(() => Promise.resolve({url: 'http://192.0.2.10:32000/d/kubephos-experiment?refresh=10s'}))
-    const tab = {opener: {}, location: {href: ''}, close: vi.fn()}
-    const open = vi.spyOn(window, 'open').mockReturnValue(tab as unknown as Window)
-    render(<ClusterDashboards resource={{...resource, id: 'cluster-1', spec: single}} session={{authenticated: true, csrfToken: 'token'}} />)
-    fireEvent.click(await screen.findByRole('button', {name: /Live experiment/}))
-    await waitFor(() => expect(tab.location.href).toBe('http://192.0.2.10:32000/d/kubephos-experiment?refresh=10s'))
-    expect(request).toHaveBeenCalledWith('/kubernetes-clusters/cluster-1/live-dashboard', {method: 'POST', body: '{}'}, 'token')
-    expect(tab.opener).toBeNull()
-    open.mockRestore()
-  })
-
-  it('closes the pending tab and explains why when Grafana is unavailable', async () => {
-    mockApi(() => Promise.reject(new Error('Managed Grafana details are unavailable for this cluster.')))
-    const tab = {opener: {}, location: {href: ''}, close: vi.fn()}
-    const open = vi.spyOn(window, 'open').mockReturnValue(tab as unknown as Window)
-    render(<ClusterDashboards resource={{...resource, id: 'cluster-1', spec: single}} />)
-    fireEvent.click(await screen.findByRole('button', {name: /Live experiment/}))
-    expect(await screen.findByRole('alert')).toHaveTextContent('Managed Grafana details are unavailable')
-    expect(tab.close).toHaveBeenCalled()
-    open.mockRestore()
-  })
 })

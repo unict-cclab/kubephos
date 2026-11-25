@@ -884,3 +884,28 @@ it('fills the per-execution statistics table with the plotted workload samples o
   expect(cells[3]).toHaveTextContent('1')
   expect(cells[5]).toHaveTextContent('8.00')
 })
+
+it('links to the configuration and opens ClusterLens for the selected execution', async () => {
+  const tab = {opener: {}, location: {href: ''}, close: vi.fn()}
+  const open = vi.spyOn(window, 'open').mockReturnValue(tab as unknown as Window)
+  vi.mocked(request).mockImplementation(async path => path.includes('/cluster-lens') ? {url: 'http://192.0.2.10:32088?namespace=shop-previous'} as never : {items: []} as never)
+  const experiment = {id: 'exp_lens', configurationId: 'cfg_suite', kind: 'suite', name: 'Suite', status: 'running', variants: [{id: 'variant', configurationId: 'cfg_app', name: 'App', configuration: {}, trials: [{id: 'previous', position: 1, status: 'succeeded', pipelineRunId: 'pipeline_previous'}, {id: 'current', position: 2, status: 'running', pipelineRunId: 'pipeline_current'}]}]} as unknown as Experiment
+  render(<ResultsView artifacts={[]} experiments={[experiment]} operations={[]} workspaces={[]} session={{authenticated: true}} changed={async () => {}} openOperation={() => {}} focusedExperiment={experiment} />)
+  expect(screen.getByRole('link', {name: 'Configuration'})).toHaveAttribute('href', '#experiments/configuration/cfg_suite')
+  fireEvent.click(screen.getByRole('button', {name: 'App · Execution 1'}))
+  expect(screen.getByRole('link', {name: 'Configuration'})).toHaveAttribute('href', '#experiments/configuration/cfg_app')
+  fireEvent.click(screen.getByRole('button', {name: 'ClusterLens'}))
+  await waitFor(() => expect(tab.location.href).toBe('http://192.0.2.10:32088?namespace=shop-previous'))
+  expect(request).toHaveBeenCalledWith('/experiments/exp_lens/cluster-lens?trialId=previous', {method: 'GET'}, undefined)
+  expect(tab.opener).toBeNull()
+  open.mockRestore()
+})
+
+
+it.each(['queued', 'initializing', 'initialized', 'succeeded', 'failed', 'canceled'])('hides ClusterLens for a %s experiment while retaining its configuration link', status => {
+  vi.mocked(request).mockResolvedValue({items: []} as never)
+  const experiment = {id: 'exp_lens_hidden', configurationId: 'cfg_app', kind: 'instance', name: 'App', status, variants: []} as unknown as Experiment
+  render(<ResultsView artifacts={[]} experiments={[experiment]} operations={[]} workspaces={[]} session={{authenticated: true}} changed={async () => {}} openOperation={() => {}} focusedExperiment={experiment} />)
+  expect(screen.queryByRole('button', {name: 'ClusterLens'})).not.toBeInTheDocument()
+  expect(screen.getByRole('link', {name: 'Configuration'})).toHaveAttribute('href', '#experiments/configuration/cfg_app')
+})
