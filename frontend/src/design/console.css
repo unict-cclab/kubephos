@@ -335,6 +335,8 @@
   .timeline-card-head { grid-template-columns: 28px minmax(0, 1fr) auto; gap: 12px; }
   .timeline-fields { grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 16px; margin-top: 20px; align-items: end; }
   .timeline-fields label, .weight-grid label { min-width: 0; margin: 0; color: var(--foreground); font-size: 14px; line-height: 1.45; }
+  .rate-equivalents { display: grid; gap: 2px; margin: 12px 0 0; padding: 0; list-style: none; color: var(--muted-foreground); font-size: 13px; line-height: 1.45; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+  .rate-equivalents strong { color: var(--foreground); font-weight: 500; }
   .weight-grid { min-width: 0; margin: 24px 0 0; padding: 0; border: 0; }
   .weight-grid > .weight-grid-title { display: block; margin-bottom: 12px; color: var(--foreground); font-size: 14px; font-weight: 500; line-height: 1.45; }
   .weight-grid > .weight-grid-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 140px), 1fr)); align-items: end; gap: 16px; }

@@ -1,4 +1,14 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
-  <rect width="32" height="32" rx="7" fill="#eef0ff"/>
-  <path d="M10 8v16m0-8L22 8m-12 8 12 8" fill="none" stroke="#4f5bd5" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- The sidebar brand mark (.brand-mark): a Geist semibold "K" on the primary color, drawn as paths so it needs no font. -->
+  <style>
+    .tile { fill: #0a0a0a; }
+    .letter { stroke: #fff; }
+    @media (prefers-color-scheme: dark) {
+      .tile { fill: #f1f3f5; }
+      .letter { stroke: #0a0a0a; }
+    }
+  </style>
+  <clipPath id="cap-height"><rect x="0" y="9.6" width="32" height="12.8"/></clipPath>
+  <rect class="tile" width="32" height="32" rx="8"/>
+  <path class="letter" clip-path="url(#cap-height)" d="M11.6 8v16M22.4 8l-10.8 10.8M14.6 15.8l8.2 8.2" fill="none" stroke-width="2.4"/>
 </svg>

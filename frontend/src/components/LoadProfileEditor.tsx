@@ -4,9 +4,17 @@ import {workloadTable, trafficTable, sinusoidalRange} from './PhaseReadout'
 import {FormTabs} from './FormTabs'
 import {ResourceAction} from './ResourceAction'
 import {ActionIcon} from './ActionIcon'
-import {useEffect, useId, useMemo, useRef, useState, type Dispatch, type SetStateAction, type ReactNode} from 'react'
+import {lazy, Suspense, useEffect, useId, useMemo, useRef, useState, type Dispatch, type SetStateAction, type ReactNode} from 'react'
 import {niceAxis, timeAxis} from '../charts'
 import {NumericInput} from './NumericInput'
+import type {RequestMixContext} from './RequestMixEditor'
+import {rateEquivalentsText, useFormTaskWeights, useRateEquivalents} from './useRateEquivalents'
+import type {RateEquivalents as RateEquivalentsValue} from '../rateEquivalents'
+
+// Loaded with the Generator tab so the initial bundle stays within its budget.
+const LoadGeneratorSettings = lazy(() => import('./LoadGeneratorAdvice').then(module => ({default: module.LoadGeneratorSettings})))
+const RequestMixEditor = lazy(() => import('./RequestMixEditor').then(module => ({default: module.RequestMixEditor})))
+const mixFields = ['taskWeights', 'profileCallChain', 'profileSecondsPerTask', 'profileRps']
 
 export type LoadProfileStep = {
   type: 'constant' | 'sinusoidal' | 'exponential'
@@ -36,9 +44,12 @@ type GeographicStep = {
   endWeights: Record<string, number>
 }
 
-export function LoadProfileEditor({prefix, zones, values = {}, distribution = 'zone', tabbed = true, settings, onDurationChange, onValidityChange}: {onValidityChange?: (valid: boolean) => void; onDurationChange?: (duration: number) => void; settings?: ReactNode; prefix: string; zones: string[]; values?: Record<string, unknown>; distribution?: 'zone' | 'cluster' | 'endpoint'; tabbed?: boolean}) {
+export function LoadProfileEditor({prefix, zones, values = {}, distribution = 'zone', tabbed = true, settings, requestMix, onDurationChange, onValidityChange}: {requestMix?: RequestMixContext; onValidityChange?: (valid: boolean) => void; onDurationChange?: (duration: number) => void; settings?: ReactNode; prefix: string; zones: string[]; values?: Record<string, unknown>; distribution?: 'zone' | 'cluster' | 'endpoint'; tabbed?: boolean}) {
   const initialSteps = loadProfileSteps(values.steps)
   const initialGeography = geographicProfileSteps(values.geographicSteps, zones)
+  const root = useRef<HTMLDivElement>(null)
+  // Virtual users and server-side rate of each Locust rate, listed under the phase fields.
+  const equivalents = useRateEquivalents(requestMix, useFormTaskWeights(prefix, values.taskWeights, root))
   const [activeLoad,setActiveLoad]=useState<string>()
   const [activeGeography,setActiveGeography]=useState<string>()
   const [sequence, setSequence] = useState(Math.max(3, initialSteps.length + initialGeography.length + 1))
@@ -84,6 +95,7 @@ export function LoadProfileEditor({prefix, zones, values = {}, distribution = 'z
         {step.type === 'sinusoidal' && <><NumberField label="Minimum (req/s)" value={sinusoidalRange(step).min} min={0} step="any" set={value => updateLoadStep(setSteps, step.id, {minRps: value, maxRps: sinusoidalRange(step).max})} /><NumberField label="Maximum (req/s)" value={sinusoidalRange(step).max} min={0} max={200000} step="any" validationMessage={sinusoidalRange(step).max > sinusoidalRange(step).min ? '' : 'Maximum must exceed minimum.'} set={value => updateLoadStep(setSteps, step.id, {minRps: sinusoidalRange(step).min, maxRps: value})} /><Minutes label="Period" value={step.periodSeconds} set={value => updateLoadStep(setSteps, step.id, {periodSeconds: value})} /><Minutes label="Phase offset" value={step.phaseSeconds} allowZero set={value => updateLoadStep(setSteps, step.id, {phaseSeconds: value})} /></>}
         {step.type === 'exponential' && <><NumberField label="Start RPS" value={step.startRps} min={0} set={value => updateLoadStep(setSteps, step.id, {startRps: value})} /><NumberField label="End RPS" value={step.endRps} min={0} set={value => updateLoadStep(setSteps, step.id, {endRps: value})} /><NumberField label="Curve" value={step.curve} min={-20} max={20} step={0.1} set={value => updateLoadStep(setSteps, step.id, {curve: value})} /></>}
       </div>
+      <RateEquivalents rates={phaseRates(step)} equivalents={equivalents} />
     </article>}))}/>
     <ResourceAction action="add" label="Add workload phase" onClick={addLoadStep} /></div>
   const geography = <div className="form-stack" data-review-skip="true"><div className="timeline-duration-summary"><div><strong>Traffic duration</strong><span>{formatDuration(geographicDuration)}</span></div><div><strong>Workload duration</strong><span>{formatDuration(duration)}</span></div></div>
@@ -99,13 +111,15 @@ export function LoadProfileEditor({prefix, zones, values = {}, distribution = 'z
   const preview = <LoadProfilePreview steps={previewSteps} />
   // The chart sits beside the phases so every edit is visible as it is made.
   const workspace = <div className="load-profile-workspace">{workload}<aside className="load-profile-live" aria-label="Live preview">{preview}</aside></div>
-  return <div className={`load-profile-editor${tabbed ? ' load-profile-editor-tabbed' : ''}`}>
-    <input type="hidden" data-review-title="Workload phases" data-review-table={JSON.stringify(workloadTable(previewSteps))} name={`${prefix}.steps`} value={JSON.stringify(serializedSteps)} readOnly />
+  return <div ref={root} className={`load-profile-editor${tabbed ? ' load-profile-editor-tabbed' : ''}`}>
+    <input type="hidden" data-review-title="Workload phases" data-review-table={JSON.stringify(workloadTable(previewSteps, rps => rateEquivalentsText(rps, equivalents)))} name={`${prefix}.steps`} value={JSON.stringify(serializedSteps)} readOnly />
     <input type="hidden" data-review-title={distribution === 'endpoint' ? 'Traffic phases by endpoint' : distribution === 'cluster' ? 'Traffic phases by cluster' : 'Traffic phases by zone'} data-review-table={zones.length ? JSON.stringify(trafficTable(serializedGeography, distribution === 'cluster', distribution === 'endpoint')) : undefined} name={`${prefix}.geographicSteps`} value={JSON.stringify(serializedGeography)} readOnly />
     {tabbed ? <FormTabs label="Load profile settings" items={[
       {id: 'workload', title: 'Workload', content: workspace},
       ...(zones.length ? [{id: 'distribution', title: 'Traffic distribution', content: geography}] : []),
-      ...(settings ? [{id: 'generator', title: 'Generator', content: settings}] : [])
+      // Until the editor loads, the saved mix settings are submitted unchanged.
+      ...(requestMix ? [{id: 'mix', title: 'Request mix', content: <Suspense fallback={mixFields.map(name => values[name] !== undefined && <input key={name} type="hidden" name={`${prefix}.${name}`} value={typeof values[name] === 'object' ? JSON.stringify(values[name]) : String(values[name])} readOnly />)}><RequestMixEditor key={`${requestMix.applicationRef}|${requestMix.scenarioId}`} prefix={prefix} values={values} samples={loadSamples(previewSteps)} context={requestMix} /></Suspense>}] : []),
+      ...(settings ? [{id: 'generator', title: 'Generator', content: <Suspense fallback={settings}><LoadGeneratorSettings prefix={prefix} samples={loadSamples(previewSteps)} values={values}>{settings}</LoadGeneratorSettings></Suspense>}] : [])
     ]} /> : <>{workload}{preview}{zones.length > 0 && geography}</>}
   </div>
 }
@@ -179,7 +193,7 @@ function numericRecord(value: unknown): Record<string, number> {
   return Object.fromEntries(Object.entries(value).flatMap(([key, item]) => Number.isFinite(Number(item)) ? [[key, Number(item)]] : []))
 }
 
-function loadSamples(steps: LoadProfileStep[]): Array<{seconds: number; rps: number}> {
+export function loadSamples(steps: LoadProfileStep[]): Array<{seconds: number; rps: number}> {
   const result: Array<{seconds: number; rps: number}> = []
   let elapsed = 0
   steps.forEach(step => {
@@ -233,8 +247,28 @@ function NumberField({label, value, set, min, max = 100000, step = 1, validation
   return <label>{label}<NumericInput validationMessage={validationMessage} value={value} min={min} max={max} step={step} required onValueChange={set} /></label>
 }
 
+// The rates a phase is defined by, named as in its fields.
+function phaseRates(step: LoadProfileStep): Array<[string, number]> {
+  if (step.type === 'sinusoidal') return [['Minimum', sinusoidalRange(step).min], ['Maximum', sinusoidalRange(step).max]]
+  if (step.type === 'exponential') return [['Start', step.startRps], ['End', step.endRps]]
+  return [['Rate', step.rps]]
+}
+
+// One line per rate under the phase fields, full width, so long figures wrap
+// instead of running under the neighbouring field or the chart.
+function RateEquivalents({rates, equivalents}: {rates: Array<[string, number]>; equivalents?: RateEquivalentsValue}) {
+  const rows = rates.flatMap(([label, rps]) => {
+    const text = rateEquivalentsText(rps, equivalents)
+    return text ? [{label, rps, text}] : []
+  })
+  if (!rows.length) return null
+  return <ul className="rate-equivalents">{rows.map(row => <li key={row.label}><strong>{row.label} {row.rps.toLocaleString('en-US')} req/s:</strong> {row.text}</li>)}</ul>
+}
+
+// Profiles are stored in whole seconds: any second must stay valid here (a 0.1 minute
+// step rejected 45 s or 100 s saved through the API and blocked saving the configuration).
 function Minutes({label, value, set, allowZero = false}: {label: string; value: number; set: (value: number) => void; allowZero?: boolean}) {
-  return <label>{label} (minutes)<NumericInput value={value / 60} min={allowZero ? 0 : 0.1} max={1440} step={0.1} required onValueChange={next => set(Math.round(next * 60))} /></label>
+  return <label>{label} (minutes)<NumericInput value={Number((value / 60).toFixed(4))} min={allowZero ? 0 : 1 / 60} max={1440} step="any" required onValueChange={next => set(Math.round(next * 60))} /></label>
 }
 
 function WeightGrid({title, zones, values, set}: {title: string; zones: string[]; values: Record<string, number>; set: (zone: string, value: number) => void}) {

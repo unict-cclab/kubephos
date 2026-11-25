@@ -47,6 +47,7 @@ type experimentConfigurationDefinitionInput struct {
 	ApplicationPlacement    *placement.ApplicationSettings `json:"applicationPlacement,omitempty"`
 	Namespace               string                         `json:"namespace,omitempty"`
 	TwoPhaseStart           bool                           `json:"twoPhaseStart,omitempty"`
+	ManualStartScope        string                         `json:"manualStartScope,omitempty"` // "first" (default) or "every", see trial_schedule.go
 	IstioInjection          *bool                          `json:"istioInjection,omitempty"`
 	IstioInjectionOverrides map[string]bool                `json:"istioInjectionOverrides,omitempty"`
 	// IstioDataPlane is "sidecar" (default when empty) or "ambient", which enrolls the whole namespace.
@@ -56,6 +57,8 @@ type experimentConfigurationDefinitionInput struct {
 	Kind                            string                                  `json:"kind,omitempty"`
 	Variants                        []experimentSuiteVariantInput           `json:"variants,omitempty"`
 	Runs                            int                                     `json:"runs,omitempty"`
+	RestSecondsBetweenTrials        int                                     `json:"restSecondsBetweenTrials,omitempty"`
+	FirstTrialPilot                 bool                                    `json:"firstTrialPilot,omitempty"`
 	DestinationMode                 string                                  `json:"destinationMode,omitempty"`
 	ExternalDestination             externalLoadDestinationInput            `json:"externalDestination,omitempty"`
 	ApplicationValues               json.RawMessage                         `json:"applicationValues"`
@@ -266,6 +269,9 @@ func (s *Server) validatedExperimentConfiguration(ctx context.Context, input exp
 		return domain.ExperimentConfiguration{}, &managedOperationFailure{status: http.StatusUnprocessableEntity, code: "invalid_configuration_kind", message: "Configuration type must be single or suite."}
 	}
 	input.Definition.Kind = "single"
+	if err := validateDefinitionTrialSchedule(input.Definition); err != nil {
+		return domain.ExperimentConfiguration{}, &managedOperationFailure{status: http.StatusUnprocessableEntity, code: "invalid_trial_schedule", message: err.Error()}
+	}
 	if len(input.Definition.Variants) != 0 {
 		return domain.ExperimentConfiguration{}, &managedOperationFailure{status: http.StatusUnprocessableEntity, code: "invalid_configuration", message: "Single configurations cannot contain suite members."}
 	}

@@ -415,3 +415,11 @@ databaseChangeLog:
             path: changes/058-strategy-plugins.sql
             relativeToChangelogFile: true
             splitStatements: false
+  - changeSet:
+      id: 059-measurement-integrity
+      author: kubephos
+      changes:
+        - sqlFile:
+            path: changes/059-measurement-integrity.sql
+            relativeToChangelogFile: true
+            splitStatements: false

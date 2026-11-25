@@ -67,7 +67,9 @@ type clockRunner struct {
 	timestamp     string
 	wrongDuration bool
 	restart       bool
-	commands      []string
+	// Seconds added to the clock each kind of pod reports.
+	shaperSkew, workerSkew int64
+	commands               []string
 }
 
 func (r *clockRunner) Run(_ context.Context, _ string, stdin []byte, args ...string) (string, error) {
@@ -100,10 +102,10 @@ func (r *clockRunner) Run(_ context.Context, _ string, stdin []byte, args ...str
 		return "", nil
 	}
 	if strings.Contains(command, "-c node-shaper") {
-		return strconv.FormatInt(time.Now().Unix(), 10), nil
+		return strconv.FormatInt(time.Now().Unix()+r.shaperSkew, 10), nil
 	}
 	if strings.Contains(command, "-c locust") {
-		return r.timestamp + " " + strconv.FormatInt(time.Now().Unix(), 10), nil
+		return r.timestamp + " " + strconv.FormatInt(time.Now().Unix()+r.workerSkew, 10), nil
 	}
 	return "", fmt.Errorf("unexpected clock command %s", command)
 }
@@ -123,11 +125,59 @@ func TestNetworkAndLoadWorkersAcknowledgeSameStartClock(t *testing.T) {
 	profile := loadProfile{Workload: scenarioWorkload("default-load")}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	start, err := armNetworkTimeline(ctx, runner, "config", deployment, profile, 60, 1)
+	clock, err := armSharedStart(ctx, runner, "config", deployment, profile, 1, 0, 30, 60, true, time.Now)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if runner.timestamp != strconv.FormatInt(start.Unix(), 10) || time.Now().Before(start) {
-		t.Fatal("load started before acknowledged network clock")
+	// Network phases and the measured load profile share t=0, after the warmup.
+	if runner.timestamp != strconv.FormatInt(clock.profileStart.Unix(), 10) || clock.profileStart.Sub(clock.warmupStart) != 30*time.Second {
+		t.Fatalf("network clock %s differs from the load profile start %s", runner.timestamp, clock.profileStart)
+	}
+	if !time.Now().Before(clock.warmupStart) {
+		t.Fatal("workers acknowledged the start after it happened")
+	}
+	shaper, worker := "", ""
+	for _, command := range runner.commands {
+		if strings.Contains(command, "-c node-shaper") {
+			shaper = command
+		}
+		if strings.Contains(command, "-c locust") {
+			worker = command
+		}
+	}
+	if !strings.Contains(shaper, "printf '%s' "+runner.timestamp+" > "+networkClockFile) || !strings.Contains(worker, "printf '%s' "+runner.timestamp+" > "+sharedStartFile) {
+		t.Fatalf("shapers and workers received different starts:\n%s\n%s", shaper, worker)
+	}
+}
+
+// A skewed KubePhos host (common on WSL2) must not fail the run: the start is
+// interpreted by the cluster clock and only KubePhos' own waits are converted.
+func TestSharedStartToleratesHostClockSkew(t *testing.T) {
+	var deployment applicationDeployment
+	deployment.Metadata.OwnershipMarker = "marker"
+	deployment.Spec.Namespace = "load-namespace"
+	profile := loadProfile{Workload: scenarioWorkload("default-load")}
+	arm := func(runner *clockRunner) (sharedStart, error) {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		return armSharedStart(ctx, runner, "config", deployment, profile, 1, 0, 0, 60, true, time.Now)
+	}
+	for _, skew := range []int64{-20, -5, 5} {
+		clock, err := arm(&clockRunner{shaperSkew: skew, workerSkew: skew})
+		if err != nil {
+			t.Fatalf("skew %ds rejected: %v", skew, err)
+		}
+		if got := clock.clockOffset; got < time.Duration(skew-1)*time.Second || got > time.Duration(skew+1)*time.Second {
+			t.Fatalf("skew %ds measured as %s", skew, got)
+		}
+	}
+	if clock, err := arm(&clockRunner{}); err != nil || clock.clockOffset != 0 {
+		t.Fatalf("synchronized clocks: offset %s, %v", clock.clockOffset, err)
+	}
+	if _, err := arm(&clockRunner{shaperSkew: -60, workerSkew: -60}); err == nil || !strings.Contains(err.Error(), "differs from the KubePhos host clock") {
+		t.Fatalf("a 60s skew was accepted: %v", err)
+	}
+	if _, err := arm(&clockRunner{shaperSkew: 0, workerSkew: -6}); err == nil || !strings.Contains(err.Error(), "disagree") {
+		t.Fatalf("nodes disagreeing by 6s were accepted: %v", err)
 	}
 }

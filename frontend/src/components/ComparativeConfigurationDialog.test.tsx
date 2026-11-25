@@ -117,3 +117,58 @@ describe('comparative configuration details', () => {
     expect(screen.queryByRole('heading', {name: item.name})).not.toBeInTheDocument()
   })
 })
+
+describe('suite repetition schedule', () => {
+  const item: ExperimentConfiguration = {...configurations[0], id: 'suite', kind: 'suite', name: 'Scheduler comparison', updatedAt: '2026-10-06T00:00:00Z', definition: {applicationValues: {}, components: [], kind: 'suite', runs: 3, restSecondsBetweenTrials: 30, variants: [{configurationId: 'cfg_0', alias: 'Baseline', color: '#1f77b4'}, {configurationId: 'cfg_1', alias: 'Custom', color: '#123456'}]}}
+  const props = {open: true, close: () => {}, configurations, applications: [application], clusters: [cluster], session: {authenticated: true}, changed: async () => {}}
+
+  it('saves rest and warm-up settings in the suite definition', async () => {
+    vi.mocked(request).mockReset().mockResolvedValue({id: 'suite'} as never)
+    render(<ComparativeConfigurationDialog {...props} item={item} />)
+    fireEvent.click(screen.getByRole('button', {name: 'Continue'}))
+    const rest = screen.getByLabelText('Rest between repetitions (s)')
+    expect(rest).toHaveValue(30)
+    fireEvent.change(rest, {target: {value: '120'}})
+    fireEvent.click(screen.getByRole('checkbox', {name: 'First repetition is a warm-up (excluded from statistics)'}))
+    fireEvent.click(screen.getByRole('button', {name: 'Continue'}))
+    fireEvent.click(screen.getByRole('button', {name: 'Save comparison'}))
+    await waitFor(() => expect(request).toHaveBeenCalled())
+    expect(JSON.parse(String(vi.mocked(request).mock.calls[0][1]?.body)).definition).toMatchObject({runs: 3, restSecondsBetweenTrials: 120, firstTrialPilot: true})
+  })
+
+  it('offers the manual start choice only for manual-start members and saves it in the suite', async () => {
+    vi.mocked(request).mockReset().mockResolvedValue({id: 'suite'} as never)
+    const view = render(<ComparativeConfigurationDialog {...props} item={item} />)
+    fireEvent.click(screen.getByRole('button', {name: 'Continue'}))
+    expect(screen.queryByLabelText('Wait for my Start')).not.toBeInTheDocument()
+    view.unmount()
+    const manual = [{...configurations[0], definition: {...configurations[0].definition, twoPhaseStart: true}}, configurations[1]]
+    render(<ComparativeConfigurationDialog {...props} configurations={manual} item={item} />)
+    fireEvent.click(screen.getByRole('button', {name: 'Continue'}))
+    const scope = screen.getByLabelText('Wait for my Start')
+    expect(scope).toHaveValue('')
+    fireEvent.change(scope, {target: {value: 'every'}})
+    expect(scope).toHaveAccessibleDescription('Every repetition waits for your Start after its setup.')
+    fireEvent.click(screen.getByRole('button', {name: 'Continue'}))
+    fireEvent.click(screen.getByRole('button', {name: 'Save comparison'}))
+    await waitFor(() => expect(request).toHaveBeenCalled())
+    expect(JSON.parse(String(vi.mocked(request).mock.calls[0][1]?.body)).definition).toMatchObject({runs: 3, manualStartScope: 'every'})
+  })
+
+  it('marks the rest field when the API rejects the schedule', async () => {
+    vi.mocked(request).mockReset().mockRejectedValue(Object.assign(new Error('Rest between runs must be between 0 and 3600 seconds.'), {status: 422, body: {code: 'invalid_trial_schedule'}}))
+    render(<ComparativeConfigurationDialog {...props} item={item} />)
+    fireEvent.click(screen.getByRole('button', {name: 'Continue'}))
+    fireEvent.click(screen.getByRole('button', {name: 'Continue'}))
+    fireEvent.click(screen.getByRole('button', {name: 'Save comparison'}))
+    await waitFor(() => expect(screen.getByLabelText('Rest between repetitions (s)', {selector: 'input'})).toHaveAttribute('aria-invalid', 'true'))
+    expect(screen.getByText('Execution: Rest between runs must be between 0 and 3600 seconds.')).toBeInTheDocument()
+  })
+
+  it('shows the saved schedule in the read-only view', () => {
+    render(<ComparativeConfigurationDialog {...props} readOnly item={{...item, definition: {...item.definition, firstTrialPilot: true}}} />)
+    const table = screen.getByRole('table', {name: 'Repetition schedule', hidden: true})
+    expect(table).toHaveTextContent('Rest between repetitions30 s')
+    expect(table).toHaveTextContent('Warm-up repetitionYes · excluded from statistics')
+  })
+})

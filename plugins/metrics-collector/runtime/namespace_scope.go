@@ -6,7 +6,9 @@ import (
 	"strings"
 )
 
-var rateVector = regexp.MustCompile(`\brate\(([^()]*)\[1m\]\)`)
+// rateVector matches rate(<selector>[<window>]) for any range, including the
+// unresolved rate window placeholder.
+var rateVector = regexp.MustCompile(`\brate\(([^()]*)\[[^\[\]()]+\]\)`)
 var instantVector = regexp.MustCompile(`[a-zA-Z_:][a-zA-Z0-9_:]*\{[^{}]*\}`)
 
 // A reused namespace can still have previous-run samples in a rate lookback.
@@ -21,7 +23,7 @@ func scopeReusableNamespaceMetrics(definitions []metricDefinition, deployment ap
 	pods := "(max by (pod) (kube_pod_created{namespace=" + namespace + "} >= " + strconv.FormatInt(scope.Unix(), 10) + "))"
 	for i := range definitions {
 		id := definitions[i].ID
-		if !(strings.HasPrefix(id, "load.") || strings.HasPrefix(id, "application.") || strings.HasPrefix(id, "redis.") || id == "cpu.cores" || id == "memory.working_set" || id == "pod.restarts") {
+		if !(strings.HasPrefix(id, "load.") || strings.HasPrefix(id, "application.") || strings.HasPrefix(id, "redis.") || id == "cpu.cores" || id == "cpu.limit_cores" || id == "cpu.request_cores" || id == "memory.working_set" || id == "pod.restarts") {
 			continue
 		}
 		query := definitions[i].Query

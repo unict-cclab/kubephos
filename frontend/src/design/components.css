@@ -747,3 +747,15 @@ tr.is-unavailable > td:first-child { color: var(--muted-foreground); text-decora
 .placement-replicas { display: flex; flex-wrap: wrap; gap: 8px; }
 .placement-service { display: inline-flex; align-items: center; gap: 12px; padding: 6px 10px; border: 1px solid var(--border); border-radius: 6px; overflow-wrap: anywhere; max-width: 100%; }
 .placement-service > span { color: var(--muted-foreground); font-variant-numeric: tabular-nums; }
+/* Repetition schedule fields and run notes */
+.trial-schedule-fields { display: grid; gap: 12px; }
+.trial-schedule-field { display: grid; gap: 4px; min-width: 0; }
+.trial-schedule-field > .field-hint { font-size: 12px; line-height: 1.5; }
+.trial-count, .trial-notes { display: inline-grid; gap: 2px; justify-items: start; }
+.trial-notes { margin-left: 8px; vertical-align: top; }
+.trial-note { color: var(--muted-foreground); font-size: 12px; white-space: nowrap; }
+.trial-cleanup-warning { color: var(--amber); font-size: 12px; }
+.trial-cleanup-warning > summary { display: inline-flex; align-items: center; gap: 5px; font-weight: 550; cursor: pointer; }
+.trial-cleanup-warning > summary:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; border-radius: var(--radius-sm); }
+.trial-cleanup-warning > ul { margin: 4px 0 0; padding-left: 18px; color: var(--foreground); overflow-wrap: anywhere; }
+.comparison-live-badge { display: inline-flex; align-items: center; padding: 1px 8px; border: 1px solid var(--border); border-radius: var(--radius-full); background: var(--muted); color: var(--muted-foreground); font-size: 12px; font-weight: 550; line-height: 18px; }

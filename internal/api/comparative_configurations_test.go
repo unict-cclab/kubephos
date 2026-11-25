@@ -48,11 +48,19 @@ func TestComparativeConfigurationValidation(t *testing.T) {
 			i.Definition.Variants[0].Color = "#123456"
 			i.Definition.Variants[1].Color = "#123456"
 		}},
+		{name: "invalid manual start scope", want: "invalid_trial_schedule", change: func(i *experimentConfigurationInput, _ map[string]domain.ExperimentConfiguration) {
+			i.Definition.ManualStartScope = "sometimes"
+		}},
 		{name: "invalid runs", want: "invalid_suite", change: func(i *experimentConfigurationInput, _ map[string]domain.ExperimentConfiguration) {
 			i.Definition.Runs = 21
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			if tc.name == "valid" {
+				tc.change = func(i *experimentConfigurationInput, _ map[string]domain.ExperimentConfiguration) {
+					i.Definition.ManualStartScope = manualStartEvery
+				}
+			}
 			members := map[string]domain.ExperimentConfiguration{}
 			for _, id := range []string{"a", "b"} {
 				members[id] = domain.ExperimentConfiguration{ID: id, Kind: "single", Name: id, WorkspaceID: "workspace", ClusterResourceID: "cluster", ApplicationRef: "app:test", Validation: domain.ValidationReport{Valid: true}}
@@ -81,7 +89,7 @@ func TestComparativeConfigurationValidation(t *testing.T) {
 			if err := json.Unmarshal(configuration.Definition, &definition); err != nil {
 				t.Fatal(err)
 			}
-			if definition.Runs != 3 || len(definition.Variants) != 2 || definition.Variants[0].Alias != "a" || definition.Variants[0].Color == definition.Variants[1].Color {
+			if definition.Runs != 3 || len(definition.Variants) != 2 || definition.Variants[0].Alias != "a" || definition.Variants[0].Color == definition.Variants[1].Color || definition.ManualStartScope != manualStartEvery {
 				t.Fatalf("unexpected recipe %#v", definition)
 			}
 		})
@@ -91,7 +99,7 @@ func TestComparativeConfigurationValidation(t *testing.T) {
 func TestExecutionSnapshotFreezesSuiteAndSingleSettings(t *testing.T) {
 	configuration := domain.ExperimentConfiguration{ID: "suite", Kind: "suite", Definition: json.RawMessage(`{"kind":"suite","runs":4}`)}
 	member := domain.ExperimentConfiguration{ID: "single", ClusterResourceID: "cluster", ApplicationRef: "app:test", ApplicationDigest: "original", Definition: json.RawMessage(`{"components":[{"configuration":{"rps":10}}]}`)}
-	snapshot := executionConfigurationSnapshot(configuration, []validatedSuiteVariant{{Configuration: member}}, 4)
+	snapshot := executionConfigurationSnapshot(configuration, []validatedSuiteVariant{{Configuration: member}}, 4, trialSchedule{})
 	configuration.Definition[0] = ' '
 	member.Definition[0] = ' '
 	member.ApplicationDigest = "changed"

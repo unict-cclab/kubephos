@@ -1,0 +1,17 @@
+/* Comparison snapshot, staleness and compatibility notices (loaded with the lazy notice). */
+.comparison-integrity { display: grid; gap: 10px; margin: 0 0 12px; }
+.comparison-integrity:empty { display: none; }
+.comparison-snapshot { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; color: var(--muted-foreground); font-size: 13px; }
+.comparison-snapshot > svg { flex: 0 0 16px; }
+.comparison-snapshot strong { color: var(--foreground); font-weight: 550; }
+.comparison-snapshot.is-live > svg { color: var(--amber); }
+.comparison-integrity-alert { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 10px; padding: 12px 14px; border: 1px solid color-mix(in srgb, var(--amber) 30%, transparent); border-radius: var(--radius-md); background: var(--amber-background); color: var(--foreground); font-size: 13px; }
+.comparison-integrity-alert > svg { margin-top: 2px; color: var(--amber); }
+.comparison-integrity-alert h3 { margin: 0 0 4px; font-size: 14px; font-weight: 600; }
+.comparison-integrity-alert p { margin: 0; line-height: 1.5; }
+.comparison-integrity-alert ul { margin: 6px 0 0; padding-left: 18px; line-height: 1.5; }
+.comparison-integrity-alert .resource-selection-scroll { margin-top: 8px; }
+.comparison-integrity-alert td { font-family: var(--font-mono); font-size: 12px; overflow-wrap: anywhere; }
+.comparison-integrity-alert td:first-child { font-family: var(--font-sans); font-size: 13px; }
+.comparison-integrity-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.comparison-integrity-error { margin: 0; padding: 10px 14px; border-radius: var(--radius-md); background: var(--error-background); color: var(--error-foreground); font-size: 13px; }

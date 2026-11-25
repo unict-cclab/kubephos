@@ -34,15 +34,13 @@ func TestSinusoidalLocustCurveRangeAndLegacy(t *testing.T) {
 	if err != nil {
 		t.Skip("python3 unavailable")
 	}
-	start := strings.Index(locustWrapper, "def active_step(")
-	end := strings.Index(locustWrapper[start:], "def rps_at(") + start
+	start := strings.Index(locustWrapper, "def step_number(")
+	end := strings.Index(locustWrapper, "def worker_rps_at(")
 	// Use the exact production rate function while isolating its clock and Locust dependencies.
-	rate := locustWrapper[end:]
-	next := strings.Index(rate[1:], "\ndef ")
-	if next < 0 {
+	if start < 0 || end < start {
 		t.Fatal("rate function boundary missing")
 	}
-	rate = rate[:next+1]
+	rate := locustWrapper[start:end]
 	script := "import math\n" + "def active_step(steps, elapsed):\n    return steps[0], elapsed\n" + rate + `
 steps=[{"type":"sinusoidal","minRps":10,"maxRps":90,"periodSeconds":100}]
 assert abs(rps_at(0)-50)<1e-9

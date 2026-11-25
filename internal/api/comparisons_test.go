@@ -293,8 +293,14 @@ func TestComparisonAPISelectsExperimentsWithUnequalExecutionCounts(t *testing.T)
 		t.Fatal("original source renamed", sourceName, err)
 	}
 	exec(`UPDATE experiments SET name='Same name' WHERE id IN ('first','second')`)
+	// Saved comparisons are frozen: a rename is reported until refreshed.
 	w = httptest.NewRecorder()
 	s.getComparison(w, r)
+	if err := json.Unmarshal(w.Body.Bytes(), &view); err != nil || w.Code != 200 || !view.Stale || view.Result.Variants[0].Alias != "first" {
+		t.Fatalf("snapshot not frozen: %d %s", w.Code, w.Body.String())
+	}
+	w = httptest.NewRecorder()
+	s.refreshComparison(w, r)
 	if w.Code != 200 {
 		t.Fatalf("same names: %d %s", w.Code, w.Body.String())
 	}
@@ -305,7 +311,7 @@ func TestComparisonAPISelectsExperimentsWithUnequalExecutionCounts(t *testing.T)
 		t.Fatal("plot labels were numbered", view.Result.Variants)
 	}
 	// Legacy selections may mix experiments or include only one repetition.
-	exec(`UPDATE result_comparisons SET series=$2 WHERE id=$1`, item.ID, `[{"label":"Mixed","color":"#123456","runs":[{"experimentId":"first","trialId":"trial1"},{"experimentId":"second","trialId":"trial2"}]}]`)
+	exec(`UPDATE result_comparisons SET snapshot=NULL,series=$2 WHERE id=$1`, item.ID, `[{"label":"Mixed","color":"#123456","runs":[{"experimentId":"first","trialId":"trial1"},{"experimentId":"second","trialId":"trial2"}]}]`)
 	w = httptest.NewRecorder()
 	s.getComparison(w, r)
 	if w.Code != 200 {

@@ -187,3 +187,71 @@ func TestCancelAfterInitializationCleansPreparedStagesWithoutStartingLoad(t *tes
 		t.Fatal("prepared resources not cleaned before cancellation", run)
 	}
 }
+
+// With the "first" manual start scope only the first run carries a pause gate;
+// the next run of the same experiment must run straight through, without
+// reporting itself as initializing/initialized or waiting for Start.
+func TestManualStartFirstScopeLetsLaterRunsStartByThemselves(t *testing.T) {
+	worker, pool, tick := parallelCoordinator(t)
+	ctx := context.Background()
+	exec := func(q string, args ...any) {
+		t.Helper()
+		if _, err := pool.Exec(ctx, q, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	exec(`INSERT INTO users(id,username,role) VALUES ('scope-owner','scope-owner','user'); INSERT INTO experiments(id,workspace_id,owner_user_id,kind,name,status,result_type,result_version) VALUES ('scope-experiment','ws_default','scope-owner','instance','Scope','queued','',''); INSERT INTO experiment_variants(id,experiment_id,position,name,display_alias,pipeline_id,pipeline_hash) VALUES ('scope-variant','scope-experiment',1,'Scope','Scope','parallel-pipeline',repeat('a',64)); INSERT INTO experiment_trials(id,variant_id,position,status,pipeline_run_id) VALUES ('scope-trial','scope-variant',1,'queued','parallel-run'); UPDATE pipeline_runs SET pause_before_stage='a-next' WHERE id='parallel-run'`)
+	run := tick()
+	exec(`UPDATE operations SET status='succeeded',completed_at=now() WHERE id=$1`, run.Stages[0].OperationID)
+	if run = tick(); run.Phase != "initialized" {
+		t.Fatal("first run did not wait for Start", run)
+	}
+	if err := worker.store.StartExperimentTraffic(ctx, "scope-experiment", "parallel-run"); err != nil {
+		t.Fatal(err)
+	}
+	run = tick()
+	exec(`UPDATE operations SET status='succeeded',completed_at=now()`)
+	if run = tick(); run.Status != "succeeded" {
+		t.Fatal("first run did not finish", run.Status)
+	}
+
+	second := domain.PipelineRun{ID: "scope-second-run", PipelineID: run.PipelineID, WorkspaceID: run.WorkspaceID, Name: "Run 2", PipelineHash: run.PipelineHash}
+	for _, stage := range run.Stages {
+		second.Stages = append(second.Stages, domain.PipelineRunStage{ID: "scope-second-" + stage.StageID, Position: stage.Position, StageID: stage.StageID, PluginID: stage.PluginID, Title: stage.Title})
+	}
+	if _, err := worker.store.CreatePipelineRun(ctx, second); err != nil {
+		t.Fatal(err)
+	}
+	exec(`INSERT INTO experiment_trials(id,variant_id,position,status,pipeline_run_id) VALUES ('scope-second-trial','scope-variant',2,'queued','scope-second-run'); UPDATE experiments SET status='queued' WHERE id='scope-experiment'`)
+	nextTick := func() domain.PipelineRun {
+		t.Helper()
+		claimed, found, err := worker.store.ClaimPipelineRun(ctx, "test-coordinator")
+		if err != nil || !found || claimed.ID != "scope-second-run" {
+			t.Fatalf("claim second run: %v %v %#v", err, found, claimed)
+		}
+		if err := worker.reconcilePipelineRun(ctx, "test-coordinator", claimed); err != nil {
+			t.Fatal(err)
+		}
+		latest, err := worker.store.GetPipelineRun(ctx, "scope-second-run")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return latest
+	}
+	second = nextTick()
+	if second.Phase != "" {
+		t.Fatal("second run reported a manual start phase", second.Phase)
+	}
+	exec(`UPDATE operations SET status='succeeded',completed_at=now() WHERE id=$1`, second.Stages[0].OperationID)
+	second = nextTick()
+	if second.Phase != "" || second.InitializedAt != nil || second.Stages[1].OperationID == "" {
+		t.Fatal("second run waited for Start", second)
+	}
+	var experimentStatus, trialStatus string
+	if err := pool.QueryRow(ctx, `SELECT e.status, t.status FROM experiments e JOIN experiment_variants v ON v.experiment_id=e.id JOIN experiment_trials t ON t.variant_id=v.id WHERE e.id='scope-experiment' AND t.id='scope-second-trial'`).Scan(&experimentStatus, &trialStatus); err != nil {
+		t.Fatal(err)
+	}
+	if experimentStatus != "running" || trialStatus != "running" {
+		t.Fatal("progress shows the second run waiting", experimentStatus, trialStatus)
+	}
+}

@@ -116,6 +116,7 @@ type PipelineRun struct {
 	ResultType           string             `json:"resultType"`
 	ResultVersion        string             `json:"resultVersion"`
 	ResultArtifactID     string             `json:"resultArtifactId,omitempty"`
+	CleanupError         string             `json:"cleanupError,omitempty"` // cleanup failed after a verified result was kept
 	CancelRequested      bool               `json:"cancelRequested"`
 	TerminalStatus       string             `json:"-"`
 	Error                string             `json:"error,omitempty"`
@@ -148,23 +149,25 @@ type PipelineRunStage struct {
 }
 
 type Experiment struct {
-	ConfigurationSnapshot json.RawMessage     `json:"configurationSnapshot,omitempty"`
-	ID                    string              `json:"id"`
-	WorkspaceID           string              `json:"workspaceId"`
-	ConfigurationID       string              `json:"configurationId,omitempty"`
-	OwnerUserID           string              `json:"ownerUserId,omitempty"`
-	OwnerUsername         string              `json:"ownerUsername,omitempty"`
-	Kind                  string              `json:"kind"`
-	Name                  string              `json:"name"`
-	Description           string              `json:"description"`
-	Status                string              `json:"status"`
-	CancelRequested       bool                `json:"cancelRequested"`
-	ResultType            string              `json:"resultType"`
-	ResultVersion         string              `json:"resultVersion"`
-	Variants              []ExperimentVariant `json:"variants"`
-	ScheduledFor          *time.Time          `json:"scheduledFor,omitempty"`
-	CreatedAt             time.Time           `json:"createdAt"`
-	UpdatedAt             time.Time           `json:"updatedAt"`
+	ConfigurationSnapshot    json.RawMessage     `json:"configurationSnapshot,omitempty"`
+	ID                       string              `json:"id"`
+	WorkspaceID              string              `json:"workspaceId"`
+	ConfigurationID          string              `json:"configurationId,omitempty"`
+	OwnerUserID              string              `json:"ownerUserId,omitempty"`
+	OwnerUsername            string              `json:"ownerUsername,omitempty"`
+	Kind                     string              `json:"kind"`
+	Name                     string              `json:"name"`
+	Description              string              `json:"description"`
+	Status                   string              `json:"status"`
+	CancelRequested          bool                `json:"cancelRequested"`
+	ResultType               string              `json:"resultType"`
+	ResultVersion            string              `json:"resultVersion"`
+	Variants                 []ExperimentVariant `json:"variants"`
+	ScheduledFor             *time.Time          `json:"scheduledFor,omitempty"`
+	RestSecondsBetweenTrials int                 `json:"restSecondsBetweenTrials,omitempty"` // delay before each next run
+	FirstTrialPilot          bool                `json:"firstTrialPilot,omitempty"`          // pilot run at position 0 per configuration
+	CreatedAt                time.Time           `json:"createdAt"`
+	UpdatedAt                time.Time           `json:"updatedAt"`
 }
 
 type ExperimentFigure struct {
@@ -202,6 +205,9 @@ type ExperimentTrial struct {
 	PipelineRunID    string     `json:"pipelineRunId,omitempty"`
 	ResultArtifactID string     `json:"resultArtifactId"`
 	Error            string     `json:"error,omitempty"`
+	CleanupError     string     `json:"cleanupError,omitempty"` // warning: valid result, environment may not be clean
+	Pilot            bool       `json:"pilot,omitempty"`        // warm-up run excluded from statistics
+	ScheduledFor     *time.Time `json:"scheduledFor,omitempty"`
 	CreatedAt        time.Time  `json:"createdAt"`
 	StartedAt        *time.Time `json:"startedAt,omitempty"`
 	CompletedAt      *time.Time `json:"completedAt,omitempty"`

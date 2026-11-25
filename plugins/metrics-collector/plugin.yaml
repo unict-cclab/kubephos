@@ -77,6 +77,18 @@ spec:
         title: Response time SLO (optional, ms)
         minimum: 1
         maximum: 600000
+      rateWindow:
+        type: string
+        title: Rate window
+        description: Range used by rate() and percentile queries. Auto uses
+          max(resolution, 4 x scrape interval).
+        enum:
+        - auto
+        - 30s
+        - 1m
+        - 2m
+        - 5m
+        default: auto
       clusterName:
         type: string
         x-kubephos-hidden: true

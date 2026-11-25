@@ -211,6 +211,24 @@ func TestParseValidatesLoadScenarioEndpoint(t *testing.T) {
 	}
 }
 
+func TestParseValidatesEndpointRedirects(t *testing.T) {
+	withRedirects := func(value string) string {
+		return strings.Replace(validDescriptor, "        path: /\n  valuesSchema:", "        path: /\n        redirects:\n"+value+"  valuesSchema:", 1)
+	}
+	if _, err := Parse([]byte(withRedirects("          - {method: POST, path: /cart}\n          - {method: GET, path: /logout}\n")), "imported"); err != nil {
+		t.Fatalf("valid redirects were rejected: %v", err)
+	}
+	for name, value := range map[string]string{
+		"lower-case method": "          - {method: post, path: /cart}\n",
+		"relative path":     "          - {method: POST, path: cart}\n",
+		"duplicate":         "          - {method: POST, path: /cart}\n          - {method: POST, path: /cart}\n",
+	} {
+		if _, err := Parse([]byte(withRedirects(value)), "imported"); err == nil {
+			t.Fatalf("%s redirect was accepted", name)
+		}
+	}
+}
+
 func TestParseAcceptsMultipleEntrypointsAndInlineLoadScript(t *testing.T) {
 	raw := strings.Replace(validDescriptor, "    entrypoint: application.yaml", "    entrypoint: application.yaml\n    additionalEntrypoints: [database.yaml, worker.yaml]", 1)
 	raw = strings.Replace(raw, "  valuesSchema:", `    loadScenarios:

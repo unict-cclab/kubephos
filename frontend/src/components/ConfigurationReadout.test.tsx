@@ -59,6 +59,17 @@ it('uses the same scheduling sections in edit and view', () => {
  expect(screen.queryByRole('button',{name:'Save changes'})).not.toBeInTheDocument()
 })
 
+it('says what happens when a scheduling or scaling kind is not configured', () => {
+ render(<ConfigurationReadout item={item} clusters={[]} applications={[]} plugins={[]} strategies={[]}/>)
+ fireEvent.click(screen.getByRole('button',{name:'Scheduling and scaling'}))
+ fireEvent.click(screen.getByRole('tab',{name:'Scheduler'}))
+ expect(within(screen.getByRole('tabpanel',{name:'Scheduler'})).queryByText(/^No scheduler/)).not.toBeInTheDocument()
+ fireEvent.click(screen.getByRole('tab',{name:'Descheduler'}))
+ expect(screen.getByRole('tabpanel',{name:'Descheduler'})).toHaveTextContent('No descheduler: running pods are not moved to other nodes.')
+ fireEvent.click(screen.getByRole('tab',{name:'Autoscaler'}))
+ expect(screen.getByRole('tabpanel',{name:'Autoscaler'})).toHaveTextContent('No autoscaler: services keep their initial replicas and resources.')
+})
+
 it('keeps network under Monitoring and always shows Phase 1 for a static network profile',()=>{
  render(<ConfigurationReadout item={item} clusters={[]} applications={[application]} plugins={[]} strategies={[]}/>)
  fireEvent.click(screen.getByRole('button',{name:'Monitoring'}))

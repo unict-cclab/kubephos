@@ -71,22 +71,14 @@ func (w *Worker) reconcilePipelineRun(ctx context.Context, owner string, run dom
 			return nil
 		}
 		if !pipeline.Definition.CleanupAfterRun {
-			return w.store.FailPipelineRun(ctx, run.ID, owner, run.TerminalStatus, run.Error)
+			return w.finishTerminatedPipelineRun(ctx, owner, run, nil)
 		}
 		complete, cleanupErr := w.reconcilePipelineCleanup(ctx, owner, run)
-		if cleanupErr != nil {
-			run.Error = errors.Join(errors.New(run.Error), cleanupErr).Error()
-			if err := w.store.FailPipelineRun(ctx, run.ID, owner, run.TerminalStatus, run.Error); err != nil {
-				return err
-			}
-			released = true
-			return nil
-		}
-		if !complete {
+		if cleanupErr == nil && !complete {
 			release()
 			return nil
 		}
-		if err := w.store.FailPipelineRun(ctx, run.ID, owner, run.TerminalStatus, run.Error); err != nil {
+		if err := w.finishTerminatedPipelineRun(ctx, owner, run, cleanupErr); err != nil {
 			return err
 		}
 		released = true
@@ -189,21 +181,47 @@ func (w *Worker) reconcilePipelineRun(ctx context.Context, owner string, run dom
 	if artifact.Type != run.ResultType || artifact.Version != run.ResultVersion || artifact.VerifiedAt.IsZero() {
 		return w.deferPipelineTermination(ctx, owner, run, pipeline, len(run.Stages)-1, domain.OperationFailed, errors.New("result artifact does not satisfy the validated contract"))
 	}
+	cleanupWarning := ""
 	if pipeline.Definition.CleanupAfterRun {
 		complete, err := w.reconcilePipelineCleanup(ctx, owner, run)
-		if err != nil {
-			return w.failPipelineRun(ctx, owner, run, -1, err)
-		}
-		if !complete {
+		if err == nil && !complete {
 			release()
 			return nil
 		}
+		// The verified result was measured before cleanup started, so a cleanup
+		// failure cannot invalidate it. Keep it and report the failure; the
+		// store still cancels later sequential runs of the experiment.
+		cleanupWarning = resultCleanupWarning(err)
 	}
-	if err := w.store.CompletePipelineRun(ctx, run.ID, owner, artifactID); err != nil {
+	if err := w.store.CompletePipelineRun(ctx, run.ID, owner, artifactID, cleanupWarning); err != nil {
 		return err
 	}
 	released = true
 	return nil
+}
+
+func resultCleanupWarning(err error) string {
+	if err == nil {
+		return ""
+	}
+	message := strings.TrimSpace(err.Error())
+	if message == "" {
+		message = "cleanup failed"
+	}
+	return message
+}
+
+// finishTerminatedPipelineRun records the final status of a run that entered
+// termination. A run retried only for cleanup after a successful measurement
+// keeps its result; every other run fails or is canceled.
+func (w *Worker) finishTerminatedPipelineRun(ctx context.Context, owner string, run domain.PipelineRun, cleanupErr error) error {
+	if run.TerminalStatus == domain.OperationSucceeded {
+		return w.store.CompletePipelineRun(ctx, run.ID, owner, run.ResultArtifactID, resultCleanupWarning(cleanupErr))
+	}
+	if cleanupErr != nil {
+		run.Error = errors.Join(errors.New(run.Error), cleanupErr).Error()
+	}
+	return w.store.FailPipelineRun(ctx, run.ID, owner, run.TerminalStatus, run.Error)
 }
 
 func (w *Worker) reconcilePipelineCleanup(ctx context.Context, owner string, run domain.PipelineRun) (bool, error) {

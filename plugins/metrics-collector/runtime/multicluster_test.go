@@ -45,3 +45,24 @@ func TestCiliumQueriesUseClusterProbeMetricsAndKeepLocustEndToEnd(t *testing.T) 
 		}
 	}
 }
+
+func TestMultiClusterMergesCatalogsAndRunContexts(t *testing.T) {
+	rtt := func(cluster string) metricCatalogEntry {
+		return metricCatalogEntry{Metric: "network.rtt", Source: sourceMentat, Vantage: vantageNetwork, Collector: collectorPrometheus, Query: `rate(cluster_network_latency_sum{measurement_cluster="` + cluster + `"}[1m])`, RateWindowSeconds: 60, Description: "rtt"}
+	}
+	cpu := metricCatalogEntry{Metric: "cpu.cores", Source: sourceCadvisor, Vantage: vantageResource, Collector: collectorPrometheus, Query: "cpu", Description: "cpu"}
+	merged := mergeCatalogs([][]metricCatalogEntry{{cpu, rtt("a")}, {cpu, rtt("b")}}, []string{"a", "b"})
+	if len(merged) != 2 || merged[0] != cpu || merged[1].Query != "a: "+rtt("a").Query+"\nb: "+rtt("b").Query {
+		t.Fatalf("unexpected merged catalog %+v", merged)
+	}
+	one, two := []concurrentLoad{{Namespace: "x", MaxPods: 1}}, []concurrentLoad{{Namespace: "x", MaxPods: 3}, {Namespace: "y", MaxPods: 1}}
+	primary := &runContext{Kubernetes: &runContextKubernetes{ServerVersion: "v1.31.2"}, Nodes: []runContextNode{{Name: "n1"}}, ConcurrentLoad: &one}
+	peer := &runContext{Kubernetes: &runContextKubernetes{ServerVersion: "v1.30.0"}, Nodes: []runContextNode{{Name: "n1"}}, ConcurrentLoad: &two}
+	context := mergeRunContexts([]*runContext{primary, peer, nil}, []string{"a", "b", "c"})
+	if context.Kubernetes.ServerVersion != "v1.31.2" || len(context.Nodes) != 2 || context.Nodes[0].Cluster != "a" || context.Nodes[1].Cluster != "b" || len(*context.ConcurrentLoad) != 2 || (*context.ConcurrentLoad)[0].MaxPods != 3 {
+		t.Fatalf("unexpected merged run context %+v", context)
+	}
+	if primary.Nodes[0].Cluster != "" {
+		t.Fatal("merging must not mutate the primary context")
+	}
+}

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -70,10 +71,10 @@ func (s *Store) CreatePipelineExperiment(ctx context.Context, experiment domain.
 	}
 	defer tx.Rollback(ctx)
 	err = tx.QueryRow(ctx, `
-		INSERT INTO experiments (id, workspace_id, configuration_id, owner_user_id, kind, name, description, status, result_type, result_version, scheduled_for, configuration_snapshot)
-		VALUES ($1, $2, NULLIF($3, ''), $4, COALESCE(NULLIF($5, ''), 'comparison'), $6, $7, $8, $9, $10, $11, $12)
+		INSERT INTO experiments (id, workspace_id, configuration_id, owner_user_id, kind, name, description, status, result_type, result_version, scheduled_for, configuration_snapshot, rest_seconds_between_trials, first_trial_pilot)
+		VALUES ($1, $2, NULLIF($3, ''), $4, COALESCE(NULLIF($5, ''), 'comparison'), $6, $7, $8, $9, $10, $11, $12, $13, $14)
 		RETURNING created_at, updated_at
-	`, experiment.ID, experiment.WorkspaceID, experiment.ConfigurationID, experiment.OwnerUserID, experiment.Kind, experiment.Name, experiment.Description, domain.OperationQueued, experiment.ResultType, experiment.ResultVersion, experiment.ScheduledFor, experiment.ConfigurationSnapshot).Scan(&experiment.CreatedAt, &experiment.UpdatedAt)
+	`, experiment.ID, experiment.WorkspaceID, experiment.ConfigurationID, experiment.OwnerUserID, experiment.Kind, experiment.Name, experiment.Description, domain.OperationQueued, experiment.ResultType, experiment.ResultVersion, experiment.ScheduledFor, experiment.ConfigurationSnapshot, experiment.RestSecondsBetweenTrials, experiment.FirstTrialPilot).Scan(&experiment.CreatedAt, &experiment.UpdatedAt)
 	if err != nil {
 		return domain.Experiment{}, err
 	}
@@ -136,10 +137,10 @@ func (s *Store) CreatePipelineExperiment(ctx context.Context, experiment domain.
 			trial.PipelineRunID = run.ID
 			trial.Status = domain.OperationQueued
 			err = tx.QueryRow(ctx, `
-				INSERT INTO experiment_trials (id, variant_id, position, status, pipeline_run_id)
-				VALUES ($1, $2, $3, $4, $5)
+				INSERT INTO experiment_trials (id, variant_id, position, status, pipeline_run_id, pilot)
+				VALUES ($1, $2, $3, $4, $5, $6)
 				RETURNING created_at
-			`, trial.ID, variant.ID, trial.Position, trial.Status, run.ID).Scan(&trial.CreatedAt)
+			`, trial.ID, variant.ID, trial.Position, trial.Status, run.ID, trial.Pilot).Scan(&trial.CreatedAt)
 			if err != nil {
 				return domain.Experiment{}, err
 			}
@@ -166,7 +167,7 @@ func (s *Store) readListPipelineRunsForUser(ctx context.Context, userID string, 
 	}
 	rows, err := s.pool.Query(ctx, `
 		SELECT id, pipeline_id, workspace_id, COALESCE(cluster_resource_id, ''), COALESCE(owner_user_id, ''), isolation_mode, name, status, pipeline_hash, result_type, result_version,
-		       COALESCE(result_artifact_id, ''), cancel_requested, COALESCE(terminal_status, ''), error, created_at, queued_at, scheduled_for, started_at, completed_at, pause_before_stage, execution_requested, initialized_at, application_namespace
+		       COALESCE(result_artifact_id, ''), cancel_requested, COALESCE(terminal_status, ''), error, created_at, queued_at, scheduled_for, started_at, completed_at, pause_before_stage, execution_requested, initialized_at, application_namespace, cleanup_error
 		FROM pipeline_runs
 		WHERE `+visibility+`
 		ORDER BY created_at DESC
@@ -206,7 +207,7 @@ func (s *Store) readListPipelineRunsForUser(ctx context.Context, userID string, 
 func (s *Store) GetPipelineRun(ctx context.Context, runID string) (domain.PipelineRun, error) {
 	run, err := scanPipelineRun(s.pool.QueryRow(ctx, `
 		SELECT id, pipeline_id, workspace_id, COALESCE(cluster_resource_id, ''), COALESCE(owner_user_id, ''), isolation_mode, name, status, pipeline_hash, result_type, result_version,
-		       COALESCE(result_artifact_id, ''), cancel_requested, COALESCE(terminal_status, ''), error, created_at, queued_at, scheduled_for, started_at, completed_at, pause_before_stage, execution_requested, initialized_at, application_namespace
+		       COALESCE(result_artifact_id, ''), cancel_requested, COALESCE(terminal_status, ''), error, created_at, queued_at, scheduled_for, started_at, completed_at, pause_before_stage, execution_requested, initialized_at, application_namespace, cleanup_error
 		FROM pipeline_runs
 		WHERE id = $1
 	`, runID))
@@ -300,7 +301,7 @@ func (s *Store) ListPipelineRunArtifacts(ctx context.Context, runID string) ([]d
 
 func scanPipelineRun(row scanner) (domain.PipelineRun, error) {
 	var run domain.PipelineRun
-	err := row.Scan(&run.ID, &run.PipelineID, &run.WorkspaceID, &run.ClusterResourceID, &run.OwnerUserID, &run.IsolationMode, &run.Name, &run.Status, &run.PipelineHash, &run.ResultType, &run.ResultVersion, &run.ResultArtifactID, &run.CancelRequested, &run.TerminalStatus, &run.Error, &run.CreatedAt, &run.QueuedAt, &run.ScheduledFor, &run.StartedAt, &run.CompletedAt, &run.PauseBeforeStage, &run.ExecutionRequested, &run.InitializedAt, &run.ApplicationNamespace)
+	err := row.Scan(&run.ID, &run.PipelineID, &run.WorkspaceID, &run.ClusterResourceID, &run.OwnerUserID, &run.IsolationMode, &run.Name, &run.Status, &run.PipelineHash, &run.ResultType, &run.ResultVersion, &run.ResultArtifactID, &run.CancelRequested, &run.TerminalStatus, &run.Error, &run.CreatedAt, &run.QueuedAt, &run.ScheduledFor, &run.StartedAt, &run.CompletedAt, &run.PauseBeforeStage, &run.ExecutionRequested, &run.InitializedAt, &run.ApplicationNamespace, &run.CleanupError)
 	if run.Status == domain.OperationRunning && run.TerminalStatus == "" && !run.CancelRequested && run.PauseBeforeStage != "" && !run.ExecutionRequested {
 		run.Phase = "initializing"
 		if run.InitializedAt != nil {
@@ -618,7 +619,12 @@ func (s *Store) FailPipelineRunStage(ctx context.Context, runStageID, status, me
 	return err
 }
 
-func (s *Store) CompletePipelineRun(ctx context.Context, runID, owner, artifactID string) error {
+// CompletePipelineRun records a successful run. A non-empty cleanupError keeps
+// the verified result but reports that the environment may not be clean: later
+// sequential runs of the same experiment are canceled exactly as after a failure,
+// and managed resource transitions are not applied.
+func (s *Store) CompletePipelineRun(ctx context.Context, runID, owner, artifactID string, cleanupError ...string) error {
+	warning := strings.TrimSpace(strings.Join(cleanupError, "; "))
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return err
@@ -626,15 +632,22 @@ func (s *Store) CompletePipelineRun(ctx context.Context, runID, owner, artifactI
 	defer tx.Rollback(ctx)
 	command, err := tx.Exec(ctx, `
 		UPDATE pipeline_runs
-		SET status = $3, result_artifact_id = NULLIF($4, ''), completed_at = now(), lease_owner = NULL, lease_until = NULL
+		SET status = $3, result_artifact_id = NULLIF($4, ''), cleanup_error = $7, terminal_status = NULL,
+		    completed_at = now(), lease_owner = NULL, lease_until = NULL
 		WHERE id = $1 AND lease_owner = $2 AND status = $5
 		  AND NOT EXISTS (SELECT 1 FROM pipeline_run_stages WHERE run_id = $1 AND status <> $6)
-	`, runID, owner, domain.OperationSucceeded, artifactID, domain.OperationRunning, domain.StepSucceeded)
+	`, runID, owner, domain.OperationSucceeded, artifactID, domain.OperationRunning, domain.StepSucceeded, warning)
 	if err != nil {
 		return err
 	}
 	if command.RowsAffected() != 1 {
 		return ErrConflict
+	}
+	if warning != "" {
+		if err := cancelLaterSequentialTrials(ctx, tx, runID, "Not started because cleanup of an earlier run failed and the environment may not be clean."); err != nil {
+			return err
+		}
+		return tx.Commit(ctx)
 	}
 	if _, err := tx.Exec(ctx, `
 		UPDATE managed_resources
@@ -695,7 +708,16 @@ func (s *Store) FailPipelineRun(ctx context.Context, runID, owner, status, messa
 	if command.RowsAffected() != 1 {
 		return ErrConflict
 	}
-	_, err = tx.Exec(ctx, `
+	if err := cancelLaterSequentialTrials(ctx, tx, runID, "Not started because an earlier sequential run failed or was canceled."); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+// Sequential runs never start after an earlier run left the environment in an
+// unknown state.
+func cancelLaterSequentialTrials(ctx context.Context, tx pgx.Tx, runID, message string) error {
+	_, err := tx.Exec(ctx, `
 		WITH current_trial AS (
 			SELECT variant.experiment_id, variant.position AS variant_position, trial.position AS trial_position
 			FROM experiment_trials trial
@@ -715,11 +737,8 @@ func (s *Store) FailPipelineRun(ctx context.Context, runID, owner, status, messa
 		SET status = $2, error = $3, completed_at = now(), updated_at = now()
 		FROM canceled_runs
 		WHERE trial.pipeline_run_id = canceled_runs.id AND trial.status = $4
-	`, runID, domain.OperationCanceled, "Not started because an earlier sequential run failed or was canceled.", domain.OperationQueued)
-	if err != nil {
-		return err
-	}
-	return tx.Commit(ctx)
+	`, runID, domain.OperationCanceled, message, domain.OperationQueued)
+	return err
 }
 
 func (s *Store) RequestPipelineRunCancel(ctx context.Context, runID string) error {
@@ -829,6 +848,7 @@ func (s *Store) SyncExperimentPipelineRun(ctx context.Context, runID string) err
 		    operation_id = (SELECT operation_id FROM pipeline_run_stages WHERE run_id = r.id AND operation_id IS NOT NULL ORDER BY position DESC LIMIT 1),
 		    result_artifact_id = r.result_artifact_id,
 		    error = r.error,
+		    cleanup_error = r.cleanup_error,
 		    updated_at = now(),
 		    completed_at = r.completed_at
 		FROM pipeline_runs r, experiment_variants v
@@ -849,7 +869,7 @@ func (s *Store) SyncExperimentPipelineRun(ctx context.Context, runID string) err
 			SELECT v.experiment_id,
 			       CASE
 			           WHEN bool_and(t.status = $2) THEN $2
-			           WHEN bool_and(t.status IN ($2, $3, $4)) AND bool_or(t.status = $3) THEN $3
+			           WHEN bool_and(t.status IN ($2, $3, $4)) AND bool_or(t.status = $3 OR t.cleanup_error <> '') THEN $3
 			           WHEN bool_and(t.status IN ($2, $3, $4)) THEN $4
 			           WHEN bool_or(t.status = 'initialized') THEN 'initialized'
                    WHEN bool_or(t.status = 'initializing') THEN 'initializing'
@@ -866,7 +886,40 @@ func (s *Store) SyncExperimentPipelineRun(ctx context.Context, runID string) err
 	if err != nil {
 		return err
 	}
+	if err := scheduleRestAfterRun(ctx, tx, runID); err != nil {
+		return err
+	}
 	return tx.Commit(ctx)
+}
+
+// scheduleRestAfterRun delays the next sequential run of the experiment by the
+// configured rest. It only moves scheduled_for forward, so no worker sleeps and
+// repeated synchronizations are idempotent.
+func scheduleRestAfterRun(ctx context.Context, tx pgx.Tx, runID string) error {
+	_, err := tx.Exec(ctx, `
+		WITH finished AS (
+			SELECT e.id AS experiment_id, e.rest_seconds_between_trials AS rest, v.position AS variant_position, t.position AS trial_position, r.completed_at
+			FROM pipeline_runs r
+			JOIN experiment_trials t ON t.pipeline_run_id = r.id
+			JOIN experiment_variants v ON v.id = t.variant_id
+			JOIN experiments e ON e.id = v.experiment_id
+			WHERE r.id = $1 AND r.status IN ($2, $3, $4) AND r.completed_at IS NOT NULL AND e.rest_seconds_between_trials > 0
+		), next_run AS (
+			SELECT t.pipeline_run_id AS id, finished.completed_at + finished.rest * interval '1 second' AS not_before
+			FROM finished
+			JOIN experiment_variants v ON v.experiment_id = finished.experiment_id
+			JOIN experiment_trials t ON t.variant_id = v.id
+			WHERE t.pipeline_run_id IS NOT NULL
+			  AND (v.position > finished.variant_position OR v.position = finished.variant_position AND t.position > finished.trial_position)
+			ORDER BY v.position, t.position
+			LIMIT 1
+		)
+		UPDATE pipeline_runs r
+		SET scheduled_for = GREATEST(r.scheduled_for, next_run.not_before)
+		FROM next_run
+		WHERE r.id = next_run.id AND r.status = $5
+	`, runID, domain.OperationSucceeded, domain.OperationFailed, domain.OperationCanceled, domain.OperationQueued)
+	return err
 }
 
 // Keep ownership while a final read-only cleanup health gate contacts the cluster.

@@ -1,14 +1,32 @@
 import {networkMetricValue} from '../networkUnits'
-import type {ReactNode} from 'react'
+import {useMemo,type ReactNode} from 'react'
 import {workloadTable,trafficTable} from './PhaseReadout'
 import type {Application,CatalogStrategy,ExperimentConfiguration,ExperimentConfigurationComponent,ManagedResource,Plugin,Session} from '../types'
 import {ReadoutTable,type ReadoutTableData} from './ReadoutTable'
 import {FormTabs} from './FormTabs'
 import {FormDisclosure} from './FormDisclosure'
 import {InputData} from './InputData'
-import {LoadProfilePreview,loadProfileSteps} from './LoadProfileEditor'
+import {LoadProfilePreview,loadProfileSteps,type LoadProfileStep} from './LoadProfileEditor'
+import {rateEquivalentsText,scenarioRedirects,taskWeights,useRateEquivalents} from './useRateEquivalents'
 import {WizardReadout} from './WizardReadout'
 import {ApplicationSettingsReadout} from './ApplicationSettingsReadout'
+
+// Scheduling and scaling tabs, with what happens when the configuration has none.
+const schedulingKinds=[
+ {prefix:'scheduler.',title:'Scheduler',empty:'No scheduler: pods are placed by the default Kubernetes scheduler.'},
+ {prefix:'descheduler.',title:'Descheduler',empty:'No descheduler: running pods are not moved to other nodes.'},
+ {prefix:'autoscaler.',title:'Autoscaler',empty:'No autoscaler: services keep their initial replicas and resources.'},
+ {prefix:'',title:'Other',empty:'No other scheduling or scaling component.'}
+]
+
+// Workload phases with what each rate means for plain Locust users and the server.
+function WorkloadPhases({steps,application,scenarioId,savedWeights}:{steps:LoadProfileStep[];application?:Application;scenarioId?:string;savedWeights:unknown}) {
+ const scenario=scenarioId??application?.descriptor.spec?.interface?.loadScenarios?.[0]?.id
+ const context=application&&scenario?{applicationId:application.id,scenarioId:scenario,redirects:scenarioRedirects(application.descriptor,scenario)}:undefined
+ const weights=useMemo(()=>taskWeights(savedWeights),[savedWeights])
+ const equivalents=useRateEquivalents(context,weights)
+ return <div className="load-profile-workspace"><PhaseTables label="Workload phases" table={workloadTable(steps,rps=>rateEquivalentsText(rps,equivalents))}/><aside className="load-profile-live" aria-label="Live preview"><LoadProfilePreview steps={steps}/></aside></div>
+}
 
 function PhaseTables({table,label}:{table:ReadoutTableData;label:string}) {
  return <FormTabs label={label} items={table.rows.map((row,index)=>({id:String(index),title:`Phase ${index+1}`,content:<ReadoutTable label={`${label} · Phase ${index+1}`} data={{headers:table.headers,rows:[row]}}/>}))}/>
@@ -33,7 +51,7 @@ export function ConfigurationReadout({session,item,clusters,applications,plugins
   return <section className="readout-section" key={component.id}><h4>{strategy?.name??plugin?.name??component.capability}</h4><InputData value={settings} schema={plugin?.schema} references={references}/>{typeof configuration==='string'&&configuration.trim()&&<FormDisclosure title="Configuration"><InputData value={configuration}/></FormDisclosure>}{(component.targets?.include?.length>0||component.targets?.exclude?.length>0)&&<InputData value={{includedServices:component.targets.include,excludedServices:component.targets.exclude}}/>}</section>
  }
  const duration=load.reduce((total,component)=>Math.max(total,loadProfileSteps(component.configuration.steps).reduce((sum,step)=>sum+step.durationSeconds,0)),0)
- const general=<InputData value={{clusterResourceId:item.clusterResourceId,...(!deploymentMode?{destinationType:external?'External destination':'Catalog application'}:{}),...(external?{}:{applicationRef:item.applicationRef,namespace:item.definition.namespace||'—'}),...(!deploymentMode?{startMode:item.definition.twoPhaseStart?'Manual':'Automatic'}:{})}} references={references}/>
+ const general=<InputData value={{clusterResourceId:item.clusterResourceId,...(!deploymentMode?{destinationType:external?'External destination':'Catalog application'}:{}),...(external?{}:{applicationRef:item.applicationRef,namespace:item.definition.namespace||'—'}),...(!deploymentMode?{startMode:item.definition.twoPhaseStart?(item.definition.manualStartScope==='every'?'Manual · every repetition waits for Start':'Manual · only the first repetition waits for Start'):'Automatic'}:{})}} references={references}/>
  return <div className="configuration-readout">{showHeading&&<div className="readout-heading"><h3>{item.name}</h3></div>}<WizardReadout sections={[
  {id:'general',title:'General',content:general},
  {id:'application',title:external?'External destination':'Application',content:external?<FormTabs label="External destination settings" items={[
@@ -46,7 +64,7 @@ export function ConfigurationReadout({session,item,clusters,applications,plugins
   const {steps:_steps,geographicSteps,action:_action,interactive:_interactive,scenarioId,...settings}=component.configuration
   if((application?.descriptor.spec?.interface?.loadScenarios?.length??0)>1)settings.scenarioId=scenarioId
   return <FormTabs key={component.id} label="Load profile settings" items={[
-   {id:'workload',title:'Workload',content:<div className="load-profile-workspace"><PhaseTables label="Workload phases" table={workloadTable(steps)}/><aside className="load-profile-live" aria-label="Live preview"><LoadProfilePreview steps={steps}/></aside></div>},
+   {id:'workload',title:'Workload',content:<WorkloadPhases steps={steps} application={application} scenarioId={typeof scenarioId==='string'?scenarioId:undefined} savedWeights={component.configuration.taskWeights}/>},
    ...(Array.isArray(geographicSteps)&&geographicSteps.length?[{id:'distribution',title:'Traffic distribution',content:<PhaseTables label={external?'Traffic phases by endpoint':multi?'Traffic phases by cluster':'Traffic phases by zone'} table={trafficTable(geographicSteps as Record<string,unknown>[],multi,external)}/>}]:[]),
    {id:'generator',title:'Generator',content:<InputData value={settings} schema={plugins.find(value=>value.id===component.pluginId)?.schema}/>}
   ]}/>
@@ -59,7 +77,10 @@ export function ConfigurationReadout({session,item,clusters,applications,plugins
   return <section key={component.id} className="form-stack"><FormTabs label="Network phases" items={phases.map((phase,index)=>({id:String(index),title:`Phase ${index+1}`,content:<div className="form-stack"><ReadoutTable label={`Phase ${index+1} duration`} data={{headers:['Field','Value'],rows:[['Duration (min)',String(Number(phase.durationSeconds)/60)]]}}/><NetworkReadout component={{...component,configuration:phase}} clusterMode={multi} showTarget={false}/></div>}))}/><FormDisclosure title="Network target"><InputData value={{nodeGroupLabel:value.nodeGroupLabel,nodeSelector:value.nodeSelector,networkInterface:value.networkInterface,hostNetwork:value.hostNetwork}}/></FormDisclosure></section>
  })}</div>},{id:'agent',title:'Agent',content:<div className="form-stack"><ReadoutTable label="Agent" data={{headers:['Field','Value'],rows:[['Customize mon-agent for this experiment',agents.length?'Enabled':'Disabled']]}}/>{agents.map(componentReadout)}</div>}]:[])
  ]}/>},
- ...(!external?[{id:'scheduling',title:'Scheduling and scaling',content:<FormTabs label="Scheduling and scaling settings" items={([['scheduler.','Scheduler'],['descheduler.','Descheduler'],['autoscaler.','Autoscaler'],['','Other']] as const).map(([prefix,title])=>({id:prefix||'other',title,content:<div className="form-stack">{scheduling.filter(component=>prefix?component.capability.startsWith(prefix):!/^(scheduler\.|descheduler\.|autoscaler\.)/.test(component.capability)).map(componentReadout)}</div>}))}/>}]:[])] : [])
+ ...(!external?[{id:'scheduling',title:'Scheduling and scaling',content:<FormTabs label="Scheduling and scaling settings" items={schedulingKinds.map(({prefix,title,empty})=>{
+  const selected=scheduling.filter(component=>prefix?component.capability.startsWith(prefix):!/^(scheduler\.|descheduler\.|autoscaler\.)/.test(component.capability))
+  return {id:prefix||'other',title,content:<div className="form-stack">{selected.length?selected.map(componentReadout):<p className="details-copy">{empty}</p>}</div>}
+ })}/>}]:[])] : [])
  ]}/></div>
 }
 

@@ -21,8 +21,21 @@ type ResultComparison struct {
 	CreatedBy   string             `json:"createdBy"`
 	ModifiedBy  string             `json:"modifiedBy"`
 	Series      []ComparisonSeries `json:"series"`
-	CreatedAt   time.Time          `json:"createdAt"`
-	UpdatedAt   time.Time          `json:"updatedAt"`
+	// Snapshot freezes the resolved sources; nil for legacy comparisons.
+	Snapshot           *ComparisonSnapshot `json:"-"`
+	SnapshotCapturedAt *time.Time          `json:"snapshotCapturedAt,omitempty"`
+	CreatedAt          time.Time           `json:"createdAt"`
+	UpdatedAt          time.Time           `json:"updatedAt"`
+}
+
+// ComparisonSnapshot records exactly which runs and results a comparison
+// showed when it was saved or refreshed, so later reads are reproducible.
+type ComparisonSnapshot struct {
+	CapturedAt time.Time          `json:"capturedAt"`
+	Series     []ComparisonSeries `json:"series"`
+	// Sources keep each source experiment with only its selected runs,
+	// including variant presentation, configuration and result artifact ids.
+	Sources []Experiment `json:"sources"`
 }
 
 type ComparisonCandidate struct {

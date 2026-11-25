@@ -57,6 +57,19 @@ func deleteExperimentRuns(ctx context.Context, tx pgx.Tx, requested []string) er
 	if _, err := tx.Exec(ctx, `DELETE FROM pipelines p WHERE id=ANY($1::text[]) AND (description LIKE 'Immutable execution pipeline for %' OR description LIKE 'Immutable suite pipeline for %') AND NOT EXISTS(SELECT 1 FROM pipeline_runs WHERE pipeline_id=p.id) AND NOT EXISTS(SELECT 1 FROM experiment_variants WHERE pipeline_id=p.id)`, pipelines); err != nil {
 		return err
 	}
+	if err := deleteUnreferencedOperations(ctx, tx, operations); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM audit_events WHERE target_id=ANY($1::text[]) OR target_id=ANY($2::text[])`, runs, pipelines); err != nil {
+		return err
+	}
+	return nil
+}
+
+// deleteUnreferencedOperations removes the candidate operations, their
+// artifacts and stored objects, except operations which still supply data to
+// other resources, experiments, figures or frozen comparison snapshots.
+func deleteUnreferencedOperations(ctx context.Context, tx pgx.Tx, operations []string) error {
 	// Retain operations which supply data to other resources or experiments.
 	for {
 		previous := len(operations)
@@ -72,6 +85,7 @@ func deleteExperimentRuns(ctx context.Context, tx pgx.Tx, requested []string) er
  AND NOT EXISTS(SELECT 1 FROM experiment_trials t LEFT JOIN artifacts a ON a.id=t.result_artifact_id WHERE t.operation_id=o.id OR a.operation_id=o.id)
 	AND NOT EXISTS(SELECT 1 FROM artifacts a JOIN pipeline_runs r ON r.result_artifact_id=a.id WHERE a.operation_id=o.id)
 	AND NOT EXISTS(SELECT 1 FROM artifacts a JOIN experiment_figures f ON a.id=ANY(f.source_artifact_ids) WHERE a.operation_id=o.id)
+	AND NOT EXISTS(SELECT 1 FROM artifacts a JOIN result_comparison_artifacts c ON c.artifact_id=a.id WHERE a.operation_id=o.id)
  AND NOT EXISTS(SELECT 1 FROM infrastructure_resources WHERE created_by_operation_id=o.id)
  AND NOT EXISTS(SELECT 1 FROM managed_resources WHERE operation_id=o.id OR deletion_operation_id=o.id)
  AND NOT EXISTS(SELECT 1 FROM strategy_catalog WHERE operation_id=o.id)
@@ -94,10 +108,30 @@ func deleteExperimentRuns(ctx context.Context, tx pgx.Tx, requested []string) er
 	if _, err := tx.Exec(ctx, `DELETE FROM operations WHERE id=ANY($1::text[])`, operations); err != nil {
 		return err
 	}
-	if _, err := tx.Exec(ctx, `DELETE FROM audit_events WHERE target_id=ANY($1::text[]) OR target_id=ANY($2::text[]) OR target_id=ANY($3::text[])`, runs, operations, pipelines); err != nil {
+	if _, err := tx.Exec(ctx, `DELETE FROM audit_events WHERE target_id=ANY($1::text[])`, operations); err != nil {
 		return err
 	}
 	return nil
+}
+
+// purgeReleasedComparisonArtifacts deletes results which were retained only
+// because a comparison snapshot referenced them after their experiment was
+// deleted. It runs after the snapshot references were removed or replaced.
+func purgeReleasedComparisonArtifacts(ctx context.Context, tx pgx.Tx, released []string) error {
+	if len(released) == 0 {
+		return nil
+	}
+	var operations []string
+	if err := tx.QueryRow(ctx, `SELECT COALESCE(array_agg(DISTINCT a.operation_id),'{}') FROM artifacts a
+ WHERE a.id=ANY($1::text[])
+ AND NOT EXISTS(SELECT 1 FROM result_comparison_artifacts c WHERE c.artifact_id=a.id)
+ AND NOT EXISTS(SELECT 1 FROM pipeline_run_stages s WHERE s.operation_id=a.operation_id OR s.cleanup_operation_id=a.operation_id)`, released).Scan(&operations); err != nil {
+		return err
+	}
+	if len(operations) == 0 {
+		return nil
+	}
+	return deleteUnreferencedOperations(ctx, tx, operations)
 }
 
 // PurgeOrphanedExperimentHistory applies the same deletion to snapshots whose

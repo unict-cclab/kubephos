@@ -40,4 +40,19 @@ for (const [name, theme] of Object.entries(themes)) for (const [foreground, back
   console.log(`${name}: ${foreground} / ${background} = ${contrast.toFixed(2)}:1 (minimum ${minimum}:1)`)
   if (contrast < minimum) failed = true
 }
+// Chart marks (results.css --chart-1…8) need 3:1 against the card they are drawn on, in both
+// themes. Series separation (normal vision and colour-vision deficiencies) is checked by
+// src/components/results/chartColor.test.ts with the full palette validator.
+const results = readFileSync(new URL('../src/components/results/results.css', import.meta.url), 'utf8')
+const block = selector => {const start = results.indexOf(selector); return start < 0 ? '' : results.slice(start, results.indexOf('}', start))}
+const chartLight = variables(block('.results-page {\n  --chart-1'))
+const chartThemes = {light: {...themes.light, ...chartLight}, dark: {...themes.dark, ...chartLight, ...variables(block(':root[data-theme="dark"] .results-page {\n  --chart-1'))}}
+for (const [name, theme] of Object.entries(chartThemes)) for (let slot = 1; slot <= 8; slot++) {
+  const key = `--chart-${slot}`
+  if (!theme[key]) {console.log(`${name}: ${key} missing`); failed = true; continue}
+  const a = luminance(theme[key], theme), b = luminance(theme['--card'], theme)
+  const contrast = (Math.max(a, b) + .05) / (Math.min(a, b) + .05)
+  console.log(`${name}: ${key} / --card = ${contrast.toFixed(2)}:1 (minimum 3:1)`)
+  if (contrast < 3) failed = true
+}
 if (failed) throw new Error('A theme color pair falls below its WCAG contrast threshold.')

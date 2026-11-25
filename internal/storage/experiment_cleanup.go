@@ -46,9 +46,8 @@ func (s *Store) RetryExperimentCleanup(ctx context.Context, runID string) error 
 	if command.RowsAffected() == 0 {
 		return ErrConflict
 	}
-	if status == "succeeded" {
-		status = "failed"
-	}
+	// A succeeded run whose cleanup failed keeps its verified result: the retry
+	// completes it as succeeded again and clears the cleanup warning.
 	if _, err := tx.Exec(ctx, `UPDATE pipeline_runs SET terminal_status=$2,status='running',lease_owner=NULL,lease_until=NULL WHERE id=$1`, runID, status); err != nil {
 		return err
 	}
