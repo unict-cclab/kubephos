@@ -1,4 +1,4 @@
-import {useEffect, useId, useRef, useState, type ReactNode} from 'react'
+import {useEffect, useId, useRef, type ReactNode} from 'react'
 import {cumulativeCounterMetrics, isControlMetric, type AggregateSeries} from '../../../resultsData'
 import {defaultSpec, type FigureSpec} from './figureSpec'
 import {metricTitle} from '../format'
@@ -72,7 +72,7 @@ const scaler = (values: number[], from: number, to: number, zero = false) => {
 
 const colorOf = (groups: OverviewGroup[], label: string, index: number, fallback?: string) => groups.find(group => group.label === label || label.startsWith(`${group.label} · `))?.color ?? fallback ?? `var(--chart-${index % 8 + 1})`
 
-function lineThumb(series: Array<{label: string; color?: string; points: Array<{x: number; y: number}>; dashed?: boolean}>, groups: OverviewGroup[]) {
+export function lineThumb(series: Array<{label: string; color?: string; points: Array<{x: number; y: number}>; dashed?: boolean}>, groups: OverviewGroup[]) {
   const xs = series.flatMap(item => item.points.map(point => point.x))
   const ys = series.flatMap(item => item.points.map(point => point.y))
   const px = scaler(xs, PAD + 2, W - PAD)
@@ -84,12 +84,12 @@ function lineThumb(series: Array<{label: string; color?: string; points: Array<{
   }))
 }
 
-const curvePoints = (series: AggregateSeries) => {
+export const curvePoints = (series: AggregateSeries) => {
   const start = Date.parse(series.points[0]?.timestamp ?? '')
   return series.points.map(point => ({x: Date.parse(point.timestamp) - start, y: point.value}))
 }
 
-function dotsThumb(columns: Array<{label: string; color?: string; values: number[]}>, groups: OverviewGroup[]) {
+export function dotsThumb(columns: Array<{label: string; color?: string; values: number[]}>, groups: OverviewGroup[]) {
   const all = columns.flatMap(item => item.values)
   const py = scaler(all, H - PAD - 4, PAD + 4)
   const width = (W - PAD * 2) / Math.max(1, columns.length)
@@ -104,13 +104,13 @@ function dotsThumb(columns: Array<{label: string; color?: string; values: number
   }))
 }
 
-function scatterThumb(points: Array<{x: number; y: number; color: string}>) {
+export function scatterThumb(points: Array<{x: number; y: number; color: string}>) {
   const px = scaler(points.map(point => point.x), PAD + 3, W - PAD - 2)
   const py = scaler(points.map(point => point.y), H - PAD - 3, PAD + 3)
   return frame(points.slice(0, 200).map((point, index) => <circle key={index} cx={px(point.x)} cy={py(point.y)} r="2" fill={point.color} fillOpacity=".7" />))
 }
 
-function placeholderThumb(kind: FigureKind) {
+export function placeholderThumb(kind: FigureKind) {
   return <span className="studio-thumb studio-thumb-icon"><KindIcon kind={kind} /></span>
 }
 
@@ -192,10 +192,11 @@ export const customForms: Array<{kind: CustomForm; label: string; hint: string}>
 ]
 
 // Top-bar chart switcher: the current chart's name; opens a popover with a custom chart (pick
-// the form, then X and Y) and the starting points built from this experiment's data.
-export function FigureSwitcher({items, active, prefix = '', label, onPick, forms, onCustom}: {items: SwitcherItem[]; active?: FigureKind; prefix?: string; label?: string; onPick: (item: SwitcherItem) => void; forms: CustomForm[]; onCustom: (form: CustomForm) => void}) {
+// the form, then X and Y) and the starting points built from this experiment's data. KubeStudio
+// also opens it to add a chart (`adding`): the type comes first, the data after.
+export function FigureSwitcher({items, active, prefix = '', label, onPick, forms, onCustom, open, onOpenChange, adding}: {items: SwitcherItem[]; active?: FigureKind; prefix?: string; label?: string; onPick: (item: SwitcherItem) => void; forms: CustomForm[]; onCustom: (form: CustomForm) => void; open: boolean; onOpenChange: (open: boolean) => void; adding?: string}) {
   const id = useId()
-  const [open, setOpen] = useState(false)
+  const setOpen = onOpenChange
   const trigger = useRef<HTMLButtonElement>(null)
   const panel = useRef<HTMLDivElement>(null)
   const found = items.find(item => item.kind === active)
@@ -213,7 +214,8 @@ export function FigureSwitcher({items, active, prefix = '', label, onPick, forms
       {current && <KindIcon kind={current.kind} />}<span>{prefix}{current?.title ?? 'Choose a chart'}</span>
       <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><path d="m3 4.5 3 3 3-3" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" /></svg>
     </button>
-    {open && <div ref={panel} id={`${id}-panel`} className="ks-popover ks-switcher-panel" role="dialog" aria-label="Choose a figure" onKeyDown={event => {if (event.key === 'Escape') {event.preventDefault(); event.stopPropagation(); close()}}}>
+    {open && <div ref={panel} id={`${id}-panel`} className="ks-popover ks-switcher-panel" role="dialog" aria-label={adding ? `Add ${adding}: choose its type` : 'Choose a figure'} onKeyDown={event => {if (event.key === 'Escape') {event.preventDefault(); event.stopPropagation(); close()}}}>
+      {adding && <p className="ks-switcher-step">Add {adding}: first choose its type, then its X and Y on the right.</p>}
       {forms.length > 0 && <section className="ks-custom" aria-labelledby={`${id}-custom`}>
         <p className="ks-popover-title" id={`${id}-custom`}>Custom chart <span>— pick the form, then choose X and Y freely</span></p>
         <div className="ks-custom-forms">
@@ -225,7 +227,7 @@ export function FigureSwitcher({items, active, prefix = '', label, onPick, forms
       <p className="ks-popover-title">Starting points from this experiment <span>— fully editable</span></p>
       <ul className="ks-figure-list">
         {items.map(item => <li key={item.kind}>
-          <button type="button" className="ks-figure-item" data-kind={item.kind} aria-current={(item.kind === active && !label) || undefined} onClick={() => {setOpen(false); onPick(item)}}>
+          <button type="button" className="ks-figure-item" data-kind={item.kind} aria-current={(!adding && item.kind === active && !label) || undefined} onClick={() => {setOpen(false); onPick(item)}}>
             {item.thumb}
             <span><strong>{item.title}</strong><small>{item.description}</small></span>
           </button>

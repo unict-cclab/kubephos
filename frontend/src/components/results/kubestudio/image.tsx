@@ -7,6 +7,7 @@ import {figureSize, fontStacks, type FigureSettings} from '../figureSettings'
 import type {FidelitySeries} from '../loadFidelity'
 import {metricTitle} from '../format'
 import type {OverviewGroup} from '../overview'
+import type {Insight, ServiceHealth} from '../insights'
 import type {LadderSeries} from '../percentiles'
 import type {ResolvedProvenance} from '../runs'
 import {defaultXYOptions, defaultXYSelection, type XYSource, type XYState} from '../xy'
@@ -38,7 +39,11 @@ export interface StudioData {
   xy?: XYSource
   // Load profile (warm-up, phases) for automatic annotations.
   profile?: LoadProfile
+  // What the results say, for KubeStudio's suggestions: findings, services by bottleneck score, design.
+  guide?: StudioGuide
 }
+
+export interface StudioGuide {insights: Insight[]; services: ServiceHealth[]; variants: number; repetitions: number; callChain?: boolean}
 
 export interface ImageState {charts: ChartState[]; layout?: ChartLayout; sharedLegend: boolean; hidden: string[]}
 

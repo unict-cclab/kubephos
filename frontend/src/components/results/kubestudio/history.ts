@@ -9,11 +9,17 @@ export function useHistory<T>(snapshot: T, apply: (value: T) => void) {
   const last = useRef(json)
   const changedAt = useRef(0)
   const ready = useRef(false)
+  // Set by forget(): the next snapshot starts a fresh history (a new figure from the landing page).
+  const fresh = useRef(false)
   const [, bump] = useState(0)
   useEffect(() => {const timer = setTimeout(() => {ready.current = true}, 0); return () => clearTimeout(timer)}, [])
   useEffect(() => {
     if (json === last.current) return
-    if (!ready.current) {last.current = json; return}
+    if (!ready.current || fresh.current) {
+      if (fresh.current) {fresh.current = false; past.current = []; future.current = []; bump(value => value + 1)}
+      last.current = json
+      return
+    }
     const now = Date.now()
     if (now - changedAt.current > 700 || !past.current.length) past.current = [...past.current, last.current].slice(-100)
     changedAt.current = now
@@ -32,5 +38,5 @@ export function useHistory<T>(snapshot: T, apply: (value: T) => void) {
     bump(value => value + 1)
     return true
   }
-  return {undo: () => move(past, future), redo: () => move(future, past), canUndo: past.current.length > 0, canRedo: future.current.length > 0}
+  return {forget: () => {fresh.current = true}, undo: () => move(past, future), redo: () => move(future, past), canUndo: past.current.length > 0, canRedo: future.current.length > 0}
 }

@@ -12,7 +12,5 @@ export const layerIcons: Record<string, ReactNode> = {
   axis: <svg {...svgProps}><path d="M5 4v15h15" /><path d="M5 9h2M5 14h2M10 19v-2M15 19v-2" /></svg>,
   legend: <svg {...svgProps}><rect x="4" y="5" width="16" height="14" rx="2" /><path d="M7 10h3M13 10h4M7 14h3M13 14h4" /></svg>,
   annotation: <svg {...svgProps}><path d="M4 12h16" strokeDasharray="3 2.5" /><path d="M8 7h8" /></svg>,
-  caption: <svg {...svgProps}><path d="M5 7h14M5 12h14M5 17h9" /></svg>,
   plus: <svg {...svgProps}><path d="M12 5v14M5 12h14" /></svg>,
-  chevron: <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><path d="M4 2.5 7.5 6 4 9.5" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" /></svg>
 }

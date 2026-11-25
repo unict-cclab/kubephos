@@ -76,6 +76,7 @@ dialog.figure-studio label, dialog.figure-studio fieldset { margin: 0; }
 .studio-kind-marks path { fill: none; }
 .ks-popover { position: absolute; z-index: 40; display: grid; gap: 12px; padding: 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--popover); color: var(--popover-foreground); box-shadow: var(--shadow-md); }
 .ks-popover-title { margin: 0; color: var(--muted-foreground); font-size: 12px; font-weight: 600; }
+.ks-switcher-step { margin: 0 0 10px; padding: 8px 10px; border-radius: 6px; background: color-mix(in srgb, var(--blue) 8%, var(--card)); color: var(--foreground); font-size: 13px; line-height: 1.4; }
 .ks-switcher-panel { top: calc(100% + 8px); left: 0; width: min(560px, calc(100vw - 48px)); max-height: min(620px, calc(100vh - 140px)); overflow: auto; }
 .ks-figure-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin: 0; padding: 0; list-style: none; }
 .ks-figure-item { display: grid; gap: 8px; width: 100%; height: 100%; padding: 8px; border: 1px solid var(--border); border-radius: 8px; background: var(--card); color: var(--foreground); text-align: left; cursor: pointer; }
@@ -108,8 +109,11 @@ dialog.figure-studio label, dialog.figure-studio fieldset { margin: 0; }
 @media (hover: none) { .ks-eye { opacity: 1; } }
 .ks-swatch { flex: none; padding: 2px; border-radius: 3px; background: #ffffff; box-shadow: inset 0 0 0 1px rgb(0 0 0 / .12); }
 .ks-dot { flex: none; width: 10px; height: 10px; border-radius: 3px; box-shadow: inset 0 0 0 1px rgb(0 0 0 / .12); }
-.ks-add-menu { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; flex-basis: 100%; padding: 4px 0 4px 8px; }
-.ks-add-menu .ks-button { height: 28px; padding: 0 8px; font-size: 12px; }
+.ks-add-menu { display: grid; gap: 2px; flex-basis: 100%; padding: 4px 0 6px 8px; }
+.ks-add-option { display: grid; gap: 1px; width: 100%; padding: 7px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--card); color: var(--foreground); font: inherit; text-align: left; cursor: pointer; }
+.ks-add-option strong { font-size: 13px; font-weight: 550; }
+.ks-add-option small { color: var(--muted-foreground); font-size: 12px; line-height: 1.35; }
+.ks-add-option:hover, .ks-add-option:focus-visible { border-color: var(--blue); outline: none; background: color-mix(in srgb, var(--blue) 6%, var(--card)); }
 
 /* Properties. */
 .ks-properties-body { display: grid; gap: 16px; padding: 16px; }
@@ -125,7 +129,6 @@ dialog.figure-studio label, dialog.figure-studio fieldset { margin: 0; }
 .ks-props { display: grid; gap: 12px; }
 .ks-field { display: grid; gap: 4px; min-width: 0; margin: 0; padding: 0; border: 0; }
 .ks-label { display: block; padding: 0; color: var(--muted-foreground); font-size: 12px; font-weight: 500; line-height: 16px; }
-.ks-label-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .ks-two { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 8px; align-items: start; }
 .ks-two.ks-align-end { align-items: end; }
 .ks-toggles { display: grid; gap: 8px; }
@@ -139,8 +142,6 @@ dialog.figure-studio label, dialog.figure-studio fieldset { margin: 0; }
 .ks-props > .ks-actions { flex-wrap: nowrap; }
 .ks-props > .ks-actions .ks-button { padding: 0 10px; font-size: 12px; }
 .ks-range { width: 100%; height: 32px; margin: 0; accent-color: var(--primary); }
-.ks-palette-strip { display: flex; gap: 2px; height: 8px; }
-.ks-palette-strip span { flex: 1 1 0; border-radius: 2px; }
 
 /* Segmented controls. */
 .ks-segments { display: flex; gap: 2px; padding: 2px; border-radius: 8px; background: var(--muted); }
@@ -162,9 +163,6 @@ dialog.figure-studio label, dialog.figure-studio fieldset { margin: 0; }
 .ks-stepper input::-webkit-inner-spin-button, .ks-stepper input::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
 
 /* Colour. */
-.ks-swatches { display: grid; grid-template-columns: repeat(auto-fit, minmax(20px, 1fr)); gap: 6px; }
-.ks-color { aspect-ratio: 1; width: 100%; padding: 0; border: 0; border-radius: 6px; box-shadow: inset 0 0 0 1px rgb(0 0 0 / .15); cursor: pointer; }
-.ks-color[aria-pressed="true"] { box-shadow: 0 0 0 2px var(--card), 0 0 0 4px var(--foreground); }
 .ks-hex { display: grid; grid-template-columns: 32px minmax(0, 1fr); gap: 8px; margin-top: 4px; }
 .ks-hex input[type="color"] { box-sizing: border-box; width: 32px; height: 32px; min-height: 0; padding: 2px; border: 1px solid var(--field-border, var(--input)); border-radius: 6px; background: var(--card); cursor: pointer; }
 .ks-shell .ks-hex input[type="text"] { font-family: var(--font-mono); }
@@ -178,14 +176,18 @@ dialog.figure-studio label, dialog.figure-studio fieldset { margin: 0; }
 
 /* Canvas. */
 .ks-canvas { position: relative; min-height: 0; background-color: var(--muted); background-image: radial-gradient(var(--texture) 1px, transparent 1px); background-size: 16px 16px; }
-.ks-stage { position: absolute; inset: 0; display: flex; padding: 32px; overflow: auto; }
+.ks-stage { position: absolute; inset: 0; display: flex; flex-direction: column; padding: 32px; overflow: auto; }
+/* With a caption the paper keeps the top free space and the caption follows it. */
+.ks-stage:has(> .ks-caption, > .ks-caption-editor) > .ks-paper { margin-bottom: 0; }
 .ks-paper { position: relative; flex: none; margin: auto; background: #ffffff; line-height: 0; box-shadow: 0 1px 2px rgb(0 0 0 / .08), 0 12px 32px -12px rgb(0 0 0 / .28); }
+/* Axis titles are renamed in place: a click opens this field over the title. */
+.ks-paper .axis-label { cursor: text; }
+.ks-axis-input { position: absolute; z-index: 3; height: 30px; padding: 0 8px; border: 1px solid var(--blue); border-radius: 6px; background: #ffffff; color: #111111; font: 500 13px/1.2 var(--font-sans); text-align: center; box-shadow: 0 4px 14px -6px rgb(0 0 0 / .35); }
+.ks-axis-input:focus { outline: 2px solid color-mix(in srgb, var(--blue) 35%, transparent); }
 .ks-paper svg.pub-figure { display: block; width: 100%; height: auto; }
 .ks-paper [data-select] { cursor: pointer; }
 .ks-paper [data-select^="annotation:"] { cursor: grab; }
 .ks-paper-free { width: min(100%, 960px); padding: 16px; border-radius: 8px; background: var(--card); line-height: normal; }
-.ks-paper-free .chart-export-actions { display: none; }
-.ks-paper-free .metric-card { margin: 0; border: 0; box-shadow: none; }
 .ks-paper-empty { margin: auto; }
 .ks-empty { display: grid; gap: 12px; justify-items: center; max-width: 380px; padding: 16px 24px; border-radius: 8px; background: var(--card); color: var(--muted-foreground); text-align: center; box-shadow: 0 0 0 1px var(--border); }
 .ks-empty p { margin: 0; }
@@ -211,20 +213,6 @@ dialog.figure-studio label, dialog.figure-studio fieldset { margin: 0; }
 @media (prefers-reduced-motion: reduce) { .ks-toast { animation: none; } .ks-disclosure svg { transition: none; } }
 
 /* Caption drawer. */
-.ks-drawer { border-top: 1px solid var(--border); background: var(--card); }
-.ks-drawer-head { display: flex; align-items: center; gap: 12px; height: 40px; padding: 0 16px 0 8px; }
-.ks-drawer-toggle { display: flex; flex: 1 1 auto; align-items: center; gap: 8px; min-width: 0; height: 32px; padding: 0 8px; border: 0; border-radius: 6px; background: transparent; color: var(--foreground); font: 13px/1 var(--font-sans); text-align: left; cursor: pointer; }
-.ks-drawer-toggle:hover { background: var(--muted); }
-.ks-drawer-toggle > svg { flex: none; color: var(--muted-foreground); transition: transform .12s ease-out; }
-.ks-drawer-toggle[aria-expanded="true"] > svg { transform: rotate(90deg); }
-.ks-drawer-toggle strong { flex: none; font-weight: 600; }
-.ks-drawer-preview { overflow: hidden; color: var(--muted-foreground); text-overflow: ellipsis; white-space: nowrap; }
-.ks-drawer-body { display: grid; gap: 12px; max-height: 40vh; padding: 0 16px 16px; overflow: auto; }
-.ks-drawer-body[hidden] { display: none; }
-.ks-methods { border: 1px solid var(--border); border-radius: 6px; }
-.ks-methods > summary { padding: 8px 12px; font-weight: 550; cursor: pointer; }
-.ks-methods p { max-height: 120px; margin: 0; padding: 0 12px; overflow: auto; color: var(--muted-foreground); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
-.ks-methods .ks-actions { padding: 8px 12px; }
 
 /* Export popover. */
 .ks-export-panel { top: calc(100% + 8px); right: 0; width: min(380px, calc(100vw - 32px)); max-height: calc(100vh - 140px); overflow: auto; }
@@ -291,6 +279,19 @@ dialog.figure-studio label, dialog.figure-studio fieldset { margin: 0; }
 .ks-paper[data-multi] .ks-cell[data-hover]::after { box-shadow: 0 0 0 1px color-mix(in srgb, var(--blue) 45%, transparent); }
 .ks-paper .ks-cell[data-selected]::after { content: ""; position: absolute; inset: -4px; border-radius: 4px; box-shadow: 0 0 0 1.5px var(--blue); pointer-events: none; }
 .ks-letter { position: absolute; left: 0; color: #111111; font-weight: 700; line-height: 1; pointer-events: none; }
+/* Drag handle of a chart (several charts per image), shown when the chart is hovered or focused. */
+.ks-grip { position: absolute; z-index: 2; top: 6px; right: 6px; display: grid; place-items: center; width: 24px; height: 28px; padding: 0; border: 1px solid var(--border); border-radius: 6px; background: var(--card); color: var(--muted-foreground); box-shadow: 0 1px 2px rgb(0 0 0 / .08); cursor: grab; opacity: 0; transition: opacity .12s ease-out; }
+.ks-grip svg { fill: currentColor; }
+.ks-cell:hover > .ks-grip, .ks-cell[data-selected] > .ks-grip, .ks-grip:focus-visible { opacity: 1; }
+.ks-grip:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
+.ks-grip:active { cursor: grabbing; }
+.ks-cell[data-dragging] { opacity: .45; }
+.ks-paper .ks-cell[data-drop]::after { content: ""; position: absolute; inset: -4px; border-radius: 4px; box-shadow: 0 0 0 2px var(--blue); background: color-mix(in srgb, var(--blue) 8%, transparent); pointer-events: none; }
+/* The optional caption, under the image at its printed width. */
+.ks-caption { display: block; flex: none; margin: 12px auto auto; padding: 6px 8px; border: 1px dashed transparent; border-radius: 6px; background: transparent; color: var(--foreground); font: inherit; font-size: 13px; line-height: 1.5; text-align: left; cursor: text; }
+.ks-caption:hover, .ks-caption:focus-visible { border-color: var(--border); outline: none; }
+.ks-caption-editor { display: grid; flex: none; gap: 8px; margin: 12px auto auto; padding: 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--card); box-shadow: 0 8px 24px -12px rgb(0 0 0 / .2); }
+.ks-caption-editor textarea { width: 100%; resize: vertical; }
 .ks-chart-group > ul { display: grid; padding: 0 0 4px; }
 .ks-chart-layer { height: 40px; }
 .ks-chart-layer .studio-kind-icon { width: 28px; height: 20px; flex: none; padding: 1px; border-radius: 4px; background: var(--muted); color: var(--muted-foreground); }
@@ -318,3 +319,41 @@ dialog.figure-studio label, dialog.figure-studio fieldset { margin: 0; }
 @media (max-width: 999px) { .ks-custom-forms { grid-template-columns: minmax(0, 1fr); } }
 .ks-form-chips .ks-segments { display: grid; grid-template-columns: 1fr 1fr; }
 .ks-form-chips .ks-segment { height: 32px; }
+/* Landing of a new figure: goal → suggested chart → refine, plus a custom chart or the last figure. */
+.ks-landing { grid-row: 3; min-height: 0; overflow: auto; padding: 20px 24px 32px; background: var(--muted); }
+.ks-landing-grid { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 24px; max-width: 1180px; margin: 0 auto; }
+.ks-landing h3 { margin: 0 0 10px; font-size: 15px; font-weight: 600; letter-spacing: -.01em; }
+.ks-landing h3.ks-landing-sub { margin-top: 20px; }
+.ks-landing h3 span { color: var(--muted-foreground); font-size: 13px; font-weight: 400; letter-spacing: 0; }
+.ks-goals { display: flex; flex-wrap: wrap; gap: 8px; }
+.ks-goals button { min-height: 34px; padding: 0 14px; border: 1px solid var(--border); border-radius: 999px; background: var(--card); color: var(--foreground); font: inherit; font-size: 13px; font-weight: 500; cursor: pointer; }
+.ks-goals button:hover { border-color: var(--input); }
+.ks-goals button[aria-pressed="true"] { border-color: var(--foreground); background: var(--foreground); color: var(--background); }
+.ks-landing-note { margin: 0 0 8px; color: var(--muted-foreground); font-size: 13px; }
+.ks-suggestions { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; margin: 0 0 12px; padding: 0; list-style: none; }
+.ks-suggestion { display: grid; grid-template-rows: auto 1fr; gap: 10px; width: 100%; height: 100%; padding: 10px; border: 1px solid var(--border); border-radius: 10px; background: var(--card); color: var(--foreground); text-align: left; cursor: pointer; transition: border-color .12s ease-out, box-shadow .12s ease-out; }
+.ks-suggestion:hover { border-color: var(--input); box-shadow: 0 6px 20px -12px rgb(0 0 0 / .3); }
+.ks-suggestion:focus-visible { outline: 2px solid var(--ring, var(--blue)); outline-offset: 2px; }
+.ks-suggestion-thumb .studio-thumb { height: 96px; }
+.ks-suggestion-text { display: grid; gap: 4px; align-content: start; padding: 0 2px 2px; }
+.ks-suggestion-text strong { font-size: 14px; font-weight: 600; line-height: 1.35; }
+.ks-suggestion-best { display: inline-block; margin-right: 4px; padding: 1px 6px; border-radius: 999px; background: var(--primary); color: var(--primary-foreground); font-size: 11px; font-weight: 600; vertical-align: 1px; }
+.ks-suggestion-why { position: relative; padding-left: 12px; color: var(--muted-foreground); font-size: 12.5px; line-height: 1.45; }
+.ks-suggestion-why::before { position: absolute; top: .5em; left: 0; width: 6px; height: 6px; border-radius: 50%; background: var(--muted-foreground); content: ""; opacity: .5; }
+.ks-suggestion-why[data-severity="critical"]::before { background: var(--destructive, #b42318); opacity: 1; }
+.ks-suggestion-why[data-severity="warning"]::before { background: var(--warning-foreground, #b54708); opacity: 1; }
+.ks-suggestion-why[data-severity="ok"]::before { background: var(--success-foreground, #067647); opacity: 1; }
+.ks-landing-side { display: grid; gap: 20px; align-content: start; }
+.ks-landing-side .ks-custom-forms { grid-template-columns: minmax(0, 1fr); margin-top: 8px; }
+.ks-continue { display: grid; gap: 2px; width: 100%; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--card); color: var(--foreground); text-align: left; cursor: pointer; }
+.ks-continue:hover { border-color: var(--input); background: var(--muted); }
+.ks-continue strong { font-size: 13px; font-weight: 600; }
+.ks-continue small { overflow: hidden; color: var(--muted-foreground); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+@media (max-width: 999px) {
+  .ks-landing { padding: 16px; }
+  .ks-landing-grid { grid-template-columns: minmax(0, 1fr); }
+  .ks-suggestions { grid-template-columns: minmax(0, 1fr); }
+  .ks-suggestion { grid-template-columns: 112px minmax(0, 1fr); grid-template-rows: none; align-items: start; }
+  .ks-suggestion-thumb .studio-thumb { height: 64px; }
+}
+.ks-landing-title { flex: 1 1 auto; margin: 0; color: var(--muted-foreground); font-size: 14px; font-weight: 500; }

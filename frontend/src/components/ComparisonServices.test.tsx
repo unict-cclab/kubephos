@@ -4,6 +4,7 @@ import {request} from '../api'
 import type {Artifact, Experiment, Session, TimeSeriesDataset} from '../types'
 import {ResultsView} from './ResultsView'
 
+vi.mock('./results/kubestudio/resultsLayout', async () => (await import('../test/everySection')).everySection())
 vi.mock('../api', () => ({request: vi.fn(async () => ({items: []}))}))
 
 const start = Date.parse('2026-11-11T00:00:00Z')

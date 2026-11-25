@@ -5,5 +5,7 @@ export default defineConfig({
   plugins: [react()],
   server: {host: '127.0.0.1', port: 5173, strictPort: true, proxy: {'/api': 'http://127.0.0.1:8088', '/auth': 'http://127.0.0.1:8088'}},
   build: {outDir: 'dist', emptyOutDir: true},
-  test: {environment: 'jsdom', setupFiles: './src/test/setup.ts', maxWorkers: 4}
+  // GitHub runners are several times slower than a workstation; full-render and
+  // axe tests in jsdom exceed Vitest's 5 s default there, so allow 30 s.
+  test: {environment: 'jsdom', setupFiles: './src/test/setup.ts', maxWorkers: 4, testTimeout: 30_000, hookTimeout: 30_000}
 })

@@ -1,7 +1,7 @@
 # Results figures review — 25 November 2026
 
-- Figure 1 adds "Ready pods" (ready replicas summed over the application
-  Deployments) under the server-side request rate, and a Download menu (PDF,
+- The load and latency chart adds "Ready pods" (ready replicas summed over the
+  application Deployments) under the server-side request rate, and a Download menu (PDF,
   PNG 600 dpi, SVG). The on-screen chart is flattened into one standalone SVG
   with explicit colours (`timeChartExport.ts`) and goes through the shared
   exporter.
@@ -13,14 +13,73 @@
   spec, model, code and editor files. Removed: the reader of the pre-multi-chart
   memory format, two unused helpers, and `export` from names used only in their
   own file.
-- "Add to results" in KubeStudio keeps the image on the experiment's results
-  page, under "Figures made with KubeStudio" (numbered after Figure 1, stored per
-  experiment in this browser). Right-click a figure, or use its ⋯ button, to edit
-  it in KubeStudio ("Update in results" saves the changes), download it (a page
-  of several charts as one image) or delete it, with an undo.
-- Validation: typecheck, all frontend tests (895, including the new ones for
-  the figures, their storage and the Figure 1 export), the asset budget and the
-  theme contrast check passed. Not yet checked in the browser against real data.
+- Charts: every results page (experiment or saved comparison) opens on a grid
+  of charts. By default it holds the placement heatmap (when there is one), then
+  each metric over time followed by the same metric by service; there is no
+  separate "All metrics" section any more. Each user arranges their own grid:
+  drag a chart onto the edge of another to move it there, or onto its middle to
+  swap the two (Alt + arrow keys on its ⋯ button move it too); drag its
+  bottom-right corner (or use the arrow keys on it) to make it span one to three
+  columns, never more than the page has, so nothing scrolls sideways; right-click
+  it or use its ⋯ button to edit it in KubeStudio, rename it (also by
+  double-clicking its title), duplicate it, download it (PDF, PNG, SVG) or remove
+  it from the page, with an undo. The placement heatmap is a bare figure that
+  scales to its card (the card gives its title and downloads). The card menu was
+  clipped by the card's `content-visibility: auto` and never showed; that
+  property is gone. "Add chart" opens KubeStudio,
+  and "Add to results" puts the image in the grid (or replaces the chart it was
+  opened from).
+- The rest of the page (summary, load and latency, services, sources,
+  endpoints, call chain, statistics, environment & methods, placement) starts
+  hidden and is added from the grid's Sections menu; following a finding of the
+  summary opens its section. Printing shows every section. "Reset" restores the
+  default page (charts and sections), with an undo. The summary is a plain list
+  of findings with a link to their section, and the services table has a fixed
+  title.
+- The arrangement (charts and shown sections) is kept on the server, per user and per experiment or
+  comparison: table `result_layouts` (migration 060, removed with the user,
+  the experiment or the comparison) and
+  `GET/PUT/DELETE /api/v1/account/result-layouts/{experiments|comparisons}/{id}`.
+  A user can only keep a layout for results they can read (owner or shared);
+  otherwise the answer is 404. A layout is a JSON object of at most 512 KiB.
+  A free selection of runs has no layout: changes last until the page closes.
+  This replaces the per-browser "Figures made with KubeStudio".
+- KubeStudio, simpler:
+  - Charts of one image are moved by dragging their handle onto another chart
+    (or with the arrow keys on it); duplicate and delete are on the chart's
+    right-click menu. The Arrange group and its buttons are gone.
+  - The caption is optional: right-click › Add caption, shown under the figure,
+    click to edit, "Remove caption" to drop it. Without one, exports describe the
+    figure with the charts' own summaries. The caption drawer and the "Methods &
+    provenance" panel are gone (methods are still embedded in every export).
+  - "Grid lines" is in the chart's settings ("Chart settings"), no longer under
+    the colours; palettes show only their name, a series colour only its picker
+    and hex value (with a warning below 3:1 contrast).
+  - Line charts carry no decorative markers (on screen, PDF, matplotlib and
+    pgfplots). Points stay where they are the data: scatter charts ("Point",
+    "Point size", "Hollow"), dot plots and the percentile ladder.
+  - Axes are not in Layers any more: a click on an axis title renames it in
+    place (Enter or a click elsewhere keeps it, Esc cancels, an empty title
+    restores the automatic one) and selects the axis, whose other settings show
+    on the right; the chart's properties also link to its axes.
+  - "Add chart" is guided: the chart-type picker opens first and the chosen chart
+    is added and selected, with its X and Y on the right. A new figure from the
+    results page ("Add chart", "Create figure") opens on the same picker.
+  - "Add annotation" is now "Add a line in the graph", and each kind says what it
+    is for, with an example (a threshold such as the 350 ms SLO, a shaded time
+    range, a vertical line at an event, a text label).
+- Removed as unused after these changes: `AllMetrics.tsx`, `XYRelationship.tsx`,
+  `XYChart.tsx`, `ResultFigures.tsx` and `savedFigures.ts` (with their tests and
+  CSS), `QualityNotices`, `isLatencyMetric`, `acrossRunsText`, `timelineHeadline`,
+  the unused XY helpers, the line-marker sampling, and the styles of the old
+  summary, the figure settings panel, the metric chips, the table notes and the
+  heatmap grid.
+- Validation: typecheck, all frontend tests (903; new ones for the charts grid,
+  its persistence and the KubeStudio right-click menu, drag handle and caption),
+  the asset budget (219.1 of 220 KiB), the theme contrast check, `go vet`, and
+  the API and storage tests against PostgreSQL (new
+  `TestResultLayoutsArePerUserAndFollowResultAccess`) passed. Not yet checked in
+  the browser against real data.
 
 # Load profile review — 24 November 2026
 

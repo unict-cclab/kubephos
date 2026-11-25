@@ -178,10 +178,6 @@ export function metricAxisLabel(metric: string, unit: string, provenance?: Pick<
   return labels[metric] ?? `${metricTitle(metric)}${unit ? ` (${unitLabel(unit)})` : ''}`
 }
 
-export function isLatencyMetric(metric: string): boolean {
-  return /_response_time$/.test(metric) || metric.endsWith('latency') || metric === 'network.rtt'
-}
-
 export function groupMetrics(metrics: string[]): Map<string, string[]> {
   const values = new Map<string, string[]>()
   for (const metric of metrics) {

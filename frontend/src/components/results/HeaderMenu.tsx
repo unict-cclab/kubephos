@@ -1,7 +1,7 @@
 import {useEffect, useId, useRef, useState, type ReactNode} from 'react'
 
 // A button opening a small panel (export choices, more actions); closes on outside click and Esc.
-export function HeaderMenu({label, icon, children, align = 'end', buttonClass = 'button secondary'}: {label: string; icon?: ReactNode; children: (close: () => void) => ReactNode; align?: 'start' | 'end'; buttonClass?: string}) {
+export function HeaderMenu({label, icon, children, align = 'end', buttonClass = 'button secondary', className = ''}: {label: string; icon?: ReactNode; children: (close: () => void) => ReactNode; align?: 'start' | 'end'; buttonClass?: string; className?: string}) {
   const [open, setOpen] = useState(false)
   const root = useRef<HTMLDivElement>(null)
   const id = useId()
@@ -13,7 +13,7 @@ export function HeaderMenu({label, icon, children, align = 'end', buttonClass = 
     document.addEventListener('keydown', escape)
     return () => {document.removeEventListener('mousedown', outside); document.removeEventListener('keydown', escape)}
   }, [open])
-  return <div className="header-menu" ref={root}>
+  return <div className={`header-menu ${className}`.trim()} ref={root}>
     <button type="button" className={buttonClass} aria-expanded={open} aria-controls={open ? id : undefined} onClick={() => setOpen(value => !value)}>{icon}{label}</button>
     {open && <div className={`header-menu-panel ${align}`} id={id}>{children(() => setOpen(false))}</div>}
   </div>

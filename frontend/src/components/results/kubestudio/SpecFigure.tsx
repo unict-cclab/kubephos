@@ -109,7 +109,7 @@ function LegendSymbol({series, x, y, width, metrics}: {series: ModelSeries; x: n
   return <>
     {series.low && <rect x={r(x)} y={r(y - metrics.fontSize * .32)} width={r(width)} height={r(metrics.fontSize * .64)} fill={style.color} fillOpacity="0.16" />}
     {hasLine && <line x1={r(x)} x2={r(x + width)} y1={r(y)} y2={r(y)} stroke={color} strokeWidth={r(style.lineWidth)} strokeDasharray={series.kind === 'line' ? dashArray(style.line, style.lineWidth) : undefined} />}
-    <ShapeMarker shape={style.marker} x={x + width / 2} y={y} size={style.markerSize * 1.1} color={color} hollow={style.hollow} />
+    {series.kind === 'scatter' && <ShapeMarker shape={style.marker} x={x + width / 2} y={y} size={style.markerSize * 1.1} color={color} hollow={style.hollow} />}
   </>
 }
 
@@ -236,10 +236,10 @@ export function SpecFigure({id, name, model, settings, grid, strokeScale, proven
         const width = series.runs && series.showMean ? style.lineWidth * 1.35 : style.lineWidth
         if (d) parts.push(<path key="line" className="series-line" d={d} fill="none" stroke={color} strokeWidth={r(width)} strokeDasharray={dashArray(style.line, width)} strokeLinejoin="round" />)
       }
-      if (series.showMean && style.marker !== 'none') {
+      // Points only where they are the data (scatter); line charts draw lines alone.
+      if (series.kind === 'scatter' && series.showMean && style.marker !== 'none') {
         const inside = series.x.map((value, index) => ({x: px(value), y: py(series.y[index])})).filter((point): point is {x: number; y: number} => point.x !== undefined && point.y !== undefined && point.x >= box.left - .01 && point.x <= box.right + .01 && point.y >= box.top - .01 && point.y <= box.bottom + .01)
-        const shown = series.kind === 'scatter' || inside.length <= 8 ? inside : Array.from({length: 8}, (_, index) => inside[Math.round(index * (inside.length - 1) / 7)])
-        shown.forEach((point, index) => parts.push(<ShapeMarker key={`m-${index}`} shape={style.marker} x={point.x} y={point.y} size={series.kind === 'scatter' ? style.markerSize * .85 : style.markerSize} color={color} hollow={style.hollow} />))
+        inside.forEach((point, index) => parts.push(<ShapeMarker key={`m-${index}`} shape={style.marker} x={point.x} y={point.y} size={style.markerSize * .85} color={color} hollow={style.hollow} />))
       }
       if (series.fit) {
         const d = linePath(series.fit.x, series.fit.y, px, py, box)
@@ -289,7 +289,7 @@ export function SpecFigure({id, name, model, settings, grid, strokeScale, proven
       if (x === undefined || x < box.left - .01 || x > box.right + .01) return
       children.push(<g key={`x-${value}`} className="tick-x" data-select={`axis:x:${panel.index}`}><line x1={r(x)} x2={r(x)} y1={r(box.bottom)} y2={r(box.bottom + tick)} stroke="#111111" strokeWidth={r(axisLine * .6)} />{showX(panel) && text({x, y: box.bottom + fs * 1.3, anchor: 'middle', className: 'tick', children: panel.x.format(value)})}</g>)
     })
-    if (showX(panel)) children.push(<g key="x-title" data-select={`axis:x:${panel.index}`}>{text({x: (box.left + box.right) / 2, y: box.bottom + fs * 2.55, anchor: 'middle', className: 'axis-label', children: panel.x.label})}</g>)
+    if (showX(panel)) children.push(<g key="x-title" className="axis-title-x" data-select={`axis:x:${panel.index}`}>{text({x: (box.left + box.right) / 2, y: box.bottom + fs * 2.55, anchor: 'middle', className: 'axis-label', children: panel.x.label})}</g>)
     if (panel.letter) children.push(<g key="letter" className="panel-letter">{text({x: box.cellLeft + fs * .3, y: box.top - fs * .7, weight: 'bold', children: panel.letter})}</g>)
     return <g key={`panel-${panel.index}`} className="figure-panel" data-panel={panel.index + 1}>{children}</g>
   }

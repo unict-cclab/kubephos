@@ -44,8 +44,18 @@ const layer = (name: string | RegExp) => fireEvent.click(layers().getByRole('but
 const chartProps = () => fireEvent.click(layers().getAllByRole('button', {name: /^Chart/})[0])
 const expand = (name: string) => {const toggle = right().getByRole('button', {name}); if (toggle.getAttribute('aria-expanded') !== 'true') fireEvent.click(toggle)}
 const seriesGroup = (key: string) => figure().querySelector(`g.series[data-series-key="${key}"]`) as SVGGElement
+// The caption exports carry when the user wrote none: the charts' own summaries.
+const exportedCaption = async () => {
+  vi.mocked(exportChart).mockClear()
+  fireEvent.click(within(studio()).getByRole('button', {name: 'Export'}))
+  fireEvent.click(within(within(studio()).getByRole('dialog', {name: 'Export figure'})).getByRole('button', {name: 'Download PDF'}))
+  await vi.waitFor(() => expect(exportChart).toHaveBeenCalled())
+  return vi.mocked(exportChart).mock.calls[0][4]?.caption ?? ''
+}
+// Axes are selected on the figure: a click on their ticks.
+const axis = (side: 'x' | 'left' | 'right') => fireEvent.click(figure().querySelector(`.tick-${side} text`)!)
 const addRight = (metric = 'load.achieved_rps') => {
-  layer(/^(Left )?Y axis$/)
+  axis('left')
   fireEvent.change(right().getByLabelText('Add a metric on a right Y axis'), {target: {value: metric}})
 }
 
@@ -118,7 +128,8 @@ describe('Spec-driven KubeStudio figures', () => {
     expect(leftLine.getAttribute('stroke-dasharray')).toBeNull()
     expect(rightLine.getAttribute('stroke')).toBe('#d55e00')
     expect(rightLine.getAttribute('stroke-dasharray')).toMatch(/^[\d.]+ [\d.]+$/)
-    expect(seriesGroup('load.achieved_rps|Alpha').querySelector('circle')).toHaveAttribute('fill', '#ffffff')
+    // Lines carry no decorative markers: the dash tells the axes apart.
+    expect(seriesGroup('load.achieved_rps|Alpha').querySelector('circle')).toBeNull()
     expect([...figure().querySelectorAll('.legend-header')].map(item => item.textContent)).toEqual(['P95 latency (left):', 'Achieved request rate (right):'])
     const pdf = new TextDecoder().decode(svgToPDF(figure()))
     expect(pdf).toMatch(/\[[\d. ]+\] 0 d/)
@@ -128,14 +139,14 @@ describe('Spec-driven KubeStudio figures', () => {
     expect(figure().querySelector('.axis-title-left text')).toHaveAttribute('fill', '#0072b2')
   })
 
-  it('edits one series from its legend entry: colour, marker, line, width, opacity, label and order', () => {
+  it('edits one series from its legend entry: colour, line, width, opacity, label and order', () => {
     render(<Studio />)
     fireEvent.click(figure().querySelector('.legend-item[data-series-key="load.p95_response_time|Beta"] text')!)
     // Clicking the legend entry selects the series: its style opens in the inspector.
     expect(layers().getByRole('button', {name: 'Beta'})).toHaveAttribute('aria-current', 'true')
     const editor = within(right().getByRole('group', {name: 'Style of Beta'}))
-    fireEvent.click(editor.getByRole('radio', {name: 'Diamond'}))
-    expect(seriesGroup('load.p95_response_time|Beta').querySelector('polygon')).not.toBeNull()
+    // Points are a scatter setting: a line series has none to edit.
+    expect(editor.queryByRole('radio', {name: 'Diamond'})).not.toBeInTheDocument()
     fireEvent.change(editor.getByLabelText('Hex'), {target: {value: '#f0e442'}})
     expect(editor.getByRole('status')).toHaveTextContent(/below 3:1/)
     expect(seriesGroup('load.p95_response_time|Beta').querySelector('path.series-line')).toHaveAttribute('stroke', '#f0e442')
@@ -154,7 +165,7 @@ describe('Spec-driven KubeStudio figures', () => {
     expect(seriesGroup('load.p95_response_time|Beta').querySelector('path.series-line')).toHaveAttribute('stroke', '#d55e00')
   })
 
-  it('switches palettes and draws every repeated-run mode', () => {
+  it('switches palettes and draws every repeated-run mode', async () => {
     render(<Studio />)
     chartProps()
     fireEvent.change(right().getByLabelText('Palette'), {target: {value: 'grayscale'}})
@@ -170,14 +181,14 @@ describe('Spec-driven KubeStudio figures', () => {
     expect(seriesGroup('load.p95_response_time|Alpha').querySelector('path.series-line')).toBeNull()
     mode('iqr')
     expect(figure().querySelectorAll('.deviation-band path')).toHaveLength(2)
-    expect((within(studio()).getByLabelText('Caption', {selector: 'textarea'}) as HTMLTextAreaElement).value).toMatch(/interquartile range/)
+    expect(await exportedCaption()).toMatch(/interquartile range/)
     mode('mean')
     expect(figure().querySelector('.deviation-band')).toBeNull()
   })
 
   it('applies axis ranges, ticks, units, number format, time format and grid', () => {
     render(<Studio />)
-    layer('Y axis')
+    axis('left')
     let axes = right()
     fireEvent.change(axes.getByLabelText('Unit'), {target: {value: 's'}})
     fireEvent.change(axes.getByLabelText('Decimals'), {target: {value: '2'}})
@@ -191,13 +202,13 @@ describe('Spec-driven KubeStudio figures', () => {
     fireEvent.change(axes.getByLabelText('Ticks'), {target: {value: 'step'}})
     fireEvent.change(axes.getByLabelText('Tick step'), {target: {value: '100'}})
     expect([...figure().querySelectorAll('.tick-left text')].map(item => item.textContent)).toEqual(['0', '100', '200', '300', '400'])
-    layer('X axis')
+    axis('x')
     axes = right()
     fireEvent.change(axes.getByLabelText('Time as'), {target: {value: 'mmss'}})
     expect([...figure().querySelectorAll('.tick-x text')].map(item => item.textContent)).toContain('0:30')
     expect(figure()).toHaveTextContent('Time (mm:ss)')
     chartProps()
-    axes = within(right().getByRole('group', {name: 'Grid'}))
+    axes = within(right().getByRole('group', {name: 'Grid lines'}))
     fireEvent.click(axes.getByRole('radio', {name: 'Minor'}))
     expect(figure().querySelectorAll('.grid-minor').length).toBeGreaterThan(0)
     fireEvent.click(axes.getByRole('radio', {name: 'None'}))
@@ -210,7 +221,11 @@ describe('Spec-driven KubeStudio figures', () => {
     expect(figure().querySelector('.annotation-slo')).toHaveTextContent('SLO 180 ms')
     fireEvent.click(layers().getByRole('button', {name: 'Show warm-up end'}))
     expect(figure().querySelector('.annotation-warmup')).toHaveTextContent('after 60 s warm-up')
-    const add = (name: string) => {fireEvent.click(layers().getByRole('button', {name: 'Add annotation'})); fireEvent.click(layers().getByRole('button', {name}))}
+    const add = (name: string) => {fireEvent.click(layers().getByRole('button', {name: 'Add a line in the graph'})); fireEvent.click(within(layers().getByRole('group', {name: 'Line to add'})).getByRole('button', {name: new RegExp(`^${name}`)}))}
+    fireEvent.click(layers().getByRole('button', {name: 'Add a line in the graph'}))
+    // Each kind says what it is for, with an example.
+    expect(within(layers().getByRole('group', {name: 'Line to add'})).getByRole('button', {name: /^Threshold line.*SLO/})).toBeInTheDocument()
+    fireEvent.click(layers().getByRole('button', {name: 'Add a line in the graph'}))
     add('Threshold line')
     fireEvent.change(right().getByLabelText('Value (ms)'), {target: {value: '120'}})
     expect(figure().querySelector('.annotation-user.annotation-hline')).toHaveTextContent('Threshold 120 ms')
@@ -226,7 +241,7 @@ describe('Spec-driven KubeStudio figures', () => {
     expect(figure().querySelector('.annotation-user.annotation-hline')).toBeNull()
   })
 
-  it('still draws saved charts with 2 × 2 panels inside: letters, shared X and one legend', () => {
+  it('still draws saved charts with 2 × 2 panels inside: letters, shared X and one legend', async () => {
     window.localStorage.setItem('kubephos.figureStudio.v1:experiment:spec', JSON.stringify({charts: [{id: 'c1', kind: 'timeseries', metric: 'load.p95_response_time', spec: {version: 1, type: 'timeseries', layout: {grid: '2x2'}, panels: [{metrics: [{metric: 'load.p95_response_time', axis: 'left'}]}, {metrics: [{metric: 'load.achieved_rps', axis: 'left'}]}]}}]}))
     render(<Studio />)
     expect(figure().querySelectorAll('.figure-panel')).toHaveLength(4)
@@ -236,7 +251,7 @@ describe('Spec-driven KubeStudio figures', () => {
     // Shared X: tick labels only on the bottom row.
     expect(figure().querySelector('[data-panel="1"] .tick-x text')).toBeNull()
     expect(figure().querySelector('[data-panel="3"] .tick-x text')).not.toBeNull()
-    expect((within(studio()).getByLabelText('Caption', {selector: 'textarea'}) as HTMLTextAreaElement).value).toMatch(/^\(a\) P95 latency/)
+    expect(await exportedCaption()).toMatch(/^\(a\) P95 latency/)
   })
 
   it('remembers the spec per experiment and copies / pastes it as JSON', async () => {
@@ -303,20 +318,24 @@ describe('Spec-driven KubeStudio figures', () => {
     }
   })
 
-  it('changes the SLO threshold from its layer; the label follows', () => {
+  it('changes the SLO threshold from its layer; the label follows', async () => {
     render(<Studio />)
     expect(figure().querySelector('.annotation-slo')).toHaveTextContent('SLO 180 ms')
     layer('SLO line')
     fireEvent.change(right().getByLabelText('Threshold (ms)'), {target: {value: '200'}})
     expect(figure().querySelector('.annotation-slo')).toHaveTextContent('SLO 200 ms')
-    expect((within(studio()).getByLabelText('Caption', {selector: 'textarea'}) as HTMLTextAreaElement).value).toMatch(/SLO of 200\.0 ms/)
+    expect(await exportedCaption()).toMatch(/SLO of 200\.0 ms/)
     fireEvent.click(right().getByRole('button', {name: 'Use the experiment SLO'}))
     expect(figure().querySelector('.annotation-slo')).toHaveTextContent('SLO 180 ms')
   })
 
   it('adds charts to one image with letters and a layout picker, and exports them as one SVG', async () => {
     render(<Studio />)
-    const add = () => fireEvent.click(layers().getByRole('button', {name: 'Add chart'}))
+    // Add chart is guided: its type first, then X and Y on the right.
+    const add = () => {
+      fireEvent.click(layers().getByRole('button', {name: 'Add chart'}))
+      fireEvent.click(within(studio()).getByRole('dialog', {name: /^Add chart \([b-d]\): choose its type$/}).querySelector('[data-form="timeseries"]')!)
+    }
     add()
     // Chart (b) gets the next suggested metric; the page widens to double column.
     expect(layers().getByRole('button', {name: 'Chart (b): Achieved request rate'})).toHaveAttribute('aria-current', 'true')
@@ -344,9 +363,9 @@ describe('Spec-driven KubeStudio figures', () => {
     expect(composed.match(/<g transform="translate\(/g)?.length).toBeGreaterThanOrEqual(4)
     expect(composed).toContain('>(d)</text>')
     expect(composed).toMatch(/viewBox="0 0 515.52 /)
-    // Remove and reorder.
-    fireEvent.click(layers().getByRole('button', {name: /^Chart \(d\)/}))
-    fireEvent.click(right().getByRole('button', {name: 'Remove chart'}))
+    // Right-click a chart to delete it.
+    fireEvent.contextMenu(studio().querySelectorAll('.ks-cell')[3])
+    fireEvent.click(within(studio()).getByRole('menuitem', {name: /^Delete chart/}))
     expect(studio().querySelectorAll('svg.pub-figure')).toHaveLength(3)
   })
 
@@ -394,21 +413,21 @@ describe('code exports', () => {
     expect(out.script).toContain('WIDTH_IN, HEIGHT_IN = 3.5, 2.917')
     expect(out.script).toContain('"font.family": "serif"')
     expect(out.script).toContain('ax1r = ax1.twinx()')
-    expect(out.script).toMatch(/ax1\.plot\(x, col\("p1s\d_y"\), color="#117733", .*marker="D"/)
-    expect(out.script).toMatch(/ax1r\.plot\(x, col\("p1s\d_y"\), color="#d55e00", .*ls=\(0, \(4, 2\.\d+\)\), marker="o", .*mfc="white"/)
+    // Line series draw no markers, as on screen.
+    expect(out.script).toMatch(/ax1\.plot\(x, col\("p1s\d_y"\), color="#117733", .*marker="None"/)
+    expect(out.script).toMatch(/ax1r\.plot\(x, col\("p1s\d_y"\), color="#d55e00", .*ls=\(0, \(4, 2\.\d+\)\), marker="None"/)
     expect(out.script).toContain('ax1.axvspan(0.25, 0.5, color="black", alpha=0.07')
     expect(out.script).toContain('ax1.axhline(180')
     expect(out.script).toContain('"P95 latency (left):"')
     expect(out.csv.split('\n')[0].split(',')).toContain('p1s1_x')
   })
 
-  it('writes a pgfplots snippet with colours, marks, dashes, the right axis and the data file', () => {
+  it('writes a pgfplots snippet with colours, dashes, the right axis and the data file', () => {
     const out = pgfplotsSnippet(model(dualSpec()), options)
     expect(out.texName).toBe('fig-1.tex')
     expect(out.tex).toContain('\\definecolor{kp117733}{HTML}{117733}')
     expect(out.tex).toContain('{fig-1-plot-data.csv}')
-    expect(out.tex).toContain('mark=diamond*')
-    expect(out.tex).toContain('mark=o')
+    expect(out.tex).not.toContain('mark=')
     expect(out.tex).toContain('dash pattern=on 1.28pt off 0.71pt'.slice(0, 15))
     expect(out.tex).toContain('axis y line*=right')
     expect(out.tex).toContain('\\addlegendentry{P95 latency (left):}')

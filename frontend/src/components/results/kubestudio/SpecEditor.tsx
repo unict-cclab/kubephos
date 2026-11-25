@@ -1,6 +1,6 @@
 import {useId, useState} from 'react'
 import {Chips, ResetIcon, SelectField, Stepper, Toggle} from './controls'
-import {builtInPresets, defaultPanel, lineStyles, markerShapes, palettes, paletteColors, paperContrast, unitChoices, type Annotation, type AxisSide, type AxisSpec, type FigureSpec, type LineStyle, type MarkerShape, type PaletteId, type PanelSpec, type RunMode, type SeriesStyleSpec, type StylePreset, type TimeFormat, type XAxisSpec} from './figureSpec'
+import {builtInPresets, defaultPanel, lineStyles, markerShapes, palettes, paperContrast, unitChoices, type Annotation, type AxisSide, type AxisSpec, type FigureSpec, type LineStyle, type MarkerShape, type PaletteId, type PanelSpec, type RunMode, type SeriesStyleSpec, type StylePreset, type TimeFormat, type XAxisSpec} from './figureSpec'
 import type {ModelSeries} from './figureModel'
 import {metricTitle} from '../format'
 import type {ResolvedProvenance} from '../runs'
@@ -29,7 +29,7 @@ export function SeriesSwatch({series}: {series: ModelSeries}) {
   const color = series.style.color
   return <svg className="ks-swatch" width="24" height="12" viewBox="0 0 24 12" aria-hidden="true" focusable="false">
     {series.style.line !== 'none' && <line x1="1" x2="23" y1="6" y2="6" stroke={color} strokeWidth="1.6" strokeDasharray={series.style.line === 'dashed' ? '4 2.5' : series.style.line === 'dotted' ? '1 2' : series.style.line === 'dashdot' ? '4 2 1 2' : undefined} />}
-    <ShapeMarker shape={series.style.marker} x={12} y={6} size={3} color={color} hollow={series.style.hollow} width={1.2} />
+    {series.kind === 'scatter' && <ShapeMarker shape={series.style.marker} x={12} y={6} size={3} color={color} hollow={series.style.hollow} width={1.2} />}
   </svg>
 }
 
@@ -65,7 +65,6 @@ export function SeriesProperties({series, spec, setSpec, label, onLabel, axis, o
   if (shown !== style.color) {setShown(style.color); setHex(style.color)}
   const set = (patch: SeriesStyleSpec) => setSpec(current => ({...current, series: {...current.series, [series.key]: {...current.series[series.key], ...patch}}}))
   const check = paperContrast(/^#[0-9a-f]{6}$/i.test(hex) ? hex : style.color)
-  const swatches = [...new Set([...paletteColors(spec.palette), ...paletteColors('okabe-ito'), '#000000', '#555555'])].slice(0, 16)
   const customised = Boolean(spec.series[series.key] && Object.keys(spec.series[series.key]).length) || label !== series.defaultLabel
   return <div className="ks-props" role="group" aria-label={`Style of ${series.label}`}>
     <div className="ks-field">
@@ -75,15 +74,12 @@ export function SeriesProperties({series, spec, setSpec, label, onLabel, axis, o
     {axis && onAxis && <Chips legend="Y axis" name={`${id}-axis`} value={axis} onChange={onAxis} choices={[{value: 'left', label: 'Left'}, {value: 'right', label: 'Right'}]} />}
     <fieldset className="ks-field">
       <legend className="ks-label">Colour</legend>
-      <div className="ks-swatches">
-        {swatches.map(color => <button key={color} type="button" className="ks-color" style={{background: color}} aria-label={`Colour ${color}`} title={color} aria-pressed={style.color === color} onClick={() => {setHex(color); set({color})}} />)}
-      </div>
       <div className="ks-hex">
         <input type="color" aria-label="Pick colour" value={/^#[0-9a-f]{6}$/i.test(hex) ? hex : style.color} onChange={event => {setHex(event.target.value); set({color: event.target.value})}} />
         <label className="visually-hidden" htmlFor={`${id}-hex`}>Hex</label>
         <input id={`${id}-hex`} type="text" value={hex} maxLength={7} spellCheck={false} onChange={event => {setHex(event.target.value); if (/^#[0-9a-fA-F]{6}$/.test(event.target.value)) set({color: event.target.value.toLowerCase()})}} />
       </div>
-      <p className={`ks-hint ${check.ok ? '' : 'ks-warning'}`} role="status">{check.ratio.toFixed(1)}:1 on white paper{check.ok ? '' : ' — below 3:1, hard to see'}</p>
+      {!check.ok && <p className="ks-hint ks-warning" role="status">Hard to see on white paper ({check.ratio.toFixed(1)}:1, below 3:1).</p>}
     </fieldset>
     <Chips legend="Line" name={`${id}-line`} value={style.line} onChange={line => set({line})} className="ks-icons" choices={lineStyles.map(line => ({value: line, label: lineNames[line], icon: <LineIcon line={line} />}))} />
     <div className="ks-two">
@@ -93,11 +89,13 @@ export function SeriesProperties({series, spec, setSpec, label, onLabel, axis, o
         <input id={`${id}-opacity`} className="ks-range" type="range" min={10} max={100} step={5} value={Math.round(style.opacity * 100)} onChange={event => set({opacity: Number(event.target.value) / 100})} />
       </div>
     </div>
-    <Chips legend="Marker" name={`${id}-marker`} value={style.marker} onChange={marker => set({marker})} className="ks-icons" choices={markerShapes.map(shape => ({value: shape, label: markerNames[shape], icon: <MarkerIcon shape={shape} />}))} />
-    <div className="ks-two ks-align-end">
-      <Stepper label="Marker size" unit="pt" value={style.markerSize} min={.5} max={8} step={.25} onChange={markerSize => set({markerSize})} />
-      <Toggle label="Hollow" checked={style.hollow} onChange={hollow => set({hollow})} hint="White-filled marker with a coloured outline" />
-    </div>
+    {series.kind === 'scatter' && <>
+      <Chips legend="Point" name={`${id}-marker`} value={style.marker} onChange={marker => set({marker})} className="ks-icons" choices={markerShapes.map(shape => ({value: shape, label: markerNames[shape], icon: <MarkerIcon shape={shape} />}))} />
+      <div className="ks-two ks-align-end">
+        <Stepper label="Point size" unit="pt" value={style.markerSize} min={.5} max={8} step={.25} onChange={markerSize => set({markerSize})} />
+        <Toggle label="Hollow" checked={style.hollow} onChange={hollow => set({hollow})} hint="White-filled point with a coloured outline" />
+      </div>
+    </>}
     <div className="ks-actions">
       <button type="button" className="ks-button" disabled={first} onClick={() => onMove(-1)} title="Earlier in the legend; drawn below the others">Move up</button>
       <button type="button" className="ks-button" disabled={last} onClick={() => onMove(1)} title="Later in the legend; drawn on top">Move down</button>
@@ -190,6 +188,8 @@ export function SecondY({spec, setSpec, source}: {spec: FigureSpec; setSpec: Set
 let annotationCounter = 0
 const newID = () => `a${Date.now().toString(36)}${(annotationCounter++).toString(36)}`
 export const annotationNames: Record<Annotation['kind'], string> = {hline: 'Threshold line', vline: 'Vertical line', xrange: 'Shaded range', text: 'Text label'}
+// What each kind is for, with an example, in the "Add a line in the graph" menu.
+export const annotationExamples: Record<Annotation['kind'], string> = {hline: 'A limit across the chart, e.g. the 350 ms SLO', xrange: 'Highlights a period, e.g. a load spike from 5 to 8 min', vline: 'Marks a moment, e.g. when a pod was rescheduled', text: 'A short note written on the chart'}
 
 // A new annotation placed in the middle of what is visible.
 export function newAnnotation(kind: Annotation['kind'], at: {x: number; x2: number; y: number; axis?: AxisSide}): Annotation {
@@ -231,7 +231,6 @@ export function AnnotationFields({item, onChange, onRemove, xUnit, yUnit}: {item
 export function PaletteEditor({spec, setSpec}: {spec: FigureSpec; setSpec: SetSpec}) {
   return <>
     <SelectField label="Palette" hint={palettes[spec.palette].hint} value={spec.palette} onChange={value => setSpec(current => ({...current, palette: value as PaletteId}))}>{(Object.keys(palettes) as PaletteId[]).map(key => <option key={key} value={key} title={palettes[key].hint}>{palettes[key].label}</option>)}</SelectField>
-    <div className="ks-palette-strip" aria-hidden="true">{paletteColors(spec.palette).map((color, index) => <span key={`${color}-${index}`} style={{background: color}} />)}</div>
   </>
 }
 

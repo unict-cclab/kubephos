@@ -76,14 +76,15 @@ it('aligns different resolutions on the coarsest grid and uses only the shared d
  expect(d.end).toBe(30000)
  expect(aggregateZonePlacement([dataset(a,60000),{spec:{start:new Date(start).toISOString(),end:new Date(start+60000).toISOString()}} as TimeSeriesDataset])).toBeUndefined()
 })
-it('renders a heatmap with scheduled replica counts and standard export actions, omitting unavailable histories',()=>{
+it('renders a bare, scalable heatmap with scheduled replica counts, omitting unavailable histories',()=>{
  const dataset={spec:{start:new Date(start-120000).toISOString(),workloadStartedAt:new Date(start).toISOString(),end:new Date(start+60000).toISOString(),placement:fixture()}} as TimeSeriesDataset
  const view=render(<PlacementHeatmap dataset={dataset}/>)
  expect(screen.getByRole('img',{name:'Application placement by zone heatmap'})).toBeInTheDocument()
  expect(screen.getByText('edge · 0.00 min · 2 scheduled replicas')).toBeInTheDocument()
  expect(screen.getByText('No samples')).toBeInTheDocument()
- expect(screen.getByRole('button',{name:'PDF'})).toBeInTheDocument()
- expect(screen.getByRole('button',{name:'PNG'})).toBeInTheDocument()
+ // The card around it gives the title and the downloads.
+ expect(screen.queryByRole('button')).not.toBeInTheDocument()
+ expect(view.container.firstElementChild).toHaveClass('placement-heatmap')
  const svg=view.container.querySelector('svg')!
  const pdf=new TextDecoder().decode(svgToPDF(svg))
  expect(pdf).toContain('(Scheduled replicas) Tj')

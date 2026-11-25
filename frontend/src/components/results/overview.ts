@@ -1,5 +1,5 @@
 import {aggregatePlotMetric, knownWorkloads, resolveWorkload, type AggregateSeries, type LoadedDataset, type RunLevelMetric, type VariantComparison} from '../../resultsData'
-import {summarize, tCritical} from '../../statistics'
+import {tCritical} from '../../statistics'
 import type {Experiment} from '../../types'
 import type {Insight, ServiceHealth} from './insights'
 import type {ChartPanel, ChartPoint, ChartSeries} from './TimeChart'
@@ -192,50 +192,6 @@ function ratioOf(achieved: AggregateSeries, offered: AggregateSeries): number {
   const o = meanOf(offered)
   return a !== undefined && o ? a / o : 1
 }
-function quantile(values: number[], q: number): number {
-  const sorted = [...values].sort((a, b) => a - b)
-  return sorted[Math.min(sorted.length - 1, Math.max(0, Math.round(q * (sorted.length - 1))))]
-}
-function roughRps(value: number): string {
-  const step = value >= 200 ? 10 : value >= 50 ? 5 : 1
-  return (Math.round(value / step) * step).toLocaleString('en-US')
-}
-
-// Title of the primary chart: what the curves show, in one sentence (the subtitle says what is plotted).
-export function timelineHeadline({groups, plot, slo}: TimelineInput): string {
-  const fallback = 'Load and latency over the measured window'
-  const achieved = plot('load.achieved_rps').length ? plot('load.achieved_rps') : plot('load.successful_rps')
-  const offered = plot('load.offered_rps').length ? plot('load.offered_rps') : plot('load.configured_rps')
-  const p95 = plot('load.p95_response_time')
-  if (groups.length > 1) {
-    const latencies = p95.map(series => ({label: series.label, value: meanOf(series)})).filter((item): item is {label: string; value: number} => item.value !== undefined).sort((a, b) => a.value - b.value)
-    if (latencies.length > 1) {
-      const best = latencies[0]
-      const worst = latencies[latencies.length - 1]
-      if (worst.value > 1.2 * best.value) return `${best.label} keeps client P95 near ${formatShortMs(best.value)}, against ${formatShortMs(worst.value)} for ${worst.label}`
-    }
-    const rates = achieved.map(series => ({label: series.label, value: meanOf(series)})).filter((item): item is {label: string; value: number} => item.value !== undefined).sort((a, b) => b.value - a.value)
-    if (rates.length > 1 && rates[0].value > 1.1 * rates[rates.length - 1].value) return `${rates[0].label} sustains ${roughRps(rates[0].value)} req/s, against ${roughRps(rates[rates.length - 1].value)} for ${rates[rates.length - 1].label}`
-    return latencies.length > 1 || rates.length > 1 ? 'The variants track each other closely' : fallback
-  }
-  const a = achieved[0]
-  const o = offered[0]
-  const latency = p95[0] && meanOf(p95[0])
-  if (a && o) {
-    const ratio = ratioOf(a, o)
-    const values = a.points.map(point => point.value).filter(Number.isFinite)
-    const targets = o.points.map(point => point.value).filter(Number.isFinite)
-    if (ratio < .95 && values.length && targets.length) {
-      const top = Math.max(...targets)
-      const level = roughRps(quantile(values, .9))
-      return top > 1.1 * Math.min(...targets) ? `Achieved throughput levels off near ${level} req/s while the target climbs to ${roughRps(top)}` : `Achieved throughput stays near ${level} req/s, short of the ${roughRps(top)} req/s target`
-    }
-    if (ratio > 1.05) return `Achieved throughput overshoots the target by ${Math.round((ratio - 1) * 100)} %`
-    if (latency !== undefined && slo !== undefined && latency > slo) return `Throughput follows the target, but client P95 sits above the ${formatShortMs(slo)} SLO`
-    return latency !== undefined ? `Throughput follows the target; client P95 stays near ${formatShortMs(latency)}` : 'Throughput follows the target'
-  }
-  return latency !== undefined ? `Client P95 averages ${formatShortMs(latency)} over the measured window` : fallback
-}
 
 export function timelineSubtitle(variants: number, repetitions: number): string {
   const what = variants > 1 ? 'Achieved request rate (top) and client P95 latency (bottom) per variant' : 'Offered and achieved request rate (top), client P50 and P95 latency (bottom)'
@@ -281,13 +237,6 @@ export function rankServiceSummaries(groupID: string, byMetric: Record<string, {
     top.reasons.push(second?.score ? `${(top.score / second.score).toFixed(1)}× the next slowest service (${second.service})` : 'only service with measurable latency')
   }
   return rows
-}
-
-// Mean ± CI across repetitions, as text, for tooltips.
-export function acrossRunsText(values: number[], format: (value: number) => string): string {
-  if (values.length < 2) return values.length ? `${format(values[0])} (1 repetition)` : 'no data'
-  const summary = summarize(values)
-  return `${format(summary.mean)} mean of ${values.length} repetitions; 95% CI ${format(summary.confidence95Low)}–${format(summary.confidence95High)}`
 }
 
 // Verdict of a saved comparison (no raw samples on the page): significant differences on

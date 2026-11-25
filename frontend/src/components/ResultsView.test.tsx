@@ -6,6 +6,7 @@ import type {Artifact, Experiment, Operation, Session, TimeSeriesDataset} from '
 import type {FigureKind} from './results/kubestudio/image'
 import {formatAxis, aggregateMetric, aggregatePlotMetric, cohenD, compactLabel, experimentProgress, figureDimensions, loadLeadFromConfiguration, niceAxis, ResultsView, serviceMetricStatistics, setPNGResolution, podSchedulingStatistics, statisticsCSV, summarize, svgToPDF, variantStatistics, type LoadedDataset} from './ResultsView'
 
+vi.mock('./results/kubestudio/resultsLayout', async () => (await import('../test/everySection')).everySection())
 vi.mock('../api', () => ({request: vi.fn(async () => ({items: []}))}))
 
 // Secondary sections are collapsed disclosures; publication figures live in KubeStudio.
@@ -16,13 +17,16 @@ async function openSection(name: string) {
 async function openStudio(kind?: FigureKind, metric?: string) {
   if (!screen.queryByRole('dialog', {name: 'KubeStudio'})) fireEvent.click(await screen.findByRole('button', {name: 'Create figure'}))
   const dialog = await screen.findByRole('dialog', {name: 'KubeStudio'})
-  // KubeStudio opens on a figure; the top-bar switcher changes it.
+  // A new figure opens on the landing page: start from a suggestion of that kind (else the first),
+  // then the top-bar switcher changes it.
+  const landing = dialog.querySelector('.ks-landing')
+  if (landing) fireEvent.click(landing.querySelector(`.ks-suggestion[data-kind="${kind}"]`) ?? landing.querySelector('.ks-suggestion')!)
   if (kind) {
-    fireEvent.click(within(dialog).getByRole('button', {name: /^Figure:/}))
+    if (!within(dialog).queryByRole('dialog', {name: 'Choose a figure'})) fireEvent.click(within(dialog).getByRole('button', {name: /^Figure:/}))
     fireEvent.click(within(dialog).getByRole('dialog', {name: 'Choose a figure'}).querySelector(`[data-kind="${kind}"]`)!)
   }
-  // The metric is a property of the Y axis layer.
-  const yAxis = within(within(dialog).getByRole('navigation', {name: 'Layers'})).queryByRole('button', {name: /^(Left )?Y axis$/})
+  // The metric is a property of the Y axis, selected on the figure.
+  const yAxis = dialog.querySelector('svg [data-select^="axis:left"]')
   if (yAxis && (kind === 'timeseries' || kind === 'runlevel' || kind === 'services')) fireEvent.click(yAxis)
   if (metric) fireEvent.change(within(dialog).getByRole('combobox', {name: 'Metric'}), {target: {value: metric}})
   return dialog
@@ -310,7 +314,7 @@ describe('focused experiment results', () => {
     expect(acrossCells.slice(1)).toEqual(['ms', expect.stringMatching(/^Locust · client side/), '2', '3.00', '1.41', '2.00', '3.00', '4.00', '47.1%', expect.stringMatching(/^−?\d+\.\d\d–\d+\.\d\d$/)])
     expect(within(document.getElementById('section-statistics-body')!).queryByText(/±/)).not.toBeInTheDocument()
     await openStudio('timeseries', 'load.p95_response_time')
-    const chart = screen.getByRole('img', {name: 'P95 latency — client (Locust) comparison chart'})
+    const chart = within(screen.getByRole('dialog', {name: 'KubeStudio'})).getByRole('img', {name: 'P95 latency — client (Locust) comparison chart'})
     expect(within(chart).getByText('Paper label')).toBeInTheDocument()
     expect(chart).not.toHaveTextContent(/Run \d+|Execution \d+/)
     expect(chart.querySelectorAll('path.series-line')).toHaveLength(1)
@@ -336,7 +340,7 @@ describe('focused experiment results', () => {
     expect(screen.queryByText('Across executions')).not.toBeInTheDocument()
     expect(screen.queryByRole('button', {name: /logs/i})).not.toBeInTheDocument()
     await openStudio('timeseries', 'load.p95_response_time')
-    expect(screen.getByRole('img', {name: 'P95 latency — client (Locust) comparison chart'})).not.toHaveTextContent(/Run \d+/)
+    expect(within(screen.getByRole('dialog', {name: 'KubeStudio'})).getByRole('img', {name: 'P95 latency — client (Locust) comparison chart'})).not.toHaveTextContent(/Run \d+/)
   })
 
   it('adds a newly completed run without downloading the existing dataset again', async () => {
@@ -650,9 +654,9 @@ it('keeps scheduler and descheduler metrics in statistics while omitting all the
   vi.mocked(request).mockResolvedValue(result.dataset as never)
   const experiment = {id: 'sparse', name: 'Sparse scheduling', status: 'succeeded', variants: [{id: 'default', name: 'Default', trials: [{id: 'trial', position: 1, status: 'succeeded', resultArtifactId: result.artifact.id}]}]} as Experiment
   render(<ResultsView artifacts={[result.artifact]} experiments={[experiment]} operations={[]} workspaces={[]} session={{authenticated: true} as Session} changed={async () => {}} openOperation={() => {}} focusedExperiment={experiment} />)
-  await openSection('All metrics')
-  fireEvent.click(screen.getByRole('button', {name: 'Scheduling latency'}))
-  expect(screen.getByText('This metric has no time series (statistics only).')).toBeInTheDocument()
+  // The charts draw none of them: they are statistics only.
+  const charts = await screen.findByRole('region', {name: 'Charts'})
+  expect(within(charts).queryByRole('figure', {name: /Scheduling|Descheduling|evictions/i})).not.toBeInTheDocument()
   expect(screen.queryByRole('img', {name: /Scheduling|Descheduling|evictions/i})).not.toBeInTheDocument()
   await openSection('Statistics')
   const table = screen.getByRole('table', {name: 'Statistics for Default · Execution 1'})
@@ -830,12 +834,13 @@ it('keeps saved comparisons read-only toward experiments and preserves each sour
   expect(screen.queryByText(/execution/i)).not.toBeInTheDocument()
   expect(screen.queryByRole('button', {name: /Share|Delete experiment|Stop experiment/})).not.toBeInTheDocument()
   await openStudio('timeseries', 'load.p95_response_time')
-  expect(screen.getByRole('img', {name: 'P95 latency — client (Locust) comparison chart'})).toBeInTheDocument()
+  expect(within(screen.getByRole('dialog', {name: 'KubeStudio'})).getByRole('img', {name: 'P95 latency — client (Locust) comparison chart'})).toBeInTheDocument()
   expect(document.querySelector('.slo-label')).not.toBeInTheDocument()
   closeStudio()
   fireEvent.click(screen.getByRole('button', {name: 'Export'}))
   expect(screen.getByRole('button', {name: 'Statistics CSV'})).toBeInTheDocument()
-  expect(vi.mocked(request).mock.calls.every(([path]) => path.startsWith('/artifacts/'))).toBe(true)
+  // It reads only the source runs and the user's own chart layout for this comparison.
+  expect(vi.mocked(request).mock.calls.every(([path, init]) => path.startsWith('/artifacts/') || path === '/account/result-layouts/comparisons/cmp_paper' && !init?.method)).toBe(true)
 })
 
 

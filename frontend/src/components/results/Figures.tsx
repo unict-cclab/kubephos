@@ -1,4 +1,3 @@
-import type {ReactNode} from 'react'
 import {timeAxis} from '../../charts'
 import {summarize, tCritical} from '../../statistics'
 import type {AggregateSeries, RunLevelMetric} from '../../resultsData'
@@ -49,11 +48,6 @@ function segments(points: MetricPoint[], step?: number): number[][] {
     result.at(-1)!.push(index)
   })
   return result
-}
-
-function sparse<T>(items: T[], count = 8): T[] {
-  if (items.length <= count) return items
-  return Array.from({length: count}, (_, index) => items[Math.round(index * (items.length - 1) / (count - 1))])
 }
 
 export interface TimeSeriesFigureProps {
@@ -111,7 +105,7 @@ export function TimeSeriesFigure({name, metric, title, axisLabel, series, settin
       <line x1={r(x(tick))} x2={r(x(tick))} y1={r(bottom)} y2={r(bottom + fs * .35)} stroke="#111" strokeWidth={r(metrics.line * .6)} />
       <SvgText x={x(tick)} y={bottom + fs * 1.3} anchor="middle" size={fs} family={metrics.family} className="tick">{formatAxis(tick)}</SvgText>
     </g>)}
-    <SvgText x={(left + right) / 2} y={bottom + fs * 2.55} anchor="middle" size={fs} family={metrics.family} className="axis-label">{labels.x('Time (min)')}</SvgText>
+    <g data-select="axis:x:0"><SvgText x={(left + right) / 2} y={bottom + fs * 2.55} anchor="middle" size={fs} family={metrics.family} className="axis-label">{labels.x('Time (min)')}</SvgText></g>
     <Frame left={left} right={right} top={top} bottom={bottom} metrics={metrics} />
     {slo !== undefined && frame.y(slo) !== undefined && <g><line x1={r(left)} x2={r(right)} y1={r(frame.y(slo)!)} y2={r(frame.y(slo)!)} stroke="#b42318" strokeWidth={r(metrics.line)} strokeDasharray="4 3" /><SvgText x={right - fs * .3} y={frame.y(slo)! - fs * .35} anchor="end" size={fs * .9} family={metrics.family} fill="#b42318" className="legend-label slo-label">SLO {formatMetric(slo, 'milliseconds')}</SvgText></g>}
     {series.map((item, index) => {
@@ -126,7 +120,6 @@ export function TimeSeriesFigure({name, metric, title, axisLabel, series, settin
           return <path key={segment} d={`M${indices.map(pointIndex => edge(pointIndex, 1)).join(' L')} L${[...indices].reverse().map(pointIndex => edge(pointIndex, -1)).join(' L')} Z`} />
         })}</g>}
         {path && <path className="series-line" d={path} fill="none" stroke={style.color} strokeWidth={r(metrics.line * 1.2)} strokeDasharray={style.dash || undefined} strokeLinejoin="round" />}
-        {sparse(item.points.filter(point => valid(point.value))).map((point, pointIndex) => <Marker key={pointIndex} shape={style.marker} x={x(Date.parse(point.timestamp) / 60000)} y={frame.y(point.value)!} color={style.color} size={fs * .24} />)}
       </g>
     })}
     {multiple && <Legend items={items} layout={legend} top={legendTop} metrics={metrics} plot={frame} />}
@@ -219,7 +212,7 @@ export function PercentileLadder({series, settings, provenance, name = 'latency-
     const style = seriesStyle(groupNames.indexOf(item.group), item.color, settings)
     return {...style, dash: item.vantage === 'server' ? '4 2' : ''}
   }
-  const items: LegendItem[] = series.map(item => ({label: labels.series(describe(item)), style: styleOf(item)}))
+  const items: LegendItem[] = series.map(item => ({label: labels.series(describe(item)), style: styleOf(item), kind: 'both'}))
   const base = plotFrame(metrics, scale, 'milliseconds', legendWidth(items, metrics))
   const band = (base.right - base.left) / Math.max(1, levels.length)
   const center = (level: string) => base.left + band * (levels.indexOf(level as typeof levels[number]) + .5)
@@ -241,7 +234,7 @@ export function PercentileLadder({series, settings, provenance, name = 'latency-
   return <FigureCard id={figureID(name)} name={name} title={title} caption={caption} methods={methods} labels={{x: 'Percentile', y: 'Latency (ms)', series: series.map(describe)}} legendHeight={legend.height} ariaLabel="Latency percentile ladder: client and server percentiles per configuration" width={metrics.width} height={height} settings={settings} provenance={provenance} csv={csv}>
     <YAxis scale={scale} unit="milliseconds" left={base.left} right={base.right} top={base.top} bottom={base.bottom} metrics={metrics} label="Latency (ms)" />
     {levels.map(level => <SvgText key={level} x={center(level)} y={base.bottom + fs * 1.3} anchor="middle" size={fs} family={metrics.family} className="tick">{level.toUpperCase()}</SvgText>)}
-    <SvgText x={(base.left + base.right) / 2} y={base.bottom + fs * 2.55} anchor="middle" size={fs} family={metrics.family} className="axis-label">{labels.x('Percentile')}</SvgText>
+    <g data-select="axis:x:0"><SvgText x={(base.left + base.right) / 2} y={base.bottom + fs * 2.55} anchor="middle" size={fs} family={metrics.family} className="axis-label">{labels.x('Percentile')}</SvgText></g>
     <Frame left={base.left} right={base.right} top={base.top} bottom={base.bottom} metrics={metrics} />
     {series.map((item, index) => {
       const style = styleOf(item)
@@ -318,6 +311,3 @@ export function ServiceFigure({metric, rows, settings, provenance, title}: {metr
   </FigureCard>
 }
 
-export function FigureSection({title, children, note}: {title: string; children: ReactNode; note?: string}) {
-  return <section className="figure-section" aria-label={title}><div className="figure-section-head"><h3>{title}</h3>{note && <p>{note}</p>}</div><div className="chart-grid figure-grid">{children}</div></section>
-}

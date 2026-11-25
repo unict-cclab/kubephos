@@ -1,4 +1,3 @@
-import {ChartExportActions} from './ChartExportActions'
 import {useId, useMemo} from 'react'
 import {timeAxis} from '../charts'
 import type {PlacementHistory, TimeSeriesDataset} from '../types'
@@ -91,14 +90,16 @@ export function aggregateZonePlacement(datasets: TimeSeriesDataset[]) {
   return {rows, cells, maximum, end}
 }
 
-export function PlacementHeatmap({dataset, datasets, canvasHeight = 470}: {dataset?: TimeSeriesDataset; datasets?: TimeSeriesDataset[]; canvasHeight?: number}) {
+// Pods per zone over time. A bare figure that scales to its container: the chart card or
+// KubeStudio around it gives the title and the downloads.
+export function PlacementHeatmap({dataset, datasets}: {dataset?: TimeSeriesDataset; datasets?: TimeSeriesDataset[]}) {
   const id = `placement-heatmap-${useId().replace(/[^a-z0-9]/gi, '')}`
   const data = useMemo(() => aggregateZonePlacement(datasets ?? (dataset ? [dataset] : [])), [dataset, datasets])
   if (!data || !data.rows.length) return null
   const start = 0, end = data.end
   const mean = (datasets?.length ?? 1) > 1
   const scale = placementColorScale(data.maximum)
-  const width = 860, height = Math.max(canvasHeight, data.rows.length * 40 + 145)
+  const width = 860, height = Math.max(470, data.rows.length * 40 + 145)
   const left = Math.min(290, Math.max(125, ...data.rows.map(r => r.label.length * 12 + 30)))
   const right = width - 55, top = 20, bottom = height - 125
   const rowHeight = (bottom - top) / data.rows.length
@@ -106,25 +107,22 @@ export function PlacementHeatmap({dataset, datasets, canvasHeight = 470}: {datas
   const axis = timeAxis(minutes, true)
   const x = (t: number) => left + ((t - start) / 60000 / axis.upper) * (right - left)
   const font = {fontFamily: 'Arial, Helvetica, DejaVu Sans, sans-serif', fill: '#111'}
-  return <article className="metric-card">
-    <div className="metric-card-header"><h3>Application placement by zone</h3><ChartExportActions chartID={id} metric="placement-by-zone" /></div>
-    <div className="chart-wrap"><svg id={id} viewBox={`0 0 ${width} ${height}`} xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Application placement by zone heatmap">
-      <rect width={width} height={height} fill="#fff" />
-      {data.rows.map((row, i) => <g key={row.id}>
-        <text {...font} x={left - 14} y={top + (i + .5) * rowHeight + 8} fontSize="23" textAnchor="end">{row.label}</text>
-        <rect x={left} y={top + i * rowHeight} width={x(end) - left} height={rowHeight} fill="#d1d5db" shapeRendering="crispEdges" />
-        {zoneColorBlocks(data.cells, row.id).map(s => {
-          const count = s.count
-          return <rect key={s.time} x={x(s.from)} y={top + i * rowHeight} width={x(s.to) - x(s.from)} height={rowHeight} fill={placementCellColor(count, scale)} shapeRendering="crispEdges"><title>{row.label} · {((s.time - start) / 60000).toFixed(2)} min · {Number(count.toFixed(2))} {mean ? 'mean scheduled replicas' : 'scheduled replicas'}</title></rect>
-        })}
-        <line x1={left} x2={x(end)} y1={top + i * rowHeight} y2={top + i * rowHeight} stroke="#fff" strokeWidth="1" />
-      </g>)}
-      <rect className="axis" x={left} y={top} width={x(end) - left} height={bottom - top} fill="none" stroke="#111" strokeWidth="1.5" />
-      {axis.ticks.map(t => <g key={t}><line x1={x(start + t * 60000)} x2={x(start + t * 60000)} y1={bottom} y2={bottom + 6} stroke="#111" /><text {...font} x={x(start + t * 60000)} y={bottom + 30} textAnchor="middle" fontSize="23">{t}</text></g>)}
-      <text {...font} x={(left + right) / 2} y={bottom + 64} textAnchor="middle" fontSize="25">Time (min)</text>
-      <text {...font} x={left} y={height - 22} fontSize="20">{mean ? 'Mean replicas' : 'Scheduled replicas'}</text>
-      {scale.map((band, i) => <g key={band.upper}><title>{band.upper === 0 ? 'Zero replicas' : `More than ${band.lower} and up to ${band.upper} replicas`}</title><rect x={left + 195 + i * 56} y={height - 39} width="50" height="16" fill={band.color} shapeRendering="crispEdges" /><text {...font} x={left + 220 + i * 56} y={height - 3} textAnchor="middle" fontSize="16">{band.upper === 0 ? '0' : `${mean ? band.lower : band.lower + 1}–${band.upper}`}</text></g>)}
-      <rect x={right - 150} y={height - 39} width="17" height="16" fill="#d1d5db" /><text {...font} x={right - 124} y={height - 24} fontSize="20">No samples</text>
-    </svg></div>
-  </article>
+  return <svg id={id} className="placement-heatmap" viewBox={`0 0 ${width} ${height}`} xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Application placement by zone heatmap">
+    <rect width={width} height={height} fill="#fff" />
+    {data.rows.map((row, i) => <g key={row.id}>
+      <text {...font} x={left - 14} y={top + (i + .5) * rowHeight + 8} fontSize="23" textAnchor="end">{row.label}</text>
+      <rect x={left} y={top + i * rowHeight} width={x(end) - left} height={rowHeight} fill="#d1d5db" shapeRendering="crispEdges" />
+      {zoneColorBlocks(data.cells, row.id).map(s => {
+        const count = s.count
+        return <rect key={s.time} x={x(s.from)} y={top + i * rowHeight} width={x(s.to) - x(s.from)} height={rowHeight} fill={placementCellColor(count, scale)} shapeRendering="crispEdges"><title>{row.label} · {((s.time - start) / 60000).toFixed(2)} min · {Number(count.toFixed(2))} {mean ? 'mean scheduled replicas' : 'scheduled replicas'}</title></rect>
+      })}
+      <line x1={left} x2={x(end)} y1={top + i * rowHeight} y2={top + i * rowHeight} stroke="#fff" strokeWidth="1" />
+    </g>)}
+    <rect className="axis" x={left} y={top} width={x(end) - left} height={bottom - top} fill="none" stroke="#111" strokeWidth="1.5" />
+    {axis.ticks.map(t => <g key={t}><line x1={x(start + t * 60000)} x2={x(start + t * 60000)} y1={bottom} y2={bottom + 6} stroke="#111" /><text {...font} x={x(start + t * 60000)} y={bottom + 30} textAnchor="middle" fontSize="23">{t}</text></g>)}
+    <text {...font} x={(left + right) / 2} y={bottom + 64} textAnchor="middle" fontSize="25">Time (min)</text>
+    <text {...font} x={left} y={height - 22} fontSize="20">{mean ? 'Mean replicas' : 'Scheduled replicas'}</text>
+    {scale.map((band, i) => <g key={band.upper}><title>{band.upper === 0 ? 'Zero replicas' : `More than ${band.lower} and up to ${band.upper} replicas`}</title><rect x={left + 195 + i * 56} y={height - 39} width="50" height="16" fill={band.color} shapeRendering="crispEdges" /><text {...font} x={left + 220 + i * 56} y={height - 3} textAnchor="middle" fontSize="16">{band.upper === 0 ? '0' : `${mean ? band.lower : band.lower + 1}–${band.upper}`}</text></g>)}
+    <rect x={right - 150} y={height - 39} width="17" height="16" fill="#d1d5db" /><text {...font} x={right - 124} y={height - 24} fontSize="20">No samples</text>
+  </svg>
 }
