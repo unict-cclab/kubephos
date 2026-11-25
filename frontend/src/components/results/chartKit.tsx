@@ -93,7 +93,8 @@ export function Marker({shape, x, y, color, size, hollow = false}: {shape: numbe
   return <path d={`M${r(x - size)},${r(y - size)}L${r(x + size)},${r(y + size)}M${r(x + size)},${r(y - size)}L${r(x - size)},${r(y + size)}`} fill="none" stroke={color} strokeWidth={r(size * .6)} />
 }
 
-export interface LegendItem {label: string; style: SeriesStyle; kind?: 'line' | 'marker' | 'band'}
+// 'line' (default): a line; 'marker': a point; 'both': points joined by a line (percentile ladder).
+export interface LegendItem {label: string; style: SeriesStyle; kind?: 'line' | 'marker' | 'both' | 'band'}
 
 export interface LegendLayout {entries: Array<{x: number; row: number}>; rows: number; rowHeight: number; height: number; width: number; symbol: number; position: FigureLegend}
 export interface PlotBox {left: number; right: number; top: number; bottom: number}
@@ -149,7 +150,7 @@ export function Legend({items, layout, top, metrics, plot}: {items: LegendItem[]
       const mid = x + layout.symbol / 2
       return <g key={`${item.label}-${index}`}>
         {item.kind !== 'marker' && <line x1={r(x)} x2={r(x + layout.symbol)} y1={r(y)} y2={r(y)} stroke={item.style.color} strokeWidth={r(metrics.line * 1.2)} strokeDasharray={item.style.dash || undefined} />}
-        <Marker shape={item.style.marker} x={mid} y={y} color={item.style.color} size={fs * .27} />
+        {(item.kind === 'marker' || item.kind === 'both') && <Marker shape={item.style.marker} x={mid} y={y} color={item.style.color} size={fs * .27} />}
         <SvgText x={x + layout.symbol + fs * .4} y={y + fs * .35} size={fs} family={metrics.family}>{item.label}</SvgText>
       </g>
     })}
@@ -171,7 +172,7 @@ export function YAxis({scale, unit, left, top, bottom, right, metrics, label, gr
       <line x1={r(left - metrics.fontSize * .35)} x2={r(left)} y1={r(y(tick))} y2={r(y(tick))} stroke="#111111" strokeWidth={r(metrics.line * .6)} />
       <SvgText x={left - metrics.fontSize * .55} y={y(tick) + metrics.fontSize * .35} anchor="end" size={metrics.fontSize} family={metrics.family} className="tick">{formatAxisValue(tick, unit)}</SvgText>
     </g>)}
-    <SvgText x={metrics.fontSize * .95} y={(top + bottom) / 2} anchor="middle" size={metrics.fontSize} family={metrics.family} rotate={-90} className="axis-label">{label}</SvgText>
+    <g data-select="axis:left:0"><SvgText x={metrics.fontSize * .95} y={(top + bottom) / 2} anchor="middle" size={metrics.fontSize} family={metrics.family} rotate={-90} className="axis-label">{label}</SvgText></g>
   </g>
 }
 

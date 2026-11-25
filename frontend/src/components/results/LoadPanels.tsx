@@ -115,11 +115,6 @@ export function cpuSaturationNotices(groups: LocustGroup[]): QualityNotice[] {
   })
 }
 
-export function QualityNotices({notices}: {notices: QualityNotice[]}) {
-  if (!notices.length) return null
-  return <div className="quality-notices" role="region" aria-label="Measurement quality">{notices.map(notice => <div key={notice.text} className={`validation-item ${notice.kind === 'warning' ? 'warning' : 'note'}`}>{notice.text}</div>)}</div>
-}
-
 export function experimentCleanupNotices(experiment: Experiment | undefined): QualityNotice[] {
   return (experiment?.variants ?? []).flatMap(variant => variant.trials.filter(trial => trial.cleanupError).map(trial => ({kind: 'note' as const, text: `${variant.alias || variant.name} · ${trial.pilot ? 'Warm-up' : `Execution ${trial.position}`}: result kept — environment cleanup failed: ${trial.cleanupError}`})))
 }

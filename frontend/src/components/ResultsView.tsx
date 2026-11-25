@@ -37,15 +37,14 @@ import {MethodsPanel, RunContextPanel} from './results/ContextPanel'
 import {CallChainPanel, hasCallChainData} from './results/CallChainPanel'
 import {formatDuration, metricTitle} from './results/format'
 import {runInsights, type Insight, type ServiceHealth} from './results/insights'
-import {comparisonVerdict, kpiCards, overviewGroups, overviewMetrics, paletteColor, primaryPanels, timelineHeadline, timelineSubtitle, rankServiceSummaries, serviceCurve, serviceDetailMetrics, type OverviewGroup} from './results/overview'
+import {comparisonVerdict, kpiCards, overviewGroups, overviewMetrics, paletteColor, primaryPanels, timelineSubtitle, rankServiceSummaries, serviceCurve, serviceDetailMetrics, type OverviewGroup} from './results/overview'
 import {Disclosure, KpiCards, PrimaryChart, QualityLine, ServicesTable, VerdictStrip, type InsightTarget, type ServiceDetail} from './results/Overview'
 import {HeaderMenu} from './results/HeaderMenu'
-import {AllMetrics} from './results/AllMetrics'
 import {RunFacts} from './results/RunFacts'
 import {KubeStudio, type StudioRequest} from './results/kubestudio/KubeStudio'
 import type {StudioData} from './results/kubestudio/image'
-import {ResultFigures} from './results/kubestudio/ResultFigures'
-import {useSavedFigures, type SavedFigure} from './results/kubestudio/savedFigures'
+import {ResultCharts} from './results/kubestudio/ResultCharts'
+import {useResultsLayout, type LayoutScope, type PageSection} from './results/kubestudio/resultsLayout'
 import {KubeStudioMark} from './results/kubestudio/KubeStudioMark'
 import {formatSpan} from './results/display'
 import type {ServiceRow} from './results/Figures'
@@ -80,7 +79,7 @@ export interface ResultsViewProps {
 }
 
 // Secondary content: collapsed by default, opened on demand (or by a verdict link).
-type SectionID = 'sources' | 'endpoints' | 'callchain' | 'statistics' | 'environment' | 'placement' | 'metrics'
+type SectionID = 'sources' | 'endpoints' | 'callchain' | 'statistics' | 'environment' | 'placement'
 type Sections = Partial<Record<SectionID, boolean>>
 
 // Load profile shared by every configuration (annotations would mislead otherwise).
@@ -159,21 +158,39 @@ function useSections(initial: Sections = {}) {
   return {sections, toggle, navigate, jump}
 }
 
-// Links of the section bar, in page order; absent sections are left out.
-function sectionLinks({overview, figure, services, endpoints, callchain, statistics, environment, placement, metrics, sources}: Partial<Record<'overview' | 'figure' | 'services' | 'endpoints' | 'callchain' | 'statistics' | 'environment' | 'placement' | 'metrics' | 'sources', boolean>>): SectionLink[] {
-  const all: Array<[boolean | undefined, SectionLink]> = [
-    [overview, {id: 'overview', label: 'Overview', target: 'results-overview'}],
-    [figure, {id: 'figure', label: 'Fig. 1', target: 'results-timeline'}],
-    [services, {id: 'services', label: 'Services', target: 'results-services'}],
-    [sources, {id: 'sources', label: 'Sources', target: 'section-sources'}],
-    [endpoints, {id: 'endpoints', label: 'Endpoints', target: 'section-endpoints'}],
-    [callchain, {id: 'callchain', label: 'Call chain', target: 'section-callchain'}],
-    [statistics, {id: 'statistics', label: 'Statistics', target: 'section-statistics'}],
-    [environment, {id: 'environment', label: 'Environment', target: 'section-environment'}],
-    [placement, {id: 'placement', label: 'Placement', target: 'section-placement'}],
-    [metrics, {id: 'metrics', label: 'All metrics', target: 'section-metrics'}]
-  ]
-  return all.filter(([present]) => present).map(([, link]) => link)
+// Where each optional section starts on the page.
+const sectionTarget: Record<PageSection, string> = {
+  summary: 'results-overview', timeline: 'results-timeline', services: 'results-services', sources: 'section-sources', endpoints: 'section-endpoints',
+  callchain: 'section-callchain', statistics: 'section-statistics', environment: 'section-environment', placement: 'section-placement'
+}
+const sectionLabel: Record<PageSection, string> = {
+  summary: 'Summary', timeline: 'Load and latency', services: 'Services', sources: 'Sources', endpoints: 'Endpoints',
+  callchain: 'Call chain', statistics: 'Statistics', environment: 'Environment', placement: 'Placement'
+}
+// The section a finding of the verdict points to.
+const insightSection: Partial<Record<InsightTarget, PageSection>> = {throughput: 'timeline', latency: 'timeline', services: 'services', endpoints: 'endpoints', quality: 'environment'}
+
+// The optional sections of a results page: hidden until the user adds them from the
+// charts' Sections menu; printing shows them all. Adding one opens it and scrolls to it,
+// and so does following a finding of the verdict to a hidden one.
+function usePageSections(layout: ReturnType<typeof useResultsLayout>, available: PageSection[], everything: boolean, {navigate, jump}: ReturnType<typeof useSections>) {
+  const show = (id: PageSection) => available.includes(id) && (everything || layout.sections.includes(id))
+  const link = (id: PageSection): SectionLink => ({id, label: sectionLabel[id], target: sectionTarget[id]})
+  const shown = available.filter(show)
+  // Links of the section bar, in page order.
+  const links = [...shown.filter(id => ['summary', 'timeline', 'services'].includes(id)).map(link), {id: 'charts', label: 'Charts', target: 'results-charts'}, ...shown.filter(id => !['summary', 'timeline', 'services'].includes(id)).map(link)]
+  return {
+    show, shown, links,
+    toggle: (id: PageSection, visible: boolean) => {
+      layout.toggleSection(id, visible)
+      if (visible) jump(link(id))
+    },
+    navigate: (target: InsightTarget) => {
+      const id = insightSection[target]
+      if (id && available.includes(id) && !show(id)) layout.toggleSection(id, true)
+      navigate(target)
+    }
+  }
 }
 
 // "2 variants × 3 repetitions · 5 min measured · 19 Nov 2026".
@@ -210,9 +227,9 @@ interface OverviewModel {
   resources?: ResourceSummary[]
 }
 
-// Verdict, KPI cards, the primary chart and the services table: the default view.
+// Verdict and KPI cards, the primary chart and the services table, each shown once the user adds it.
 // single: one execution — no summary paragraph, only the measurement warnings that matter.
-function ResultsOverview({model, onNavigate, single = false}: {model: OverviewModel; onNavigate: (target: InsightTarget) => void; single?: boolean}) {
+function ResultsOverview({model, onNavigate, show, single = false}: {model: OverviewModel; onNavigate: (target: InsightTarget) => void; show: (part: PageSection) => boolean; single?: boolean}) {
   const cards = useMemo(() => kpiCards({runLevel: model.runLevel, comparisons: model.comparisons, baseline: model.baseline, slo: model.slo}), [model.runLevel, model.comparisons, model.baseline, model.slo])
   const resources = useMemo(() => resourceCards(model.groups, model.resources), [model.groups, model.resources])
   // Several variants: the strongest significant difference sits right after the first finding.
@@ -222,16 +239,17 @@ function ResultsOverview({model, onNavigate, single = false}: {model: OverviewMo
     return [...model.insights.slice(0, 1), ...differences.slice(0, 1), ...model.insights.slice(1), ...differences.slice(1)]
   }, [model.insights, model.comparisonVerdict, model.groups.length, cards])
   const panels = useMemo(() => primaryPanels({groups: model.groups, plot: model.plot, slo: model.slo}), [model.groups, model.plot, model.slo])
-  const headline = useMemo(() => timelineHeadline({groups: model.groups, plot: model.plot, slo: model.slo}), [model.groups, model.plot, model.slo])
   const [group, setGroup] = useState<string | undefined>(model.groups[0]?.id)
   const activeGroup = model.groups.some(item => item.id === group) ? group : model.groups[0]?.id
   const services = useMemo(() => model.services(model.groups.length > 1 ? activeGroup : undefined), [model, activeGroup])
   const scope = model.groups.length > 1 ? activeGroup : undefined
   return <>
-    {single ? <QualityLine notices={model.notices} /> : <VerdictStrip insights={insights} notices={model.notices} onNavigate={onNavigate} />}
-    <KpiCards cards={cards} provenance={model.provenance} resources={resources} />
-    <PrimaryChart panels={panels} subtitle={model.subtitle} title={headline} />
-    {(services.length > 0 || model.groups.length > 1) && <ServicesTable services={services} groups={model.groups} group={activeGroup} onGroup={setGroup} note={model.servicesNote}
+    {show('summary') && <>
+      {single ? <QualityLine notices={model.notices} /> : <VerdictStrip insights={insights} notices={model.notices} onNavigate={onNavigate} />}
+      <KpiCards cards={cards} provenance={model.provenance} resources={resources} />
+    </>}
+    {show('timeline') && <PrimaryChart panels={panels} subtitle={model.subtitle} />}
+    {show('services') && (services.length > 0 || model.groups.length > 1) && <ServicesTable services={services} groups={model.groups} group={activeGroup} onGroup={setGroup} note={model.servicesNote}
       trend={model.serviceTrend ? service => model.serviceTrend!(scope, service) : undefined}
       detail={model.serviceDetail ? service => model.serviceDetail!(scope, service) : undefined} />}
   </>
@@ -256,20 +274,9 @@ function ExperimentResultsView({artifacts, experiments, operations, workspaces, 
   const [saving, setSaving] = useState(false)
   const [printPending, setPrintPending] = useState(false)
   const [activeExperiment, setActiveExperiment] = useState<string | null>(focusedExperiment?.id ?? null)
-  const {sections, toggle: toggleSection, navigate, jump} = useSections()
+  const sectionState = useSections()
+  const {sections, toggle: toggleSection} = sectionState
   const [studio, setStudio] = useState<StudioRequest | null>(null)
-  // Figures kept on this page with KubeStudio; a deleted one can be restored once.
-  const savedFigures = useSavedFigures(`experiment:${focusedExperiment?.id ?? 'selection'}`)
-  const [deletedFigure, setDeletedFigure] = useState<{figure: SavedFigure; index: number}>()
-  const keepFigure = (figure: Omit<SavedFigure, 'id'>, id?: string): SavedFigure => {
-    if (!id) return savedFigures.add(figure)
-    savedFigures.update({...figure, id})
-    return {...figure, id}
-  }
-  const deleteFigure = (figure: SavedFigure) => {
-    setDeletedFigure({figure, index: savedFigures.figures.findIndex(item => item.id === figure.id)})
-    savedFigures.remove(figure.id)
-  }
   const chartMode = useChartMode()
   const [runTab, setRunTab] = useState('summary')
   const [initialized, setInitialized] = useState(Boolean(focusedExperiment))
@@ -529,13 +536,12 @@ function ExperimentResultsView({artifacts, experiments, operations, workspaces, 
   const pilotCount = activeRun ? 0 : executedPilotCount(experiment)
   const methods = useMemo(() => sections.environment ? methodsParagraph({experiment: statsExperiment, datasets: displayed, metrics: statisticsMetrics, configurations: comparison?.sourceConfigurations, pilots: pilotCount, comparison: multipleVariants ? {familySize: comparisonRows[0]?.familySize ?? 0, mode: comparisonOptions.mode, baseline: statsExperiment?.variants.find(variant => variant.id === comparisonOptions.baseline)?.alias || statsExperiment?.variants.find(variant => variant.id === comparisonOptions.baseline)?.name} : undefined}) : '', [sections.environment, statsExperiment, displayed, statisticsMetrics, pilotCount, comparisonRows, comparisonOptions])
   const placementDatasets = activeRun ? displayed.filter(item => item.artifact.id === activeRun.trial.resultArtifactId) : displayed
-  const heatmap = !comparison && focusedExperiment && (activeRun || focusedExperiment.kind !== 'suite') && placementDatasets.some(item => item.dataset.spec.placement) ? <PlacementHeatmap datasets={placementDatasets.map(item => item.dataset)} canvasHeight={465} /> : undefined
+  const heatmap = !comparison && focusedExperiment && (activeRun || focusedExperiment.kind !== 'suite') && placementDatasets.some(item => item.dataset.spec.placement) ? <PlacementHeatmap datasets={placementDatasets.map(item => item.dataset)} /> : undefined
   const locust = useMemo(() => locustGroups(displayed, variantOf), [displayed, statsExperiment])
   const fidelityRows = useMemo(() => displayed.map(item => ({label: item.label, fidelity: loadFidelity(item)})), [displayed])
-  // Needed by KubeStudio and by the figures kept on the page.
-  const figuresShown = savedFigures.figures.length > 0
+  // What the charts and KubeStudio draw from.
   const studioData = useMemo((): StudioData | undefined => {
-    if (!(studio || figuresShown) || !displayed.length) return undefined
+    if (!displayed.length) return undefined
     const plotted = metrics.filter(metric => !['scheduler.pod_scheduling_latency', 'scheduler.cycle_duration', 'descheduler.cycle_duration', 'descheduler.evictions'].includes(metric))
     const serviceCache = new Map<string, {rows: ServiceRow[]}>()
     return {
@@ -546,13 +552,10 @@ function ExperimentResultsView({artifacts, experiments, operations, workspaces, 
       services: metric => {if (!serviceCache.has(metric)) serviceCache.set(metric, serviceMetricStatistics(displayed, metric, overviewExperiment)); return serviceCache.get(metric)},
       placement: heatmap, xy: xySource, profile: sharedLoadProfile((overviewExperiment?.variants ?? []).map(variant => variant.configuration as Record<string, unknown> | undefined))
     }
-  }, [Boolean(studio), figuresShown, displayed, metrics, plot, provenance, overviewExperiment, xySource])
-  const byService = useCallback((metric: string) => {
-    if (!perServiceMetrics.includes(metric)) return undefined
-    const services = [...new Set(serviceMetricStatistics(displayed, metric, overviewExperiment).rows.map(row => row.service))]
-    const mean = (series: AggregateSeries) => series.points.reduce((sum, point) => sum + point.value, 0) / Math.max(1, series.points.length)
-    return services.map(service => serviceCurve(displayed, metric, service, overviewExperiment)[0] && {...serviceCurve(displayed, metric, service, overviewExperiment)[0], label: service}).filter((item): item is AggregateSeries => Boolean(item)).sort((a, b) => mean(b) - mean(a))
-  }, [displayed, overviewExperiment])
+  }, [displayed, metrics, plot, provenance, overviewExperiment, xySource])
+  // Each user's charts for this experiment (or saved comparison); a free selection of runs is not kept.
+  const chartsScope: LayoutScope | undefined = focusedExperiment ? {kind: focusedExperiment.kind === 'comparison' ? 'comparisons' : 'experiments', id: focusedExperiment.id} : undefined
+  const charts = useResultsLayout(chartsScope, studioData, session.csrfToken)
   const callChain = displayed.some(item => hasCallChainData(item.dataset))
   const groupsForStudio = overview?.groups ?? []
   const seriesNotes = useMemo(() => colorNotes(overview?.groups), [overview])
@@ -564,7 +567,8 @@ function ExperimentResultsView({artifacts, experiments, operations, workspaces, 
     return run ? {name: `${run.variant.alias || run.variant.name} · ${trialLabel(run.trial)}`, item: displayed[0]} : undefined
   }, [focusedExperiment, comparison, displayed, activeRun?.trial.id, focusedRuns.length])
   const hasPlacement = Boolean(activeRun && !comparison && placementDatasets.some(item => item.dataset.spec.placement))
-  const links = sectionLinks({overview: Boolean(overview), figure: Boolean(overview), services: Boolean(overview), endpoints: locust.length > 0, callchain: callChain, statistics: true, environment: true, placement: hasPlacement, metrics: true})
+  const pageAvailable: PageSection[] = [...(overview ? ['summary', 'timeline', 'services'] as const : []), ...(locust.length ? ['endpoints'] as const : []), ...(callChain ? ['callchain'] as const : []), 'statistics', 'environment', ...(hasPlacement ? ['placement'] as const : [])]
+  const page = usePageSections(charts, pageAvailable, printPending, sectionState)
   return <ShowEverything.Provider value={printPending}><SeriesNotesContext.Provider value={seriesNotes}><div className="results-page">
     {confirmationDialog}
     <header className="page-header" id="results-top">{focusedExperiment && onBack && <DetailBreadcrumb parent={comparison ? 'Comparisons' : 'Experiments'} current={focusedExperiment.name} back={onBack} />}
@@ -580,7 +584,7 @@ function ExperimentResultsView({artifacts, experiments, operations, workspaces, 
           {!comparison && focusedExperiment?.status === 'initialized' && canManage && !stopRequested && <button className="button primary" disabled={startingTraffic} onClick={startTraffic}>{startingTraffic ? 'Starting…' : 'Start'}</button>}
           {!comparison && focusedExperiment && canManage && canStop && <button className="button danger" disabled={stopping || stopRequested} onClick={stopExperiment}>{stopping || stopRequested ? `Stopping ${stopLabel}…` : `Stop ${stopLabel}`}</button>}
           {!comparison && focusedExperiment && <ResourceSharing kind="experiments" id={focusedExperiment.id} name={focusedExperiment.name} ownerUserId={focusedExperiment.ownerUserId} session={session} changed={changed} />}
-          {displayed.length > 0 && <button type="button" className="button secondary" title="Open KubeStudio to build a publication figure" onClick={() => setStudio({})}><KubeStudioMark size={18} className="kubestudio-entry" />Create figure</button>}
+          {displayed.length > 0 && <button type="button" className="button secondary" title="Open KubeStudio to build a publication figure" onClick={() => setStudio({choose: true})}><KubeStudioMark size={18} className="kubestudio-entry" />Create figure</button>}
           {displayed.length > 0 && <HeaderMenu label="Export" icon={<ActionIcon name="download" />}>{close => <ExportPanel experiment={statsExperiment} savedFigures={!comparison} datasets={displayed} csv={() => statisticsCSV(displayed, statisticsMetrics, statsExperiment)} comparisonRows={comparisonRows} onPrint={() => {close(); toggleSection('statistics', true); setPrintPending(true)}} />}</HeaderMenu>}
           {!comparison && focusedExperiment && canManage && <HeaderMenu label="" icon={<><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><circle cx="3" cy="8" r="1.4" /><circle cx="8" cy="8" r="1.4" /><circle cx="13" cy="8" r="1.4" /></svg><span className="visually-hidden">More actions</span></>} buttonClass="icon-button more-actions">{close => <div className="menu-list"><button type="button" className="menu-item danger" disabled={deleting || !isTerminalExperiment(focusedExperiment.status)} title={isTerminalExperiment(focusedExperiment.status) ? undefined : `Stop this ${stopLabel} before deleting it`} onClick={() => {close(); void removeExperiment()}}><ActionIcon name="delete" />{deleting ? 'Deleting…' : `Delete ${stopLabel}`}</button></div>}</HeaderMenu>}
           {!focusedExperiment && <div className="results-count" aria-label={`${selectable.length} datasets`}><strong>{selectable.length}</strong><span>datasets</span></div>}
@@ -618,34 +622,30 @@ function ExperimentResultsView({artifacts, experiments, operations, workspaces, 
             <div><h3>{experiment?.name ?? displayed[0].label}</h3><p>{displayed.length} execution{displayed.length === 1 ? '' : 's'} · {metrics.length} metric{metrics.length === 1 ? '' : 's'}</p></div>
             <div className="results-heading-actions"><button className="button primary" disabled={selected.length < 2} onClick={() => setSaving(true)}>Save comparison</button></div>
           </div>}
-          <SectionNav links={links} onJump={jump} top="results-top" />
+          <SectionNav links={page.links} onJump={sectionState.jump} top="results-top" />
           <div id="results-overview" className="section-anchor" />
-          {singleRun && <RunFacts item={singleRun.item} name={singleRun.name} />}
-          {overview && <ResultsOverview key={activeRun?.trial.id ?? 'all'} model={overview} onNavigate={navigate} single={Boolean(singleRun)} />}
-          {overview && <ResultFigures figures={savedFigures.figures} data={studioData} groups={groupsForStudio} stored={savedFigures.stored}
-            onAdd={() => setStudio({})} onEdit={figure => setStudio({figure})} onDelete={deleteFigure}
-            deleted={deletedFigure?.figure.name} onUndo={() => {if (deletedFigure) savedFigures.restore(deletedFigure.figure, deletedFigure.index); setDeletedFigure(undefined)}} />}
+          {singleRun && page.show('summary') && <RunFacts item={singleRun.item} name={singleRun.name} />}
+          {overview && <ResultsOverview key={activeRun?.trial.id ?? 'all'} model={overview} onNavigate={page.navigate} show={page.show} single={Boolean(singleRun)} />}
+          {overview && <ResultCharts items={charts.items} data={studioData} groups={groupsForStudio} settings={figureSettings} loading={charts.loading} customized={charts.customized} error={charts.error}
+            sections={pageAvailable} shown={page.shown} onToggleSection={page.toggle}
+            onChange={charts.change} onReset={charts.reset} onAdd={() => setStudio({choose: true})} onEdit={item => setStudio({figure: item})} />}
           <div className="results-sections" role="region" aria-label="Details">
-            {locust.length > 0 && <Disclosure id="endpoints" title="Endpoints" summary={`${locust.reduce((total, group) => total + group.rows.filter(row => !row.aggregated).length, 0)} measured by Locust`} open={Boolean(sections.endpoints)} onToggle={open => toggleSection('endpoints', open)}><LocustSummaryPanel groups={locust} /></Disclosure>}
-            {callChain && <Disclosure id="callchain" title="Call chain" summary="calls per request, predicted against measured" open={Boolean(sections.callchain)} onToggle={open => toggleSection('callchain', open)}><CallChainPanel datasets={displayed} /></Disclosure>}
-            <Disclosure id="statistics" title="Statistics" summary={multipleVariants ? 'comparison tests, effective sample size, CSV' : 'per-execution summaries, effective sample size, CSV'} open={Boolean(sections.statistics)} onToggle={open => toggleSection('statistics', open)}>
+            {page.show('endpoints') && <Disclosure id="endpoints" title="Endpoints" summary={`${locust.reduce((total, group) => total + group.rows.filter(row => !row.aggregated).length, 0)} endpoints`} open={Boolean(sections.endpoints)} onToggle={open => toggleSection('endpoints', open)}><LocustSummaryPanel groups={locust} /></Disclosure>}
+            {page.show('callchain') && <Disclosure id="callchain" title="Call chain" open={Boolean(sections.callchain)} onToggle={open => toggleSection('callchain', open)}><CallChainPanel datasets={displayed} /></Disclosure>}
+            {page.show('statistics') && <Disclosure id="statistics" title="Statistics" open={Boolean(sections.statistics)} onToggle={open => toggleSection('statistics', open)}>
               <ExperimentStatistics datasets={displayed} metrics={statisticsMetrics} experiment={statsExperiment} provenance={provenance} comparisonRows={comparisonRows} comparisonOptions={comparisonOptions} setComparisonOptions={setComparisonOptions} fidelityRows={fidelityRows} />
-            </Disclosure>
-            <Disclosure id="environment" title="Environment & methods" summary="cluster, versions, windows and a methods paragraph" open={Boolean(sections.environment)} onToggle={open => toggleSection('environment', open)}>
-              <RunContextPanel context={runContextSummary(displayed)} /><MethodsPanel text={methods} />
-            </Disclosure>
-            {hasPlacement && <Disclosure id="placement" title="Placement" summary="pod placement replay and zone heatmap" open={Boolean(sections.placement)} onToggle={open => toggleSection('placement', open)}>
-              <PlacementReplay datasets={placementDatasets} />
-              {heatmap && <div className="chart-grid figure-grid">{heatmap}</div>}
             </Disclosure>}
-            <Disclosure id="metrics" title="All metrics" summary={`${metrics.length} recorded, plotted on request`} open={Boolean(sections.metrics)} onToggle={open => toggleSection('metrics', open)}>
-              <AllMetrics metrics={metrics} plot={plot} byService={byService} groups={overview?.groups ?? []} provenance={provenance} onFigure={metric => setStudio({kind: 'timeseries', metric})} xy={xySource} onXYFigure={xy => setStudio({kind: 'xy', xy})} />
-            </Disclosure>
+            {page.show('environment') && <Disclosure id="environment" title="Environment & methods" open={Boolean(sections.environment)} onToggle={open => toggleSection('environment', open)}>
+              <RunContextPanel context={runContextSummary(displayed)} /><MethodsPanel text={methods} />
+            </Disclosure>}
+            {page.show('placement') && <Disclosure id="placement" title="Placement" open={Boolean(sections.placement)} onToggle={open => toggleSection('placement', open)}>
+              <PlacementReplay datasets={placementDatasets} />
+            </Disclosure>}
           </div>
         </>}
       </div>
     </div>}
-    {studio && <KubeStudio open onClose={() => setStudio(null)} request={studio} data={studioData} groups={groupsForStudio} settings={figureSettings} onSettings={setFigureSettings} storageKey={`experiment:${focusedExperiment?.id ?? 'selection'}`} onKeep={keepFigure} onSave={focusedExperiment && !comparison && focusedExperiment.kind !== 'comparison' ? async ({metric, format, bytes}) => {
+    {studio && <KubeStudio open onClose={() => setStudio(null)} request={studio} data={studioData} groups={groupsForStudio} settings={figureSettings} onSettings={setFigureSettings} storageKey={`experiment:${focusedExperiment?.id ?? 'selection'}`} onKeep={charts.keep} onSave={focusedExperiment && !comparison && focusedExperiment.kind !== 'comparison' ? async ({metric, format, bytes}) => {
       await request<ExperimentFigure>(`/experiments/${focusedExperiment.id}/figures?metric=${encodeURIComponent(metric)}&format=${format}`, {method: 'POST', headers: {'Content-Type': 'application/pdf', 'X-KubePhos-Source-Artifacts': displayed.map(item => item.artifact.id).slice(0, 20).join(',')}, body: new Blob([bytes.buffer as ArrayBuffer])}, session.csrfToken)
     } : undefined} />}
     {!comparison && <SaveExperimentDialog open={saving} close={() => setSaving(false)} selected={selected.map(id => availableByID.get(id)).filter((item): item is Artifact => Boolean(item))} operations={operations} workspaces={workspaces} session={session} changed={changed} />}
@@ -884,7 +884,8 @@ function ComparisonResults({artifacts, experiment, comparison, onBack, session}:
   const data = state.result
   const [options, setOptions] = useState(initialOptions)
   const [figureSettings, setFigureSettings] = useFigureSettings(`comparison:${experiment.id}`)
-  const {sections, toggle: toggleSection, navigate, jump} = useSections()
+  const sectionState = useSections()
+  const {sections, toggle: toggleSection} = sectionState
   const [studio, setStudio] = useState<StudioRequest | null>(null)
   const chartMode = useChartMode()
   const [printPending, setPrintPending] = useState(false)
@@ -943,14 +944,18 @@ function ComparisonResults({artifacts, experiment, comparison, onBack, session}:
     metrics: data.metrics.filter(metric => !isControlMetric(metric)), level: 'mean', provenance, services: () => undefined,
     runs: ({metric}) => plot(metric).map(series => ({runID: series.artifactID, runLabel: series.label, seriesID: series.artifactID, seriesLabel: series.label, color: series.color, series}))
   }, [data, plot, provenance])
-  const studioData = useMemo((): StudioData | undefined => !studio || !data?.complete ? undefined : {
+  const studioData = useMemo((): StudioData | undefined => !data?.complete ? undefined : {
     metrics: data.metrics, plot, provenance, omitSLO: data.omitSLO,
     runLevel: (data.runLevel ?? []).filter(entry => data.metrics.includes(entry.metric)), ladder: data.ladder ?? [], fidelity: data.fidelity ?? [],
     serviceMetrics: data.metrics.filter(metric => serviceStatisticsMetrics.includes(metric) && data.services?.[metric]?.rows.length),
     services: metric => data.services?.[metric], xy: xySource, profile: sharedLoadProfile(Object.values(comparison?.sourceConfigurations ?? {}) as Array<Record<string, unknown> | undefined>)
-  }, [Boolean(studio), data, plot, provenance, xySource])
+  }, [data, plot, provenance, xySource])
+  // A saved comparison's result carries the comparison id.
+  const charts = useResultsLayout({kind: 'comparisons', id: experiment.id}, studioData, session.csrfToken)
   const rawData = artifacts.map(artifact => ({id: artifact.id, label: experiment.variants.find(variant => variant.trials.some(trial => trial.resultArtifactId === artifact.id))?.alias || artifact.name}))
-  const links = data ? sectionLinks({overview: true, figure: Boolean(data.complete), services: true, sources: Boolean(comparison?.sources), endpoints: (data.locust ?? []).length > 0, statistics: true, environment: Boolean(data.context), metrics: true}) : []
+  // Sources are there while the results are still preparing.
+  const available: PageSection[] = [...(comparison?.sources ? ['sources'] as const : []), ...(!data ? [] : ['summary', ...(data.complete ? ['timeline'] as const : []), 'services', ...((data.locust ?? []).length ? ['endpoints'] as const : []), 'statistics', ...(data.context ? ['environment'] as const : [])] as const)]
+  const page = usePageSections(charts, available, printPending, sectionState)
   const comparisonViews: StatisticsView[] = data ? [
     {id: 'comparison', title: 'Comparison', metrics: true, render: match => <StrategyComparison datasets={[]} metrics={data.statisticsMetrics.filter(match)} experiment={experiment} prepared={data.columns} provenance={provenance} />},
     {id: 'differences', title: 'Differences', metrics: true, render: match => <ComparisonTable rows={rows} variants={analysis.variants.map(variant => ({id: variant.id, label: variant.alias || variant.name}))} baseline={options.baseline} mode={options.mode} onChange={setOptions} provenance={provenance} title="Differences between experiments" match={match} />},
@@ -962,7 +967,7 @@ function ComparisonResults({artifacts, experiment, comparison, onBack, session}:
         <div className="results-title"><h2 tabIndex={-1}>{experiment.name}</h2><ResultsMeta experiment={analysis} datasets={[]} /></div>
         <div className="results-detail-actions">
           {comparison?.actions}
-          {data?.complete && <button type="button" className="button secondary" title="Open KubeStudio to build a publication figure" onClick={() => setStudio({})}><KubeStudioMark size={18} className="kubestudio-entry" />Create figure</button>}
+          {data?.complete && <button type="button" className="button secondary" title="Open KubeStudio to build a publication figure" onClick={() => setStudio({choose: true})}><KubeStudioMark size={18} className="kubestudio-entry" />Create figure</button>}
           {data && <HeaderMenu label="Export" icon={<ActionIcon name="download" />}>{close => <ExportPanel datasets={[]} csv={() => data.csv} comparisonRows={rows} savedFigures={false} rawData={rawData} onPrint={() => {close(); toggleSection('statistics', true); setPrintPending(true)}} />}</HeaderMenu>}
         </div>
       </div>
@@ -970,23 +975,23 @@ function ComparisonResults({artifacts, experiment, comparison, onBack, session}:
     {comparison?.notice}
     <ResourceAttribution resource={experiment} editable />
     <ErrorFeedback message={state.error} />
-    {data && <SectionNav links={links} onJump={jump} top="results-top" />}
+    {data && <SectionNav links={page.links} onJump={sectionState.jump} top="results-top" />}
     {state.error ? <div className="results-placeholder"><button className="button secondary" onClick={() => setRevision(value => value + 1)}>Retry loading results</button></div> : !data ? <div className="results-placeholder" role="status"><span className="results-spinner" /><strong>{state.progress}</strong></div> : <div className="results-content">
       <div id="results-overview" className="section-anchor" />
       {data.warnings.map(warning => <div key={warning} className="validation-item warning">{warning}</div>)}
-      {overview && <ResultsOverview model={overview} onNavigate={navigate} />}
+      {overview && <ResultsOverview model={overview} onNavigate={page.navigate} show={page.show} />}
+      {overview && (data.complete ? <ResultCharts items={charts.items} data={studioData} groups={overview.groups} settings={figureSettings} loading={charts.loading} customized={charts.customized} error={charts.error}
+        sections={available} shown={page.shown} onToggleSection={page.toggle}
+        onChange={charts.change} onReset={charts.reset} onAdd={() => setStudio({choose: true})} onEdit={item => setStudio({figure: item})} /> : <div className="results-placeholder" role="status"><span className="results-spinner" /><strong>{state.progress ?? 'Preparing plots…'}</strong></div>)}
     </div>}
     <div className="results-sections" role="region" aria-label="Details">
-      {comparison?.sources && <Disclosure id="sources" title="Sources" summary={`${experiment.variants.length} source experiment${experiment.variants.length === 1 ? '' : 's'}`} open={Boolean(sections.sources)} onToggle={open => toggleSection('sources', open)}>{comparison.sources}</Disclosure>}
-      {data && (data.locust ?? []).length > 0 && <Disclosure id="endpoints" title="Endpoints" summary="per-endpoint statistics from Locust" open={Boolean(sections.endpoints)} onToggle={open => toggleSection('endpoints', open)}><LocustSummaryPanel groups={data.locust as LocustGroup[]} /></Disclosure>}
-      {data && <Disclosure id="statistics" title="Statistics" summary="Holm-adjusted tests, effect sizes, CSV" open={Boolean(sections.statistics)} onToggle={open => toggleSection('statistics', open)}>
+      {comparison?.sources && page.show('sources') && <Disclosure id="sources" title="Sources" summary={`${experiment.variants.length} experiment${experiment.variants.length === 1 ? '' : 's'}`} open={Boolean(sections.sources)} onToggle={open => toggleSection('sources', open)}>{comparison.sources}</Disclosure>}
+      {data && page.show('endpoints') && <Disclosure id="endpoints" title="Endpoints" open={Boolean(sections.endpoints)} onToggle={open => toggleSection('endpoints', open)}><LocustSummaryPanel groups={data.locust as LocustGroup[]} /></Disclosure>}
+      {data && page.show('statistics') && <Disclosure id="statistics" title="Statistics" open={Boolean(sections.statistics)} onToggle={open => toggleSection('statistics', open)}>
         <StatisticsTabs views={comparisonViews} />
       </Disclosure>}
-      {data?.context && <Disclosure id="environment" title="Environment & methods" summary="cluster, versions, windows and a methods paragraph" open={Boolean(sections.environment)} onToggle={open => toggleSection('environment', open)}><RunContextPanel context={data.context as RunContextSummary} /><MethodsPanel text={methods} /></Disclosure>}
-      {data && <Disclosure id="metrics" title="All metrics" summary={`${data.metrics.length} recorded, plotted on request`} open={Boolean(sections.metrics)} onToggle={open => toggleSection('metrics', open)}>
-        {data.complete ? <AllMetrics metrics={data.metrics} plot={plot} groups={overview?.groups ?? []} provenance={provenance} onFigure={metric => setStudio({kind: 'timeseries', metric})} xy={xySource} onXYFigure={xy => setStudio({kind: 'xy', xy})} /> : <div className="results-placeholder" role="status"><span className="results-spinner" /><strong>{state.progress ?? 'Preparing plots…'}</strong></div>}
-      </Disclosure>}
+      {data?.context && page.show('environment') && <Disclosure id="environment" title="Environment & methods" open={Boolean(sections.environment)} onToggle={open => toggleSection('environment', open)}><RunContextPanel context={data.context as RunContextSummary} /><MethodsPanel text={methods} /></Disclosure>}
     </div>
-    {studio && <KubeStudio open onClose={() => setStudio(null)} request={studio} data={studioData} groups={overview?.groups ?? []} settings={figureSettings} onSettings={setFigureSettings} storageKey={`comparison:${experiment.id}`} />}
+    {studio && <KubeStudio open onClose={() => setStudio(null)} request={studio} data={studioData} groups={overview?.groups ?? []} settings={figureSettings} onSettings={setFigureSettings} storageKey={`comparison:${experiment.id}`} onKeep={charts.keep} />}
   </div></SeriesNotesContext.Provider></ShowEverything.Provider>
 }

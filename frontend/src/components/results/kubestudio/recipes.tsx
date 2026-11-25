@@ -1,4 +1,4 @@
-import {useEffect, useId, useRef, useState, type ReactNode} from 'react'
+import {useEffect, useId, useRef, type ReactNode} from 'react'
 import {cumulativeCounterMetrics, isControlMetric, type AggregateSeries} from '../../../resultsData'
 import {defaultSpec, type FigureSpec} from './figureSpec'
 import {metricTitle} from '../format'
@@ -192,10 +192,11 @@ export const customForms: Array<{kind: CustomForm; label: string; hint: string}>
 ]
 
 // Top-bar chart switcher: the current chart's name; opens a popover with a custom chart (pick
-// the form, then X and Y) and the starting points built from this experiment's data.
-export function FigureSwitcher({items, active, prefix = '', label, onPick, forms, onCustom}: {items: SwitcherItem[]; active?: FigureKind; prefix?: string; label?: string; onPick: (item: SwitcherItem) => void; forms: CustomForm[]; onCustom: (form: CustomForm) => void}) {
+// the form, then X and Y) and the starting points built from this experiment's data. KubeStudio
+// also opens it to add a chart (`adding`): the type comes first, the data after.
+export function FigureSwitcher({items, active, prefix = '', label, onPick, forms, onCustom, open, onOpenChange, adding}: {items: SwitcherItem[]; active?: FigureKind; prefix?: string; label?: string; onPick: (item: SwitcherItem) => void; forms: CustomForm[]; onCustom: (form: CustomForm) => void; open: boolean; onOpenChange: (open: boolean) => void; adding?: string}) {
   const id = useId()
-  const [open, setOpen] = useState(false)
+  const setOpen = onOpenChange
   const trigger = useRef<HTMLButtonElement>(null)
   const panel = useRef<HTMLDivElement>(null)
   const found = items.find(item => item.kind === active)
@@ -213,7 +214,8 @@ export function FigureSwitcher({items, active, prefix = '', label, onPick, forms
       {current && <KindIcon kind={current.kind} />}<span>{prefix}{current?.title ?? 'Choose a chart'}</span>
       <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><path d="m3 4.5 3 3 3-3" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" /></svg>
     </button>
-    {open && <div ref={panel} id={`${id}-panel`} className="ks-popover ks-switcher-panel" role="dialog" aria-label="Choose a figure" onKeyDown={event => {if (event.key === 'Escape') {event.preventDefault(); event.stopPropagation(); close()}}}>
+    {open && <div ref={panel} id={`${id}-panel`} className="ks-popover ks-switcher-panel" role="dialog" aria-label={adding ? `Add ${adding}: choose its type` : 'Choose a figure'} onKeyDown={event => {if (event.key === 'Escape') {event.preventDefault(); event.stopPropagation(); close()}}}>
+      {adding && <p className="ks-switcher-step">Add {adding}: first choose its type, then its X and Y on the right.</p>}
       {forms.length > 0 && <section className="ks-custom" aria-labelledby={`${id}-custom`}>
         <p className="ks-popover-title" id={`${id}-custom`}>Custom chart <span>— pick the form, then choose X and Y freely</span></p>
         <div className="ks-custom-forms">
@@ -225,7 +227,7 @@ export function FigureSwitcher({items, active, prefix = '', label, onPick, forms
       <p className="ks-popover-title">Starting points from this experiment <span>— fully editable</span></p>
       <ul className="ks-figure-list">
         {items.map(item => <li key={item.kind}>
-          <button type="button" className="ks-figure-item" data-kind={item.kind} aria-current={(item.kind === active && !label) || undefined} onClick={() => {setOpen(false); onPick(item)}}>
+          <button type="button" className="ks-figure-item" data-kind={item.kind} aria-current={(!adding && item.kind === active && !label) || undefined} onClick={() => {setOpen(false); onPick(item)}}>
             {item.thumb}
             <span><strong>{item.title}</strong><small>{item.description}</small></span>
           </button>

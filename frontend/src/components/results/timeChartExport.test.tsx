@@ -13,7 +13,7 @@ const panels: ChartPanel[] = [
   {id: 'pods', title: 'Ready pods', unit: 'replicas', series: [{id: 'p', label: 'Ready pods', color: 'rgb(213, 94, 0)', points: points([12, 15])}]}
 ]
 
-describe('Figure 1 download', () => {
+describe('Load and latency download', () => {
   it('flattens the on-screen panels into one standalone SVG with explicit colours', () => {
     const {container} = render(<TimeChart panels={panels} ariaLabel="Load" />)
     const svg = flattenTimeChart(container.querySelector('.time-chart') as HTMLElement, 'export', 'Load and latency')
@@ -28,9 +28,9 @@ describe('Figure 1 download', () => {
 
   it('exports through the shared exporter and removes the temporary SVG', async () => {
     const {container} = render(<TimeChart panels={panels} ariaLabel="Load" />)
-    await downloadTimeChart(container.querySelector('.time-chart') as HTMLElement, 'svg', {fileName: 'kubephos-figure-1', title: 'Figure 1'})
+    await downloadTimeChart(container.querySelector('.time-chart') as HTMLElement, 'svg', {fileName: 'kubephos-load-and-latency', title: 'Load and latency over time'})
     const [id, metric, format] = vi.mocked(exportChart).mock.calls[0]
-    expect([metric, format]).toEqual(['kubephos-figure-1', 'svg'])
+    expect([metric, format]).toEqual(['kubephos-load-and-latency', 'svg'])
     expect(document.getElementById(id)).toBeNull()
   })
 })

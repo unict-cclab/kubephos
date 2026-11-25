@@ -3,6 +3,7 @@ import {afterEach,expect,it,vi} from 'vitest'
 import {ResultsView} from './ResultsView'
 import {request} from '../api'
 import type {Artifact,Experiment,TimeSeriesDataset} from '../types'
+vi.mock('./results/kubestudio/resultsLayout', async () => (await import('../test/everySection')).everySection())
 vi.mock('../api',()=>({request:vi.fn()}))
 afterEach(cleanup)
 it('keeps replay execution-specific while exposing the aggregate heatmap in KubeStudio',async()=>{
@@ -24,7 +25,7 @@ it('keeps replay execution-specific while exposing the aggregate heatmap in Kube
  expect(screen.queryByLabelText('Placement replay')).not.toBeInTheDocument()
  fireEvent.click(await screen.findByRole('button',{name:'Create figure'}))
  const dialog=await screen.findByRole('dialog',{name:'KubeStudio'})
- fireEvent.click(within(dialog).getByRole('button',{name:/^Figure:/}))
+ // A new figure opens on the chart types.
  fireEvent.click(within(dialog).getByRole('dialog',{name:'Choose a figure'}).querySelector('[data-kind="placement"]')!)
  await within(dialog).findByRole('img',{name:'Application placement by zone heatmap'})
  expect(within(dialog).getByText('Mean replicas')).toBeInTheDocument()

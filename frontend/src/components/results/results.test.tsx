@@ -18,6 +18,7 @@ import {executedPilotCount, provenanceFor} from './runs'
 import {valueScale} from './scales'
 import {intervalText, RunStatisticsTable} from './StatisticsTables'
 
+vi.mock('./kubestudio/resultsLayout', async () => (await import('../../test/everySection')).everySection())
 vi.mock('../../api', () => ({request: vi.fn(async () => ({items: []}))}))
 vi.mock('../../charts', async original => ({...await original<typeof import('../../charts')>(), downloadBlob: vi.fn()}))
 afterEach(() => {cleanup(); vi.mocked(request).mockReset(); vi.mocked(downloadBlob).mockReset()})
@@ -341,7 +342,7 @@ describe('publication figures', () => {
 })
 
 describe('accessibility', () => {
-  it('keeps the overview, every disclosure section, All metrics and KubeStudio free of axe violations', async () => {
+  it('keeps the overview, every disclosure section, the charts and KubeStudio free of axe violations', async () => {
     const items = ['a1', 'a2', 'a3', 'b1', 'b2', 'b3'].map((id, index) => {
       const item = latencyRun(id, 10 + index)
       item.dataset.spec.locustSummary = locustSummary(1000, 1, 20 + index, {workerCpu: [{worker: 'w', maxPercent: 95, warnings: 1}]})
@@ -360,26 +361,29 @@ describe('accessibility', () => {
       expect({section, violations: results.violations.map(({id, nodes}) => ({id, targets: nodes.map(node => node.target)}))}).toEqual({section, violations: []})
     }
     await audit('Overview')
-    for (const section of ['Endpoints', 'Statistics', 'Environment & methods', 'All metrics']) {
+    for (const section of ['Endpoints', 'Statistics', 'Environment & methods']) {
       await openSection(section)
       await audit(section)
     }
     fireEvent.click(screen.getByRole('tab', {name: 'Differences'}))
     await screen.findByRole('table', {name: 'Differences between strategies'})
     await audit('Statistics, differences tab')
-    fireEvent.click(screen.getByRole('button', {name: 'P95 latency — client (Locust)'}))
-    fireEvent.click(within(screen.getByRole('region', {name: 'P95 latency — client (Locust)'})).getByRole('button', {name: 'View as table'}))
-    await audit('All metrics chart and table')
+    const charts = within(screen.getByRole('region', {name: 'Charts'}))
+    fireEvent.click(charts.getAllByRole('button', {name: /^Actions for /})[0])
+    expect(screen.getByRole('menu')).toBeInTheDocument()
+    await audit('Charts and a chart menu')
+    fireEvent.keyDown(screen.getByRole('menu'), {key: 'Escape'})
     fireEvent.click(screen.getByRole('button', {name: 'Create figure'}))
     const dialog = await screen.findByRole('dialog', {name: 'KubeStudio'})
     const pick = (kind: string) => {fireEvent.click(within(dialog).getByRole('button', {name: /^Figure:/})); fireEvent.click(within(dialog).getByRole('dialog', {name: 'Choose a figure'}).querySelector(`[data-kind="${kind}"]`)!)}
-    await audit('KubeStudio')
-    fireEvent.click(within(dialog).getByRole('button', {name: /^Figure:/}))
+    // A new figure opens on the chart types.
     await audit('KubeStudio figure switcher')
     fireEvent.click(within(dialog).getByRole('dialog', {name: 'Choose a figure'}).querySelector('[data-kind="fidelity"]')!)
     expect(within(dialog).getByRole('img', {name: 'Offered versus achieved request rate chart'})).toBeInTheDocument()
     pick('runlevel')
-    fireEvent.click(within(within(dialog).getByRole('navigation', {name: 'Layers'})).getByRole('button', {name: 'Y axis'}))
+    // Clicking the Y axis title selects the axis and opens its rename field.
+    fireEvent.click(dialog.querySelector('svg [data-select^="axis:left"] .axis-label')!)
+    expect(within(dialog).getByRole('textbox', {name: 'Y axis title'})).toHaveFocus()
     fireEvent.change(within(dialog).getByRole('combobox', {name: 'Metric'}), {target: {value: 'load.p95_response_time'}})
     expect(within(dialog).getByRole('img', {name: 'P95 latency — client (Locust) per repetition: individual repetitions with mean and 95% confidence interval'})).toBeInTheDocument()
     pick('ladder')

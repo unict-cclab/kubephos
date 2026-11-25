@@ -11,6 +11,7 @@ import {resourceCards, resourceRun, resourceSummary} from './resources'
 import {AcrossRunsTable, RunStatisticsTable, StatisticsTabs} from './StatisticsTables'
 import {provenanceFor} from './runs'
 
+vi.mock('./kubestudio/resultsLayout', async () => (await import('../../test/everySection')).everySection())
 vi.mock('../../api', () => ({request: vi.fn(async () => ({items: []}))}))
 afterEach(() => {cleanup(); vi.mocked(request).mockReset()})
 
@@ -92,7 +93,7 @@ describe('single execution overview', () => {
     render(<ResultsView artifacts={[item.artifact]} experiments={[experiment]} operations={[]} workspaces={[]} session={session} changed={async () => {}} openOperation={() => {}} focusedExperiment={experiment} />)
     await screen.findByRole('list', {name: 'Key results'})
     expect(screen.queryByRole('region', {name: 'Verdict'})).not.toBeInTheDocument()
-    expect(screen.queryByText('Summary')).not.toBeInTheDocument()
+    expect(screen.queryByRole('heading', {name: 'Summary'})).not.toBeInTheDocument()
     const line = screen.getByRole('group', {name: 'Measurement quality'})
     expect(line.querySelector('summary')).toHaveTextContent(/^Measurement note: Achieved request rate was 50.0% of the offered rate over the measured window$/)
     expect(screen.getByRole('list', {name: 'Resource usage'})).toBeInTheDocument()
@@ -129,7 +130,7 @@ describe('page navigation', () => {
   it('jumps to a section from the sticky bar, opening it, and highlights it', async () => {
     suite()
     const bar = await screen.findByRole('navigation', {name: 'Sections of the results'})
-    expect(within(bar).getAllByRole('link').map(link => link.textContent)).toEqual(['Overview', 'Fig. 1', 'Services', 'Statistics', 'Environment', 'All metrics'])
+    expect(within(bar).getAllByRole('link').map(link => link.textContent)).toEqual(['Summary', 'Load and latency', 'Services', 'Charts', 'Statistics', 'Environment'])
     expect(within(bar).getAllByRole('link').filter(link => link.getAttribute('aria-current') === 'location')).toHaveLength(1)
     const statistics = within(bar).getByRole('link', {name: 'Statistics'})
     expect(statistics).toHaveAttribute('href', '#section-statistics')

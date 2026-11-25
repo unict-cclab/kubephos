@@ -1,4 +1,4 @@
-import {useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode} from 'react'
+import {Fragment, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode} from 'react'
 import {downloadBlob, exportChart} from '../../../charts'
 import {ActionIcon} from '../../ActionIcon'
 import {ErrorFeedback, useErrorState} from '../../ToastRegion'
@@ -9,6 +9,7 @@ import type {OverviewGroup} from '../overview'
 import {defaultXYOptions, defaultXYSelection, type XYState} from '../xy'
 import {figureChecks, type CheckFix} from './checks'
 import {Chips, Group, LabelField, MoreGroup, SelectField, Stepper, Toggle} from './controls'
+import {ContextMenu, type MenuAnchor, type MenuItem} from './ContextMenu'
 import {ExportPopover, exportLabels, rememberedFormat, rememberFormat, type ExportAction} from './ExportPopover'
 import {matplotlibScript, pgfplotsSnippet} from './figureCode'
 import {unitSuffix, type ModelSeries} from './figureModel'
@@ -20,26 +21,27 @@ import {KubeStudioMark} from './KubeStudioMark'
 import {defaultLayout, layoutChoices, letters, maxCharts, newChartId, validLayout, type ChartLayout, type ChartState} from './layout'
 import {loadStudioMemory, saveStudioMemory} from './memory'
 import {buildRecipes, customForms, FigureSwitcher, KindIcon, kindLabels, smartTimeSeriesSpec, switcherItems, type CustomForm, type SwitcherItem} from './recipes'
-import type {SavedFigure} from './savedFigures'
+import type {ChartItem} from './resultsLayout'
 import {autoAnnotations, highlightShapes, parseKey, parseTarget, selectionKey, snap, targetKey, type Selection, type Shape, type Target} from './selection'
-import {AnnotationFields, annotationNames, AxisFields, AxisMetrics, NumberInput, newAnnotation, PaletteEditor, PresetsEditor, runNames, SecondY, SeriesProperties, SeriesSwatch, SpecActions, XYAxisPicker} from './SpecEditor'
+import {AnnotationFields, annotationExamples, annotationNames, AxisFields, AxisMetrics, NumberInput, newAnnotation, PaletteEditor, PresetsEditor, runNames, SecondY, SeriesProperties, SeriesSwatch, SpecActions, XYAxisPicker} from './SpecEditor'
 import type {FigureGeometry} from './SpecFigure'
 import './kubestudio.css'
 
 // KubeStudio: a Figma-like workspace for one publication image made of one to four charts.
 // It opens directly on the best chart for this experiment (or the last image edited). Left:
-// Layers, the outline of the image (charts, each with title, axes, series, legend,
-// annotations; caption), which is also how things are selected; centre: the image on paper
+// Layers, the outline of the image (charts, each with title, axes, series, legend and
+// lines), which is also how things are selected; centre: the image on paper
 // at its true printed size, clickable and draggable; right: the properties of the selection,
 // or of the page. Every change is undoable and autosaved; export lives in the top bar, with
 // "Add to results", which keeps the image on the experiment's results page.
 
-export interface StudioRequest {kind?: FigureKind; metric?: string; xy?: XYState; figure?: SavedFigure}
+// choose: open on the chart-type picker (a new figure from the results page).
+export interface StudioRequest {kind?: FigureKind; metric?: string; xy?: XYState; figure?: ChartItem; choose?: boolean}
 
 // Saves the exported PDF as an experiment figure (POST /experiments/{id}/figures).
 export type StudioSave = (figure: {metric: string; format: 'pdf'; bytes: Uint8Array}) => Promise<void>
 // Keeps the image on the results page (a new figure, or the one being edited when id is set).
-type StudioKeep = (figure: Omit<SavedFigure, 'id'>, id?: string) => SavedFigure
+type StudioKeep = (figure: Omit<ChartItem, 'id'>, id?: string) => ChartItem
 
 const studioName = 'KubeStudio'
 const creator = 'KubePhos KubeStudio'
@@ -74,7 +76,6 @@ export function KubeStudio({open, onClose, request, data, groups, settings, onSe
   const dialog = useRef<HTMLDialogElement>(null)
   const stage = useRef<HTMLDivElement>(null)
   const paper = useRef<HTMLDivElement>(null)
-  const captionRef = useRef<HTMLTextAreaElement>(null)
   const geometries = useRef<Record<string, FigureGeometry | undefined>>({})
   const geometryRefs = useRef<Record<string, {current: FigureGeometry | undefined}>>({})
   const geometryOf = (chart: string) => geometryRefs.current[chart] ??= {get current() {return geometries.current[chart]}, set current(value) {geometries.current[chart] = value}}
@@ -102,6 +103,13 @@ export function KubeStudio({open, onClose, request, data, groups, settings, onSe
   const [hidden, setHidden] = useState<string[]>(figure ? figure.hidden : remembered.hidden ?? [])
   const [keptId, setKeptId] = useState(figure?.id)
   const [selection, setSelection] = useState<Selection>()
+  // The chart-type picker: changing the selected chart, or choosing the type of a chart to add.
+  const [switcher, setSwitcher] = useState<'change' | 'add'>()
+  // The axis title being renamed on the figure, with where its field sits on the paper.
+  const [axisEdit, setAxisEdit] = useState<{chart: string; side: 'x' | 'left' | 'right'; panel: number; value: string; left: number; top: number; width: number}>()
+  const axisCancelled = useRef(false)
+  const choosing = useRef(Boolean(request.choose))
+  useEffect(() => {if (data && choosing.current) {choosing.current = false; setSwitcher('change')}}, [data])
   const [hoverKey, setHoverKey] = useState('')
   const [shapes, setShapes] = useState<{hover: Shape[]; selected: Shape[]; hoverChart?: string; selectedChart?: string}>({hover: [], selected: []})
   const [addingNote, setAddingNote] = useState<string>()
@@ -113,7 +121,10 @@ export function KubeStudio({open, onClose, request, data, groups, settings, onSe
   const [exportOpen, setExportOpen] = useState(false)
   const [format, setFormat] = useState<ExportAction>(() => rememberedFormat())
   const [help, setHelp] = useState(false)
-  const [drawer, setDrawer] = useState(false)
+  const [captionEditing, setCaptionEditing] = useState(false)
+  const [menu, setMenu] = useState<{at: MenuAnchor; chart?: string}>()
+  const [dragging, setDragging] = useState<string>()
+  const [dropOn, setDropOn] = useState<string>()
   const [dismissed, setDismissed] = useState<string[]>([])
   const [status, setStatus] = useState('')
   const [notice, setNotice] = useState<{text: string; undo?: boolean; at: number}>()
@@ -124,7 +135,7 @@ export function KubeStudio({open, onClose, request, data, groups, settings, onSe
   const announce = (text: string, undo = false) => {setStatus(text); setNotice({text, undo, at: Date.now()})}
   useEffect(() => {if (!notice) return; const timer = setTimeout(() => setNotice(undefined), notice.undo ? 6000 : 2400); return () => clearTimeout(timer)}, [notice])
   // The kept figure brings its own page style.
-  useEffect(() => {if (figure) onSettings(figure.settings)}, [])
+  useEffect(() => {if (figure?.settings) onSettings(figure.settings)}, [])
 
   // Undo / redo of everything the user edits (style settings live in the page).
   const history = useHistory({settings, charts, layout, sharedLegend, doc, hidden}, value => {
@@ -186,12 +197,13 @@ export function KubeStudio({open, onClose, request, data, groups, settings, onSe
   const page = imagePage(views, reports, settings, view => Boolean(isPublication(view.index)))
   const {currentOf, first, cellOf, width: pageWidth, height: pageHeight} = page
 
-  // Name, caption and methods of the whole image.
+  // Name, caption and methods of the whole image. The caption is the user's own, optional
+  // text (right-click › Add caption); exports fall back to the charts' own summaries.
   const titles = views.map(view => currentOf(view)?.title ?? (view.kind ? kindLabels[view.kind] : 'Chart'))
   const autoName = single ? titles[0] ?? 'Figure' : titles.join(' · ')
   const name = doc.name ?? autoName
-  const autoCaption = single ? first?.caption ?? '' : views.map(view => `${view.letter} ${currentOf(view)?.caption ?? ''}`.trim()).join(' ')
-  const caption = doc.caption ?? autoCaption
+  const summary = single ? first?.caption ?? '' : views.map(view => `${view.letter} ${currentOf(view)?.caption ?? ''}`.trim()).join(' ')
+  const caption = doc.caption ?? ''
   const methods = [...new Set(views.map(view => currentOf(view)?.methods ?? '').filter(Boolean))].join(' ')
 
   // Selection: resolved against the current charts and their elements.
@@ -248,7 +260,7 @@ export function KubeStudio({open, onClose, request, data, groups, settings, onSe
 
   // ---------------------------------------------------------------------------------------
   // Export.
-  const description = [caption, methods && `Methods and provenance: ${methods}`].filter(Boolean).join('\n\n')
+  const description = [caption || summary, methods && `Methods and provenance: ${methods}`].filter(Boolean).join('\n\n')
   const fileName = `kubephos-${slug(name)}`
   const savedMetric = (() => {const view = views[0]; return !view ? 'figure' : view.kind === 'timeseries' || view.kind === 'runlevel' || view.kind === 'services' ? view.metric : view.kind === 'xy' ? view.xy.y.metric : view.kind === 'ladder' ? 'load.p95_response_time' : view.kind === 'fidelity' ? 'load.achieved_rps' : 'placement'})()
   const exportOptions = {title: name, caption: description, fileName, creator}
@@ -378,13 +390,6 @@ export function KubeStudio({open, onClose, request, data, groups, settings, onSe
     setPresets(next)
     if (!savePresets(next)) setError('The preset is kept for this session only: browser storage is not available.')
   }
-  const copyCaption = async () => {
-    setError('')
-    try {
-      await navigator.clipboard.writeText(caption)
-      announce('Caption copied.')
-    } catch {setError('Could not copy the caption: the clipboard is not available. Select the caption text instead.')}
-  }
 
   // ---------------------------------------------------------------------------------------
   // Charts: recipes, custom forms, add / duplicate / move / remove.
@@ -395,25 +400,36 @@ export function KubeStudio({open, onClose, request, data, groups, settings, onSe
     setSelection(view && count > 1 ? {chart: next.id} : undefined)
     announce(`${item.title}. Click any part of the chart to change it.`, true)
   }
-  // A custom chart keeps the current data where it makes sense: Y stays Y.
-  const applyForm = (view: ChartView | undefined, form: CustomForm) => {
+  // A custom chart keeps the current data where it makes sense: Y stays Y. A new chart starts
+  // from `prefer`, the next metric the image does not show yet.
+  const customChart = (view: ChartView | undefined, form: CustomForm, prefer?: string): ChartState | undefined => {
     if (!data) return
-    const current = view?.kind === 'xy' ? view.xy.y.metric : view?.metric ?? ''
+    const current = prefer ?? (view?.kind === 'xy' ? view.xy.y.metric : view?.metric ?? '')
     const xyMetrics = data.xy?.metrics ?? []
     const optionsFor = metricOptionsFor(form)
     const metric = optionsFor.includes(current) ? current : form === 'services' ? optionsFor.find(item => data.services(item)?.rows.length) ?? optionsFor[0] ?? '' : optionsFor.includes('load.p95_response_time') ? 'load.p95_response_time' : optionsFor[0] ?? ''
     const pair = defaultXYSelection(xyMetrics)
     const xy: XYState = form === 'xy' ? {x: view?.kind === 'xy' ? view.xy.x : pair.x, y: xyMetrics.includes(current) && current !== pair.x.metric ? {metric: current} : pair.y, options: {...defaultXYOptions, fit: true}} : view?.xy ?? defaultXY()
-    const next: ChartState = {id: view?.chart.id ?? newChartId(), kind: form, metric, xy, spec: form === 'timeseries' ? smartTimeSeriesSpec(data.plot(metric)) : undefined, origin: 'custom'}
+    return {id: view?.chart.id ?? newChartId(), kind: form, metric, xy, spec: form === 'timeseries' ? smartTimeSeriesSpec(data.plot(metric)) : undefined, origin: 'custom'}
+  }
+  const applyForm = (view: ChartView | undefined, form: CustomForm) => {
+    const next = customChart(view, form)
+    if (!next) return
     if (view) updateChart(view.chart.id, () => next); else setCharts([next])
     setSelection({chart: next.id})
     announce(`Custom ${customForms.find(item => item.kind === form)?.label.toLowerCase()}: choose X and Y on the right.`, true)
   }
-  const addChart = () => {
+  // Add chart is guided: the chart-type picker opens first; the chosen chart is added and
+  // selected, so its X and Y are on the right.
+  const addChart = () => {if (data && count < maxCharts) setSwitcher('add')}
+  const nextMetric = () => {
+    const used = new Set(views.flatMap(view => view.kind === 'xy' ? [view.xy.y.metric] : view.kind === 'timeseries' || view.kind === 'services' || view.kind === 'runlevel' ? [view.metric] : []))
+    return suggested.find(item => seriesMetrics.includes(item) && !used.has(item)) ?? seriesMetrics.find(item => !used.has(item))
+  }
+  const addCustom = (form: CustomForm) => {const chart = customChart(undefined, form, nextMetric()); if (chart) appendChart(chart, `custom ${customForms.find(item => item.kind === form)?.label.toLowerCase()}`)}
+  const addRecipe = (item: SwitcherItem) => appendChart({id: newChartId(), kind: item.kind, metric: item.recipe?.metric ?? '', xy: item.recipe?.xy ?? defaultXY(), spec: item.recipe?.spec, origin: 'recipe'}, item.title)
+  const appendChart = (chart: ChartState, what: string) => {
     if (!data || count >= maxCharts) return
-    const used = new Set(views.flatMap(view => view.kind === 'timeseries' ? [view.metric] : view.kind === 'xy' ? [view.xy.y.metric] : view.kind === 'services' || view.kind === 'runlevel' ? [view.metric] : []))
-    const metric = suggested.find(item => seriesMetrics.includes(item) && !used.has(item)) ?? seriesMetrics.find(item => !used.has(item)) ?? seriesMetrics[0]
-    const chart: ChartState = metric ? {id: newChartId(), kind: 'timeseries', metric, xy: defaultXY(), spec: smartTimeSeriesSpec(data.plot(metric)), origin: 'custom'} : {id: newChartId(), kind: available.find(kind => kind !== 'placement') ?? 'timeseries', metric: '', xy: defaultXY()}
     setCharts(list => [...list, chart])
     setLayout(defaultLayout(count + 1))
     if (count === 1 && settings.size === 'single') onSettings({...settings, size: 'double'})
@@ -421,27 +437,48 @@ export function KubeStudio({open, onClose, request, data, groups, settings, onSe
     if (count === 1 && layout === undefined) setSharedLegend(true)
     setSelection({chart: chart.id})
     if (narrow) setTab('properties')
-    announce(`Chart (${letters[count]}) added${metric ? `: ${metricTitle(metric, data.provenance(metric))}` : ''}${count === 1 && settings.size === 'single' ? ' — page widened to double column' : ''}. Change its form or data on the right.`, true)
+    announce(`Chart (${letters[count]}) added: ${what}${count === 1 && settings.size === 'single' ? ' — page widened to double column' : ''}. Choose its X and Y on the right.`, true)
   }
   const duplicateChart = (view: ChartView) => {
     if (count >= maxCharts) return
     const copy = {...JSON.parse(JSON.stringify(view.chart)) as ChartState, id: newChartId()}
     setCharts(list => [...list.slice(0, view.index + 1), copy, ...list.slice(view.index + 1)])
     setLayout(defaultLayout(count + 1))
+    if (count === 1 && settings.size === 'single') onSettings({...settings, size: 'double'})
     setSelection({chart: copy.id})
+    announce(`Chart ${view.letter ?? '(a)'} duplicated.`, true)
   }
-  const moveChart = (view: ChartView, by: -1 | 1) => setCharts(list => {
-    const next = [...list]
-    const [item] = next.splice(view.index, 1)
-    next.splice(Math.max(0, Math.min(list.length - 1, view.index + by)), 0, item)
-    return next
-  })
+  // Puts a chart at another position (drag and drop, or arrow keys on its grip).
+  const moveChart = (chartId: string, to: number) => {
+    const from = charts.findIndex(item => item.id === chartId)
+    const target = Math.max(0, Math.min(count - 1, to))
+    if (from < 0 || from === target) return
+    setCharts(list => {const next = [...list]; const [item] = next.splice(from, 1); next.splice(target, 0, item); return next})
+    announce(`Chart moved to position (${letters[target]}).`, true)
+  }
   const removeChart = (view: ChartView) => {
     if (count <= 1) return
     setCharts(list => list.filter(item => item.id !== view.chart.id))
     setLayout(defaultLayout(count - 1))
     setSelection(undefined)
-    announce(`Chart ${view.letter} removed.`, true)
+    announce(`Chart ${view.letter} deleted.`, true)
+  }
+  // Right-click menu of a chart, or of the page when no chart is under the pointer.
+  const menuItems = (chartId: string | undefined): MenuItem[] => {
+    const view = viewOf(chartId)
+    return [
+      ...(view ? [
+        {label: 'Duplicate chart', icon: 'create' as const, hint: count >= maxCharts ? `An image holds up to ${maxCharts} charts` : 'Adds a copy next to it', disabled: count >= maxCharts, run: () => duplicateChart(view)},
+        {label: 'Delete chart', icon: 'delete' as const, danger: true, hint: count <= 1 ? 'An image keeps at least one chart' : undefined, disabled: count <= 1, run: () => removeChart(view)}
+      ] : []),
+      {label: caption ? 'Edit caption' : 'Add caption', icon: 'edit', hint: 'Optional text that describes the figure', separated: Boolean(view), run: () => setCaptionEditing(true)}
+    ]
+  }
+  const onPaperContextMenu = (event: ReactMouseEvent<HTMLDivElement>) => {
+    event.preventDefault()
+    const chart = cellAt(event.target)?.getAttribute('data-chart') ?? undefined
+    if (chart) select({chart})
+    setMenu({at: {x: event.clientX, y: event.clientY}, chart})
   }
 
   // Check fixes (undoable like any edit).
@@ -553,7 +590,27 @@ export function KubeStudio({open, onClose, request, data, groups, settings, onSe
     const view = viewOf(cell?.getAttribute('data-chart') ?? undefined)
     if (!view) {select(undefined); return}
     const target = parseTarget((event.target as Element).closest?.('[data-select]')?.getAttribute('data-select'))
-    select({chart: view.chart.id, target: target && (view.spec || target.type === 'title') ? target : undefined})
+    select({chart: view.chart.id, target: target && (view.spec || target.type === 'title' || target.type === 'axis') ? target : undefined})
+    const title = (event.target as Element).closest?.('.axis-label')
+    if (target?.type === 'axis' && title && paper.current) {
+      const box = title.getBoundingClientRect()
+      const frame = paper.current.getBoundingClientRect()
+      const width = Math.min(frame.width - 8, Math.max(160, (target.side === 'x' ? box.width : box.height) + 48))
+      axisCancelled.current = false
+      setAxisEdit({chart: view.chart.id, side: target.side, panel: target.panel, value: title.textContent ?? '', width,
+        left: Math.max(4, Math.min(frame.width - width - 4, box.left + box.width / 2 - frame.left - width / 2)), top: box.top + box.height / 2 - frame.top - 15})
+    }
+  }
+  // An axis title edited in place: an empty title restores the automatic one.
+  const commitAxis = (value: string) => {
+    const edit = axisEdit
+    setAxisEdit(undefined)
+    const view = edit && viewOf(edit.chart)
+    if (!edit || !view || value.trim() === edit.value.trim()) return
+    const label = value.trim() || undefined
+    if (edit.side !== 'right') labelOverride(view, edit.side === 'x' ? 'x' : 'y', label)
+    else if (view.spec) {const axis = view.spec.panels[Math.min(edit.panel, view.spec.panels.length - 1)].right; setAxis(view, edit.panel, 'right', {...axis, label})}
+    announce(label ? `Axis renamed to ${label}.` : 'Axis title restored.', true)
   }
 
   // ---------------------------------------------------------------------------------------
@@ -603,20 +660,8 @@ export function KubeStudio({open, onClose, request, data, groups, settings, onSe
     const rows: LayerRow[] = []
     const key = (target: string) => `${view.chart.id}/${target}`
     if (!isPublication(view.index)) return rows
-    const current = currentOf(view)
     const {spec, model} = view
     rows.push({key: key('title'), label: 'Title', depth: 2, icon: layerIcons.title, selectable: true, eye: {visible: settings.showTitle, label: settings.showTitle ? 'Hide the title' : 'Show the title', onToggle: () => onSettings({...settings, showTitle: !settings.showTitle})}, dim: !settings.showTitle})
-    rows.push({key: key('h-axes'), label: 'Axes', depth: 2, heading: true})
-    if (spec && model && !model.empty) model.panels.forEach(panel => {
-      const suffix = model.panels.length > 1 ? ` ${panel.letter ?? `(${panel.index + 1})`}` : ''
-      rows.push({key: key(`axis:x:${panel.index}`), label: `X axis${suffix}`, depth: 2, icon: layerIcons.axis, selectable: true})
-      if (panel.left) rows.push({key: key(`axis:left:${panel.index}`), label: `${panel.right ? 'Left Y axis' : 'Y axis'}${suffix}`, depth: 2, icon: layerIcons.axis, selectable: true})
-      if (panel.right) rows.push({key: key(`axis:right:${panel.index}`), label: `Right Y axis${suffix}`, depth: 2, icon: layerIcons.axis, selectable: true})
-    })
-    else {
-      if (current?.labels.x !== undefined) rows.push({key: key('axis:x:0'), label: 'X axis', depth: 2, icon: layerIcons.axis, selectable: true})
-      if (current?.labels.y !== undefined || view.metricOptions.length) rows.push({key: key('axis:left:0'), label: 'Y axis', depth: 2, icon: layerIcons.axis, selectable: true})
-    }
     rows.push({key: key('h-series'), label: 'Series', depth: 2, heading: true})
     if (spec && model) {
       const seen = new Set<string>()
@@ -627,8 +672,8 @@ export function KubeStudio({open, onClose, request, data, groups, settings, onSe
     rows.push({key: key('legend'), label: 'Legend', depth: 2, icon: layerIcons.legend, selectable: true, dim: legendOff, eye: {visible: !legendOff, label: legendOff ? 'Show the legend' : 'Hide the legend', onToggle: () => {if (sharedLegend && view.index > 0) setSharedLegend(false); else onSettings({...settings, legend: settings.legend === 'none' ? 'bottom' : 'none'})}}})
     if (spec && model) {
       const adding = addingNote === view.chart.id
-      rows.push({key: key('h-annotations'), label: 'Lines and labels', depth: 2, heading: true, action: !model.empty && <button type="button" className="ks-icon-button ks-small" aria-label="Add annotation" aria-expanded={adding} title="Add a threshold, range, line or label" onClick={() => setAddingNote(adding ? undefined : view.chart.id)}>{layerIcons.plus}</button>,
-        menu: adding && <div className="ks-add-menu" role="group" aria-label="Annotation to add">{(['hline', 'xrange', 'vline', 'text'] as const).map(item => <button key={item} type="button" className="ks-button" onClick={() => addNote(view, item)}>{annotationNames[item]}</button>)}</div>})
+      rows.push({key: key('h-annotations'), label: 'Add a line in the graph', depth: 2, heading: true, action: !model.empty && <button type="button" className="ks-icon-button ks-small" aria-label="Add a line in the graph" aria-expanded={adding} title="Add a threshold (e.g. the SLO), a time range, a vertical line or a label" onClick={() => setAddingNote(adding ? undefined : view.chart.id)}>{layerIcons.plus}</button>,
+        menu: adding && <div className="ks-add-menu" role="group" aria-label="Line to add">{(['hline', 'xrange', 'vline', 'text'] as const).map(item => <button key={item} type="button" className="ks-add-option" onClick={() => addNote(view, item)}><strong>{annotationNames[item]}</strong><small>{annotationExamples[item]}</small></button>)}</div>})
       if (spec.type === 'timeseries') {
         const sloShown = model.panels.some(panel => panel.annotations.some(item => item.source === 'slo'))
         if (hasSLO && model.panels.some(panel => panel.metrics.some(item => /^load\.(p\d+|mean)_response_time$/.test(item)))) rows.push({key: key('annotation:0:slo'), label: 'SLO line', depth: 2, icon: layerIcons.annotation, selectable: sloShown, dim: !spec.auto.slo, eye: {visible: spec.auto.slo, label: spec.auto.slo ? 'Hide the SLO line' : 'Show the SLO line', onToggle: () => setChartSpec(view)(current => ({...current, auto: {...current.auto, slo: !current.auto.slo}}))}})
@@ -672,9 +717,6 @@ export function KubeStudio({open, onClose, request, data, groups, settings, onSe
       {data && publication && count < maxCharts && <li className="ks-layer-row" data-depth={1}>
         <button type="button" className="ks-add-chart" onClick={addChart} title="Add another chart to this image">{layerIcons.plus}<span>Add chart</span></button>
       </li>}
-      {publication && <li className="ks-layer-row" data-depth={0}>
-        <button type="button" className="ks-layer" aria-expanded={drawer} aria-controls={`${id}-caption-body`} onClick={() => {const next = !drawer; setDrawer(next); if (next) setTimeout(() => captionRef.current?.focus(), 0)}}>{layerIcons.caption}<span>Caption</span></button>
-      </li>}
     </ul>
     {!publication && data && single && <p className="ks-hint ks-pad">This figure keeps its on-screen layout; it has no editable layers.</p>}
   </nav>
@@ -687,6 +729,13 @@ export function KubeStudio({open, onClose, request, data, groups, settings, onSe
       <Chips legend="Chart form" className="ks-form-chips" name={`${id}-${view.chart.id}-form`} value={value} onChange={form => applyForm(view, form)} choices={customForms.filter(form => forms.includes(form.kind)).map(form => ({value: form.kind, label: form.label, hint: form.hint}))} />
       {!value && view.kind && <p className="ks-hint">{kindLabels[view.kind]} is a fixed form. Pick one above to choose X and Y freely.</p>}
     </div>
+  }
+  // The axes of a chart's first panel, for the links to their settings.
+  const axisTargets = (view: ChartView): Array<{side: 'x' | 'left' | 'right'; label: string}> => {
+    const panel = view.model && !view.model.empty ? view.model.panels[0] : undefined
+    if (view.spec) return panel ? [{side: 'x', label: 'X axis'}, ...(panel.left ? [{side: 'left' as const, label: panel.right ? 'Left Y axis' : 'Y axis'}] : []), ...(panel.right ? [{side: 'right' as const, label: 'Right Y axis'}] : [])] : []
+    const labels = currentOf(view)?.labels
+    return [...(labels?.x !== undefined ? [{side: 'x' as const, label: 'X axis'}] : []), ...(labels?.y !== undefined || view.metricOptions.length ? [{side: 'left' as const, label: 'Y axis'}] : [])]
   }
   const dataFields = (view: ChartView) => {
     if (!data) return null
@@ -780,7 +829,7 @@ export function KubeStudio({open, onClose, request, data, groups, settings, onSe
               <NumberInput id={`${id}-slo`} min={0} value={value === undefined ? undefined : Number(value.toPrecision(6))} onChange={next => {if (next !== undefined && next > 0) setChartSpec(view)(current => ({...current, auto: {...current.auto, sloValue: Number((next / factor).toPrecision(6))}}))}} />
               <p className="ks-hint">{spec.auto.sloValue !== undefined ? <>Experiment SLO: {formatMetric(dataSLO, 'milliseconds')}. <button type="button" className="ks-link" onClick={() => setChartSpec(view)(current => {const {sloValue: _, ...rest} = current.auto; void _; return {...current, auto: rest}})}>Use the experiment SLO</button></> : 'From the experiment. Type a value or drag the line on the figure.'}</p>
             </div>
-            <p className="ks-hint">For a threshold on another metric or the right axis, add a threshold line with + in Lines and labels.</p>
+            <p className="ks-hint">For a threshold on another metric or the right axis, add a threshold line with + in “Add a line in the graph”.</p>
           </>}
         }
         if (auto) return {kind: 'Annotation', title: auto.label, body: <>
@@ -799,6 +848,10 @@ export function KubeStudio({open, onClose, request, data, groups, settings, onSe
         <Group title="Form and data">
           {formChips(view)}
           {dataFields(view)}
+          {axisTargets(view).length > 0 && <div className="ks-field"><span className="ks-label">Axis settings</span>
+            <p className="ks-static">{axisTargets(view).map((axis, index) => <Fragment key={axis.side}>{index > 0 && ' · '}<button type="button" className="ks-link" onClick={() => select({chart: view.chart.id, target: {type: 'axis', side: axis.side, panel: 0}})}>{axis.label}</button></Fragment>)}</p>
+            <p className="ks-hint">Click an axis title on the figure to rename it.</p>
+          </div>}
           <p className="ks-hint">Starting points from the chart switcher stay fully editable: change X, Y and every style.</p>
         </Group>
         {spec?.type === 'timeseries' && model && <Group title="Uncertainty">
@@ -813,20 +866,13 @@ export function KubeStudio({open, onClose, request, data, groups, settings, onSe
             <Toggle label="Connect each run in time order" checked={view.xy.options.path} onChange={path => setChartXY(view, state => ({...state, options: {...state.options, path}}))} />
           </div>
         </Group>}
-        {spec && <Group title="Colour">
+        {spec && <Group title="Chart settings">
+          <Chips legend="Grid lines" name={`${id}-gridlines`} value={spec.grid} onChange={grid => setChartSpec(view)(current => ({...current, grid}))} choices={[{value: 'none', label: 'None'}, {value: 'major', label: 'Major'}, {value: 'minor', label: 'Minor', hint: 'Major and minor gridlines'}]} />
+        </Group>}
+        {spec && <Group title="Colours">
           <PaletteEditor spec={spec} setSpec={setChartSpec(view)} />
-          <Chips legend="Grid" name={`${id}-gridlines`} value={spec.grid} onChange={grid => setChartSpec(view)(current => ({...current, grid}))} choices={[{value: 'none', label: 'None'}, {value: 'major', label: 'Major'}, {value: 'minor', label: 'Minor', hint: 'Major and minor gridlines'}]} />
         </Group>}
-        {count > 1 && <Group title="Arrange">
-          <div className="ks-actions">
-            <button type="button" className="ks-button" disabled={view.index === 0} onClick={() => moveChart(view, -1)}>Move earlier</button>
-            <button type="button" className="ks-button" disabled={view.index === count - 1} onClick={() => moveChart(view, 1)}>Move later</button>
-          </div>
-        </Group>}
-        <div className="ks-actions">
-          {count < maxCharts && <button type="button" className="ks-button" onClick={() => duplicateChart(view)}>Duplicate chart</button>}
-          {count > 1 && <button type="button" className="ks-button ks-danger ks-push" onClick={() => removeChart(view)}>Remove chart</button>}
-        </div>
+        {count > 1 && <p className="ks-hint">Drag a chart by its handle to move it; right-click it to duplicate or delete it.</p>}
         {spec && <MoreGroup title="Presets and spec">
           <PresetsEditor presets={presets} onApply={preset => applyPreset(view, preset)} onSave={presetName => storePresets([...presets.filter(item => item.name !== presetName && !builtInPresets.some(builtIn => builtIn.name === presetName)), {name: presetName, style: settings, strokeScale: spec.strokeScale, grid: spec.grid}])} onDelete={presetName => storePresets(presets.filter(item => item.name !== presetName))} />
           <SpecActions onCopy={() => void copySpec(view)} onPaste={json => void pasteSpec(view, json)} onReset={() => {updateChart(view.chart.id, chart => ({...chart, spec: undefined, overrides: undefined})); announce('Chart reset.', true)}} />
@@ -888,7 +934,7 @@ export function KubeStudio({open, onClose, request, data, groups, settings, onSe
   </div>
 
   // ---------------------------------------------------------------------------------------
-  // Canvas and caption drawer.
+  // Canvas: the image on paper, its right-click menu and the optional caption.
   const overlayFor = (view: ChartView) => {
     const geometry = geometries.current[view.chart.id]
     const hoverShapes = shapes.hoverChart === view.chart.id ? shapes.hover : []
@@ -908,17 +954,42 @@ export function KubeStudio({open, onClose, request, data, groups, settings, onSe
         : !views.length ? emptyState('No figure can be drawn from these results yet.')
           : single && !publication ? (views[0].kind === 'placement' && data.placement ? <div className="ks-paper ks-paper-free" ref={paper}>{rendered[0][0]}</div> : <div className="ks-paper-empty">{rendered[0][0]}</div>)
             : <div className="ks-paper" ref={paper} data-multi={single ? undefined : true} style={{width: `${Math.round(px(pageWidth))}px`, height: single ? undefined : `${Math.round(px(pageHeight))}px`}}
-              onClick={onPaperClick} onPointerDown={onPaperPointerDown} onPointerMove={onPaperPointerMove} onPointerUp={onPaperPointerUp} onPointerLeave={() => {if (!drag.current) setHoverKey('')}}>
+              onClick={onPaperClick} onPointerDown={onPaperPointerDown} onPointerMove={onPaperPointerMove} onPointerUp={onPaperPointerUp} onPointerLeave={() => {if (!drag.current) setHoverKey('')}} onContextMenu={onPaperContextMenu}>
               {views.map(view => {
                 const cell = cellOf(view)
                 return <div key={view.chart.id} className="ks-cell" data-chart={view.chart.id} data-selected={selectedKey === `${view.chart.id}/` || undefined} data-hover={hoveredChart === view.chart.id || undefined}
+                  data-dragging={dragging === view.chart.id || undefined} data-drop={dropOn === view.chart.id && dragging !== view.chart.id || undefined}
+                  onDragOver={event => {if (!dragging) return; event.preventDefault(); if (dropOn !== view.chart.id) setDropOn(view.chart.id)}}
+                  onDrop={event => {event.preventDefault(); if (dragging) moveChart(dragging, view.index); setDragging(undefined); setDropOn(undefined)}}
                   style={single ? undefined : {left: px(cell.x), top: px(cell.y), width: px(cell.width)}}>
                   {view.letter && <span className="ks-letter" aria-hidden="true" style={{fontSize: px(settings.fontSize), fontFamily: fontStacks[settings.font], top: -px(settings.fontSize * 1.35)}}>{view.letter}</span>}
+                  {!single && <button type="button" className="ks-grip" draggable aria-label={`Move chart ${view.letter}: drag it onto another chart, or use the arrow keys`} title="Drag to move this chart"
+                    onClick={event => event.stopPropagation()} onPointerDown={event => event.stopPropagation()}
+                    onDragStart={event => {event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/plain', view.chart.id); setDragging(view.chart.id)}}
+                    onDragEnd={() => {setDragging(undefined); setDropOn(undefined)}}
+                    onKeyDown={event => {const by = event.key === 'ArrowLeft' || event.key === 'ArrowUp' ? -1 : event.key === 'ArrowRight' || event.key === 'ArrowDown' ? 1 : 0; if (by) {event.preventDefault(); moveChart(view.chart.id, view.index + by)}}}>
+                    <svg width="12" height="16" viewBox="0 0 12 16" aria-hidden="true"><circle cx="4" cy="4" r="1.3" /><circle cx="8" cy="4" r="1.3" /><circle cx="4" cy="8" r="1.3" /><circle cx="8" cy="8" r="1.3" /><circle cx="4" cy="12" r="1.3" /><circle cx="8" cy="12" r="1.3" /></svg>
+                  </button>}
                   <FigureHostContext.Provider value={hosts[view.chart.id]}>{rendered[view.index][0]}</FigureHostContext.Provider>
                   {overlayFor(view)}
                 </div>
               })}
+              {axisEdit && <input className="ks-axis-input" aria-label={`${axisEdit.side === 'x' ? 'X' : axisEdit.side === 'right' ? 'Right Y' : 'Y'} axis title`} defaultValue={axisEdit.value} autoFocus maxLength={120}
+                style={{left: axisEdit.left, top: axisEdit.top, width: axisEdit.width}} onFocus={event => event.currentTarget.select()}
+                onClick={event => event.stopPropagation()} onPointerDown={event => event.stopPropagation()}
+                onBlur={event => {if (axisCancelled.current) axisCancelled.current = false; else commitAxis(event.currentTarget.value)}}
+                onKeyDown={event => {event.stopPropagation(); if (event.key === 'Enter') event.currentTarget.blur(); else if (event.key === 'Escape') {event.preventDefault(); axisCancelled.current = true; setAxisEdit(undefined)}}} />}
             </div>}
+      {publication && (captionEditing
+        ? <div className="ks-caption-editor" style={{width: `${Math.round(px(pageWidth))}px`}}>
+          <label className="ks-label" htmlFor={`${id}-caption`}>Caption</label>
+          <textarea id={`${id}-caption`} rows={3} autoFocus value={caption} placeholder="Describe what the figure shows, e.g. P95 latency stays under the SLO until the load spike at 8 min." onChange={event => {const value = event.target.value; setDoc(current => ({...current, caption: value.trim() ? value : undefined}))}} onKeyDown={event => {if (event.key === 'Escape') {event.preventDefault(); event.stopPropagation(); setCaptionEditing(false)}}} />
+          <div className="ks-actions">
+            {caption && <button type="button" className="ks-link" onClick={() => {setDoc(current => ({...current, caption: undefined})); setCaptionEditing(false)}}>Remove caption</button>}
+            <button type="button" className="ks-button ks-push" onClick={() => setCaptionEditing(false)}>Done</button>
+          </div>
+        </div>
+        : caption && <button type="button" className="ks-caption" style={{width: `${Math.round(px(pageWidth))}px`}} title="Edit the caption" onClick={() => setCaptionEditing(true)}>{caption}</button>)}
     </div>
     {checks.length > 0 && publication && <button type="button" className="ks-check-pill" data-warning={checks.some(check => check.level === 'warning') || undefined} onClick={() => select(undefined)}>{checks.length} {checks.some(check => check.level === 'warning') ? `issue${checks.length > 1 ? 's' : ''}` : `suggestion${checks.length > 1 ? 's' : ''}`}</button>}
     {publication && <div className="ks-zoom" role="group" aria-label="Zoom">
@@ -932,28 +1003,6 @@ export function KubeStudio({open, onClose, request, data, groups, settings, onSe
       {notice && <div className="ks-toast" data-action={notice.undo || undefined}><span aria-hidden="true">{notice.text}</span>{notice.undo && history.canUndo && <button type="button" className="ks-link" onClick={() => {setNotice(undefined); undo()}}>Undo</button>}</div>}
     </div>
   </div>
-  const captionDrawer = publication && <section className="ks-drawer" data-open={drawer || undefined} aria-label="Caption">
-    <div className="ks-drawer-head">
-      <button type="button" className="ks-drawer-toggle" aria-expanded={drawer} aria-controls={`${id}-caption-body`} onClick={() => setDrawer(value => !value)}>
-        {layerIcons.chevron}<strong>Caption</strong>{!drawer && <span className="ks-drawer-preview">{caption}</span>}
-      </button>
-      <button type="button" className="ks-link" onClick={() => void copyCaption()} disabled={!caption}>Copy caption</button>
-    </div>
-    <div id={`${id}-caption-body`} className="ks-drawer-body" hidden={!drawer}>
-      <div className="ks-field">
-        <div className="ks-label-row"><label className="ks-label" htmlFor={`${id}-caption`}>Caption</label>{doc.caption !== undefined && <button type="button" className="ks-link" onClick={() => setDoc(current => ({...current, caption: undefined}))}>Reset to automatic</button>}</div>
-        <textarea ref={captionRef} id={`${id}-caption`} rows={3} value={caption} onChange={event => {const value = event.target.value; setDoc(current => ({...current, caption: value === autoCaption ? undefined : value}))}} />
-      </div>
-      {methods && <details className="ks-methods">
-        <summary>Methods & provenance</summary>
-        <p>{methods}</p>
-        <div className="ks-actions">
-          <span className="ks-hint">Embedded in the SVG description, the PDF metadata and the CSV header.</span>
-          <button type="button" className="ks-button ks-push" onClick={() => setDoc(current => ({...current, caption: `${caption.trim()} ${methods}`.trim()}))}>Insert into caption</button>
-        </div>
-      </details>}
-    </div>
-  </section>
 
   const tabs = [{id: 'layers', label: 'Layers'}, {id: 'canvas', label: 'Figure'}, {id: 'properties', label: 'Properties'}] as const
   const onTabKey = (event: KeyboardEvent<HTMLDivElement>) => {
@@ -1001,7 +1050,8 @@ export function KubeStudio({open, onClose, request, data, groups, settings, onSe
     {open && <div className="ks-shell" data-narrow={narrow || undefined}>
       <header className="ks-topbar">
         <div className="ks-brand"><KubeStudioMark size={24} /><h2 id={`${id}-title`}>{studioName}</h2></div>
-        {data && <FigureSwitcher items={items.filter(item => item.kind !== 'placement' || count === 1)} active={activeView?.kind} prefix={activeView?.letter ? `${activeView.letter} ` : ''} label={activeView?.chart.origin === 'custom' ? `Custom ${customForms.find(form => form.kind === activeView.kind)?.label.toLowerCase() ?? 'chart'}` : undefined} forms={forms} onPick={item => applyRecipe(activeView, item)} onCustom={form => applyForm(activeView, form)} />}
+        {data && <FigureSwitcher items={items.filter(item => item.kind !== 'placement' || (count === 1 && switcher !== 'add'))} active={activeView?.kind}
+          open={Boolean(switcher)} onOpenChange={open => setSwitcher(open ? 'change' : undefined)} adding={switcher === 'add' ? `chart (${letters[count]})` : undefined} prefix={activeView?.letter ? `${activeView.letter} ` : ''} label={activeView?.chart.origin === 'custom' ? `Custom ${customForms.find(form => form.kind === activeView.kind)?.label.toLowerCase() ?? 'chart'}` : undefined} forms={forms} onPick={item => switcher === 'add' ? addRecipe(item) : applyRecipe(activeView, item)} onCustom={form => switcher === 'add' ? addCustom(form) : applyForm(activeView, form)} />}
         <div className="ks-name">
           {publication && <><label htmlFor={`${id}-name`} className="visually-hidden">Figure name</label>
             <input id={`${id}-name`} type="text" value={name} placeholder="Figure name" title="Figure name — also the exported file name" onChange={event => {const value = event.target.value; setDoc(current => ({...current, name: value === autoName ? undefined : value}))}} /></>}
@@ -1027,9 +1077,10 @@ export function KubeStudio({open, onClose, request, data, groups, settings, onSe
       </div>}
       <div className="ks-workspace">
         {panel('layers', 'ks-left', layers, 'Layers')}
-        {panel('canvas', 'ks-centre', <>{canvas}{captionDrawer}</>, 'Figure')}
+        {panel('canvas', 'ks-centre', canvas, 'Figure')}
         {panel('properties', 'ks-right', inspector, 'Properties')}
       </div>
+      {menu && <ContextMenu at={menu.at} label={menu.chart ? `Chart ${viewOf(menu.chart)?.letter ?? ''}`.trim() : 'Figure'} onClose={() => setMenu(undefined)} items={menuItems(menu.chart)} />}
       {help && <div className="ks-popover ks-help" role="dialog" aria-label="Keyboard shortcuts" onKeyDown={event => {if (event.key === 'Escape') {event.preventDefault(); event.stopPropagation(); setHelp(false)}}}>
         <div className="ks-help-head"><strong>Keyboard shortcuts</strong><button type="button" className="ks-icon-button ks-small" aria-label="Close shortcuts" onClick={() => setHelp(false)}><ActionIcon name="close" /></button></div>
         <dl>{shortcuts.map(([keys, action]) => <div key={keys}><dt><kbd>{keys}</kbd></dt><dd>{action}</dd></div>)}</dl>

@@ -423,3 +423,11 @@ databaseChangeLog:
             path: changes/059-measurement-integrity.sql
             relativeToChangelogFile: true
             splitStatements: false
+  - changeSet:
+      id: 060-result-layouts
+      author: kubephos
+      changes:
+        - sqlFile:
+            path: changes/060-result-layouts.sql
+            relativeToChangelogFile: true
+            splitStatements: false

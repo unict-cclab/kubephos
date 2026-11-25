@@ -2,7 +2,6 @@ import {cleanup, fireEvent, render, screen, within} from '@testing-library/react
 import {afterEach, describe, expect, it, vi} from 'vitest'
 import {downloadBlob} from '../../charts'
 import type {AggregateSeries, RunLevelMetric, VariantComparison} from '../../resultsData'
-import {AllMetrics} from './AllMetrics'
 import {KubeStudio} from './kubestudio/KubeStudio'
 import type {StudioData} from './kubestudio/image'
 import {defaultFigureSettings} from './figureSettings'
@@ -54,25 +53,22 @@ describe('KPI model', () => {
   })
 })
 
-describe('written summary', () => {
-  it('writes at most three findings as sentences with evidence references and folds the reasoning and the rest into notes', () => {
+describe('summary', () => {
+  it('lists every finding with its detail and a link to its section, then the measurement notes', () => {
     const navigate = vi.fn()
     const insights = ['critical', 'critical', 'warning', 'info'].map((severity, index) => ({id: `i${index}`, severity: severity as 'critical', title: `Finding ${index}`, detail: `Detail ${index}`, evidence: {}, target: index === 1 ? 'services' as const : undefined}))
     render(<VerdictStrip insights={insights} notices={[{kind: 'warning', text: 'Concurrent load'}]} onNavigate={navigate} />)
     const verdict = screen.getByRole('region', {name: 'Verdict'})
-    expect(verdict.querySelectorAll('.summary-sentence')).toHaveLength(3)
-    expect(verdict.querySelector('.summary-lede')).toHaveTextContent('Critical: Finding 0. Critical: Finding 1 (Table 1). Warning: Finding 2.')
-    expect(screen.getAllByText('Critical:', {exact: false})).toHaveLength(2)
-    expect(verdict).toHaveClass('severity-critical')
-    fireEvent.click(screen.getByRole('button', {name: 'Go to table 1, services'}))
+    expect(within(verdict).getAllByRole('listitem').map(item => item.textContent)).toEqual(['Critical: Finding 0.Detail 0', 'Critical: Finding 1. ServicesDetail 1', 'Warning: Finding 2.Detail 2', 'Note: Finding 3.Detail 3'])
+    expect(within(verdict).getAllByRole('listitem')[0]).toHaveClass('summary-item', 'critical')
+    fireEvent.click(within(verdict).getByRole('button', {name: 'Go to Services'}))
     expect(navigate).toHaveBeenCalledWith('services')
-    expect(screen.getByText('Reasoning, and 2 more measurement notes')).toBeInTheDocument()
-    expect(screen.getByText('Detail 3', {exact: false})).toBeInTheDocument()
+    expect(within(verdict).getByText('Concurrent load')).toHaveClass('validation-item', 'warning')
   })
 
   it('says so when nothing stands out', () => {
     render(<VerdictStrip insights={[]} notices={[]} onNavigate={() => {}} />)
-    expect(screen.getByText(/No issue detected/)).toBeInTheDocument()
+    expect(screen.getByText('No issues detected.')).toBeInTheDocument()
   })
 })
 
@@ -111,11 +107,11 @@ describe('services table', () => {
     expect(rows).toHaveLength(8)
     expect(rows[0]).toHaveClass('bottleneck')
     expect(rows[0]).toHaveTextContent('Bottleneck')
-    expect(screen.getByText(/^Server P95 2\.3 s × 87 %; CPU flat at 0\.20 cores\.$/)).toHaveClass('table-note')
     expect(rows[0]).toHaveTextContent('2,310')
     expect(rows[1]).toHaveTextContent('0.07 (70 %)')
     fireEvent.click(within(rows[0]).getByRole('button', {name: 'recommendationservice'}))
     expect(detail).toHaveBeenCalledWith('recommendationservice')
+    expect(screen.getByText(/^Server P95 2\.3 s × 87 %; CPU flat at 0\.20 cores\.$/)).toHaveClass('service-detail-reasons')
     expect(screen.getByRole('img', {name: 'recommendationservice: Server P95 over time'})).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', {name: 'All 10 services'}))
     expect(within(table).getAllByRole('row').filter(row => !row.classList.contains('service-detail-row'))).toHaveLength(11)
@@ -139,24 +135,6 @@ describe('disclosure sections', () => {
     rerender(<Disclosure id="statistics" title="Statistics" summary="CSV" open onToggle={() => {}}><Body /></Disclosure>)
     expect(screen.getByText('Heavy statistics')).toBeInTheDocument()
     expect(screen.getByRole('button', {name: 'Statistics CSV'})).toHaveAttribute('aria-controls', 'section-statistics-body')
-  })
-})
-
-describe('All metrics', () => {
-  it('filters the picker and plots a metric only after it is picked, with a table view and a figure shortcut', () => {
-    const plot = vi.fn((name: string) => name === 'cpu.cores' ? [curve('Default', [.1, .2, .3], 'cores')] : [])
-    const onFigure = vi.fn()
-    render(<AllMetrics metrics={['cpu.cores', 'memory.working_set', 'scheduler.cycle_duration']} plot={plot} groups={[]} provenance={provenance} onFigure={onFigure} />)
-    expect(plot).not.toHaveBeenCalled()
-    fireEvent.change(screen.getByRole('searchbox', {name: 'Search metrics'}), {target: {value: 'cpu'}})
-    expect(screen.queryByRole('button', {name: 'Memory working set'})).not.toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', {name: 'CPU usage'}))
-    expect(screen.getByRole('button', {name: 'CPU usage'})).toHaveAttribute('aria-pressed', 'true')
-    expect(screen.getByRole('img', {name: 'CPU usage over time'})).toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', {name: 'View as table'}))
-    expect(screen.getByRole('table', {name: 'CPU usage over time: data table'})).toHaveTextContent('300 mCPU')
-    fireEvent.click(screen.getByRole('button', {name: 'Create figure: CPU usage'}))
-    expect(onFigure).toHaveBeenCalledWith('cpu.cores')
   })
 })
 

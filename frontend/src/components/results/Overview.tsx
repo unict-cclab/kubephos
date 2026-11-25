@@ -16,47 +16,26 @@ import {downloadTimeChart} from './timeChartExport'
 export type InsightTarget = NonNullable<Insight['target']>
 
 // --- summary (verdict) ---
-// Written like the opening of a lab report: the strongest findings as plain sentences, each
-// ending with a reference to its evidence (Fig. 1, Table 1, …). Severity is carried by the
-// wording and by a thin rule beside the paragraph; the reasoning sits in a quiet disclosure.
+// The findings, worst first: each one, what it rests on and a link to its section.
+// Measurement notes follow as warnings.
 
 const severityLabel: Record<InsightSeverity, string> = {critical: 'Critical', warning: 'Warning', info: 'Note', ok: 'OK'}
-const severityRank: Record<InsightSeverity, number> = {critical: 0, warning: 1, info: 2, ok: 3}
 
-const reference: Record<InsightTarget, {text: string; label: string}> = {
-  throughput: {text: 'Fig. 1', label: 'Go to figure 1, load and latency over time'},
-  latency: {text: 'Fig. 1', label: 'Go to figure 1, load and latency over time'},
-  services: {text: 'Table 1', label: 'Go to table 1, services'},
-  endpoints: {text: 'Endpoints', label: 'Open the endpoints section'},
-  quality: {text: 'Methods', label: 'Open the environment and methods section'}
+const reference: Record<InsightTarget, string> = {
+  throughput: 'Load and latency', latency: 'Load and latency', services: 'Services', endpoints: 'Endpoints', quality: 'Environment & methods'
 }
 
 const sentence = (text: string) => /[.!?]$/.test(text) ? text : `${text}.`
 
-function Reference({target, onNavigate}: {target?: InsightTarget; onNavigate: (target: InsightTarget) => void}) {
-  if (!target) return null
-  return <>{' '}<span className="summary-ref">(<button type="button" className="ref-link" aria-label={reference[target].label} onClick={() => onNavigate(target)}>{reference[target].text}</button>)</span></>
-}
-
 export function VerdictStrip({insights, notices, onNavigate, empty}: {insights: Insight[]; notices: QualityNotice[]; onNavigate: (target: InsightTarget) => void; empty?: string}) {
-  const shown = insights.slice(0, 3)
-  const more = insights.slice(3)
-  const worst = shown.reduce<InsightSeverity>((current, item) => severityRank[item.severity] < severityRank[current] ? item.severity : current, 'ok')
-  const extra = more.length + notices.length
-  const reasoning = shown.filter(item => item.detail)
-  return <section className={`summary severity-${shown.length ? worst : 'ok'}`} aria-label="Verdict">
-    <h3 className="summary-kicker">Summary</h3>
-    {shown.length ? <p className="summary-lede">{shown.map((insight, index) => <span key={insight.id} className={`summary-sentence ${insight.severity}`}>
-      {index > 0 && ' '}<span className="visually-hidden">{severityLabel[insight.severity]}: </span>{sentence(insight.title).replace(/\.$/, '')}<Reference target={insight.target} onNavigate={onNavigate} />.
-    </span>)}</p> : <p className="summary-lede">{sentence(empty ?? 'No issue detected')} <span className="summary-quiet">The load was sustained and no single service dominates latency.</span></p>}
-    {(reasoning.length > 0 || extra > 0) && <details className="summary-notes">
-      <summary>{reasoning.length ? 'Reasoning' : 'Notes'}{extra > 0 ? `, and ${extra} more measurement note${extra === 1 ? '' : 's'}` : ''}</summary>
-      <ol className="summary-notes-list">
-        {reasoning.map(insight => <li key={insight.id}><p>{insight.detail}</p></li>)}
-        {more.map(insight => <li key={insight.id} className="summary-note-extra"><p><span className="visually-hidden">{severityLabel[insight.severity]}: </span><em>{sentence(insight.title)}</em> {insight.detail}</p></li>)}
-        {notices.map(notice => <li key={notice.text} className="summary-note-extra"><p>{notice.kind === 'warning' && <span className="visually-hidden">Warning: </span>}{notice.text}</p></li>)}
-      </ol>
-    </details>}
+  return <section className="summary" aria-label="Verdict">
+    <h3>Summary</h3>
+    {insights.length ? <ul className="summary-list">{insights.map(insight => <li key={insight.id} className={`summary-item ${insight.severity}`}>
+      <p><span className="visually-hidden">{severityLabel[insight.severity]}: </span><strong>{sentence(insight.title)}</strong>
+        {insight.target && <>{' '}<button type="button" className="link-button" aria-label={`Go to ${reference[insight.target]}`} onClick={() => onNavigate(insight.target!)}>{reference[insight.target]}</button></>}</p>
+      {insight.detail && <p className="summary-detail">{insight.detail}</p>}
+    </li>)}</ul> : <p>{sentence(empty ?? 'No issues detected')}</p>}
+    {notices.map(notice => <div key={notice.text} className={`validation-item ${notice.kind === 'warning' ? 'warning' : 'note'}`}>{notice.text}</div>)}
   </section>
 }
 
@@ -172,18 +151,19 @@ export function KpiCards({cards, provenance, resources = []}: {cards: KpiCard[];
 
 // --- primary chart ---
 
-export function PrimaryChart({panels, subtitle, title = 'Load and latency over time'}: {panels: ChartPanel[]; subtitle: string; title?: string}) {
+const primaryTitle = 'Load and latency over time'
+
+export function PrimaryChart({panels, subtitle}: {panels: ChartPanel[]; subtitle: string}) {
   const chart = useRef<HTMLDivElement>(null)
   if (!panels.length) return null
   const download = async (format: ChartExportFormat) => {
     const element = chart.current?.querySelector<HTMLElement>('.time-chart')
     if (!element) throw new Error('The figure is not ready yet. Try again.')
-    await downloadTimeChart(element, format, {fileName: 'kubephos-figure-1-load-and-latency', title, caption: subtitle, creator: 'KubePhos'})
+    await downloadTimeChart(element, format, {fileName: 'kubephos-load-and-latency', title: primaryTitle, caption: subtitle, creator: 'KubePhos'})
   }
   return <section className="report-figure primary-chart" id="results-timeline" aria-labelledby="results-timeline-title">
     <header className="report-head report-head-actions">
-      <p className="report-label">Figure 1</p>
-      <h3 id="results-timeline-title">{title}</h3>
+      <h3 id="results-timeline-title">{primaryTitle}</h3>
       <p className="report-sub">{subtitle}</p>
       <div className="report-actions"><DownloadMenu download={download} /></div>
     </header>
@@ -212,13 +192,10 @@ export function ServicesTable({services, groups, group, onGroup, trend, detail, 
   const {sorted, sort, toggle} = useSort(ranked, serviceAccessors)
   const shown = all ? sorted : sorted.slice(0, limit)
   const columns = 2 + serviceColumns.length + (trend ? 1 : 0)
-  const bottleneck = ranked.find(row => row.bottleneck)
-  const title = bottleneck ? `${bottleneck.service} carries most of the server-side latency` : ranked.length ? 'No single service dominates latency' : 'Services'
   return <section className="report-figure services-card" id="results-services" aria-labelledby="results-services-title">
     <header className="report-head">
-      <p className="report-label">Table 1</p>
-      <h3 id="results-services-title">{title}</h3>
-      <p className="report-sub">{note ?? 'Services ranked by their contribution to client latency: server P95 weighted by the share of requests that reach them.'}</p>
+      <h3 id="results-services-title">Services</h3>
+      {note && <p className="report-sub">{note}</p>}
       {groups && groups.length > 1 && onGroup && <div className="variant-tabs" role="group" aria-label="Variant">{groups.map(item => <button key={item.id} type="button" aria-pressed={item.id === group} onClick={() => onGroup(item.id)}><LegendKey color={item.color} />{item.label}</button>)}</div>}
     </header>
     {!ranked.length ? <p className="empty-inline">No per-service metrics were collected for these runs.</p> : <TableScroll label="Services, scrollable" className="services-table-wrap"><table className="services-table sticky-first" aria-label="Services ranked by bottleneck score">
@@ -231,7 +208,7 @@ export function ServicesTable({services, groups, group, onGroup, trend, detail, 
           <tr className={`${row.bottleneck ? 'bottleneck' : ''} ${expanded ? 'expanded' : ''}`}>
             <th scope="row">
               {detail ? <button type="button" className="service-toggle" aria-expanded={expanded} onClick={() => setOpen(expanded ? undefined : row.service)}><svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><path d="m3.5 2 3 3-3 3" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" /></svg>{row.service}</button> : <span className="service-name">{row.service}</span>}
-              {row.bottleneck && <span className="margin-note">Bottleneck<sup aria-hidden="true">†</sup></span>}
+              {row.bottleneck && <span className="margin-note">Bottleneck</span>}
             </th>
             <td className="numeric">{formatSignificant(row.rps)}</td>
             <td className="numeric">{formatSignificant(row.p95Ms)}</td>
@@ -240,14 +217,12 @@ export function ServicesTable({services, groups, group, onGroup, trend, detail, 
             <td className="numeric col-restarts">{formatCount(row.restarts)}</td>
             {trend && <td className="trend-cell">{points ? <Sparkline points={toChartPoints(points)} color={row.bottleneck ? 'var(--chart-1)' : 'var(--chart-quiet)'} width={88} height={20} /> : null}</td>}
           </tr>
-          {expanded && detail && <tr className="service-detail-row"><td colSpan={columns}><ServiceDetailCharts service={row.service} reasons={row.bottleneck ? [] : row.reasons} charts={detail(row.service)} /></td></tr>}
+          {expanded && detail && <tr className="service-detail-row"><td colSpan={columns}><ServiceDetailCharts service={row.service} reasons={row.reasons} charts={detail(row.service)} /></td></tr>}
         </Fragment>
       })}</tbody>
     </table></TableScroll>}
-    {ranked.length > 0 && <div className="services-foot">
-      {bottleneck && <p className="table-note"><sup aria-hidden="true">†</sup> {sentence(bottleneck.reasons.map((reason, index) => index ? reason : reason.charAt(0).toUpperCase() + reason.slice(1)).join('; '))}</p>}
-      <p className="table-note">— not recorded.{sort ? ' Sorted by the selected column; select it until the arrows reset to restore the ranking.' : ''}</p>
-      {ranked.length > limit && <button type="button" className="link-button services-more" aria-expanded={all} onClick={() => setAll(value => !value)}>{all ? `Top ${limit} only` : `All ${ranked.length} services`}</button>}
+    {ranked.length > limit && <div className="services-foot">
+      <button type="button" className="link-button services-more" aria-expanded={all} onClick={() => setAll(value => !value)}>{all ? `Top ${limit} only` : `All ${ranked.length} services`}</button>
     </div>}
   </section>
 }
@@ -255,7 +230,7 @@ export function ServicesTable({services, groups, group, onGroup, trend, detail, 
 function ServiceDetailCharts({service, reasons, charts}: {service: string; reasons: string[]; charts: ServiceDetail[]}) {
   const visible = charts.filter(chart => chart.series.length)
   return <div className="service-detail">
-    {reasons.length > 0 && <p className="service-detail-reasons">{sentence(reasons.join('; '))}</p>}
+    {reasons.length > 0 && <p className="service-detail-reasons">{sentence(reasons.join('; ').replace(/^./, letter => letter.toUpperCase()))}</p>}
     {visible.length ? <div className="service-detail-grid">{visible.map(chart => <div key={chart.title} className="service-detail-chart">
       <span className="time-chart-panel-title">{chart.title}</span>
       <TimeChart compact panelHeight={88} ariaLabel={`${service}: ${chart.title} over time`} panels={[{id: chart.title, title: chart.title, unit: chart.unit, series: chart.series.map((series, index) => chartSeries(series, `${index}`, series.label, index ? `var(--chart-${index % 8 + 1})` : 'var(--chart-1)'))}]} />

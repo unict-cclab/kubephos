@@ -1,8 +1,7 @@
-import {useMemo} from 'react'
 import type {AggregateSeries} from '../../resultsData'
 import {tCritical} from '../../statistics'
 import type {MetricPoint} from '../../types'
-import {metricAxisLabel, provenanceLabel, toCSV} from './format'
+import {metricAxisLabel, provenanceLabel} from './format'
 import type {ResolvedProvenance} from './runs'
 
 // X–Y relationship between two recorded metrics. Each point is one sampling window of one
@@ -85,18 +84,6 @@ export function plottable(points: XYPoint[], options: Pick<XYOptions, 'logX' | '
   return points.filter(point => (!options.logX || point.x > 0) && (!options.logY || point.y > 0))
 }
 
-// Splits a run into time-ordered segments, breaking where a window is missing.
-export function pathSegments(run: XYRun, points = run.points): XYPoint[][] {
-  let step = run.step ?? Infinity
-  if (!Number.isFinite(step)) for (let index = 1; index < points.length; index++) step = Math.min(step, points[index].t - points[index - 1].t)
-  const segments: XYPoint[][] = []
-  points.forEach((point, index) => {
-    if (!index || Number.isFinite(step) && point.t - points[index - 1].t > step * 1.5) segments.push([])
-    segments.at(-1)!.push(point)
-  })
-  return segments
-}
-
 function ranks(values: number[]): number[] {
   const order = values.map((value, index) => ({value, index})).sort((a, b) => a.value - b.value)
   const result = new Array<number>(values.length)
@@ -166,29 +153,11 @@ export function fitXY(points: XYPoint[], {logX = false, logY = false}: {logX?: b
   return {n, slope, intercept, slopeCI: [slope - half, slope + half], r, r2: r * r, spearman: spearman(usable.map(point => point.x), usable.map(point => point.y)), logX, logY}
 }
 
-// Value of the fitted line at x (data units), undefined where the line cannot be evaluated.
-export function fitAt(fit: XYFit, x: number): number | undefined {
-  if (fit.logX && x <= 0) return undefined
-  const value = fit.intercept + fit.slope * (fit.logX ? Math.log10(x) : x)
-  return fit.logY ? 10 ** value : value
-}
-
 const precise = (value: number) => Number(value.toPrecision(3)).toString()
 
 export function fitSummary(fit: XYFit): string {
   const slopeLabel = fit.logX || fit.logY ? `slope (log${fit.logX ? '–' : ''}${fit.logY ? 'log' : 'lin'})` : 'slope'
   return `n = ${fit.n} · r = ${fit.r.toFixed(2)} · R² = ${fit.r2.toFixed(2)} · ${slopeLabel} = ${precise(fit.slope)} [${precise(fit.slopeCI[0])}, ${precise(fit.slopeCI[1])}]${fit.spearman !== undefined ? ` · Spearman ρ = ${fit.spearman.toFixed(2)}` : ''}`
-}
-
-export function xyCSV(data: XYData, options: XYOptions): string {
-  const fits = new Map(data.series.map(series => [series.id, options.fit ? fitXY(series.runs.flatMap(run => run.points), options) : undefined]))
-  const header = ['series', 'run', 'seconds_since_window_start', 'x_metric', 'x_service', 'x_unit', 'x', 'y_metric', 'y_service', 'y_unit', 'y', 'level', 'fit_n', 'fit_slope', 'fit_intercept', 'fit_slope_ci95_low', 'fit_slope_ci95_high', 'fit_r', 'fit_r2', 'spearman_rho', 'fit_scale']
-  const rows = data.series.flatMap(series => series.runs.flatMap(run => run.points.map(point => {
-    const fit = fits.get(series.id)
-    return [series.label, run.label, point.t / 1000, data.x.metric, data.x.service, data.x.unit, point.x, data.y.metric, data.y.service, data.y.unit, point.y, data.level,
-      fit?.n, fit?.slope, fit?.intercept, fit?.slopeCI[0], fit?.slopeCI[1], fit?.r, fit?.r2, fit?.spearman, fit ? `${fit.logX ? 'log10' : 'linear'} x, ${fit.logY ? 'log10' : 'linear'} y` : undefined]
-  })))
-  return toCSV([header, ...rows])
 }
 
 // Default pair: achieved rate vs client P95 when recorded, else the first two metrics.
@@ -200,6 +169,3 @@ export function defaultXYSelection(metrics: string[]): {x: XYAxisSelection; y: X
 
 export interface XYState {x: XYAxisSelection; y: XYAxisSelection; options: XYOptions}
 
-export function useXYData(source: XYSource | undefined, state: XYState): XYData | undefined {
-  return useMemo(() => source && state.x.metric && state.y.metric ? buildXY(source, state.x, state.y) : undefined, [source, state.x.metric, state.x.service, state.y.metric, state.y.service])
-}

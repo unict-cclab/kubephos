@@ -2,6 +2,7 @@ import {fireEvent, render, screen} from '@testing-library/react'
 import {expect, it, vi} from 'vitest'
 import {ResultsView} from './ResultsView'
 import type {Experiment} from '../types'
+vi.mock('./results/kubestudio/resultsLayout', async () => (await import('../test/everySection')).everySection())
 vi.mock('../usePreparedComparison',()=>({usePreparedComparison:()=>({result:null,progress:'Preparing comparison…',error:''})}))
 it('keeps Sources one click away while aggregate results are preparing',()=>{
  const experiment={id:'cmp',name:'Comparison',kind:'comparison',status:'succeeded',variants:[]} as unknown as Experiment

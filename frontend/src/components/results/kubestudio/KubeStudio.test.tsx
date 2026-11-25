@@ -44,7 +44,7 @@ describe('KubeStudio', () => {
     render(<Studio request={{}} />)
     expect(within(studio()).getByRole('img', {name: /comparison chart/})).toBeInTheDocument()
     expect(within(studio()).getByRole('button', {name: 'Figure: Latency over time by variant'})).toBeInTheDocument()
-    expect(layers().getAllByRole('button').map(button => button.getAttribute('aria-label') ?? button.textContent)).toEqual(['Figure', 'Chart: P95 latency — client (Locust)', 'Title', 'Show the title', 'X axis', 'Y axis', 'Alpha', 'Hide Alpha', 'Beta', 'Hide Beta', 'Legend', 'Hide the legend', 'Add annotation', 'Add chart', 'Caption'])
+    expect(layers().getAllByRole('button').map(button => button.getAttribute('aria-label') ?? button.textContent)).toEqual(['Figure', 'Chart: P95 latency — client (Locust)', 'Title', 'Show the title', 'Alpha', 'Hide Alpha', 'Beta', 'Hide Beta', 'Legend', 'Hide the legend', 'Add a line in the graph', 'Add chart'])
     expect(heading()).toBe('P95 latency — client (Locust)')
     // One chart by default, with a single panel.
     expect(figure().querySelectorAll('.figure-panel')).toHaveLength(1)
@@ -83,19 +83,25 @@ describe('KubeStudio', () => {
     expect(within(studio()).getByText(/^4\.25 × [\d.]+ in · Helvetica 8 pt$/)).toBeInTheDocument()
   })
 
-  it('keeps provenance out of the short caption and embeds caption + methods in every export', async () => {
+  it('adds an optional caption from the right-click menu and embeds caption + methods in every export', async () => {
     render(<Studio />)
+    // No caption until the user writes one; exports then describe the figure on their own.
+    expect(within(studio()).queryByLabelText('Caption')).not.toBeInTheDocument()
+    fireEvent.click(openExport().getByRole('button', {name: 'Download PDF'}))
+    await vi.waitFor(() => expect(exportChart).toHaveBeenCalled())
+    const automatic = vi.mocked(exportChart).mock.calls[0][4]?.caption ?? ''
+    expect(automatic).toMatch(/^P95 latency — client \(Locust\) over the measured window/)
+    expect(automatic.split('\n\n')[0]).not.toMatch(/histogram_quantile|PromQL|rate window/i)
+    await vi.waitFor(() => expect(within(studio()).getByRole('button', {name: 'Export'})).toBeEnabled())
+    vi.mocked(exportChart).mockClear()
+    fireEvent.contextMenu(studio().querySelector('.ks-cell')!)
+    fireEvent.click(within(studio()).getByRole('menuitem', {name: /^Add caption/}))
     const caption = within(studio()).getByLabelText('Caption', {selector: 'textarea'}) as HTMLTextAreaElement
-    expect(caption.value).toMatch(/^P95 latency — client \(Locust\) over the measured window/)
-    expect(caption.value).not.toMatch(/histogram_quantile|PromQL|rate window/i)
-    // The caption lives in a bottom drawer, closed by default, opened from Layers.
-    expect(caption).not.toBeVisible()
-    layer('Caption')
-    expect(caption).toBeVisible()
-    const methods = within(studio()).getByText('Methods & provenance').closest('details')!
-    expect(methods).not.toHaveAttribute('open')
-    expect(methods.querySelector('p')?.textContent).toMatch(/Locust/)
+    expect(caption).toHaveFocus()
     fireEvent.change(caption, {target: {value: 'Client P95 per configuration (n = 3 runs). Bands: 95 % CI.'}})
+    fireEvent.click(within(studio()).getByRole('button', {name: 'Done'}))
+    // The caption shows under the figure; clicking it edits it again.
+    expect(within(studio()).getByRole('button', {name: 'Client P95 per configuration (n = 3 runs). Bands: 95 % CI.'})).toBeInTheDocument()
     fireEvent.change(within(studio()).getByLabelText('Figure name'), {target: {value: 'Fig 3 latency'}})
     const popover = openExport()
     expect(popover.getByRole('radio', {name: /^PDF/})).toBeChecked()
@@ -116,10 +122,60 @@ describe('KubeStudio', () => {
     expect(name).toBe('kubephos-fig-3-latency-data.csv')
     const text = await (blob as Blob).text()
     expect(text.split('\n').slice(0, 4)).toEqual(['# Fig 3 latency', '# Caption: Client P95 per configuration (n = 3 runs). Bands: 95 % CI.', expect.stringMatching(/^# Methods and provenance: /), expect.stringMatching(/^series,minute,value/)])
-    fireEvent.click(within(studio()).getByRole('button', {name: 'Insert into caption'}))
-    expect(caption.value).toMatch(/Bands: 95 % CI\. .*Locust/)
-    fireEvent.click(within(studio()).getByRole('button', {name: 'Reset to automatic'}))
-    expect(caption.value).toMatch(/^P95 latency — client \(Locust\) over the measured window/)
+    // Remove it from the same menu.
+    fireEvent.contextMenu(studio().querySelector('.ks-cell')!)
+    fireEvent.click(within(studio()).getByRole('menuitem', {name: /^Edit caption/}))
+    fireEvent.click(within(studio()).getByRole('button', {name: 'Remove caption'}))
+    expect(within(studio()).queryByLabelText('Caption')).not.toBeInTheDocument()
+  })
+
+  it('duplicates, moves and deletes charts from the figure itself: right-click menu and drag handle', () => {
+    render(<Studio />)
+    const cells = () => [...studio().querySelectorAll('.ks-cell')].map(cell => cell.getAttribute('data-chart'))
+    const menu = (index: number) => {fireEvent.contextMenu(studio().querySelectorAll('.ks-cell')[index]); return within(within(studio()).getByRole('menu'))}
+    // One chart: it can be copied but not deleted, and there is nothing to drag.
+    expect(menu(0).getByRole('menuitem', {name: /^Delete chart/})).toBeDisabled()
+    expect(studio().querySelector('.ks-grip')).toBeNull()
+    fireEvent.keyDown(within(studio()).getByRole('menu'), {key: 'Escape'})
+    expect(within(studio()).queryByRole('menu')).not.toBeInTheDocument()
+    fireEvent.click(menu(0).getByRole('menuitem', {name: /^Duplicate chart/}))
+    expect(studio().querySelectorAll('svg.pub-figure')).toHaveLength(2)
+    expect([...studio().querySelectorAll('.ks-letter')].map(item => item.textContent)).toEqual(['(a)', '(b)'])
+    // Two charts side by side need the double-column page.
+    expect(within(studio()).getByText(/^7\.16 × [\d.]+ in/)).toBeInTheDocument()
+    const [a, b] = cells()
+    fireEvent.keyDown(within(studio()).getByRole('button', {name: /^Move chart \(a\)/}), {key: 'ArrowRight'})
+    expect(cells()).toEqual([b, a])
+    expect(studio()).toHaveTextContent('Chart moved to position (b).')
+    fireEvent.dragStart(within(studio()).getByRole('button', {name: /^Move chart \(b\)/}), {dataTransfer: {setData: () => {}, effectAllowed: ''}})
+    const target = studio().querySelectorAll('.ks-cell')[0]
+    fireEvent.dragOver(target)
+    expect(target).toHaveAttribute('data-drop')
+    fireEvent.drop(target)
+    expect(cells()).toEqual([a, b])
+    fireEvent.click(menu(1).getByRole('menuitem', {name: /^Delete chart/}))
+    expect(cells()).toEqual([a])
+  })
+
+  it('adds charts guided: the type first, then X and Y; a new figure opens on the type picker', () => {
+    render(<Studio request={{choose: true}} />)
+    // From the results page: KubeStudio opens on the chart types.
+    expect(within(studio()).getByRole('dialog', {name: 'Choose a figure'})).toBeInTheDocument()
+    fireEvent.keyDown(within(studio()).getByRole('dialog', {name: 'Choose a figure'}), {key: 'Escape'})
+    // Add chart opens the same picker; leaving it adds nothing.
+    fireEvent.click(layers().getByRole('button', {name: 'Add chart'}))
+    const picker = within(studio()).getByRole('dialog', {name: 'Add chart (b): choose its type'})
+    expect(picker).toHaveTextContent('first choose its type, then its X and Y on the right')
+    fireEvent.keyDown(picker, {key: 'Escape'})
+    expect(studio().querySelectorAll('svg.pub-figure')).toHaveLength(1)
+    fireEvent.click(layers().getByRole('button', {name: 'Add chart'}))
+    fireEvent.click(within(studio()).getByRole('dialog', {name: 'Add chart (b): choose its type'}).querySelector('[data-kind="runlevel"]')!)
+    expect(studio().querySelectorAll('.ks-cell')).toHaveLength(2)
+    expect(within(studio()).getByRole('img', {name: /per repetition/})).toBeInTheDocument()
+    // The new chart is selected: its data and axes are on the right.
+    expect(heading()).toMatch(/^Run-level|P95 latency/)
+    expect(props().getByRole('group', {name: 'Chart form'})).toBeInTheDocument()
+    expect(props().getByRole('button', {name: 'Y axis'})).toBeInTheDocument()
   })
 
   it('exports from one popover that shows the physical output and remembers the format', async () => {
@@ -159,15 +215,33 @@ describe('KubeStudio', () => {
     expect(await within(studio()).findByText('SVG copied to the clipboard.', {selector: '[role="status"]'})).toBeInTheDocument()
   })
 
-  it('edits title, axis and series labels from their layers and moves the legend', () => {
+  it('edits title and series labels from their layers, renames axes on the figure and moves the legend', () => {
     render(<Studio />)
     layer('Title')
     fireEvent.click(props().getByRole('checkbox', {name: 'Show titles in the figure'}))
     fireEvent.change(props().getByRole('textbox', {name: 'Title'}), {target: {value: 'Client latency'}})
     expect(figure().querySelector('.figure-title')).toHaveTextContent('Client latency')
-    layer('Y axis')
-    fireEvent.change(props().getByLabelText('Label'), {target: {value: 'Latency (ms)'}})
-    expect(figure()).toHaveTextContent('Latency (ms)')
+    // Axes are not in Layers: a click on an axis title renames it in place.
+    expect(layers().queryByRole('button', {name: /axis$/})).not.toBeInTheDocument()
+    fireEvent.click(figure().querySelector('.axis-title-left text')!)
+    const field = within(studio()).getByRole('textbox', {name: 'Y axis title'})
+    expect(field).toHaveFocus()
+    expect(field).toHaveValue(figure().querySelector('.axis-title-left text')!.textContent)
+    expect(heading()).toBe('Y axis')
+    fireEvent.change(field, {target: {value: 'Latency (ms)'}})
+    fireEvent.keyDown(field, {key: 'Enter'})
+    fireEvent.blur(field)
+    expect(figure().querySelector('.axis-title-left')).toHaveTextContent('Latency (ms)')
+    expect(within(studio()).queryByRole('textbox', {name: 'Y axis title'})).not.toBeInTheDocument()
+    // Esc keeps the title; an empty one restores the automatic title.
+    fireEvent.click(figure().querySelector('.axis-title-x text')!)
+    fireEvent.change(within(studio()).getByRole('textbox', {name: 'X axis title'}), {target: {value: 'Elapsed'}})
+    fireEvent.keyDown(within(studio()).getByRole('textbox', {name: 'X axis title'}), {key: 'Escape'})
+    expect(figure().querySelector('.axis-title-x')).not.toHaveTextContent('Elapsed')
+    fireEvent.click(figure().querySelector('.axis-title-left text')!)
+    fireEvent.change(within(studio()).getByRole('textbox', {name: 'Y axis title'}), {target: {value: ' '}})
+    fireEvent.blur(within(studio()).getByRole('textbox', {name: 'Y axis title'}))
+    expect(figure().querySelector('.axis-title-left')).not.toHaveTextContent('Latency (ms)')
     layer('Beta')
     fireEvent.change(props().getByLabelText('Label'), {target: {value: 'Raised limit'}})
     expect(figure().querySelector('.figure-legend')).toHaveTextContent('Raised limit')
@@ -192,7 +266,6 @@ describe('KubeStudio', () => {
     expect(heading()).toBe('P95 latency — client (Locust)')
     fireEvent.click(figure().querySelector('.tick-left text')!)
     expect(heading()).toBe('Y axis')
-    expect(layers().getByRole('button', {name: 'Y axis'})).toHaveAttribute('aria-current', 'true')
     fireEvent.click(props().getByRole('radio', {name: 'Custom'}))
     fireEvent.change(props().getByLabelText('Max'), {target: {value: '10'}})
     expect([...figure().querySelectorAll('.tick-left text')].at(-1)?.textContent).toBe('10')
@@ -228,10 +301,14 @@ describe('KubeStudio', () => {
     expect(figure().querySelector('.figure-legend')).toBeNull()
   })
 
-  it('adds an annotation from Layers and edits it in place', () => {
+  it('adds a line in the graph from Layers and edits it in place', () => {
     render(<Studio />)
-    fireEvent.click(layers().getByRole('button', {name: 'Add annotation'}))
-    fireEvent.click(layers().getByRole('button', {name: 'Threshold line'}))
+    fireEvent.click(layers().getByRole('button', {name: 'Add a line in the graph'}))
+    const options = within(layers().getByRole('group', {name: 'Line to add'})).getAllByRole('button')
+    expect(options.map(option => option.querySelector('strong')?.textContent)).toEqual(['Threshold line', 'Shaded range', 'Vertical line', 'Text label'])
+    // Each option says what it is for, with an example.
+    expect(options[0]).toHaveTextContent(/SLO/)
+    fireEvent.click(options[0])
     expect(heading()).toBe('Threshold line')
     fireEvent.change(props().getByLabelText('Value (ms)'), {target: {value: '3'}})
     // The label follows the value, with the axis unit.
@@ -240,21 +317,22 @@ describe('KubeStudio', () => {
     expect(figure().querySelector('.annotation-user')).toBeNull()
   })
 
-  it('steps marker size and line width on a 0.25 pt grid with round numbers', () => {
+  it('steps line width on a 0.25 pt grid with round numbers, and keeps points to scatter charts', () => {
     render(<Studio />)
     layer('Alpha')
     expect(props().getByLabelText('Line width (pt)')).toHaveValue(1)
-    expect(props().getByLabelText('Marker size (pt)')).toHaveValue(2)
+    expect(props().queryByLabelText(/^Point size/)).not.toBeInTheDocument()
+    expect(figure().querySelector('g.series[data-series-key="load.p95_response_time|Alpha"] circle')).toBeNull()
     fireEvent.click(props().getByRole('button', {name: 'Increase line width'}))
     expect(props().getByLabelText('Line width (pt)')).toHaveValue(1.25)
     expect(figure().querySelector('g.series[data-series-key="load.p95_response_time|Alpha"] path.series-line')).toHaveAttribute('stroke-width', '1.25')
-    fireEvent.click(props().getByRole('button', {name: 'Decrease marker size'}))
-    expect(props().getByLabelText('Marker size (pt)')).toHaveValue(1.75)
   })
 
   it('remembers the figure, caption and zoom per experiment, loads old saves and survives broken storage', () => {
     const view = render(<Studio storageKey="experiment:e1" request={{}} />)
     pickFigure('runlevel')
+    fireEvent.contextMenu(studio().querySelector('.ks-cell')!)
+    fireEvent.click(within(studio()).getByRole('menuitem', {name: /^Add caption/}))
     fireEvent.change(within(studio()).getByLabelText('Caption', {selector: 'textarea'}), {target: {value: 'Edited caption.'}})
     fireEvent.click(within(studio()).getByRole('button', {name: /show at 100 %/}))
     expect(within(studio()).getByText('Saved')).toBeInTheDocument()
@@ -262,7 +340,7 @@ describe('KubeStudio', () => {
     expect(loadStudioMemory('experiment:e1')).toMatchObject({charts: [expect.objectContaining({kind: 'runlevel'})], zoom: 1})
     render(<Studio storageKey="experiment:e1" request={{}} />)
     expect(within(studio()).getByRole('img', {name: /per repetition/})).toBeInTheDocument()
-    expect(within(studio()).getByLabelText('Caption', {selector: 'textarea'})).toHaveValue('Edited caption.')
+    expect(within(studio()).getByRole('button', {name: 'Edited caption.'})).toBeInTheDocument()
     expect(within(studio()).getByRole('button', {name: /^Zoom 100 %/})).toBeInTheDocument()
     cleanup()
     const getItem = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {throw new Error('denied')})
@@ -289,6 +367,8 @@ describe('KubeStudio', () => {
     expect(figure().getAttribute('viewBox')).toMatch(/^0 0 515.52 /)
     fireEvent.keyDown(document.body, {key: 'z', metaKey: true})
     expect(figure().getAttribute('viewBox')).toMatch(/^0 0 252 /)
+    fireEvent.contextMenu(studio().querySelector('.ks-cell')!)
+    fireEvent.click(within(studio()).getByRole('menuitem', {name: /^Add caption/}))
     const caption = within(studio()).getByLabelText('Caption', {selector: 'textarea'})
     fireEvent.change(caption, {target: {value: 'Mine.'}})
     fireEvent.keyDown(caption, {key: 'z', ctrlKey: true})
@@ -350,8 +430,9 @@ describe('KubeStudio', () => {
       return results.violations.map(({id, nodes}) => ({id, targets: nodes.map(node => node.target)}))
     }
     render(<main><h1>Results</h1><Studio onSave={async () => {}} /></main>)
-    layer('Caption')
-    fireEvent.click(within(studio()).getByText('Methods & provenance'))
+    fireEvent.contextMenu(studio().querySelector('.ks-cell')!)
+    expect(await audit()).toEqual([])
+    fireEvent.click(within(studio()).getByRole('menuitem', {name: /^Add caption/}))
     expect(await audit()).toEqual([])
     openExport()
     expect(await audit()).toEqual([])
@@ -361,7 +442,7 @@ describe('KubeStudio', () => {
     fireEvent.keyDown(within(studio()).getByRole('dialog', {name: 'Choose a figure'}), {key: 'Escape'})
     fireEvent.click(figure().querySelector('.legend-item text')!)
     expect(await audit()).toEqual([])
-    layer('Y axis')
+    fireEvent.click(figure().querySelector('.axis-title-left text')!)
     expect(await audit()).toEqual([])
     fireEvent.keyDown(document.body, {key: '?'})
     expect(await audit()).toEqual([])

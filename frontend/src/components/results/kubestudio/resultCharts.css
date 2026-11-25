@@ -1,0 +1,36 @@
+/* Charts of a results page (ResultCharts). */
+/* The columns (one to three, from the grid's width) and each chart's span are set inline. */
+.result-chart-grid { display: grid; gap: 20px; margin: 0; padding: 0; list-style: none; }
+.result-chart-grid > li { position: relative; min-width: 0; }
+/* Where a dragged chart will land: a bar before (or after the last) card. */
+.result-chart-grid > li[data-drop-before]::before, .result-chart-grid > li[data-drop-after]::after { position: absolute; top: 0; bottom: 0; width: 3px; border-radius: 2px; background: var(--blue, #2563eb); content: ""; }
+.result-chart-grid > li[data-drop-before]::before { left: -12px; }
+.result-chart-grid > li[data-drop-after]::after { right: -12px; }
+/* Dropping in the middle of a chart swaps the two. */
+.result-chart-grid > li[data-drop-swap] > .result-chart { border-color: var(--blue, #2563eb); box-shadow: 0 0 0 1px var(--blue, #2563eb); }
+.result-chart { position: relative; display: grid; gap: 10px; min-width: 0; margin: 0; padding: 12px 14px 14px; border: 1px solid var(--border); border-radius: var(--radius-md, 10px); background: var(--card); transition: border-color .12s ease-out, box-shadow .12s ease-out; }
+.result-chart:hover, .result-chart:focus-within { border-color: var(--line-strong, var(--border)); box-shadow: 0 6px 20px -12px rgb(0 0 0 / .25); }
+.result-chart[data-dragging] { opacity: .4; }
+.result-chart-head { display: flex; align-items: center; gap: 8px; }
+.result-chart-head strong { flex: 1 1 auto; min-width: 0; overflow: hidden; font-size: 15px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.result-chart-name { flex: 1 1 auto; min-width: 0; height: 30px; margin: 0 0 0 -7px; padding: 0 6px; border: 1px solid var(--ring, var(--blue)); border-radius: 6px; background: var(--background); color: var(--foreground); font: inherit; font-size: 15px; font-weight: 600; }
+.result-chart-name:focus { outline: 2px solid color-mix(in srgb, var(--ring, var(--blue)) 30%, transparent); }
+/* Corner handle: drag to span more or fewer columns. */
+.result-chart-resize { position: absolute; right: 2px; bottom: 2px; display: grid; place-items: center; width: 20px; height: 20px; padding: 0; border: 0; border-radius: 4px; background: transparent; color: var(--muted-foreground); cursor: ew-resize; opacity: 0; touch-action: none; transition: opacity .12s ease-out; }
+.result-chart-resize svg { fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; }
+.result-chart:hover .result-chart-resize, .result-chart-resize:focus-visible { opacity: 1; }
+.result-chart-resize:hover { color: var(--foreground); }
+.result-chart-resize:focus-visible { outline: 2px solid var(--ring, var(--blue)); outline-offset: 1px; }
+@media (hover: none) { .result-chart-resize { opacity: .6; } }
+/* Charts are drawn on white paper, like their exports, in both themes. */
+.result-chart-image { position: relative; overflow: hidden; border-radius: var(--radius-sm); background: #ffffff; cursor: zoom-in; }
+.result-chart-image:not([style]) .result-chart-cell { position: relative; }
+.result-chart-image[style] .result-chart-cell { position: absolute; }
+.result-chart-image svg.pub-figure, .result-chart-image svg.placement-heatmap { display: block; width: 100%; height: auto; }
+/* A wide chart keeps its proportions and grows up to a readable height. */
+.result-chart-image:not([style]) svg.pub-figure, .result-chart-image svg.placement-heatmap { max-height: 560px; }
+.result-chart-letter { position: absolute; bottom: 100%; left: 2px; color: #111111; font-size: 12px; font-weight: 700; }
+.result-chart .figure-caption { margin: 0; color: var(--muted-foreground); font-size: 13px; line-height: 1.5; }
+.result-charts-notice { margin: 0 0 12px; font-size: 14px; }
+.result-charts-empty { padding: 32px 16px; border: 1px dashed var(--border); border-radius: var(--radius-md, 10px); color: var(--muted-foreground); text-align: center; }
+.result-charts-empty p { margin: 0; }

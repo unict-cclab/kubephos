@@ -92,6 +92,9 @@ func NewServer(store *storage.Store, registry *plugins.Registry, artifactStore *
 	router.HandleFunc("POST /api/v1/account/notifications/telegram/connect", server.connectTelegram)
 	router.HandleFunc("POST /api/v1/account/notifications/telegram/disconnect", server.disconnectTelegram)
 	router.HandleFunc("POST /api/v1/account/notifications/telegram/test", server.testTelegram)
+	router.HandleFunc("GET /api/v1/account/result-layouts/{kind}/{id}", server.getResultLayout)
+	router.HandleFunc("PUT /api/v1/account/result-layouts/{kind}/{id}", server.saveResultLayout)
+	router.HandleFunc("DELETE /api/v1/account/result-layouts/{kind}/{id}", server.deleteResultLayout)
 
 	router.HandleFunc("GET /api/v1/auth/login", server.authLogin)
 	router.HandleFunc("GET /api/v1/auth/callback", server.authCallback)

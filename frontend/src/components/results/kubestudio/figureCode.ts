@@ -68,7 +68,6 @@ const mplDash = (line: LineStyle, width: number) => {
   const pattern = (dashArray(line, width) ?? '').split(' ').map(Number).map(value => Number((value / Math.max(.1, width)).toFixed(3)))
   return `(0, (${pattern.join(', ')}))`
 }
-const markEvery = (series: ModelSeries) => series.kind === 'scatter' ? 1 : Math.max(1, Math.round(series.x.filter(Number.isFinite).length / 7))
 const legendLoc: Record<string, string> = {bottom: 'outside lower center', top: 'outside upper center', right: 'outside right upper'}
 
 function pyAxis(target: string, axis: ModelAxis, which: 'x' | 'y', show: boolean): string[] {
@@ -162,9 +161,10 @@ export function matplotlibScript(model: FigureModel, options: CodeOptions): {scr
       if (entry.runs.length) lines.push(`for name in [${entry.runs.map(py).join(', ')}]:`, `    ${target}.plot(x, col(name), color=${py(style.color)}, lw=${(series.showMean ? style.lineWidth * .45 : style.lineWidth * .7).toFixed(2)}, alpha=${series.showMean ? .38 * style.opacity : style.opacity}, zorder=2)`)
       if (series.showMean) {
         const width = series.runs && series.showMean ? style.lineWidth * 1.35 : style.lineWidth
-        const marker = mplMarker[style.marker]
-        const size = (series.kind === 'scatter' ? style.markerSize * .85 : style.markerSize) * 2
-        lines.push(`handles[${py(series.key)}] = ${target}.plot(x, col(${py(entry.y)}), color=${py(style.color)}, lw=${width.toFixed(2)}, ls=${mplDash(style.line, width)}, marker=${py(marker)}, ms=${size.toFixed(2)}, mfc=${style.hollow ? '"white"' : py(style.color)}, mec=${py(style.color)}, mew=${(style.markerSize * .45).toFixed(2)}, markevery=${markEvery(series)}${alpha}, label=${py(series.label)}, zorder=3)[0]`)
+        // Like the SVG: points for scatter series only.
+        const marker = series.kind === 'scatter' ? mplMarker[style.marker] : 'None'
+        const size = style.markerSize * .85 * 2
+        lines.push(`handles[${py(series.key)}] = ${target}.plot(x, col(${py(entry.y)}), color=${py(style.color)}, lw=${width.toFixed(2)}, ls=${mplDash(style.line, width)}, marker=${py(marker)}, ms=${size.toFixed(2)}, mfc=${style.hollow ? '"white"' : py(style.color)}, mec=${py(style.color)}, mew=${(style.markerSize * .45).toFixed(2)}${alpha}, label=${py(series.label)}, zorder=3)[0]`)
       }
       if (entry.fx && entry.fy) lines.push(`${target}.plot(col(${py(entry.fx)}), col(${py(entry.fy)}), color=${py(style.color)}, lw=${style.lineWidth.toFixed(2)}${series.axis === 'right' ? ', ls="--"' : ''}${alpha}, zorder=3)`)
     }
@@ -219,10 +219,9 @@ const pgfDash = (line: LineStyle, width: number) => {
 function pgfStyle(series: ModelSeries, forLegend = false): string {
   const style = series.style
   const parts = [`color=${colorName(style.color)}`, `line width=${(series.runs && series.showMean ? style.lineWidth * 1.35 : style.lineWidth).toFixed(2)}pt`, pgfDash(series.kind === 'scatter' && !forLegend ? style.line : style.line, style.lineWidth)]
-  const mark = pgfMarker(style.marker, style.hollow)
-  if (mark) parts.push(`mark=${mark}`, `mark size=${(series.kind === 'scatter' ? style.markerSize * .85 : style.markerSize).toFixed(2)}pt`, `mark options={solid${style.hollow ? ', fill=white' : ''}}`)
+  const mark = series.kind === 'scatter' ? pgfMarker(style.marker, style.hollow) : undefined
+  if (mark) parts.push(`mark=${mark}`, `mark size=${(style.markerSize * .85).toFixed(2)}pt`, `mark options={solid${style.hollow ? ', fill=white' : ''}}`)
   else parts.push('no marks')
-  if (!forLegend && series.kind === 'line' && mark) parts.push(`mark repeat=${markEvery(series)}`)
   if (style.opacity < 1) parts.push(`opacity=${style.opacity}`)
   return parts.join(', ')
 }
