@@ -17,7 +17,10 @@ async function openSection(name: string) {
 async function openStudio(kind?: FigureKind, metric?: string) {
   if (!screen.queryByRole('dialog', {name: 'KubeStudio'})) fireEvent.click(await screen.findByRole('button', {name: 'Create figure'}))
   const dialog = await screen.findByRole('dialog', {name: 'KubeStudio'})
-  // KubeStudio opens on the chart types (a new figure); the top-bar switcher changes it later.
+  // A new figure opens on the landing page: start from a suggestion of that kind (else the first),
+  // then the top-bar switcher changes it.
+  const landing = dialog.querySelector('.ks-landing')
+  if (landing) fireEvent.click(landing.querySelector(`.ks-suggestion[data-kind="${kind}"]`) ?? landing.querySelector('.ks-suggestion')!)
   if (kind) {
     if (!within(dialog).queryByRole('dialog', {name: 'Choose a figure'})) fireEvent.click(within(dialog).getByRole('button', {name: /^Figure:/}))
     fireEvent.click(within(dialog).getByRole('dialog', {name: 'Choose a figure'}).querySelector(`[data-kind="${kind}"]`)!)

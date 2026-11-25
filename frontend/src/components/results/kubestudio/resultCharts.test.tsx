@@ -1,3 +1,4 @@
+import {useState} from 'react'
 import {act, cleanup, createEvent, fireEvent, render, renderHook, screen, waitFor, within} from '@testing-library/react'
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest'
 import {request} from '../../../api'
@@ -5,7 +6,8 @@ import type {AggregateSeries} from '../../../resultsData'
 import {defaultFigureSettings} from '../figureSettings'
 import {provenanceFor} from '../runs'
 import {defaultXYState, type StudioData} from './image'
-import {ResultCharts} from './ResultCharts'
+import {SectionsMenu} from '../SectionsMenu'
+import {clickDelay, ResultCharts} from './ResultCharts'
 import {defaultCharts, useResultsLayout, type ChartItem, type LayoutScope, type PageSection} from './resultsLayout'
 
 vi.mock('../../../api', () => ({request: vi.fn()}))
@@ -22,11 +24,16 @@ const path = '/account/result-layouts/experiments/exp%2F1'
 
 const available: PageSection[] = ['summary', 'timeline', 'statistics']
 
-function Page({onAdd = () => {}, onEdit = () => {}}: {onAdd?: () => void; onEdit?: (item: ChartItem) => void}) {
+// The charts with the page header's Sections menu and Reset (in the page's ⋯ menu), as on a results page.
+function Page({onEdit = () => {}}: {onEdit?: (item: ChartItem) => void}) {
   const charts = useResultsLayout(scope, data, 'token')
-  return <ResultCharts items={charts.items} data={data} groups={groups} settings={defaultFigureSettings} loading={charts.loading} customized={charts.customized} error={charts.error}
-    sections={available} shown={charts.sections} onToggleSection={charts.toggleSection}
-    onChange={charts.change} onReset={charts.reset} onAdd={onAdd} onEdit={onEdit} />
+  const [undo, setUndo] = useState<() => void>()
+  return <>
+    <SectionsMenu available={available} shown={charts.sections} onToggle={charts.toggleSection} onShowAll={() => charts.setSections(available)} />
+    {charts.customized && <button type="button" onClick={() => setUndo(() => charts.reset())}>Reset charts and sections</button>}
+    {undo && <button type="button" onClick={() => {undo(); setUndo(undefined)}}>Undo reset</button>}
+    <ResultCharts items={charts.items} data={data} groups={groups} settings={defaultFigureSettings} loading={charts.loading} error={charts.error} onChange={charts.change} onEdit={onEdit} />
+  </>
 }
 
 const section = () => within(screen.getByRole('region', {name: 'Charts'}))
@@ -39,7 +46,12 @@ const savedLayout = () => {
 const savedNames = () => savedLayout().items!.map(item => item.name)
 // jsdom drops clientX from drag events, so it is set on the event itself.
 const dragOverAt = (element: HTMLElement, clientX: number) => {const event = createEvent.dragOver(element); Object.defineProperty(event, 'clientX', {value: clientX}); fireEvent(element, event)}
-const openMenu = (index: number) => fireEvent.contextMenu(section().getAllByRole('figure')[index])
+const openMenu = (index: number) => fireEvent.click(within(section().getAllByRole('figure')[index]).getByRole('button', {name: /^Actions for/}))
+const grid = () => section().getByRole('list')
+const cells = () => grid().querySelectorAll<HTMLLIElement>(':scope > li')
+const sizes = () => [...cells()].map(cell => cell.dataset.size)
+// jsdom has no PointerEvent: the coordinates are set on the event itself.
+const pointer = (type: 'pointerDown' | 'pointerMove' | 'pointerUp', element: HTMLElement, clientX: number) => {const event = createEvent[type](element, {button: 0}); Object.defineProperty(event, 'clientX', {value: clientX}); fireEvent(element, event)}
 
 beforeEach(() => vi.mocked(request).mockImplementation(async () => ({layout: null}) as never))
 afterEach(() => {cleanup(); vi.mocked(request).mockReset()})
@@ -51,27 +63,43 @@ describe('Charts', () => {
     await waitFor(() => expect(names()).toEqual(['P95 latency — client (Locust)', 'Achieved request rate']))
     expect(request).toHaveBeenCalledWith(path)
     expect(section().getAllByRole('img')).toHaveLength(2)
-    expect(section().queryByRole('button', {name: 'Reset'})).not.toBeInTheDocument()
+    // Nothing but the charts in their header: no Reset, no Sections (both moved to the page header).
+    expect(section().queryByRole('button', {name: /Reset|Sections/})).not.toBeInTheDocument()
     expect(saves()).toEqual([])
   })
 
-  it('removes a chart from its right-click menu with undo, and resets to the defaults', async () => {
+  it('hides a chart from its ⋯ menu with undo, shows it again from Hidden charts, and resets to the defaults', async () => {
     render(<Page />)
     await waitFor(() => expect(names()).toHaveLength(2))
+    // No "Add chart" here: Create figure in the page header opens KubeStudio.
+    expect(section().queryByRole('button', {name: /Add chart/})).not.toBeInTheDocument()
     openMenu(0)
     const menu = within(screen.getByRole('menu', {name: 'P95 latency — client (Locust)'}))
-    expect(menu.getAllByRole('menuitem').map(item => item.textContent)).toEqual([expect.stringMatching(/^Edit in KubeStudio/), expect.stringMatching(/^Rename/), expect.stringMatching(/^Duplicate/), expect.stringMatching(/^Download PDF/), expect.stringMatching(/^Download PNG/), expect.stringMatching(/^Download SVG/), expect.stringMatching(/^Remove from this page/)])
-    fireEvent.click(menu.getByRole('menuitem', {name: /^Remove from this page/}))
+    expect(menu.getAllByRole('menuitem').map(item => item.querySelector('strong')!.textContent)).toEqual(['Full screen', 'Edit in KubeStudio', 'Rename', 'Duplicate', 'Download PDF', 'Download PNG', 'Download SVG', 'Hide'])
+    // Sizes are the corner handle's job, not the menu's.
+    expect(menu.queryAllByRole('menuitemcheckbox')).toEqual([])
+    expect(menu.queryByRole('menuitem', {name: /Remove/})).not.toBeInTheDocument()
+    fireEvent.click(menu.getByRole('menuitem', {name: /^Hide/}))
     expect(names()).toEqual(['Achieved request rate'])
     expect(saves()[0]).toEqual([path, expect.objectContaining({method: 'PUT'}), 'token'])
-    expect(savedNames()).toEqual(['Achieved request rate'])
+    // Hidden, not removed: kept in the saved layout and listed, collapsed, under the grid.
+    expect(savedLayout().items!.map(item => [item.name, item.concealed])).toEqual([['P95 latency — client (Locust)', true], ['Achieved request rate', undefined]])
+    const toggle = section().getByRole('button', {name: 'Hidden charts (1)'})
+    expect(toggle).toHaveAttribute('aria-expanded', 'false')
+    expect(section().queryByRole('button', {name: /^Show P95/})).not.toBeInTheDocument()
     fireEvent.click(section().getByRole('button', {name: 'Undo'}))
     expect(names()).toHaveLength(2)
-    expect(savedNames()).toEqual(['P95 latency — client (Locust)', 'Achieved request rate'])
-    fireEvent.click(section().getByRole('button', {name: 'Reset'}))
+    expect(section().queryByRole('button', {name: /^Hidden charts/})).not.toBeInTheDocument()
+    openMenu(1)
+    fireEvent.click(screen.getByRole('menuitem', {name: /^Hide/}))
+    fireEvent.click(section().getByRole('button', {name: 'Hidden charts (1)'}))
+    fireEvent.click(section().getByRole('button', {name: 'Show Achieved request rate'}))
+    expect(names()).toEqual(['P95 latency — client (Locust)', 'Achieved request rate'])
+    expect(savedLayout().items!.every(item => !item.concealed)).toBe(true)
+    expect(section().getByText('Achieved request rate shown again.')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', {name: 'Reset charts and sections'}))
     expect(saves().at(-1)).toEqual([path, {method: 'DELETE'}, 'token'])
-    expect(section().getByText(/Default page restored/)).toBeInTheDocument()
-    expect(section().queryByRole('button', {name: 'Reset'})).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', {name: 'Reset charts and sections'})).not.toBeInTheDocument()
   })
 
   it('moves and swaps charts by dragging them, or moves them with Alt + arrow keys on their ⋯ button', async () => {
@@ -124,29 +152,55 @@ describe('Charts', () => {
     expect(names()).toEqual(['P95 latency — client (Locust)', 'Throughput'])
   })
 
-  it('widens and narrows a chart from its corner, up to the columns there are', async () => {
+  it('resizes a chart in steps from its corner (keys or drag); the grid reflows around it', async () => {
     render(<Page />)
     await waitFor(() => expect(names()).toHaveLength(2))
-    const [first] = section().getAllByRole('listitem')
+    // A six-column grid filled densely: the size is a span of it (CSS), so neighbours move to fill rows.
+    expect(sizes()).toEqual(['third', 'third'])
     const corner = () => section().getByRole('button', {name: /^Resize P95 latency/})
-    expect(first.style.gridColumn).toBe('span 1')
     fireEvent.keyDown(corner(), {key: 'ArrowRight'})
-    expect(first.style.gridColumn).toBe('span 2')
-    expect(section().getByText('P95 latency — client (Locust) now spans 2 columns.')).toBeInTheDocument()
+    expect(sizes()).toEqual(['half', 'third'])
+    expect(section().getByText('P95 latency — client (Locust) is now ½ width.')).toBeInTheDocument()
     fireEvent.keyDown(corner(), {key: 'ArrowRight'})
     fireEvent.keyDown(corner(), {key: 'ArrowRight'})
-    expect(first.style.gridColumn).toBe('span 3')
-    expect(JSON.parse(String(saves().at(-1)![1]!.body)).layout.items[0].span).toBe(3)
+    fireEvent.keyDown(corner(), {key: 'ArrowRight'})
+    expect(sizes()).toEqual(['full', 'third'])
+    expect(savedLayout().items![0].size).toBe('full')
+    expect(corner()).toHaveAccessibleName(/now Full width/)
     fireEvent.keyDown(corner(), {key: 'ArrowLeft'})
+    expect(sizes()).toEqual(['two-thirds', 'third'])
+    fireEvent.keyDown(section().getByRole('button', {name: /^Resize Achieved/}), {key: 'ArrowUp'})
+    fireEvent.keyDown(corner(), {key: 'ArrowDown'})
+    fireEvent.keyDown(corner(), {key: 'ArrowDown'})
+    expect(sizes()).toEqual(['third', 'half'])
+    expect(savedLayout().items!.map(item => item.size)).toEqual([undefined, 'half'])
+    // Dragging the corner previews the nearest size live (the grid reflows), saves it when let go,
+    // and never starts moving the card instead.
+    Object.defineProperty(grid(), 'clientWidth', {configurable: true, value: 1200})
+    vi.spyOn(cells()[0], 'getBoundingClientRect').mockReturnValue({left: 0, right: 380, width: 380, top: 0, bottom: 300, height: 300, x: 0, y: 0, toJSON: () => ({})})
+    const before = saves().length
+    pointer('pointerDown', corner(), 380)
+    const drag = createEvent.dragStart(section().getAllByRole('figure')[0], {dataTransfer: {setData: () => {}, effectAllowed: ''}})
+    fireEvent(section().getAllByRole('figure')[0], drag)
+    expect(drag.defaultPrevented).toBe(true)
+    pointer('pointerMove', corner(), 790)
+    expect(sizes()).toEqual(['two-thirds', 'half'])
+    expect(saves()).toHaveLength(before)
+    pointer('pointerMove', corner(), 1180)
+    expect(sizes()).toEqual(['full', 'half'])
+    pointer('pointerUp', corner(), 1180)
+    expect(savedLayout().items![0].size).toBe('full')
+    // A grid too narrow for thirds steps between half and full width only.
+    Object.defineProperty(grid(), 'clientWidth', {configurable: true, value: 700})
     fireEvent.keyDown(corner(), {key: 'ArrowLeft'})
-    expect(first.style.gridColumn).toBe('span 1')
-    expect(JSON.parse(String(saves().at(-1)![1]!.body)).layout.items[0].span).toBeUndefined()
+    expect(sizes()).toEqual(['half', 'half'])
+    fireEvent.keyDown(corner(), {key: 'ArrowLeft'})
+    expect(sizes()).toEqual(['half', 'half'])
   })
 
-  it('duplicates a chart from its ⋯ button and opens charts in KubeStudio', async () => {
+  it('duplicates a chart from its ⋯ button and opens charts in KubeStudio by double-click, Enter or the menu', async () => {
     const onEdit = vi.fn()
-    const onAdd = vi.fn()
-    render(<Page onEdit={onEdit} onAdd={onAdd} />)
+    render(<Page onEdit={onEdit} />)
     await waitFor(() => expect(names()).toHaveLength(2))
     fireEvent.click(section().getByRole('button', {name: 'Actions for Achieved request rate'}))
     fireEvent.click(screen.getByRole('menuitem', {name: /^Duplicate/}))
@@ -156,8 +210,84 @@ describe('Charts', () => {
     expect(onEdit).toHaveBeenLastCalledWith(expect.objectContaining({name: 'P95 latency — client (Locust)'}))
     fireEvent.doubleClick(section().getAllByRole('figure')[2].querySelector('.result-chart-image')!)
     expect(onEdit).toHaveBeenLastCalledWith(expect.objectContaining({name: 'Achieved request rate (copy)'}))
-    fireEvent.click(section().getByRole('button', {name: 'Add chart'}))
-    expect(onAdd).toHaveBeenCalled()
+    // Keyboard: the card is focusable, Enter opens it; Enter inside its buttons does not.
+    const second = section().getAllByRole('figure')[1]
+    expect(second).toHaveAttribute('tabindex', '0')
+    expect(second).toHaveAttribute('aria-keyshortcuts', 'Enter F Shift+F10')
+    expect(second).toHaveAccessibleDescription(/Click a chart for full screen, double-click it to edit it in KubeStudio, right-click it for more/)
+    fireEvent.keyDown(second, {key: 'Enter'})
+    expect(onEdit).toHaveBeenLastCalledWith(expect.objectContaining({name: 'Achieved request rate'}))
+    fireEvent.keyDown(within(second).getByRole('button', {name: /^Actions for/}), {key: 'Enter'})
+    expect(onEdit).toHaveBeenCalledTimes(3)
+    // Double-clicking the title renames instead.
+    fireEvent.doubleClick(within(second).getByText('Achieved request rate'))
+    expect(within(second).getByRole('textbox', {name: 'Chart name'})).toBeInTheDocument()
+    expect(onEdit).toHaveBeenCalledTimes(3)
+  })
+
+  it('opens a chart full screen on a single click, F or its ⤢ button; a double click opens KubeStudio instead', async () => {
+    const onEdit = vi.fn()
+    render(<Page onEdit={onEdit} />)
+    await waitFor(() => expect(names()).toHaveLength(2))
+    vi.useFakeTimers()
+    try {
+      const fullscreen = () => screen.queryByRole('dialog', {name: 'Achieved request rate'})
+      const card = () => section().getAllByRole('figure')[1]
+      const image = () => card().querySelector('.result-chart-image')!
+      // A single click waits for a possible second one, then opens the full screen.
+      fireEvent.click(image(), {detail: 1})
+      expect(fullscreen()).not.toBeInTheDocument()
+      act(() => {vi.advanceTimersByTime(clickDelay)})
+      expect(fullscreen()).toBeInTheDocument()
+      expect(within(fullscreen()!).getByRole('img')).toBeInTheDocument()
+      expect(within(fullscreen()!).getByRole('button', {name: 'Close full screen'})).toHaveFocus()
+      fireEvent.keyDown(fullscreen()!, {key: 'Escape'})
+      expect(fullscreen()).not.toBeInTheDocument()
+      // A double click never flashes it: KubeStudio opens.
+      fireEvent.click(image(), {detail: 1})
+      fireEvent.click(image(), {detail: 2})
+      fireEvent.doubleClick(image())
+      act(() => {vi.advanceTimersByTime(clickDelay * 2)})
+      expect(fullscreen()).not.toBeInTheDocument()
+      expect(onEdit).toHaveBeenCalledTimes(1)
+      // Clicks on the card's controls are theirs.
+      fireEvent.click(within(card()).getByRole('button', {name: /^Resize/}), {detail: 1})
+      fireEvent.click(within(card()).getByRole('button', {name: /^Actions for/}), {detail: 1})
+      fireEvent.click(screen.getByRole('menuitem', {name: /^Duplicate/}), {detail: 1})
+      act(() => {vi.advanceTimersByTime(clickDelay * 2)})
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+      // F on the focused card, and the ⤢ button, open it at once.
+      fireEvent.keyDown(card(), {key: 'f'})
+      expect(fullscreen()).toBeInTheDocument()
+      fireEvent.click(within(fullscreen()!).getByRole('button', {name: 'Close full screen'}))
+      expect(fullscreen()).not.toBeInTheDocument()
+      fireEvent.click(section().getByRole('button', {name: 'Full screen: Achieved request rate'}))
+      fireEvent.click(within(fullscreen()!).getByRole('button', {name: 'Edit in KubeStudio'}))
+      expect(fullscreen()).not.toBeInTheDocument()
+      expect(onEdit).toHaveBeenLastCalledWith(expect.objectContaining({name: 'Achieved request rate'}))
+    } finally {vi.useRealTimers()}
+  })
+
+  it('opens the chart’s menu on right-click at the pointer, or with Shift+F10 and the menu key', async () => {
+    render(<Page />)
+    await waitFor(() => expect(names()).toHaveLength(2))
+    const card = section().getAllByRole('figure')[1]
+    const right = createEvent.contextMenu(card)
+    Object.defineProperty(right, 'clientX', {value: 120})
+    Object.defineProperty(right, 'clientY', {value: 80})
+    fireEvent(card, right)
+    expect(right.defaultPrevented).toBe(true)
+    const menu = screen.getByRole('menu', {name: 'Achieved request rate'})
+    expect(menu.style.top).toBe('80px')
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    fireEvent.click(within(menu).getByRole('menuitem', {name: /^Full screen/}))
+    expect(screen.getByRole('dialog', {name: 'Achieved request rate'})).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', {name: 'Close full screen'}))
+    fireEvent.keyDown(card, {key: 'F10', shiftKey: true})
+    expect(screen.getByRole('menu', {name: 'Achieved request rate'})).toBeInTheDocument()
+    fireEvent.keyDown(screen.getByRole('menu'), {key: 'Escape'})
+    fireEvent.keyDown(card, {key: 'ContextMenu'})
+    expect(screen.getByRole('menu', {name: 'Achieved request rate'})).toBeInTheDocument()
   })
 
   it('loads the user’s saved arrangement, drops unreadable entries and reports failed saves', async () => {
@@ -169,12 +299,13 @@ describe('Charts', () => {
     render(<Page />)
     await waitFor(() => expect(names()).toEqual(['Latency for the paper']))
     expect(section().getByText('P95 per strategy.')).toBeInTheDocument()
-    expect(section().getByRole('button', {name: 'Reset'})).toBeInTheDocument()
+    expect(screen.getByRole('button', {name: 'Reset charts and sections'})).toBeInTheDocument()
     fireEvent.keyDown(section().getByRole('button', {name: /^Actions for Latency/}), {key: 'ArrowLeft', altKey: true})
     openMenu(0)
-    fireEvent.click(screen.getByRole('menuitem', {name: /^Remove from this page/}))
+    fireEvent.click(screen.getByRole('menuitem', {name: /^Hide/}))
     expect(await section().findByText('The server is unavailable.')).toBeInTheDocument()
-    expect(section().getByText(/No charts here/)).toBeInTheDocument()
+    expect(section().getByText(/Every chart is hidden/)).toBeInTheDocument()
+    expect(section().getByRole('button', {name: 'Hidden charts (1)'})).toBeInTheDocument()
   })
 
   it('shows the default charts when the layout cannot be read', async () => {
@@ -184,23 +315,46 @@ describe('Charts', () => {
   })
 })
 
+describe('stored layouts', () => {
+  it('reads sizes, hidden charts and the column spans of older layouts', async () => {
+    const chart = (id: string, extra: object) => ({id, name: id, caption: '', charts: [{id, kind: 'timeseries', metric: 'load.p95_response_time', xy: defaultXYState(data)}], sharedLegend: false, hidden: [], ...extra})
+    vi.mocked(request).mockImplementation(async () => ({layout: {version: 1, items: [chart('wide', {span: 3}), chart('two', {span: 2}), chart('half', {size: 'half'}), chart('odd', {size: 'huge'}), chart('away', {concealed: true})]}}) as never)
+    render(<Page />)
+    await waitFor(() => expect(names()).toEqual(['wide', 'two', 'half', 'odd']))
+    expect(sizes()).toEqual(['full', 'two-thirds', 'half', 'third'])
+    expect(section().getByRole('button', {name: 'Hidden charts (1)'})).toBeInTheDocument()
+  })
+})
+
 describe('the rest of the page', () => {
-  it('starts hidden and is added from the Sections menu, which saves it with the default charts', async () => {
+  it('is chosen from Customize view: one switch per section, the state at a glance, Show all', async () => {
     render(<Page />)
     await waitFor(() => expect(names()).toHaveLength(2))
-    fireEvent.click(section().getByRole('button', {name: 'Sections'}))
-    const menu = within(screen.getByRole('menu', {name: 'Sections'}))
-    expect(menu.getAllByRole('menuitemcheckbox').map(item => [item.querySelector('strong')!.textContent, item.getAttribute('aria-checked')])).toEqual([['Summary', 'false'], ['Load and latency', 'false'], ['Statistics', 'false']])
-    fireEvent.click(menu.getByRole('menuitemcheckbox', {name: /^Load and latency/}))
+    const button = () => screen.getByRole('button', {name: /^Customize view/})
+    expect(button()).toHaveAccessibleName('Customize view: 1 of 4 sections shown')
+    expect(button()).toHaveAttribute('title', '1 of 4 sections shown')
+    fireEvent.click(button())
+    const menu = () => within(screen.getByRole('menu', {name: 'Sections of this page'}))
+    const switches = () => menu().getAllByRole('menuitemcheckbox').map(item => [item.querySelector('strong')!.textContent, item.getAttribute('aria-checked'), item.querySelector('small')!.textContent])
+    expect(switches()).toEqual([['Charts', 'true', 'Always shown'], ['Summary', 'false', 'Verdict and key numbers'], ['Load and latency', 'false', 'Request rate and latency over time'], ['Statistics', 'false', 'Tables per metric and comparisons']])
+    expect(menu().getByRole('menuitemcheckbox', {name: /^Charts/})).toBeDisabled()
+    // Switching keeps the menu open, so several can be changed in a row; each change is saved.
+    fireEvent.click(menu().getByRole('menuitemcheckbox', {name: /^Load and latency/}))
     expect(savedLayout()).toEqual({version: 1, sections: ['timeline']})
-    fireEvent.click(section().getByRole('button', {name: 'Sections'}))
-    expect(screen.getByRole('menuitemcheckbox', {name: /^Load and latency/})).toHaveAttribute('aria-checked', 'true')
-    fireEvent.click(screen.getByRole('menuitemcheckbox', {name: /^Summary/}))
+    expect(menu().getByRole('menuitemcheckbox', {name: /^Load and latency/})).toHaveAttribute('aria-checked', 'true')
+    fireEvent.click(menu().getByRole('menuitemcheckbox', {name: /^Summary/}))
     expect(savedLayout().sections).toEqual(['summary', 'timeline'])
-    fireEvent.click(section().getByRole('button', {name: 'Reset'}))
+    expect(button()).toHaveAccessibleName('Customize view: 3 of 4 sections shown')
+    fireEvent.click(menu().getByRole('menuitem', {name: /^Show all/}))
+    expect(savedLayout().sections).toEqual(['summary', 'timeline', 'statistics'])
+    fireEvent.click(button())
+    expect(menu().getByRole('menuitem', {name: /^Show all/})).toBeDisabled()
+    fireEvent.keyDown(screen.getByRole('menu'), {key: 'Escape'})
+    // Reset (from the page's ⋯ menu) restores the default page, with undo.
+    fireEvent.click(screen.getByRole('button', {name: 'Reset charts and sections'}))
     expect(saves().at(-1)).toEqual([path, {method: 'DELETE'}, 'token'])
-    fireEvent.click(section().getByRole('button', {name: 'Undo'}))
-    expect(savedLayout()).toEqual({version: 1, sections: ['summary', 'timeline']})
+    fireEvent.click(screen.getByRole('button', {name: 'Undo reset'}))
+    expect(savedLayout()).toEqual({version: 1, sections: ['summary', 'timeline', 'statistics']})
   })
 })
 

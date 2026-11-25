@@ -20,6 +20,7 @@ import {availableKinds, buildViews, chartContent, defaultXYState, emptyState, im
 import {KubeStudioMark} from './KubeStudioMark'
 import {defaultLayout, layoutChoices, letters, maxCharts, newChartId, validLayout, type ChartLayout, type ChartState} from './layout'
 import {loadStudioMemory, saveStudioMemory} from './memory'
+import {StudioLanding} from './StudioLanding'
 import {buildRecipes, customForms, FigureSwitcher, KindIcon, kindLabels, smartTimeSeriesSpec, switcherItems, type CustomForm, type SwitcherItem} from './recipes'
 import type {ChartItem} from './resultsLayout'
 import {autoAnnotations, highlightShapes, parseKey, parseTarget, selectionKey, snap, targetKey, type Selection, type Shape, type Target} from './selection'
@@ -28,14 +29,16 @@ import type {FigureGeometry} from './SpecFigure'
 import './kubestudio.css'
 
 // KubeStudio: a Figma-like workspace for one publication image made of one to four charts.
-// It opens directly on the best chart for this experiment (or the last image edited). Left:
+// A new figure opens on a landing page of charts suggested by the results; otherwise it opens on
+// the chart asked for (or the last image edited, else the best chart for the experiment). Left:
 // Layers, the outline of the image (charts, each with title, axes, series, legend and
 // lines), which is also how things are selected; centre: the image on paper
 // at its true printed size, clickable and draggable; right: the properties of the selection,
 // or of the page. Every change is undoable and autosaved; export lives in the top bar, with
 // "Add to results", which keeps the image on the experiment's results page.
 
-// choose: open on the chart-type picker (a new figure from the results page).
+// choose: a new figure from the results page: open on the landing page (StudioLanding) that
+// suggests charts from these results, with a custom chart and the last figure beside them.
 export interface StudioRequest {kind?: FigureKind; metric?: string; xy?: XYState; figure?: ChartItem; choose?: boolean}
 
 // Saves the exported PDF as an experiment figure (POST /experiments/{id}/figures).
@@ -108,8 +111,16 @@ export function KubeStudio({open, onClose, request, data, groups, settings, onSe
   // The axis title being renamed on the figure, with where its field sits on the paper.
   const [axisEdit, setAxisEdit] = useState<{chart: string; side: 'x' | 'left' | 'right'; panel: number; value: string; left: number; top: number; width: number}>()
   const axisCancelled = useRef(false)
-  const choosing = useRef(Boolean(request.choose))
-  useEffect(() => {if (data && choosing.current) {choosing.current = false; setSwitcher('change')}}, [data])
+  // The landing page of a new figure, until a suggestion, a custom chart or the last figure is chosen.
+  const [landing, setLanding] = useState(Boolean(request.choose && !figure))
+  // Back to suggestions (Home) from the editor: the figure stays, offered as "Continue last figure".
+  const [returned, setReturned] = useState(false)
+  const switched = useRef(false)
+  // Focus follows between the landing page and the editor.
+  useEffect(() => {
+    if (switched.current) dialog.current?.querySelector<HTMLElement>(landing ? '.ks-suggestion, .ks-continue' : '.ks-switcher-button')?.focus({preventScroll: true})
+    switched.current = true
+  }, [landing])
   const [hoverKey, setHoverKey] = useState('')
   const [shapes, setShapes] = useState<{hover: Shape[]; selected: Shape[]; hoverChart?: string; selectedChart?: string}>({hover: [], selected: []})
   const [addingNote, setAddingNote] = useState<string>()
@@ -150,7 +161,7 @@ export function KubeStudio({open, onClose, request, data, groups, settings, onSe
     if (!element || !open) return
     const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null
     if (!element.open) element.showModal()
-    element.querySelector<HTMLElement>('.ks-switcher-button')?.focus({preventScroll: true})
+    element.querySelector<HTMLElement>('.ks-switcher-button, .ks-suggestion, .ks-custom-form')?.focus({preventScroll: true})
     return () => {
       if (element.open) element.close()
       if (previous?.isConnected) previous.focus({preventScroll: true})
@@ -165,7 +176,7 @@ export function KubeStudio({open, onClose, request, data, groups, settings, onSe
   const metricOptionsFor = (kind: FigureKind | undefined) => metricOptions(data, kind)
   // Data that arrives after opening: start on the best recipe as well.
   useEffect(() => {if (!charts.length && data && recipes.length) setCharts([{id: newChartId(), kind: recipes[0].kind, metric: recipes[0].metric ?? '', xy: recipes[0].xy ?? defaultXY(), spec: recipes[0].spec}])}, [data, recipes])
-  useEffect(() => {setSaved(saveStudioMemory(memoryKey, {charts, layout, sharedLegend, name: doc.name, caption: doc.caption, hidden, zoom}))}, [memoryKey, charts, layout, sharedLegend, doc, hidden, zoom])
+  useEffect(() => {if (!landing) setSaved(saveStudioMemory(memoryKey, {charts, layout, sharedLegend, name: doc.name, caption: doc.caption, hidden, zoom}))}, [memoryKey, charts, layout, sharedLegend, doc, hidden, zoom, landing])
 
   const shown = (label: string) => !hidden.includes(label)
   const count = charts.length
@@ -418,6 +429,15 @@ export function KubeStudio({open, onClose, request, data, groups, settings, onSe
     if (view) updateChart(view.chart.id, () => next); else setCharts([next])
     setSelection({chart: next.id})
     announce(`Custom ${customForms.find(item => item.kind === form)?.label.toLowerCase()}: choose X and Y on the right.`, true)
+  }
+  // Leaves the landing page on a new, one-chart image with a history of its own.
+  const startWith = (chart: ChartState, text: string, select = false) => {
+    history.forget()
+    setCharts([chart]); setLayout(undefined); setSharedLegend(false); setHidden([]); setDoc({}); setKeptId(undefined)
+    setSelection(select ? {chart: chart.id} : undefined)
+    if (select && narrow) setTab('properties')
+    setLanding(false)
+    announce(text, false)
   }
   // Add chart is guided: the chart-type picker opens first; the chosen chart is added and
   // selected, so its X and Y are on the right.
@@ -1030,6 +1050,7 @@ export function KubeStudio({open, onClose, request, data, groups, settings, onSe
       return
     }
     if (mod || event.altKey || typing) return
+    if (landing && event.key !== '?') return
     if (key === 'e' && data && publication) {event.preventDefault(); setExportOpen(true)}
     else if (event.key === '?') {event.preventDefault(); setHelp(value => !value)}
     else if (publication && (event.key === '+' || event.key === '=')) {event.preventDefault(); step(1)}
@@ -1050,21 +1071,25 @@ export function KubeStudio({open, onClose, request, data, groups, settings, onSe
     {open && <div className="ks-shell" data-narrow={narrow || undefined}>
       <header className="ks-topbar">
         <div className="ks-brand"><KubeStudioMark size={24} /><h2 id={`${id}-title`}>{studioName}</h2></div>
-        {data && <FigureSwitcher items={items.filter(item => item.kind !== 'placement' || (count === 1 && switcher !== 'add'))} active={activeView?.kind}
-          open={Boolean(switcher)} onOpenChange={open => setSwitcher(open ? 'change' : undefined)} adding={switcher === 'add' ? `chart (${letters[count]})` : undefined} prefix={activeView?.letter ? `${activeView.letter} ` : ''} label={activeView?.chart.origin === 'custom' ? `Custom ${customForms.find(form => form.kind === activeView.kind)?.label.toLowerCase() ?? 'chart'}` : undefined} forms={forms} onPick={item => switcher === 'add' ? addRecipe(item) : applyRecipe(activeView, item)} onCustom={form => switcher === 'add' ? addCustom(form) : applyForm(activeView, form)} />}
+        {landing && <p className="ks-landing-title">New figure</p>}
+        {!landing && data && <button type="button" className="ks-icon-button ks-home" aria-label="Back to suggestions" title="Back to suggestions — this figure stays available as “Continue last figure”" onClick={() => {setSelection(undefined); setSwitcher(undefined); setExportOpen(false); setReturned(true); setLanding(true)}}>
+          <svg {...svgProps}><path d="M4 11 12 4l8 7" /><path d="M6 9.5V20h4.5v-5.5h3V20H18V9.5" /></svg>
+        </button>}
+        {data && !landing && <FigureSwitcher items={items.filter(item => item.kind !== 'placement' || (count === 1 && switcher !== 'add'))} active={activeView?.kind}
+          open={Boolean(switcher)} onOpenChange={open => setSwitcher(open ? 'change' : undefined)} adding={switcher === 'add' ? `chart (${letters[count]})` : undefined} prefix={activeView?.letter ? `${activeView.letter} ` : ''} label={activeView?.chart.origin === 'custom' ? `Custom ${customForms.find(form => form.kind === activeView.kind)?.label.toLowerCase() ?? 'chart'}` : activeView?.kind && items.find(item => item.kind === activeView.kind)?.recipe?.metric && items.find(item => item.kind === activeView.kind)!.recipe!.metric !== activeView.metric ? kindLabels[activeView.kind] : undefined} forms={forms} onPick={item => switcher === 'add' ? addRecipe(item) : applyRecipe(activeView, item)} onCustom={form => switcher === 'add' ? addCustom(form) : applyForm(activeView, form)} />}
         <div className="ks-name">
-          {publication && <><label htmlFor={`${id}-name`} className="visually-hidden">Figure name</label>
+          {publication && !landing && <><label htmlFor={`${id}-name`} className="visually-hidden">Figure name</label>
             <input id={`${id}-name`} type="text" value={name} placeholder="Figure name" title="Figure name — also the exported file name" onChange={event => {const value = event.target.value; setDoc(current => ({...current, name: value === autoName ? undefined : value}))}} /></>}
         </div>
         <div className="ks-tools">
-          <div className="ks-history" role="group" aria-label="History">
+          {!landing && <><div className="ks-history" role="group" aria-label="History">
             <button type="button" className="ks-icon-button" aria-label="Undo" aria-keyshortcuts="Control+Z Meta+Z" title="Undo (Ctrl/⌘ Z)" disabled={!history.canUndo} onClick={undo}><UndoIcon /></button>
             <button type="button" className="ks-icon-button" aria-label="Redo" aria-keyshortcuts="Control+Shift+Z Meta+Shift+Z" title="Redo (Ctrl/⌘ Shift Z)" disabled={!history.canRedo} onClick={redo}><UndoIcon redo /></button>
           </div>
-          {storageKey && <span className={`ks-saved ${saved === false ? 'failed' : ''}`} title={savedText}><svg {...svgProps} width={14} height={14} strokeWidth={2}>{saved === false ? <path d="M12 8v5M12 16.5v.5" /> : <path d="m5 12 5 5 9-10" />}</svg><span>{saved === false ? 'Not saved' : 'Saved'}</span><span className="visually-hidden">: {savedText}</span></span>}
+          {storageKey && <span className={`ks-saved ${saved === false ? 'failed' : ''}`} title={savedText}><svg {...svgProps} width={14} height={14} strokeWidth={2}>{saved === false ? <path d="M12 8v5M12 16.5v.5" /> : <path d="m5 12 5 5 9-10" />}</svg><span>{saved === false ? 'Not saved' : 'Saved'}</span><span className="visually-hidden">: {savedText}</span></span>}</>}
           <button type="button" className="ks-icon-button" aria-label="Keyboard shortcuts" aria-keyshortcuts="?" title="Keyboard shortcuts (?)" aria-expanded={help} onClick={() => setHelp(value => !value)}><span className="ks-help-glyph" aria-hidden="true">?</span></button>
-          {onKeep && data && publication && <button type="button" className="ks-button ks-keep" onClick={keep} title={keptId ? 'Save these changes to the figure on the results page' : 'Keep this image on the experiment’s results page'}>{keptId ? 'Update in results' : 'Add to results'}</button>}
-          {data && publication && <ExportPopover open={exportOpen} onOpenChange={setExportOpen} format={format} onFormat={action => {setFormat(action); rememberFormat(action)}} busy={Boolean(busy)} csv={publication} code={Boolean(codeView)}
+          {onKeep && data && publication && !landing && <button type="button" className="ks-button ks-keep" onClick={keep} title={keptId ? 'Save these changes to the figure on the results page' : 'Keep this image on the experiment’s results page'}>{keptId ? 'Update in results' : 'Add to results'}</button>}
+          {data && publication && !landing && <ExportPopover open={exportOpen} onOpenChange={setExportOpen} format={format} onFormat={action => {setFormat(action); rememberFormat(action)}} busy={Boolean(busy)} csv={publication} code={Boolean(codeView)}
             page={{width: pageWidth, height: pageHeight, font: settings.font === 'serif' ? 'Times' : 'Helvetica', fontSize: settings.fontSize}} base={fileName}
             onExport={action => void exportAs(action)} onCopy={action => void copyFigure(action)} onSave={onSave ? () => void save() : undefined} saving={busy === 'save'} />}
           <button type="button" className="ks-icon-button ks-close" aria-label="Close" title="Close (Esc)" onClick={onClose}><ActionIcon name="close" /></button>
@@ -1072,14 +1097,18 @@ export function KubeStudio({open, onClose, request, data, groups, settings, onSe
       </header>
       <span className="visually-hidden" role="status">{status}</span>
       {error && <div className="ks-error"><ErrorFeedback message={error} /></div>}
-      {narrow && <div className="ks-tabs" role="tablist" aria-label={`${studioName} panels`} onKeyDown={onTabKey}>
+      {landing && data && <StudioLanding data={data} groups={groups} forms={forms} last={(returned || remembered.charts?.length) && charts.length ? {name, charts: charts.length} : undefined}
+        onPick={suggestion => startWith({...suggestion.chart, id: newChartId(), origin: 'recipe'}, `${suggestion.title}. Refine it: click any part of the chart to change it.`)}
+        onCustom={form => {const chart = customChart(undefined, form); if (chart) startWith(chart, `Custom ${customForms.find(item => item.kind === form)?.label.toLowerCase()}: choose X and Y on the right.`, true)}}
+        onContinue={() => {setLanding(false); announce(returned ? 'Back to your figure, with its undo history.' : 'Your last figure. Every change is saved in this browser.')}} />}
+      {!landing && narrow && <div className="ks-tabs" role="tablist" aria-label={`${studioName} panels`} onKeyDown={onTabKey}>
         {tabs.map(item => <button key={item.id} type="button" role="tab" id={`${id}-${item.id}-tab`} aria-selected={tab === item.id} aria-controls={`${id}-${item.id}`} tabIndex={tab === item.id ? 0 : -1} onClick={() => setTab(item.id)}>{item.label}</button>)}
       </div>}
-      <div className="ks-workspace">
+      {!landing && <div className="ks-workspace">
         {panel('layers', 'ks-left', layers, 'Layers')}
         {panel('canvas', 'ks-centre', canvas, 'Figure')}
         {panel('properties', 'ks-right', inspector, 'Properties')}
-      </div>
+      </div>}
       {menu && <ContextMenu at={menu.at} label={menu.chart ? `Chart ${viewOf(menu.chart)?.letter ?? ''}`.trim() : 'Figure'} onClose={() => setMenu(undefined)} items={menuItems(menu.chart)} />}
       {help && <div className="ks-popover ks-help" role="dialog" aria-label="Keyboard shortcuts" onKeyDown={event => {if (event.key === 'Escape') {event.preventDefault(); event.stopPropagation(); setHelp(false)}}}>
         <div className="ks-help-head"><strong>Keyboard shortcuts</strong><button type="button" className="ks-icon-button ks-small" aria-label="Close shortcuts" onClick={() => setHelp(false)}><ActionIcon name="close" /></button></div>

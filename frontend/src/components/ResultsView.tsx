@@ -6,7 +6,7 @@ export type {LoadedDataset, AggregateSeries} from '../resultsData'
 import {PlacementReplay} from './PlacementReplay'
 import {PlacementHeatmap} from './PlacementHeatmap'
 import {ErrorFeedback, useErrorState} from './ToastRegion'
-import {ResourceSharing, canManageResource} from './ResourceSharing'
+import {canManageResource} from './ResourceSharing'
 import {ActionIcon} from './ActionIcon'
 import {downloadBlob} from '../charts'
 export {figureDimensions, niceAxis, setPNGResolution, svgToPDF} from '../charts'
@@ -15,7 +15,7 @@ import {useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type 
 import {request} from '../api'
 import {openClusterLens, openLiveDashboard} from '../liveDashboard'
 import {experimentDeletionMessage, experimentDisplayStatus, formatBytes, formatDate, isTerminalExperiment} from '../lib'
-import type {Artifact, Experiment, ExperimentFigure, ExperimentTrial, Operation, Session, TimeSeriesDataset, Workspace} from '../types'
+import type {Artifact, Experiment, ExperimentFigure, ExperimentTrial, ExperimentVariant, Operation, Session, TimeSeriesDataset, Workspace} from '../types'
 import {Dialog} from './Dialog'
 import {DetailBreadcrumb} from './DetailBreadcrumb'
 import {LoadProfilePreview, loadProfileSteps, type LoadProfileStep} from './LoadProfileEditor'
@@ -40,6 +40,9 @@ import {runInsights, type Insight, type ServiceHealth} from './results/insights'
 import {comparisonVerdict, kpiCards, overviewGroups, overviewMetrics, paletteColor, primaryPanels, timelineSubtitle, rankServiceSummaries, serviceCurve, serviceDetailMetrics, type OverviewGroup} from './results/overview'
 import {Disclosure, KpiCards, PrimaryChart, QualityLine, ServicesTable, VerdictStrip, type InsightTarget, type ServiceDetail} from './results/Overview'
 import {HeaderMenu} from './results/HeaderMenu'
+import {SectionsMenu} from './results/SectionsMenu'
+import {anchorAtButton, ContextMenu, type MenuAnchor} from './results/kubestudio/ContextMenu'
+import {VisibilityDialog, VisibilityMenuItem, type Sharing} from './results/Visibility'
 import {RunFacts} from './results/RunFacts'
 import {KubeStudio, type StudioRequest} from './results/kubestudio/KubeStudio'
 import type {StudioData} from './results/kubestudio/image'
@@ -194,16 +197,16 @@ function usePageSections(layout: ReturnType<typeof useResultsLayout>, available:
 }
 
 // "2 variants × 3 repetitions · 5 min measured · 19 Nov 2026".
-function ResultsMeta({experiment, datasets, status, run}: {experiment?: Experiment; datasets: LoadedDataset[]; status?: ReactNode; run?: string}) {
+function ResultsMeta({experiment, datasets, status, run, link}: {experiment?: Experiment; datasets: LoadedDataset[]; status?: ReactNode; run?: string; link?: ReactNode}) {
   // One execution: its name; the timing facts sit in the facts row below.
-  if (run) return <p className="results-meta">{status}<span>{run}</span></p>
+  if (run) return <p className="results-meta">{status}<span>{run}</span>{link && <span>{link}</span>}</p>
   const variants = experiment?.variants.length ?? 0
   const repetitions = experiment ? Math.max(0, ...experiment.variants.map(variant => variant.trials.filter(trial => !isPilot(trial)).length)) : 0
   const measured = datasets.map(measuredSeconds).filter((value): value is number => value !== undefined)
   const span = measured.length ? Math.max(...measured) : undefined
   const started = datasets.map(item => item.dataset.spec.workloadStartedAt ?? item.dataset.spec.start).filter(Boolean).sort()[0] ?? experiment?.createdAt
   const shape = experiment ? experiment.kind === 'comparison' ? `${variants} series` : `${variants} variant${variants === 1 ? '' : 's'} × ${repetitions} repetition${repetitions === 1 ? '' : 's'}` : `${datasets.length} execution${datasets.length === 1 ? '' : 's'}`
-  return <p className="results-meta">{status}<span>{shape}</span>{span !== undefined && <span>{formatSpan(span * 1000)} measured</span>}{started && <span>{formatDate(started)}</span>}</p>
+  return <p className="results-meta">{status}<span>{shape}</span>{span !== undefined && <span>{formatSpan(span * 1000)} measured</span>}{started && <span>{formatDate(started)}</span>}{link && <span>{link}</span>}</p>
 }
 
 interface OverviewModel {
@@ -279,6 +282,9 @@ function ExperimentResultsView({artifacts, experiments, operations, workspaces, 
   const [studio, setStudio] = useState<StudioRequest | null>(null)
   const chartMode = useChartMode()
   const [runTab, setRunTab] = useState('summary')
+  const [visibilityOpen, setVisibilityOpen] = useState(false)
+  const [visibility, setVisibility] = useState<Sharing>()
+  const [layoutUndo, setLayoutUndo] = useState<() => void>()
   const [initialized, setInitialized] = useState(Boolean(focusedExperiment))
   const [figureSettings, setFigureSettings] = useFigureSettings(`experiment:${focusedExperiment?.id ?? 'selection'}`)
   useEffect(() => {
@@ -293,6 +299,10 @@ function ExperimentResultsView({artifacts, experiments, operations, workspaces, 
   const [actionError, setActionError] = useErrorState()
   const focusedRuns = focusedExperiment?.variants.flatMap(variant => variant.trials.map(trial => ({variant, trial}))) ?? []
   const activeRun = focusedRuns.find(item => item.trial.id === runTab)
+  // One execution: no tabs ("All executions" would be the same run); its run view (diagnostics,
+  // load progress, placement) straight away, while statistics and exports stay experiment-wide.
+  const onlyRun = focusedRuns.length === 1 && !comparison ? focusedRuns[0] : undefined
+  const viewRun = activeRun ?? onlyRun
   const liveRun = focusedRuns.find(item => ['running','initializing','initialized'].includes(item.trial.status))
   const viewSelected = activeRun ? activeRun.trial.resultArtifactId && availableByID.has(activeRun.trial.resultArtifactId) ? [activeRun.trial.resultArtifactId] : [] : focusedExperiment ? analysisArtifactIDs.filter(id => availableByID.has(id)) : selected
   const selectedKey = viewSelected.map(id => `${id}:${availableByID.get(id)?.digest ?? ''}:${responseTimeSLO(focusedExperiment, id, comparison?.sourceConfigurations[id]) ?? ''}`).join('|')
@@ -535,8 +545,8 @@ function ExperimentResultsView({artifacts, experiments, operations, workspaces, 
   const runLabels = Object.fromEntries([...experimentPresentation].map(([id, value]) => [id, value.label]))
   const pilotCount = activeRun ? 0 : executedPilotCount(experiment)
   const methods = useMemo(() => sections.environment ? methodsParagraph({experiment: statsExperiment, datasets: displayed, metrics: statisticsMetrics, configurations: comparison?.sourceConfigurations, pilots: pilotCount, comparison: multipleVariants ? {familySize: comparisonRows[0]?.familySize ?? 0, mode: comparisonOptions.mode, baseline: statsExperiment?.variants.find(variant => variant.id === comparisonOptions.baseline)?.alias || statsExperiment?.variants.find(variant => variant.id === comparisonOptions.baseline)?.name} : undefined}) : '', [sections.environment, statsExperiment, displayed, statisticsMetrics, pilotCount, comparisonRows, comparisonOptions])
-  const placementDatasets = activeRun ? displayed.filter(item => item.artifact.id === activeRun.trial.resultArtifactId) : displayed
-  const heatmap = !comparison && focusedExperiment && (activeRun || focusedExperiment.kind !== 'suite') && placementDatasets.some(item => item.dataset.spec.placement) ? <PlacementHeatmap datasets={placementDatasets.map(item => item.dataset)} /> : undefined
+  const placementDatasets = viewRun ? displayed.filter(item => item.artifact.id === viewRun.trial.resultArtifactId) : displayed
+  const heatmap = !comparison && focusedExperiment && (viewRun || focusedExperiment.kind !== 'suite') && placementDatasets.some(item => item.dataset.spec.placement) ? <PlacementHeatmap datasets={placementDatasets.map(item => item.dataset)} /> : undefined
   const locust = useMemo(() => locustGroups(displayed, variantOf), [displayed, statsExperiment])
   const fidelityRows = useMemo(() => displayed.map(item => ({label: item.label, fidelity: loadFidelity(item)})), [displayed])
   // What the charts and KubeStudio draw from.
@@ -550,9 +560,11 @@ function ExperimentResultsView({artifacts, experiments, operations, workspaces, 
       ladder: percentileLadder(displayed, overviewExperiment), fidelity: fidelityPlot(displayed, overviewExperiment),
       serviceMetrics: plotted.filter(metric => serviceStatisticsMetrics.includes(metric)),
       services: metric => {if (!serviceCache.has(metric)) serviceCache.set(metric, serviceMetricStatistics(displayed, metric, overviewExperiment)); return serviceCache.get(metric)},
-      placement: heatmap, xy: xySource, profile: sharedLoadProfile((overviewExperiment?.variants ?? []).map(variant => variant.configuration as Record<string, unknown> | undefined))
+      placement: heatmap, xy: xySource, profile: sharedLoadProfile((overviewExperiment?.variants ?? []).map(variant => variant.configuration as Record<string, unknown> | undefined)),
+      guide: overview && {insights: overview.insights, services: overview.services(undefined), variants: overview.groups.length,
+        repetitions: Math.max(0, ...(overviewExperiment?.variants ?? []).map(variant => variant.trials.filter(trial => displayed.some(item => item.artifact.id === trial.resultArtifactId)).length)), callChain: displayed.some(item => hasCallChainData(item.dataset))}
     }
-  }, [displayed, metrics, plot, provenance, overviewExperiment, xySource])
+  }, [displayed, metrics, plot, provenance, overviewExperiment, xySource, overview])
   // Each user's charts for this experiment (or saved comparison); a free selection of runs is not kept.
   const chartsScope: LayoutScope | undefined = focusedExperiment ? {kind: focusedExperiment.kind === 'comparison' ? 'comparisons' : 'experiments', id: focusedExperiment.id} : undefined
   const charts = useResultsLayout(chartsScope, studioData, session.csrfToken)
@@ -566,39 +578,48 @@ function ExperimentResultsView({artifacts, experiments, operations, workspaces, 
     const run = activeRun ?? (measuredRuns.length === 1 ? measuredRuns[0] : undefined)
     return run ? {name: `${run.variant.alias || run.variant.name} · ${trialLabel(run.trial)}`, item: displayed[0]} : undefined
   }, [focusedExperiment, comparison, displayed, activeRun?.trial.id, focusedRuns.length])
-  const hasPlacement = Boolean(activeRun && !comparison && placementDatasets.some(item => item.dataset.spec.placement))
+  const hasPlacement = Boolean(viewRun && !comparison && placementDatasets.some(item => item.dataset.spec.placement))
   const pageAvailable: PageSection[] = [...(overview ? ['summary', 'timeline', 'services'] as const : []), ...(locust.length ? ['endpoints'] as const : []), ...(callChain ? ['callchain'] as const : []), 'statistics', 'environment', ...(hasPlacement ? ['placement'] as const : [])]
   const page = usePageSections(charts, pageAvailable, printPending, sectionState)
+  const resetPage = () => setLayoutUndo(() => charts.reset())
+  const exportPanel = (close: () => void) => <ExportPanel experiment={statsExperiment} savedFigures={!comparison} datasets={displayed} csv={() => statisticsCSV(displayed, statisticsMetrics, statsExperiment)} comparisonRows={comparisonRows} onPrint={() => {close(); toggleSection('statistics', true); setPrintPending(true)}} />
+  const sectionsMenu = overview && <SectionsMenu available={pageAvailable} shown={page.shown} onToggle={(id, shown) => {charts.toggleSection(id, shown); if (shown) toggleSection(id as SectionID, true)}} onShowAll={() => charts.setSections(pageAvailable)} details={locust.length ? {endpoints: `${locust.reduce((total, group) => total + group.rows.filter(row => !row.aggregated).length, 0)} endpoints, Locust statistics`} : undefined} />
   return <ShowEverything.Provider value={printPending}><SeriesNotesContext.Provider value={seriesNotes}><div className="results-page">
     {confirmationDialog}
     <header className="page-header" id="results-top">{focusedExperiment && onBack && <DetailBreadcrumb parent={comparison ? 'Comparisons' : 'Experiments'} current={focusedExperiment.name} back={onBack} />}
       <div className={`results-heading ${focusedExperiment ? 'focused' : ''}`}>
         <div className="results-title"><h2 tabIndex={-1}>{focusedExperiment?.name ?? 'Results'}</h2>
-          {focusedExperiment && <ResultsMeta run={singleRun?.name} experiment={activeRun ? undefined : withoutPilots(focusedExperiment)} datasets={displayed} status={!comparison ? <span className={`status ${activeRun?.trial.status ?? displayStatus}`}>{activeRun?.trial.status ?? displayStatus}</span> : undefined} />}
+          {focusedExperiment && <ResultsMeta run={singleRun?.name} experiment={activeRun ? undefined : withoutPilots(focusedExperiment)} datasets={displayed} status={!comparison ? <span className={`status ${activeRun?.trial.status ?? displayStatus}`}>{activeRun?.trial.status ?? displayStatus}</span> : undefined}
+            link={!comparison && configurationId ? <a className="results-meta-link" href={`#experiments/configuration/${encodeURIComponent(configurationId)}`} title="Open the configuration of this experiment">Configuration<svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><path d="M4.5 2.5h5v5M9.5 2.5 3 9" /></svg></a> : undefined} />}
         </div>
         <div className="results-detail-actions">
           {comparison?.actions}
-          {!comparison && focusedExperiment && configurationId && <a className="button secondary" href={`#experiments/configuration/${encodeURIComponent(configurationId)}`}>Configuration</a>}
           {!comparison && focusedExperiment?.status === 'running' && <button type="button" className="button secondary" disabled={openingLens || !(activeRun ? activeRun.trial.pipelineRunId : focusedRuns.some(item => item.trial.pipelineRunId))} onClick={() => void openLens()}>{openingLens ? 'Opening…' : 'ClusterLens'}</button>}
           {liveDashboard &&<button type="button" className="button secondary live-dashboard-button" disabled={openingDashboard} onClick={() => void openDashboard()}><ActionIcon name="pulse" />{openingDashboard ? 'Opening…' : 'Live dashboard'}</button>}
           {!comparison && focusedExperiment?.status === 'initialized' && canManage && !stopRequested && <button className="button primary" disabled={startingTraffic} onClick={startTraffic}>{startingTraffic ? 'Starting…' : 'Start'}</button>}
           {!comparison && focusedExperiment && canManage && canStop && <button className="button danger" disabled={stopping || stopRequested} onClick={stopExperiment}>{stopping || stopRequested ? `Stopping ${stopLabel}…` : `Stop ${stopLabel}`}</button>}
-          {!comparison && focusedExperiment && <ResourceSharing kind="experiments" id={focusedExperiment.id} name={focusedExperiment.name} ownerUserId={focusedExperiment.ownerUserId} session={session} changed={changed} />}
-          {displayed.length > 0 && <button type="button" className="button secondary" title="Open KubeStudio to build a publication figure" onClick={() => setStudio({choose: true})}><KubeStudioMark size={18} className="kubestudio-entry" />Create figure</button>}
-          {displayed.length > 0 && <HeaderMenu label="Export" icon={<ActionIcon name="download" />}>{close => <ExportPanel experiment={statsExperiment} savedFigures={!comparison} datasets={displayed} csv={() => statisticsCSV(displayed, statisticsMetrics, statsExperiment)} comparisonRows={comparisonRows} onPrint={() => {close(); toggleSection('statistics', true); setPrintPending(true)}} />}</HeaderMenu>}
-          {!comparison && focusedExperiment && canManage && <HeaderMenu label="" icon={<><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><circle cx="3" cy="8" r="1.4" /><circle cx="8" cy="8" r="1.4" /><circle cx="13" cy="8" r="1.4" /></svg><span className="visually-hidden">More actions</span></>} buttonClass="icon-button more-actions">{close => <div className="menu-list"><button type="button" className="menu-item danger" disabled={deleting || !isTerminalExperiment(focusedExperiment.status)} title={isTerminalExperiment(focusedExperiment.status) ? undefined : `Stop this ${stopLabel} before deleting it`} onClick={() => {close(); void removeExperiment()}}><ActionIcon name="delete" />{deleting ? 'Deleting…' : `Delete ${stopLabel}`}</button></div>}</HeaderMenu>}
+          {displayed.length > 0 && <HeaderMenu label="Export" icon={<ActionIcon name="download" />} className="results-export">{close => exportPanel(close)}</HeaderMenu>}
+          {displayed.length > 0 && <button type="button" className="button primary" title="Open KubeStudio to build a publication figure" onClick={() => setStudio({choose: true})}><KubeStudioMark size={18} className="kubestudio-entry" />Create figure</button>}
+          {focusedExperiment && (displayed.length > 0 || (!comparison && (canManage || charts.customized))) && <PageMoreMenu>{close => <>
+            {displayed.length > 0 && <MobileExport>{exportPanel(close)}</MobileExport>}
+            {!comparison && canManage && <VisibilityMenuItem id={focusedExperiment.id} known={visibility} onOpen={() => {close(); setVisibilityOpen(true)}} />}
+            {charts.customized && <button type="button" className="menu-item" onClick={() => {close(); resetPage()}}><ActionIcon name="refresh" /><span className="menu-item-text">Reset charts and sections<small>Back to the default page</small></span></button>}
+            {!comparison && canManage && <button type="button" className="menu-item danger" disabled={deleting || !isTerminalExperiment(focusedExperiment.status)} title={isTerminalExperiment(focusedExperiment.status) ? undefined : `Stop this ${stopLabel} before deleting it`} onClick={() => {close(); void removeExperiment()}}><ActionIcon name="delete" />{deleting ? 'Deleting…' : `Delete ${stopLabel}`}</button>}
+          </>}</PageMoreMenu>}
           {!focusedExperiment && <div className="results-count" aria-label={`${selectable.length} datasets`}><strong>{selectable.length}</strong><span>datasets</span></div>}
         </div>
       </div>
     </header>
     {comparison?.notice}
+    {layoutUndo && <p className="result-charts-notice" role="status">Default charts and sections restored. <button type="button" className="link-button" onClick={() => {layoutUndo(); setLayoutUndo(undefined)}}>Undo</button></p>}
+    {focusedExperiment && canManage && <VisibilityDialog id={focusedExperiment.id} name={focusedExperiment.name} ownerUserId={focusedExperiment.ownerUserId} open={visibilityOpen} session={session} onClose={() => setVisibilityOpen(false)} onSaved={async value => {setVisibility(value); await changed()}} />}
     {focusedExperiment && <ResourceAttribution resource={focusedExperiment} editable={Boolean(comparison)} />}
     {comparison?.sources}
     <ErrorFeedback message={actionError} />
     {!focusedExperiment && experiments.length > 0 && <div className="experiment-history"><div className="experiment-history-title"><span><b>1</b><strong>Choose an experiment</strong></span><span>{experiments.length} saved</span></div><div className="experiment-cards">{experiments.map(item => <button key={item.id} className={activeExperiment === item.id ? 'active' : ''} onClick={() => openExperiment(item)}><span className={`status-dot ${experimentDisplayStatus(item)}`} /><span><strong>{item.name}</strong><small>{item.status === 'queued' && item.scheduledFor && new Date(item.scheduledFor).getTime() > Date.now() ? `Scheduled ${formatDate(item.scheduledFor)}` : `${experimentDisplayStatus(item)} · ${item.variants.length} strategies · ${item.variants.reduce((total, variant) => total + variant.trials.filter(trial => !isPilot(trial)).length, 0)} executions`}</small></span><ActionIcon name="right" /></button>)}</div></div>}
-    {focusedExperiment && !comparison && focusedRuns.length > 0 && <nav className="experiment-run-tabs" aria-label="Run executions"><button type="button" className="run-tab all-runs" aria-current={runTab === 'summary' ? 'page' : undefined} data-active={runTab === 'summary'} onClick={() => setRunTab('summary')}><span className="run-tab-label">All executions</span></button>{focusedRuns.map(({variant, trial}) => <RunTab key={trial.id} name={`${variant.name} · ${trialLabel(trial)}`} trial={trial} active={runTab === trial.id} select={() => setRunTab(trial.id)} />)}</nav>}
-    {experiment && (!activeRun ? <>{experiment.status !== 'succeeded' && <ExperimentProgress experiment={experiment} />}{liveRun && <RunLoadProgress name={`${liveRun.variant.name} · ${trialLabel(liveRun.trial)}`} trial={liveRun.trial} configuration={liveRun.variant.configuration} operation={operations.find(item => item.id === liveRun.trial.operationId)} />}</> : <><RunDiagnostics trial={activeRun.trial} openPipelineRun={openPipelineRun} openOperation={openOperation} /><RunLoadProgress trial={activeRun.trial} configuration={activeRun.variant.configuration} operation={operations.find(item => item.id === activeRun.trial.operationId)} /></>)}
-    {!selectable.length || activeRun && !viewSelected.length ? <EmptyResults experiment={experiment} runStatus={activeRun?.trial.status} /> : <div className={`results-layout ${focusedExperiment ? 'focused' : ''}`}>
+    {(sectionsMenu || focusedExperiment && !comparison && focusedRuns.length > 1) && <div className="results-view-bar">{focusedExperiment && !comparison && focusedRuns.length > 1 && <RunTabs runs={focusedRuns} active={runTab} select={setRunTab} />}{sectionsMenu}</div>}
+    {experiment && (!viewRun ? <>{experiment.status !== 'succeeded' && <ExperimentProgress experiment={experiment} />}{liveRun && <RunLoadProgress name={`${liveRun.variant.name} · ${trialLabel(liveRun.trial)}`} trial={liveRun.trial} configuration={liveRun.variant.configuration} operation={operations.find(item => item.id === liveRun.trial.operationId)} />}</> : <><RunDiagnostics trial={viewRun.trial} openPipelineRun={openPipelineRun} openOperation={openOperation} /><RunLoadProgress trial={viewRun.trial} configuration={viewRun.variant.configuration} operation={operations.find(item => item.id === viewRun.trial.operationId)} /></>)}
+    {!selectable.length || activeRun && !viewSelected.length ? <EmptyResults experiment={experiment} runStatus={viewRun?.trial.status} /> : <div className={`results-layout ${focusedExperiment ? 'focused' : ''}`}>
       {!focusedExperiment ? <aside className="dataset-picker" aria-label="Available datasets">
         <div className="dataset-picker-title"><strong>Select executions</strong><span>{selected.length} selected</span></div>
         {selectable.map(artifact => {
@@ -626,9 +647,8 @@ function ExperimentResultsView({artifacts, experiments, operations, workspaces, 
           <div id="results-overview" className="section-anchor" />
           {singleRun && page.show('summary') && <RunFacts item={singleRun.item} name={singleRun.name} />}
           {overview && <ResultsOverview key={activeRun?.trial.id ?? 'all'} model={overview} onNavigate={page.navigate} show={page.show} single={Boolean(singleRun)} />}
-          {overview && <ResultCharts items={charts.items} data={studioData} groups={groupsForStudio} settings={figureSettings} loading={charts.loading} customized={charts.customized} error={charts.error}
-            sections={pageAvailable} shown={page.shown} onToggleSection={page.toggle}
-            onChange={charts.change} onReset={charts.reset} onAdd={() => setStudio({choose: true})} onEdit={item => setStudio({figure: item})} />}
+          {overview && <ResultCharts items={charts.items} data={studioData} groups={groupsForStudio} settings={figureSettings} loading={charts.loading} error={charts.error}
+            onChange={charts.change} onEdit={item => setStudio({figure: item})} />}
           <div className="results-sections" role="region" aria-label="Details">
             {page.show('endpoints') && <Disclosure id="endpoints" title="Endpoints" summary={`${locust.reduce((total, group) => total + group.rows.filter(row => !row.aggregated).length, 0)} endpoints`} open={Boolean(sections.endpoints)} onToggle={open => toggleSection('endpoints', open)}><LocustSummaryPanel groups={locust} /></Disclosure>}
             {page.show('callchain') && <Disclosure id="callchain" title="Call chain" open={Boolean(sections.callchain)} onToggle={open => toggleSection('callchain', open)}><CallChainPanel datasets={displayed} /></Disclosure>}
@@ -652,6 +672,16 @@ function ExperimentResultsView({artifacts, experiments, operations, workspaces, 
   </div></SeriesNotesContext.Provider></ShowEverything.Provider>
 }
 
+// Export inside the ⋯ menu, shown on phones only (the header keeps Create figure alone there).
+function MobileExport({children}: {children: ReactNode}) {
+  return <div className="mobile-export"><p className="menu-heading">Export</p>{children}</div>
+}
+
+// The page header's ⋯ menu.
+function PageMoreMenu({children}: {children: (close: () => void) => ReactNode}) {
+  return <HeaderMenu label="" icon={<><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><circle cx="3" cy="8" r="1.4" /><circle cx="8" cy="8" r="1.4" /><circle cx="13" cy="8" r="1.4" /></svg><span className="visually-hidden">More actions</span></>} buttonClass="icon-button more-actions">{close => <div className="menu-list">{children(close)}</div>}</HeaderMenu>
+}
+
 const hasFidelity = (rows: Array<{fidelity: LoadFidelity}>) => rows.some(row => row.fidelity.ratio !== undefined || row.fidelity.schedule)
 
 function FidelitySection({rows}: {rows: Array<{label: string; fidelity: LoadFidelity}>}) {
@@ -662,15 +692,47 @@ function FidelitySection({rows}: {rows: Array<{label: string; fidelity: LoadFide
   </section>
 }
 
-function RunTab({name, trial, active, select}: {name: string; trial: ExperimentTrial; active: boolean; select: () => void}) {
+function RunTab({name, full, variant, short, trial, active, select}: {name: string; full: string; variant?: string; short?: string; trial: ExperimentTrial; active: boolean; select: () => void}) {
   const resting = restingUntil(trial)
   const cleanup = cleanupWarning(trial)
-  return <button type="button" className={`run-tab ${trial.status}`} aria-current={active ? 'page' : undefined} data-active={active} onClick={select} title={cleanup}>
-    <span className={`status-dot ${trial.status}`} /><span className="run-tab-label">{name}</span>
+  return <button type="button" className={`run-tab ${trial.status}`} aria-current={active ? 'page' : undefined} aria-label={full === name && !variant ? undefined : full} data-active={active} onClick={select} title={cleanup ?? (full === name && !variant ? undefined : full)}>
+    <span className={`status-dot ${trial.status}`} />{variant
+      // Several variants: "variant · Execution n", compacted on a narrow row to "what tells it apart · #n".
+      ? <span className="run-tab-label"><span className="run-tab-variant">{variant}</span><span className="run-tab-variant-short">{short ?? variant}</span> · <span className="run-tab-run">{trialLabel(trial)}</span><span className="run-tab-run-short">{isPilot(trial) ? 'Warm-up' : `#${trial.position}`}</span></span>
+      : <span className="run-tab-label">{name}</span>}
     {isPilot(trial) && <span className="run-badge pilot">Pilot</span>}
     {resting && <span className="run-badge resting">{resting}</span>}
     {cleanup && <span className="run-badge warning">Cleanup failed</span>}
   </button>
+}
+
+// Shown before the rest go into "+k more" (the selected run always stays visible).
+export const visibleRunTabs = 8
+
+// The run tabs: they wrap rather than scroll. With one variant the repeated variant name is dropped
+// from the label (it stays in the accessible name and tooltip); past visibleRunTabs runs, the rest
+// are listed in a "+k more" menu.
+function RunTabs({runs, active, select}: {runs: Array<{variant: ExperimentVariant; trial: ExperimentTrial}>; active: string; select: (id: string) => void}) {
+  const [more, setMore] = useState<MenuAnchor>()
+  const single = new Set(runs.map(run => run.variant.id)).size === 1
+  const named = runs.map(run => ({...run, full: `${run.variant.name} · ${trialLabel(run.trial)}`, name: single ? trialLabel(run.trial) : `${run.variant.alias || run.variant.name} · ${trialLabel(run.trial)}`}))
+  // Compact variant names: without the words every variant name starts with ("CPU limit 200m" → "200m").
+  const names = [...new Set(runs.map(run => run.variant.alias || run.variant.name))]
+  const words = names.map(item => item.split(' '))
+  let common = 0
+  while (names.length > 1 && words.every(item => item.length > common + 1 && item[common] === words[0][common])) common++
+  const shortName = (variant: ExperimentVariant) => (variant.alias || variant.name).split(' ').slice(common).join(' ')
+  const selected = named.findIndex(run => run.trial.id === active)
+  const limit = named.length > visibleRunTabs + 1 ? visibleRunTabs : named.length
+  const shown = named.slice(0, limit)
+  if (selected >= limit) shown[limit - 1] = named[selected]
+  const rest = named.filter(run => !shown.includes(run))
+  return <nav className="experiment-run-tabs" aria-label="Run executions">
+    <button type="button" className="run-tab all-runs" aria-current={active === 'summary' ? 'page' : undefined} data-active={active === 'summary'} onClick={() => select('summary')}><span className="run-tab-label">All executions</span></button>
+    {shown.map(({variant, trial, name, full}) => <RunTab key={trial.id} name={name} full={full} variant={single ? undefined : variant.alias || variant.name} short={single ? undefined : shortName(variant)} trial={trial} active={active === trial.id} select={() => select(trial.id)} />)}
+    {rest.length > 0 && <button type="button" className="run-tab more-runs" aria-haspopup="menu" aria-expanded={Boolean(more)} aria-label={`${rest.length} more executions`} onClick={event => setMore(anchorAtButton(event.currentTarget))}><span className="run-tab-label">+{rest.length} more</span></button>}
+    {more && <ContextMenu at={more} label="More executions" items={rest.map(run => ({label: run.name, hint: run.trial.status, run: () => select(run.trial.id)}))} onClose={() => setMore(undefined)} />}
+  </nav>
 }
 
 function ExperimentStatistics({datasets, metrics, experiment, provenance, comparisonRows, comparisonOptions, setComparisonOptions, fidelityRows}: {datasets: LoadedDataset[]; metrics: string[]; experiment?: Experiment; provenance: ProvenanceOf; comparisonRows: ReturnType<typeof compareRunValues>; comparisonOptions: {baseline: string; mode: 'baseline' | 'all-pairs'}; setComparisonOptions: (value: {baseline: string; mode: 'baseline' | 'all-pairs'}) => void; fidelityRows: Array<{label: string; fidelity: LoadFidelity}>}) {
@@ -877,6 +939,7 @@ function EmptyResults({experiment, runStatus}: {experiment?: Experiment; runStat
 }
 
 function ComparisonResults({artifacts, experiment, comparison, onBack, session}: ResultsViewProps & {experiment: Experiment}) {
+  const [layoutUndo, setLayoutUndo] = useState<() => void>()
   const [revision, setRevision] = useState(0)
   const initialOptions = useMemo(() => comparisonOptionsDefault(withoutPilots(experiment)), [experiment])
   const job = useMemo(() => ({artifacts, experiment, configurations: comparison?.sourceConfigurations ?? {}, comparison: initialOptions}), [artifacts, experiment, comparison?.sourceConfigurations, session.user?.id, initialOptions])
@@ -948,14 +1011,16 @@ function ComparisonResults({artifacts, experiment, comparison, onBack, session}:
     metrics: data.metrics, plot, provenance, omitSLO: data.omitSLO,
     runLevel: (data.runLevel ?? []).filter(entry => data.metrics.includes(entry.metric)), ladder: data.ladder ?? [], fidelity: data.fidelity ?? [],
     serviceMetrics: data.metrics.filter(metric => serviceStatisticsMetrics.includes(metric) && data.services?.[metric]?.rows.length),
-    services: metric => data.services?.[metric], xy: xySource, profile: sharedLoadProfile(Object.values(comparison?.sourceConfigurations ?? {}) as Array<Record<string, unknown> | undefined>)
-  }, [data, plot, provenance, xySource])
+    services: metric => data.services?.[metric], xy: xySource, profile: sharedLoadProfile(Object.values(comparison?.sourceConfigurations ?? {}) as Array<Record<string, unknown> | undefined>),
+    guide: overview && {insights: overview.insights, services: overview.services(undefined), variants: overview.groups.length, repetitions: Math.max(0, ...(data.runLevel ?? []).flatMap(entry => entry.groups.map(group => group.values.length)))}
+  }, [data, plot, provenance, xySource, overview])
   // A saved comparison's result carries the comparison id.
   const charts = useResultsLayout({kind: 'comparisons', id: experiment.id}, studioData, session.csrfToken)
   const rawData = artifacts.map(artifact => ({id: artifact.id, label: experiment.variants.find(variant => variant.trials.some(trial => trial.resultArtifactId === artifact.id))?.alias || artifact.name}))
   // Sources are there while the results are still preparing.
   const available: PageSection[] = [...(comparison?.sources ? ['sources'] as const : []), ...(!data ? [] : ['summary', ...(data.complete ? ['timeline'] as const : []), 'services', ...((data.locust ?? []).length ? ['endpoints'] as const : []), 'statistics', ...(data.context ? ['environment'] as const : [])] as const)]
   const page = usePageSections(charts, available, printPending, sectionState)
+  const exportPanel = (close: () => void) => data ? <ExportPanel datasets={[]} csv={() => data.csv} comparisonRows={rows} savedFigures={false} rawData={rawData} onPrint={() => {close(); toggleSection('statistics', true); setPrintPending(true)}} /> : null
   const comparisonViews: StatisticsView[] = data ? [
     {id: 'comparison', title: 'Comparison', metrics: true, render: match => <StrategyComparison datasets={[]} metrics={data.statisticsMetrics.filter(match)} experiment={experiment} prepared={data.columns} provenance={provenance} />},
     {id: 'differences', title: 'Differences', metrics: true, render: match => <ComparisonTable rows={rows} variants={analysis.variants.map(variant => ({id: variant.id, label: variant.alias || variant.name}))} baseline={options.baseline} mode={options.mode} onChange={setOptions} provenance={provenance} title="Differences between experiments" match={match} />},
@@ -967,22 +1032,27 @@ function ComparisonResults({artifacts, experiment, comparison, onBack, session}:
         <div className="results-title"><h2 tabIndex={-1}>{experiment.name}</h2><ResultsMeta experiment={analysis} datasets={[]} /></div>
         <div className="results-detail-actions">
           {comparison?.actions}
-          {data?.complete && <button type="button" className="button secondary" title="Open KubeStudio to build a publication figure" onClick={() => setStudio({choose: true})}><KubeStudioMark size={18} className="kubestudio-entry" />Create figure</button>}
-          {data && <HeaderMenu label="Export" icon={<ActionIcon name="download" />}>{close => <ExportPanel datasets={[]} csv={() => data.csv} comparisonRows={rows} savedFigures={false} rawData={rawData} onPrint={() => {close(); toggleSection('statistics', true); setPrintPending(true)}} />}</HeaderMenu>}
+          {data && <HeaderMenu label="Export" icon={<ActionIcon name="download" />} className="results-export">{close => exportPanel(close)}</HeaderMenu>}
+          {data?.complete && <button type="button" className="button primary" title="Open KubeStudio to build a publication figure" onClick={() => setStudio({choose: true})}><KubeStudioMark size={18} className="kubestudio-entry" />Create figure</button>}
+          {(data || charts.customized) && <PageMoreMenu>{close => <>
+            {data && <MobileExport>{exportPanel(close)}</MobileExport>}
+            {charts.customized && <button type="button" className="menu-item" onClick={() => {close(); setLayoutUndo(() => charts.reset())}}><ActionIcon name="refresh" /><span className="menu-item-text">Reset charts and sections<small>Back to the default page</small></span></button>}
+          </>}</PageMoreMenu>}
         </div>
       </div>
     </header>
     {comparison?.notice}
+    {layoutUndo && <p className="result-charts-notice" role="status">Default charts and sections restored. <button type="button" className="link-button" onClick={() => {layoutUndo(); setLayoutUndo(undefined)}}>Undo</button></p>}
     <ResourceAttribution resource={experiment} editable />
+    {data && <div className="results-view-bar"><SectionsMenu available={available} shown={page.shown} onToggle={(id, shown) => {charts.toggleSection(id, shown); if (shown) toggleSection(id as SectionID, true)}} onShowAll={() => charts.setSections(available)} /></div>}
     <ErrorFeedback message={state.error} />
     {data && <SectionNav links={page.links} onJump={sectionState.jump} top="results-top" />}
     {state.error ? <div className="results-placeholder"><button className="button secondary" onClick={() => setRevision(value => value + 1)}>Retry loading results</button></div> : !data ? <div className="results-placeholder" role="status"><span className="results-spinner" /><strong>{state.progress}</strong></div> : <div className="results-content">
       <div id="results-overview" className="section-anchor" />
       {data.warnings.map(warning => <div key={warning} className="validation-item warning">{warning}</div>)}
       {overview && <ResultsOverview model={overview} onNavigate={page.navigate} show={page.show} />}
-      {overview && (data.complete ? <ResultCharts items={charts.items} data={studioData} groups={overview.groups} settings={figureSettings} loading={charts.loading} customized={charts.customized} error={charts.error}
-        sections={available} shown={page.shown} onToggleSection={page.toggle}
-        onChange={charts.change} onReset={charts.reset} onAdd={() => setStudio({choose: true})} onEdit={item => setStudio({figure: item})} /> : <div className="results-placeholder" role="status"><span className="results-spinner" /><strong>{state.progress ?? 'Preparing plots…'}</strong></div>)}
+      {overview && (data.complete ? <ResultCharts items={charts.items} data={studioData} groups={overview.groups} settings={figureSettings} loading={charts.loading} error={charts.error}
+        onChange={charts.change} onEdit={item => setStudio({figure: item})} /> : <div className="results-placeholder" role="status"><span className="results-spinner" /><strong>{state.progress ?? 'Preparing plots…'}</strong></div>)}
     </div>}
     <div className="results-sections" role="region" aria-label="Details">
       {comparison?.sources && page.show('sources') && <Disclosure id="sources" title="Sources" summary={`${experiment.variants.length} experiment${experiment.variants.length === 1 ? '' : 's'}`} open={Boolean(sections.sources)} onToggle={open => toggleSection('sources', open)}>{comparison.sources}</Disclosure>}

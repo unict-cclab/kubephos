@@ -17,12 +17,24 @@ export interface ChartItem extends ImageState {
   caption: string
   // The page style of an image edited in KubeStudio; default charts use the page's.
   settings?: FigureSettings
-  // Columns of the grid the chart spans (absent: one); a narrow page shows fewer.
-  span?: ChartSpan
+  // Share of the row the chart takes (absent: a third); a narrower page shows it wider.
+  size?: ChartSize
+  // Hidden from the grid: listed under "Hidden charts", from where it is shown again.
+  concealed?: boolean
 }
 
-export type ChartSpan = 1 | 2 | 3
-export const maxSpan: ChartSpan = 3
+// Width steps of a chart in the grid, narrowest first.
+export const chartSizes = [
+  {id: 'third', label: '⅓ width', fraction: 1 / 3},
+  {id: 'half', label: '½ width', fraction: 1 / 2},
+  {id: 'two-thirds', label: '⅔ width', fraction: 2 / 3},
+  {id: 'full', label: 'Full width', fraction: 1}
+] as const
+export type ChartSize = (typeof chartSizes)[number]['id']
+export const defaultSize: ChartSize = 'third'
+const sizeIDs: readonly string[] = chartSizes.map(size => size.id)
+// Layouts saved before the size steps counted columns of three.
+const legacySpan: Record<number, ChartSize> = {2: 'two-thirds', 3: 'full'}
 
 export interface LayoutScope {kind: 'experiments' | 'comparisons'; id: string}
 
@@ -83,7 +95,8 @@ function storedItems(entries: ChartItem[]): ChartItem[] {
       id: typeof entry.id === 'string' ? entry.id : charts[0].id, name: typeof entry.name === 'string' ? entry.name : 'Chart', caption: typeof entry.caption === 'string' ? entry.caption : '',
       charts, layout: entry.layout, sharedLegend: entry.sharedLegend === true, hidden: Array.isArray(entry.hidden) ? entry.hidden.filter((label: unknown) => typeof label === 'string') : [],
       settings: entry.settings && typeof entry.settings === 'object' ? {...defaultFigureSettings, ...entry.settings} : undefined,
-      span: entry.span === 2 || entry.span === 3 ? entry.span : undefined
+      size: typeof entry.size === 'string' && sizeIDs.includes(entry.size) && entry.size !== defaultSize ? entry.size : legacySpan[(entry as {span?: number}).span ?? 1],
+      concealed: entry.concealed === true || undefined
     }]
   })
 }
@@ -122,11 +135,13 @@ export function useResultsLayout(scope: LayoutScope | undefined, data: StudioDat
     change: (next: ChartItem[]) => save({items: next, sections}),
     // Shows or hides an optional section, keeping the page order.
     toggleSection: (id: PageSection, shown: boolean) => save({items: stored?.items, sections: pageSections.map(section => section.id).filter(section => section === id ? shown : sections.includes(section))}),
+    // Shows exactly these optional sections.
+    setSections: (ids: PageSection[]) => save({items: stored?.items, sections: pageSections.map(section => section.id).filter(section => ids.includes(section))}),
     reset: () => {const before = stored ?? null; save(null); return () => save(before)},
     // A KubeStudio image added at the end, or replacing the chart it was opened from (keeping its width).
     keep: (figure: Omit<ChartItem, 'id'>, id?: string): ChartItem => {
       const previous = id ? items.find(item => item.id === id) : undefined
-      const kept = {span: previous?.span, ...figure, id: previous ? previous.id : newChartId()}
+      const kept: ChartItem = {size: previous?.size, ...figure, concealed: undefined, id: previous ? previous.id : newChartId()}
       save({items: items.some(item => item.id === kept.id) ? items.map(item => item.id === kept.id ? kept : item) : [...items, kept], sections})
       return kept
     }

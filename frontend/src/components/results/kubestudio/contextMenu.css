@@ -12,3 +12,9 @@
 .context-menu-item.danger, .context-menu-item.danger > svg { color: var(--destructive, #b42318); }
 .context-menu-item[data-separated] { position: relative; margin-top: 7px; }
 .context-menu-item[data-separated]::before { position: absolute; top: -4px; right: 4px; left: 4px; border-top: 1px solid var(--border); content: ""; }
+.context-menu-title { padding: 6px 10px 8px; color: var(--muted-foreground); font-size: 12px; line-height: 1.4; }
+/* Switch lists: what is off is dimmed. */
+.context-menu-item[aria-checked="false"] strong { color: var(--muted-foreground); }
+.context-menu-item[role="menuitemcheckbox"] .context-menu-check { border: 1px solid var(--input); border-radius: 4px; }
+.context-menu-item[aria-checked="true"] .context-menu-check { border-color: var(--foreground); background: var(--foreground); color: var(--background); }
+.context-menu.sections-menu { min-width: 300px; }

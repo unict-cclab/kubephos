@@ -25,8 +25,8 @@ it('keeps replay execution-specific while exposing the aggregate heatmap in Kube
  expect(screen.queryByLabelText('Placement replay')).not.toBeInTheDocument()
  fireEvent.click(await screen.findByRole('button',{name:'Create figure'}))
  const dialog=await screen.findByRole('dialog',{name:'KubeStudio'})
- // A new figure opens on the chart types.
- fireEvent.click(within(dialog).getByRole('dialog',{name:'Choose a figure'}).querySelector('[data-kind="placement"]')!)
+ // A new figure opens on the landing page; the heatmap is one of its suggestions.
+ fireEvent.click(dialog.querySelector('.ks-suggestion[data-suggestion="placement"]')!)
  await within(dialog).findByRole('img',{name:'Application placement by zone heatmap'})
  expect(within(dialog).getByText('Mean replicas')).toBeInTheDocument()
 })

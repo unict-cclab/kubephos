@@ -17,11 +17,32 @@ const runLevel = (name: string, unit: string): RunLevelMetric => ({metric: name,
 const curve = (label: string, values: number[]): AggregateSeries => ({artifactID: label, label, unit: 'milliseconds', stepMilliseconds: 15000, runs: 3, points: values.map((value, index) => ({timestamp: new Date(index * 15000).toISOString(), value})), deviation: values.map((_, index) => ({timestamp: new Date(index * 15000).toISOString(), value: .5}))})
 const data: StudioData = {metrics: ['load.p95_response_time'], plot: () => [curve('Alpha', [1, 2, 3, 4]), curve('Beta', [2, 3, 4, 5])], runLevel: [runLevel('load.p95_response_time', 'milliseconds')], ladder: [], fidelity: [], services: () => undefined, serviceMetrics: [], provenance: name => provenanceFor([], name), omitSLO: true}
 const groups = [{id: 'a', label: 'Alpha', color: '#1f77b4'}, {id: 'b', label: 'Beta', color: '#d55e00'}]
+// Results with findings, for the landing's suggestions: two variants × 3 repetitions, a bottleneck,
+// a load shortfall, an SLO missed and autoscaling.
+const series = (unit: string, values: number[], extra: Partial<AggregateSeries> = {}): AggregateSeries[] => [{...curve('Alpha', values), unit, ...extra}, {...curve('Beta', values.map(value => value * 1.1)), unit, ...extra}]
+const guidedPlots: Record<string, AggregateSeries[]> = {
+  'load.p95_response_time': series('milliseconds', [300, 340, 380, 420], {sloMilliseconds: 350}),
+  'load.achieved_rps': series('requests_per_second', [100, 160, 220, 300 / 1.1]),
+  'deployment.ready_replicas': series('replicas', [2, 3, 4, 5])
+}
+const serviceRow = (service: string, mean: number) => ({service, group: 'Alpha', summary: {mean}})
+const guided: StudioData = {
+  ...data, metrics: Object.keys(guidedPlots), plot: metric => guidedPlots[metric] ?? [], serviceMetrics: ['application.p95_response_time'], omitSLO: false,
+  services: metric => metric === 'application.p95_response_time' ? {rows: [serviceRow('recommendationservice', 812), serviceRow('frontend', 120)]} as never : undefined,
+  fidelity: [{...curve('Alpha', [200, 200]), role: 'offered'}, {...curve('Alpha', [130, 130]), role: 'achieved'}],
+  xy: {metrics: ['load.p95_response_time', 'load.achieved_rps'], level: 'run', provenance: name => provenanceFor([], name), services: () => undefined, runs: () => []},
+  guide: {variants: 2, repetitions: 3, services: [], insights: [
+    {id: 'bottleneck', severity: 'critical', title: 'recommendationservice is the bottleneck', detail: '', evidence: {service: 'recommendationservice', value: 812, unit: 'milliseconds'}},
+    {id: 'target-not-sustained', severity: 'critical', title: 'The target rate was not sustained', detail: '', evidence: {}},
+    {id: 'slo', severity: 'warning', title: 'The 350 ms SLO was missed in 40 % of windows', detail: '', evidence: {}},
+    {id: 'autoscaling', severity: 'info', title: 'Autoscaling was active: 7 services scaled, up to 5 replicas', detail: '', evidence: {}}
+  ]}
+}
 
 // Settings are owned by the page (useFigureSettings); a tiny stateful harness mirrors that.
-function Studio({storageKey, onSave, initial = defaultFigureSettings, request = {kind: 'timeseries' as const}}: {storageKey?: string; onSave?: StudioSave; initial?: FigureSettings; request?: Parameters<typeof KubeStudio>[0]['request']}) {
+function Studio({storageKey, onSave, initial = defaultFigureSettings, request = {kind: 'timeseries' as const}, data: studioData = data}: {storageKey?: string; onSave?: StudioSave; initial?: FigureSettings; request?: Parameters<typeof KubeStudio>[0]['request']; data?: StudioData}) {
   const [settings, setSettings] = useState(initial)
-  return <KubeStudio open onClose={() => {}} request={request} data={data} groups={groups} settings={settings} onSettings={setSettings} storageKey={storageKey} onSave={onSave} />
+  return <KubeStudio open onClose={() => {}} request={request} data={studioData} groups={groups} settings={settings} onSettings={setSettings} storageKey={storageKey} onSave={onSave} />
 }
 
 const studio = () => screen.getByRole('dialog', {name: 'KubeStudio'})
@@ -157,12 +178,9 @@ describe('KubeStudio', () => {
     expect(cells()).toEqual([a])
   })
 
-  it('adds charts guided: the type first, then X and Y; a new figure opens on the type picker', () => {
-    render(<Studio request={{choose: true}} />)
-    // From the results page: KubeStudio opens on the chart types.
-    expect(within(studio()).getByRole('dialog', {name: 'Choose a figure'})).toBeInTheDocument()
-    fireEvent.keyDown(within(studio()).getByRole('dialog', {name: 'Choose a figure'}), {key: 'Escape'})
-    // Add chart opens the same picker; leaving it adds nothing.
+  it('adds charts guided: the type first, then X and Y', () => {
+    render(<Studio request={{}} />)
+    // Add chart opens the chart-type picker; leaving it adds nothing.
     fireEvent.click(layers().getByRole('button', {name: 'Add chart'}))
     const picker = within(studio()).getByRole('dialog', {name: 'Add chart (b): choose its type'})
     expect(picker).toHaveTextContent('first choose its type, then its X and Y on the right')
@@ -424,7 +442,7 @@ describe('KubeStudio', () => {
     expect(panel('Layers')).toBeVisible()
   })
 
-  it('is free of axe violations (wide and narrow)', async () => {
+  it('is free of axe violations (wide and narrow, landing included)', async () => {
     const audit = async () => {
       const results = await axe.run(document.body, {runOnly: {type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag21aa', 'wcag22aa']}, rules: {'color-contrast': {enabled: false}}})
       return results.violations.map(({id, nodes}) => ({id, targets: nodes.map(node => node.target)}))
@@ -451,5 +469,102 @@ describe('KubeStudio', () => {
     render(<main><h1>Results</h1><Studio /></main>)
     await act(async () => {fireEvent.click(within(studio()).getByRole('tab', {name: 'Properties'}))})
     expect(await audit()).toEqual([])
+    cleanup()
+    render(<main><h1>Results</h1><Studio request={{choose: true}} data={guided} /></main>)
+    expect(await audit()).toEqual([])
+  })
+})
+
+describe('KubeStudio landing (a new figure)', () => {
+  const landing = () => within(studio().querySelector('.ks-landing') as HTMLElement)
+  const suggestions = () => landing().getAllByRole('button').filter(button => button.classList.contains('ks-suggestion'))
+  const titles = () => suggestions().map(button => button.querySelector('strong')!.textContent)
+
+  it('guides from the results: ranked suggestions, each with why, then the editor on one click', () => {
+    render(<Studio request={{choose: true}} data={guided} />)
+    // Not straight into a chart: the steps, the goals and the suggestions come first.
+    expect(studio().querySelector('.ks-workspace')).toBeNull()
+    expect(within(studio()).queryByRole('button', {name: 'Export'})).not.toBeInTheDocument()
+    // Plain wording, no numbered stepper.
+    expect(within(studio()).queryByRole('list', {name: /step/})).not.toBeInTheDocument()
+    expect(landing().getByRole('heading', {name: 'What do you want to show?'})).toBeInTheDocument()
+    expect(within(landing().getByRole('group', {name: 'What do you want to show?'})).getAllByRole('button').map(button => button.textContent)).toEqual(['Everything', 'Load and throughput', 'Latency', 'Bottlenecks', 'Resources and scaling', 'Compare variants'])
+    expect(landing().getByRole('heading', {name: 'Suggested for this experiment'})).toBeInTheDocument()
+    expect(landing().getByText('Pick one to open it in the editor — you can change data, style and layout there.')).toBeInTheDocument()
+    expect(titles()).toEqual(['Best match Server P95 by service', 'Load fidelity', 'Latency against the SLO', 'P95 comparison with 95 % CI', 'Replicas over time vs load', 'Throughput vs latency'])
+    expect(suggestions()[0]).toHaveFocus()
+    const why = suggestions().map(button => button.querySelector('small')!.textContent)
+    expect(why[0]).toBe('recommendationservice is the bottleneck (server P95 812 ms) → every service\'s P95 side by side')
+    expect(why[1]).toBe('Achieved 65 % of the target rate → offered vs achieved load')
+    expect(why[3]).toBe('2 variants × 3 repetitions → every repetition, mean and 95 % CI')
+    expect(why[2]).toBe('The 350 ms SLO was missed in 40 % of windows → P95 over time with the SLO line')
+    expect(why[4]).toBe('Autoscaling scaled 7 services, up to 5 replicas → replicas over time against the request rate')
+    expect(why[5]).toBe('Load ranged from 100 RPS to 300 RPS → how latency grows with throughput')
+    expect(suggestions()[0].querySelector('[data-severity="critical"]')).not.toBeNull()
+    // Live thumbnails drawn from the data.
+    expect(suggestions().slice(0, 5).every(button => button.querySelector('svg.studio-thumb polyline, svg.studio-thumb circle'))).toBe(true)
+    // A goal chip narrows the list.
+    const goal = (name: string) => within(landing().getByRole('group', {name: 'What do you want to show?'})).getByRole('button', {name})
+    expect(goal('Everything')).toHaveAttribute('aria-pressed', 'true')
+    fireEvent.click(goal('Load and throughput'))
+    expect(goal('Load and throughput')).toHaveAttribute('aria-pressed', 'true')
+    expect(titles()).toEqual(['Load fidelity', 'Throughput vs latency'])
+    fireEvent.click(goal('Resources and scaling'))
+    fireEvent.click(suggestions()[0])
+    // The editor, on that chart, with a history of its own.
+    expect(studio().querySelector('.ks-landing')).toBeNull()
+    expect(within(studio()).getByRole('img', {name: /replicas.*comparison chart/i})).toBeInTheDocument()
+    expect(figure().querySelectorAll('.axis-title-right').length).toBe(1)
+    expect(within(studio()).getByRole('button', {name: 'Undo'})).toBeDisabled()
+    expect(within(studio()).getByRole('status')).toHaveTextContent(/Replicas over time vs load\. Refine it/)
+  })
+
+  it('goes back to the suggestions from the editor with Home, keeping the figure as the last one', async () => {
+    render(<Studio request={{choose: true}} data={guided} />)
+    const undoButton = () => within(within(studio()).getByRole('group', {name: 'History'})).getByRole('button', {name: 'Undo'})
+    // History starts recording once mounted.
+    await act(async () => {await new Promise(resolve => setTimeout(resolve, 0))})
+    fireEvent.click(suggestions()[1])
+    fireEvent.click(within(studio()).getByRole('button', {name: /^Figure:/}))
+    fireEvent.click(within(studio()).getByRole('dialog', {name: 'Choose a figure'}).querySelector('[data-kind="runlevel"]')!)
+    expect(undoButton()).toBeEnabled()
+    const home = within(studio()).getByRole('button', {name: 'Back to suggestions'})
+    expect(home).toHaveAttribute('title', expect.stringMatching(/stays available as “Continue last figure”/))
+    fireEvent.click(home)
+    expect(studio().querySelector('.ks-workspace')).toBeNull()
+    expect(suggestions()[0]).toHaveFocus()
+    const resume = landing().getByRole('button', {name: /^Continue last figure/})
+    expect(resume).toHaveTextContent(/P95 latency/)
+    // Continue: the same figure, with its undo history.
+    fireEvent.click(resume)
+    expect(within(studio()).getByRole('img', {name: /per repetition/})).toBeInTheDocument()
+    expect(undoButton()).toBeEnabled()
+    // A new suggestion instead starts a new figure with a fresh history.
+    fireEvent.click(within(studio()).getByRole('button', {name: 'Back to suggestions'}))
+    fireEvent.click(suggestions()[0])
+    expect(undoButton()).toBeDisabled()
+  })
+
+  it('offers a custom chart and the last figure to experts, and survives results without findings', () => {
+    window.localStorage.setItem('kubephos.figureStudio.v1:experiment:e9', JSON.stringify({version: 2, charts: [{id: 'old', kind: 'runlevel', metric: 'load.p95_response_time'}], name: 'Paper figure 3'}))
+    render(<Studio storageKey="experiment:e9" request={{choose: true}} />)
+    // Plain data (no findings): still a ranked list, and the memory is not overwritten by the landing.
+    expect(titles()[0]).toMatch(/P95 comparison/)
+    expect(loadStudioMemory('experiment:e9').name).toBe('Paper figure 3')
+    fireEvent.click(landing().getByRole('button', {name: /^Continue last figure/}))
+    expect(studio().querySelector('.ks-landing')).toBeNull()
+    expect(within(studio()).getByRole('img', {name: /per repetition/})).toBeInTheDocument()
+    cleanup()
+    render(<Studio request={{choose: true}} />)
+    expect(landing().queryByRole('button', {name: /^Continue last figure/})).not.toBeInTheDocument()
+    fireEvent.click(landing().getByRole('button', {name: /^Line over time/}))
+    expect(studio().querySelector('.ks-workspace')).not.toBeNull()
+    expect(props().getByRole('group', {name: 'Chart form'})).toBeInTheDocument()
+    // Esc on the landing closes KubeStudio.
+    cleanup()
+    const onClose = vi.fn()
+    render(<KubeStudio open onClose={onClose} request={{choose: true}} data={data} groups={groups} settings={defaultFigureSettings} onSettings={() => {}} />)
+    fireEvent(studio(), new Event('cancel', {cancelable: true}))
+    expect(onClose).toHaveBeenCalled()
   })
 })

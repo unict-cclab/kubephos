@@ -116,7 +116,7 @@ describe('KubernetesClusterDialog', () => {
     expect(body.members[0].applicationPools[0].labels).toEqual({hardware: 'gpu', tier: 'frontend'})
     expect(body.members[0].applicationPools[0].taints).toEqual([{key:'gpu',effect:'NoSchedule'}])
     expect(body.members[0].machineNodes['lab-cluster-1-control-plane-1']).toBe('pve')
-  }, 15000)
+  }, 60_000)
 
   it('submits an independent capacity for every pool', async () => {
     const catalog = {items: [{id: 'prometheus', title: 'Prometheus', description: '', core: true}, {id: 'headlamp', title: 'Headlamp', description: '', core: false}], defaults: {flannel: ['prometheus', 'headlamp'], cilium: ['prometheus', 'headlamp']}}

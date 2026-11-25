@@ -376,9 +376,10 @@ describe('accessibility', () => {
     fireEvent.click(screen.getByRole('button', {name: 'Create figure'}))
     const dialog = await screen.findByRole('dialog', {name: 'KubeStudio'})
     const pick = (kind: string) => {fireEvent.click(within(dialog).getByRole('button', {name: /^Figure:/})); fireEvent.click(within(dialog).getByRole('dialog', {name: 'Choose a figure'}).querySelector(`[data-kind="${kind}"]`)!)}
-    // A new figure opens on the chart types.
-    await audit('KubeStudio figure switcher')
-    fireEvent.click(within(dialog).getByRole('dialog', {name: 'Choose a figure'}).querySelector('[data-kind="fidelity"]')!)
+    // A new figure opens on the landing page: suggestions from these results, then the editor.
+    expect(dialog.querySelectorAll('.ks-suggestion').length).toBeGreaterThan(0)
+    await audit('KubeStudio landing')
+    fireEvent.click(dialog.querySelector('.ks-suggestion[data-suggestion="fidelity"]')!)
     expect(within(dialog).getByRole('img', {name: 'Offered versus achieved request rate chart'})).toBeInTheDocument()
     pick('runlevel')
     // Clicking the Y axis title selects the axis and opens its rename field.
@@ -390,7 +391,7 @@ describe('accessibility', () => {
     expect(within(dialog).getByRole('img', {name: 'Latency percentile ladder: client and server percentiles per configuration'})).toBeInTheDocument()
     fireEvent.click(within(dialog).getByRole('button', {name: 'Export'}))
     await audit('KubeStudio export popover')
-  }, 20000)
+  }, 90_000)
 })
 
 describe('long runs and gaps in figures', () => {

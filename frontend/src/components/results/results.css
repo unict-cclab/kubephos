@@ -283,7 +283,7 @@
   .disclosure-body { padding-left: 0; }
 }
 @media print {
-  .results-detail-actions, .header-menu, .time-chart-foot { display: none; }
+  .results-detail-actions, .header-menu, .time-chart-foot, .customize-view { display: none; }
 }
 .services-table th, .services-table td { border-left: 0; border-right: 0; background: transparent; }
 .services-table thead th { background: transparent; text-transform: none; letter-spacing: 0; }
@@ -308,7 +308,8 @@
 
 /* Run tabs: separate rounded, bordered pills with the status dot before the label; the
    selected one filled. A hairline closes the row. */
-.results-page .experiment-run-tabs { display: flex; gap: 10px; padding: 0 0 16px; margin: 0 0 24px; overflow-x: auto; border-bottom: 1px solid var(--border); scrollbar-width: thin; }
+/* No rule of their own: the first section below draws the single hairline under the tabs. */
+.results-page .experiment-run-tabs { display: flex; gap: 10px; padding: 0 0 4px; margin: 0 0 20px; overflow-x: auto; border-bottom: 0; scrollbar-width: thin; }
 .results-page .experiment-run-tabs .run-tab { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 8px; height: var(--results-control); min-height: var(--results-control); padding: 0 16px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--sheet); color: var(--foreground); font-size: 14px; font-weight: 500; line-height: 1; white-space: nowrap; cursor: pointer; transition: background-color var(--duration-fast) var(--ease-out), border-color var(--duration-fast) var(--ease-out); }
 .results-page .experiment-run-tabs .run-tab:hover { border-color: var(--input); background: var(--muted); color: var(--foreground); }
 .results-page .experiment-run-tabs .run-tab[data-active="true"] { border-color: var(--input); background: var(--accent); color: var(--accent-foreground); font-weight: 600; box-shadow: none; }
@@ -397,6 +398,7 @@ th[aria-sort] { color: var(--foreground) !important; }
   .results-page .header-menu-panel.end, .results-page .header-menu-panel.start { left: 0; right: auto; width: min(360px, calc(100vw - 32px)); }
   .results-page .sort-button { min-height: 32px; }
   .results-page .experiment-run-tabs { margin-inline: -16px; padding-inline: 16px; }
+  .results-page .results-view-bar .experiment-run-tabs { margin-inline: 0; padding-inline: 0; }
   .run-facts dl { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 16px; }
   /* No scroll trap on a phone: the page scrolls vertically, tables only sideways. */
   .report-table-wrap, .results-page .statistics-table-wrap { max-height: none; }
@@ -498,4 +500,42 @@ th[aria-sort] { color: var(--foreground) !important; }
 }
 @media print {
   .section-nav, .back-to-top, .statistics-filter, .show-all-rows { display: none; }
+}
+/* The row under the header: run tabs, and "Customize view" (the page's sections) on the right. */
+/* The tabs wrap onto more lines rather than scroll; Customize view stays on the first line, and
+   turns icon-only when the row is narrow (the bar is a size container). */
+.results-page .results-view-bar { container-type: inline-size; display: flex; align-items: flex-start; gap: 12px; margin: 0 0 20px; }
+.results-page .results-view-bar .experiment-run-tabs { flex: 1 1 auto; flex-wrap: wrap; gap: 8px; min-width: 0; margin: 0; padding: 0; overflow: visible; }
+.results-page .results-view-bar .run-tab-label { max-width: 26ch; overflow: hidden; text-overflow: ellipsis; }
+.results-page .results-view-bar .run-tab.more-runs { color: var(--muted-foreground); }
+.results-page .results-view-bar > .customize-view { flex: none; margin-left: auto; }
+.results-page .results-view-bar:has(.experiment-run-tabs) > .customize-view { margin-top: calc((var(--results-control) - 32px) / 2); }
+.results-page .customize-view { gap: 6px; height: 32px; min-height: 32px; padding: 0 12px; font-size: 13px; }
+.results-page .results-view-bar .run-tab-label:has(.run-tab-variant) { max-width: none; white-space: nowrap; }
+.results-page .results-view-bar .run-tab-variant { display: inline-block; vertical-align: top; }
+.results-page .results-view-bar .run-tab-run-short, .results-page .results-view-bar .run-tab-variant-short { display: none; }
+.results-page .results-view-bar .run-tab-variant-short { max-width: 11ch; overflow: hidden; text-overflow: ellipsis; vertical-align: top; }
+@container (max-width: 1000px) {
+  .results-page .results-view-bar .run-tab-variant, .results-page .results-view-bar .run-tab-run { display: none; }
+  .results-page .results-view-bar .run-tab-run-short { display: inline; }
+  .results-page .results-view-bar .run-tab-variant-short { display: inline-block; }
+}
+@container (max-width: 520px) {
+  .results-page .results-view-bar .run-tab { gap: 6px; padding: 0 10px; }
+  .results-page .results-view-bar .run-tab-variant-short { max-width: 9ch; }
+}
+@container (max-width: 760px) {
+  .results-page .results-view-bar:has(.experiment-run-tabs) .customize-view { width: 32px; padding: 0; justify-content: center; }
+  .results-page .results-view-bar:has(.experiment-run-tabs) .customize-view-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+}
+.results-meta-link { display: inline-flex; align-items: center; gap: 3px; color: var(--foreground); font-weight: 500; text-decoration: underline; text-decoration-color: var(--line-strong, var(--border)); text-underline-offset: 3px; }
+.results-meta-link:hover { text-decoration-color: currentColor; }
+.results-meta-link svg { fill: none; stroke: currentColor; stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round; }
+/* Create figure is the page's primary action: its KubeStudio tile turns light on the primary fill. */
+.results-page .button.primary .kubestudio-entry { color: var(--primary-foreground); --ks-ink: var(--primary); }
+.results-page .mobile-export { display: none; }
+.results-page .menu-heading { margin: 4px 10px 6px; color: var(--muted-foreground); font-size: 12px; font-weight: 600; }
+@media (max-width: 640px) {
+  .results-page .results-export { display: none; }
+  .results-page .mobile-export { display: block; margin-bottom: 6px; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
 }

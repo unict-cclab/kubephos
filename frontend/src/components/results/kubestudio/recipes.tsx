@@ -72,7 +72,7 @@ const scaler = (values: number[], from: number, to: number, zero = false) => {
 
 const colorOf = (groups: OverviewGroup[], label: string, index: number, fallback?: string) => groups.find(group => group.label === label || label.startsWith(`${group.label} · `))?.color ?? fallback ?? `var(--chart-${index % 8 + 1})`
 
-function lineThumb(series: Array<{label: string; color?: string; points: Array<{x: number; y: number}>; dashed?: boolean}>, groups: OverviewGroup[]) {
+export function lineThumb(series: Array<{label: string; color?: string; points: Array<{x: number; y: number}>; dashed?: boolean}>, groups: OverviewGroup[]) {
   const xs = series.flatMap(item => item.points.map(point => point.x))
   const ys = series.flatMap(item => item.points.map(point => point.y))
   const px = scaler(xs, PAD + 2, W - PAD)
@@ -84,12 +84,12 @@ function lineThumb(series: Array<{label: string; color?: string; points: Array<{
   }))
 }
 
-const curvePoints = (series: AggregateSeries) => {
+export const curvePoints = (series: AggregateSeries) => {
   const start = Date.parse(series.points[0]?.timestamp ?? '')
   return series.points.map(point => ({x: Date.parse(point.timestamp) - start, y: point.value}))
 }
 
-function dotsThumb(columns: Array<{label: string; color?: string; values: number[]}>, groups: OverviewGroup[]) {
+export function dotsThumb(columns: Array<{label: string; color?: string; values: number[]}>, groups: OverviewGroup[]) {
   const all = columns.flatMap(item => item.values)
   const py = scaler(all, H - PAD - 4, PAD + 4)
   const width = (W - PAD * 2) / Math.max(1, columns.length)
@@ -104,13 +104,13 @@ function dotsThumb(columns: Array<{label: string; color?: string; values: number
   }))
 }
 
-function scatterThumb(points: Array<{x: number; y: number; color: string}>) {
+export function scatterThumb(points: Array<{x: number; y: number; color: string}>) {
   const px = scaler(points.map(point => point.x), PAD + 3, W - PAD - 2)
   const py = scaler(points.map(point => point.y), H - PAD - 3, PAD + 3)
   return frame(points.slice(0, 200).map((point, index) => <circle key={index} cx={px(point.x)} cy={py(point.y)} r="2" fill={point.color} fillOpacity=".7" />))
 }
 
-function placeholderThumb(kind: FigureKind) {
+export function placeholderThumb(kind: FigureKind) {
   return <span className="studio-thumb studio-thumb-icon"><KindIcon kind={kind} /></span>
 }
 

@@ -319,3 +319,41 @@ dialog.figure-studio label, dialog.figure-studio fieldset { margin: 0; }
 @media (max-width: 999px) { .ks-custom-forms { grid-template-columns: minmax(0, 1fr); } }
 .ks-form-chips .ks-segments { display: grid; grid-template-columns: 1fr 1fr; }
 .ks-form-chips .ks-segment { height: 32px; }
+/* Landing of a new figure: goal → suggested chart → refine, plus a custom chart or the last figure. */
+.ks-landing { grid-row: 3; min-height: 0; overflow: auto; padding: 20px 24px 32px; background: var(--muted); }
+.ks-landing-grid { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 24px; max-width: 1180px; margin: 0 auto; }
+.ks-landing h3 { margin: 0 0 10px; font-size: 15px; font-weight: 600; letter-spacing: -.01em; }
+.ks-landing h3.ks-landing-sub { margin-top: 20px; }
+.ks-landing h3 span { color: var(--muted-foreground); font-size: 13px; font-weight: 400; letter-spacing: 0; }
+.ks-goals { display: flex; flex-wrap: wrap; gap: 8px; }
+.ks-goals button { min-height: 34px; padding: 0 14px; border: 1px solid var(--border); border-radius: 999px; background: var(--card); color: var(--foreground); font: inherit; font-size: 13px; font-weight: 500; cursor: pointer; }
+.ks-goals button:hover { border-color: var(--input); }
+.ks-goals button[aria-pressed="true"] { border-color: var(--foreground); background: var(--foreground); color: var(--background); }
+.ks-landing-note { margin: 0 0 8px; color: var(--muted-foreground); font-size: 13px; }
+.ks-suggestions { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; margin: 0 0 12px; padding: 0; list-style: none; }
+.ks-suggestion { display: grid; grid-template-rows: auto 1fr; gap: 10px; width: 100%; height: 100%; padding: 10px; border: 1px solid var(--border); border-radius: 10px; background: var(--card); color: var(--foreground); text-align: left; cursor: pointer; transition: border-color .12s ease-out, box-shadow .12s ease-out; }
+.ks-suggestion:hover { border-color: var(--input); box-shadow: 0 6px 20px -12px rgb(0 0 0 / .3); }
+.ks-suggestion:focus-visible { outline: 2px solid var(--ring, var(--blue)); outline-offset: 2px; }
+.ks-suggestion-thumb .studio-thumb { height: 96px; }
+.ks-suggestion-text { display: grid; gap: 4px; align-content: start; padding: 0 2px 2px; }
+.ks-suggestion-text strong { font-size: 14px; font-weight: 600; line-height: 1.35; }
+.ks-suggestion-best { display: inline-block; margin-right: 4px; padding: 1px 6px; border-radius: 999px; background: var(--primary); color: var(--primary-foreground); font-size: 11px; font-weight: 600; vertical-align: 1px; }
+.ks-suggestion-why { position: relative; padding-left: 12px; color: var(--muted-foreground); font-size: 12.5px; line-height: 1.45; }
+.ks-suggestion-why::before { position: absolute; top: .5em; left: 0; width: 6px; height: 6px; border-radius: 50%; background: var(--muted-foreground); content: ""; opacity: .5; }
+.ks-suggestion-why[data-severity="critical"]::before { background: var(--destructive, #b42318); opacity: 1; }
+.ks-suggestion-why[data-severity="warning"]::before { background: var(--warning-foreground, #b54708); opacity: 1; }
+.ks-suggestion-why[data-severity="ok"]::before { background: var(--success-foreground, #067647); opacity: 1; }
+.ks-landing-side { display: grid; gap: 20px; align-content: start; }
+.ks-landing-side .ks-custom-forms { grid-template-columns: minmax(0, 1fr); margin-top: 8px; }
+.ks-continue { display: grid; gap: 2px; width: 100%; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--card); color: var(--foreground); text-align: left; cursor: pointer; }
+.ks-continue:hover { border-color: var(--input); background: var(--muted); }
+.ks-continue strong { font-size: 13px; font-weight: 600; }
+.ks-continue small { overflow: hidden; color: var(--muted-foreground); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+@media (max-width: 999px) {
+  .ks-landing { padding: 16px; }
+  .ks-landing-grid { grid-template-columns: minmax(0, 1fr); }
+  .ks-suggestions { grid-template-columns: minmax(0, 1fr); }
+  .ks-suggestion { grid-template-columns: 112px minmax(0, 1fr); grid-template-rows: none; align-items: start; }
+  .ks-suggestion-thumb .studio-thumb { height: 64px; }
+}
+.ks-landing-title { flex: 1 1 auto; margin: 0; color: var(--muted-foreground); font-size: 14px; font-weight: 500; }
