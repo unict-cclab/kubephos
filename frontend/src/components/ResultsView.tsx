@@ -17,7 +17,7 @@ export {figureDimensions, niceAxis, setPNGResolution, svgToPDF} from '../charts'
 import {useDeleteConfirmation} from './ConfirmationDialog'
 import {useEffect, useMemo, useRef, useState, Fragment, type FormEvent, type CSSProperties} from 'react'
 import {request} from '../api'
-import {openLiveDashboard} from '../liveDashboard'
+import {openClusterLens, openLiveDashboard} from '../liveDashboard'
 import {experimentDeletionMessage, experimentDisplayStatus, formatBytes, formatDate, isTerminalExperiment} from '../lib'
 import type {Artifact, Experiment, ExperimentFigure, ExperimentTrial, MetricPoint, Operation, Session, TimeSeriesDataset, Workspace} from '../types'
 import {Dialog} from './Dialog'
@@ -227,13 +227,27 @@ function ExperimentResultsView({artifacts, experiments, operations, workspaces, 
       setOpeningDashboard(false)
     }
   }
+  const [openingLens, setOpeningLens] = useState(false)
+  const configurationId = activeRun?.variant.configurationId ?? focusedExperiment?.configurationId
+  const openLens = async () => {
+    if (!focusedExperiment) return
+    setOpeningLens(true)
+    try {
+      const query = activeRun ? `?trialId=${encodeURIComponent(activeRun.trial.id)}` : ''
+      await openClusterLens(`/experiments/${encodeURIComponent(focusedExperiment.id)}/cluster-lens${query}`)
+    } catch (cause) {
+      setActionError(cause instanceof Error ? cause.message : 'Could not open ClusterLens.')
+    } finally {
+      setOpeningLens(false)
+    }
+  }
   const displayStatus = focusedExperiment ? experimentDisplayStatus({...focusedExperiment, cancelRequested: stopRequested}) : ''
   const canStop = Boolean(focusedExperiment && ['queued', 'running', 'initializing', 'initialized'].includes(focusedExperiment.status))
   const stopLabel = focusedExperiment?.kind === 'suite' ? 'suite' : 'experiment'
   return <>
     {confirmationDialog}
     <header className="page-header">{focusedExperiment && onBack && <DetailBreadcrumb parent={comparison ? 'Comparisons' : 'Experiments'} current={focusedExperiment.name} back={onBack} />}
-    <div className={`results-heading ${focusedExperiment ? 'focused' : ''}`}><div><h2>{focusedExperiment?.name ?? 'Results'}</h2></div><div className="results-detail-actions">{comparison?.actions}{!comparison && focusedExperiment && <ResourceSharing kind="experiments" id={focusedExperiment.id} name={focusedExperiment.name} ownerUserId={focusedExperiment.ownerUserId} session={session} changed={changed} />}{!comparison && focusedExperiment && <span className={`status ${activeRun?.trial.status ?? displayStatus}`}>{activeRun?.trial.status ?? displayStatus}</span>}{liveDashboard && <button type="button" className="button secondary live-dashboard-button" disabled={openingDashboard} onClick={() => void openDashboard()}><ActionIcon name="pulse" />{openingDashboard ? 'Opening…' : 'Live dashboard'}</button>}{!comparison&&focusedExperiment?.status==='initialized'&&canManageResource(session,focusedExperiment.ownerUserId)&&!stopRequested&&<button className="button primary" disabled={startingTraffic} onClick={startTraffic}>{startingTraffic?'Starting…':'Start'}</button>}{!comparison && focusedExperiment && canManageResource(session,focusedExperiment.ownerUserId) && canStop && <button className="button danger" disabled={stopping || stopRequested} onClick={stopExperiment}>{stopping || stopRequested ? `Stopping ${stopLabel}…` : `Stop ${stopLabel}`}</button>}{!comparison && focusedExperiment && canManageResource(session,focusedExperiment.ownerUserId) && <ResourceAction action="delete" label={deleting ? 'Deleting…' : `Delete ${stopLabel}`} disabled={deleting || !isTerminalExperiment(focusedExperiment.status)} title={isTerminalExperiment(focusedExperiment.status) ? undefined : `Stop this ${stopLabel} before deleting it`} onClick={removeExperiment} />}{!focusedExperiment && <div className="results-count" aria-label={`${selectable.length} datasets`}><strong>{selectable.length}</strong><span>datasets</span></div>}</div></div></header>
+    <div className={`results-heading ${focusedExperiment ? 'focused' : ''}`}><div><h2>{focusedExperiment?.name ?? 'Results'}</h2></div><div className="results-detail-actions">{comparison?.actions}{!comparison && focusedExperiment && <ResourceSharing kind="experiments" id={focusedExperiment.id} name={focusedExperiment.name} ownerUserId={focusedExperiment.ownerUserId} session={session} changed={changed} />}{!comparison && focusedExperiment && <span className={`status ${activeRun?.trial.status ?? displayStatus}`}>{activeRun?.trial.status ?? displayStatus}</span>}{!comparison && focusedExperiment && <>{configurationId && <a className="button secondary" href={`#experiments/configuration/${encodeURIComponent(configurationId)}`}>Configuration</a>}{focusedExperiment.status === 'running' && <button type="button" className="button secondary" disabled={openingLens || !(activeRun ? activeRun.trial.pipelineRunId : focusedRuns.some(item => item.trial.pipelineRunId))} onClick={() => void openLens()}>{openingLens ? 'Opening…' : 'ClusterLens'}</button>}</>}{liveDashboard && <button type="button" className="button secondary live-dashboard-button" disabled={openingDashboard} onClick={() => void openDashboard()}><ActionIcon name="pulse" />{openingDashboard ? 'Opening…' : 'Live dashboard'}</button>}{!comparison&&focusedExperiment?.status==='initialized'&&canManageResource(session,focusedExperiment.ownerUserId)&&!stopRequested&&<button className="button primary" disabled={startingTraffic} onClick={startTraffic}>{startingTraffic?'Starting…':'Start'}</button>}{!comparison && focusedExperiment && canManageResource(session,focusedExperiment.ownerUserId) && canStop && <button className="button danger" disabled={stopping || stopRequested} onClick={stopExperiment}>{stopping || stopRequested ? `Stopping ${stopLabel}…` : `Stop ${stopLabel}`}</button>}{!comparison && focusedExperiment && canManageResource(session,focusedExperiment.ownerUserId) && <ResourceAction action="delete" label={deleting ? 'Deleting…' : `Delete ${stopLabel}`} disabled={deleting || !isTerminalExperiment(focusedExperiment.status)} title={isTerminalExperiment(focusedExperiment.status) ? undefined : `Stop this ${stopLabel} before deleting it`} onClick={removeExperiment} />}{!focusedExperiment && <div className="results-count" aria-label={`${selectable.length} datasets`}><strong>{selectable.length}</strong><span>datasets</span></div>}</div></div></header>
     {focusedExperiment && <ResourceAttribution resource={focusedExperiment} editable={Boolean(comparison)} />}
     {comparison?.sources}
     <ErrorFeedback message={actionError} />

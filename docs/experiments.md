@@ -12,6 +12,11 @@
 
 Run names are suggested as `configuration-DD/MM/YYYY-HH:mm` and remain editable.
 
+In run details, **Configuration** opens the associated configuration.
+**ClusterLens** is available while the experiment is running and opens the cluster
+with the selected execution’s namespace; from
+**All executions**, it uses the active execution or the most recently started one.
+
 A suite saves configuration order, repetitions, plot labels and colors. Runs execute
 sequentially. Starting an experiment freezes its complete configuration: later edits
 do not change recorded settings or results. Single configurations referenced by a
@@ -175,6 +180,15 @@ continue to work. Parameters are available in
 KubePhos creates only the isolated load-driver namespace and leaves the remote
 application unchanged. Per-service application metrics are unavailable without a
 verified Kubernetes topology.
+
+Nginx traffic entrypoints receive shared HTTP failover defaults: at most two
+upstream attempts, including the first, for connection errors, timeouts, invalid
+headers and HTTP 502/503/504. The retry window is five seconds; it is not a total
+request deadline. Existing server/location policies take precedence. Keepalive
+remains enabled where configured, and retries of already-sent non-idempotent
+requests are not enabled. Upstream failure accounting uses nginx's server-level
+settings; with its defaults, an eligible failure temporarily excludes that peer
+for ten seconds. A healthy alternative must be available for failover to succeed.
 
 ## Metrics and comparisons
 

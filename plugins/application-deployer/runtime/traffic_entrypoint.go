@@ -54,6 +54,11 @@ func prepareRuntimePackage(ctx context.Context, runner commandRunner, kubeconfig
 	if err != nil {
 		return "", nil, 0, err
 	}
+	content, err = configureIngressFailover(content, workloads)
+	if err != nil {
+		return "", nil, 0, err
+	}
+
 	effectiveWorkloads := workloads
 	proxyNodes := 0
 	entrypoints := trafficEntrypoints(workloads)

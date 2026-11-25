@@ -1,6 +1,5 @@
 import {useState} from 'react'
 import type {ManagedResource, Session} from '../types'
-import {openLiveDashboard} from '../liveDashboard'
 import {clusterHasComponent, useClusterComponentCatalog, type ClusterComponentCatalog} from '../clusterComponents'
 
 type Endpoint = {name: string; address: string; url: string}
@@ -21,29 +20,7 @@ function EndpointLink({endpoint}: {endpoint: Endpoint}) {
   return <a className="dashboard-link" href={endpoint.url} target="_blank" rel="noreferrer"><span><strong>{endpoint.name}</strong><span>{endpoint.address}</span></span><ExternalMark /></a>
 }
 
-// The live experiment dashboard is installed in Grafana on demand, then opened
-// on the namespace currently receiving load. It serves single clusters.
-function LiveDashboardLink({resource, session, address}: {resource: ManagedResource; session?: Session; address: string}) {
-  const [opening, setOpening] = useState(false)
-  const [error, setError] = useState('')
-  const open = async () => {
-    setOpening(true)
-    setError('')
-    try {
-      await openLiveDashboard(`/kubernetes-clusters/${resource.id}/live-dashboard`, session?.csrfToken)
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : 'Could not open the live dashboard.')
-    } finally {
-      setOpening(false)
-    }
-  }
-  return <>
-    <button type="button" className="dashboard-link" disabled={opening} onClick={() => void open()}><span><strong>Live experiment</strong><span>{opening ? 'Preparing the dashboard…' : `${address} · Grafana`}</span></span><ExternalMark /></button>
-    {error && <p className="dashboard-link-error" role="alert">{error}</p>}
-  </>
-}
-
-export function ClusterDashboards({resource, session}: {resource: ManagedResource; session?: Session}) {
+export function ClusterDashboards({resource}: {resource: ManagedResource; session?: Session}) {
   const [workloadCluster, setWorkloadCluster] = useState('')
   const {catalog} = useClusterComponentCatalog()
   if (resource.kind !== 'kubernetes-cluster' || resource.status !== 'ready') return null
@@ -64,7 +41,7 @@ export function ClusterDashboards({resource, session}: {resource: ManagedResourc
     </section>}
     <div className={multi ? 'dashboard-clusters' : ''}>{groups.map(group => <section key={group.name} className="dashboard-cluster" aria-label={multi ? `${group.name} dashboards` : 'Cluster dashboards'}>
       {multi && <h3>{group.name}</h3>}
-      <div className={multi ? 'dashboard-links' : 'dashboard-links dashboard-links-single'}>{group.links.filter(link => !multi || link.name !== 'Cluster Lens').map(endpoint => <EndpointLink key={endpoint.name} endpoint={endpoint} />)}{!multi && <LiveDashboardLink resource={resource} session={session} address={group.links[0].address} />}</div>
+      <div className={multi ? 'dashboard-links' : 'dashboard-links dashboard-links-single'}>{group.links.filter(link => !multi || link.name !== 'Cluster Lens').map(endpoint => <EndpointLink key={endpoint.name} endpoint={endpoint} />)}</div>
     </section>)}</div>
   </section>
 }

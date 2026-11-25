@@ -43,7 +43,7 @@ const nodeRadius = 82;
 let refreshMs = 2000;
 let latestSnapshot = null;
 let autoRefresh = true;
-let selectedNamespace = "all";
+let selectedNamespace = new URLSearchParams(window.location.search).get("namespace") || "all";
 let selectedGroup = "all";
 let showGateway = showGatewayToggle.checked;
 let showPodLines = showPodLinesToggle.checked;
@@ -568,7 +568,7 @@ function inspect(title, value) {
 
 function syncFilters(snapshot) {
   const namespaces = uniqueSorted(snapshot.pods.map((pod) => pod.namespace).filter(Boolean));
-  selectedNamespace = namespaces.includes(selectedNamespace) || selectedNamespace === "all" ? selectedNamespace : "all";
+  if (selectedNamespace !== "all" && !namespaces.includes(selectedNamespace)) namespaces.push(selectedNamespace);
   setOptions(namespaceFilter, [
     { value: "all", label: "All namespaces" },
     ...namespaces.map((namespace) => ({ value: namespace, label: namespace })),

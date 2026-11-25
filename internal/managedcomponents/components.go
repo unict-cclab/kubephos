@@ -6,7 +6,7 @@ const (
 	Project            = "kubephos"
 	LegacyProject      = "kubephos-dev"
 	ClusterLensName    = "cluster-lens"
-	ClusterLensVersion = "v1.3.2"
+	ClusterLensVersion = "v1.3.3"
 	MonAgentName       = "mon-agent"
 	MonAgentVersion    = "v0.0.11"
 	MentatName         = "mentat"

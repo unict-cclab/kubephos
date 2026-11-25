@@ -24,7 +24,7 @@ spec:
         x-kubephos-multiline: true
         minLength: 1
         maxLength: 131072
-      intervalSeconds: {type: integer, title: Descheduling interval in seconds, minimum: 10, maximum: 86400, default: 60}
+      intervalSeconds: {type: integer, title: Descheduling interval in seconds, minimum: 5, maximum: 86400, default: 60}
   runtime: {executable: descheduler-plugin, timeout: 20m}
   artifacts:
     inputs:
