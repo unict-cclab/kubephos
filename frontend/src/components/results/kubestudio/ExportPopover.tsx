@@ -1,5 +1,5 @@
 import {useEffect, useId, useRef, type KeyboardEvent} from 'react'
-import {ActionIcon} from '../ActionIcon'
+import {ActionIcon} from '../../ActionIcon'
 import {KubeStudioMark} from './KubeStudioMark'
 
 // KubeStudio export: one primary button opening a popover with the format, what the file
@@ -22,7 +22,7 @@ export function rememberFormat(action: ExportAction) {
 
 const round = (value: number, digits = 2) => String(Number(value.toFixed(digits)))
 
-export function exportFacts(action: ExportAction, page: {width: number; height: number; font: string; fontSize: number}, base: string): Array<[string, string]> {
+function exportFacts(action: ExportAction, page: {width: number; height: number; font: string; fontSize: number}, base: string): Array<[string, string]> {
   const inchesW = page.width / 72
   const inchesH = page.height / 72
   const size = `${round(inchesW)} × ${round(inchesH)} in (${Math.round(inchesW * 25.4)} × ${Math.round(inchesH * 25.4)} mm)`

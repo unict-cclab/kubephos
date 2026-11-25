@@ -1,17 +1,18 @@
 import {cleanup, fireEvent, render, screen, within} from '@testing-library/react'
 import {useState} from 'react'
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest'
-import {downloadBlob, exportChart, svgToPDF} from '../../charts'
-import type {AggregateSeries} from '../../resultsData'
+import {downloadBlob, exportChart, svgToPDF} from '../../../charts'
+import type {AggregateSeries} from '../../../resultsData'
 import {matplotlibScript, pgfplotsSnippet, plotData} from './figureCode'
 import {axisScale, buildFigureModel, runStatistics, type ModelData} from './figureModel'
-import {defaultFigureSettings, type FigureSettings} from './figureSettings'
+import {defaultFigureSettings, type FigureSettings} from '../figureSettings'
 import {blendWhite, dashArray, defaultAxis, defaultSpec, formatTick, normalizeSpec, paperContrast, parseSpec, relabelUnit, resolveStyle, serializeSpec, type FigureSpec} from './figureSpec'
-import {FigureStudio, type StudioData} from './FigureStudio'
-import {provenanceFor} from './runs'
-import type {XYRunInput} from './xy'
+import {KubeStudio} from './KubeStudio'
+import type {StudioData} from './image'
+import {provenanceFor} from '../runs'
+import type {XYRunInput} from '../xy'
 
-vi.mock('../../charts', async original => ({...await original<typeof import('../../charts')>(), downloadBlob: vi.fn(), exportChart: vi.fn(async () => {})}))
+vi.mock('../../../charts', async original => ({...await original<typeof import('../../../charts')>(), downloadBlob: vi.fn(), exportChart: vi.fn(async () => {})}))
 
 const at = (index: number) => new Date(index * 15000).toISOString()
 const curve = (label: string, unit: string, values: number[], color?: string, runs = 3): AggregateSeries => ({artifactID: label, label, unit, color, stepMilliseconds: 15000, runs, points: values.map((value, index) => ({timestamp: at(index), value})), deviation: values.map((_, index) => ({timestamp: at(index), value: values[index] * .1}))})
@@ -33,7 +34,7 @@ const groups = [{id: 'a', label: 'Alpha', color: '#1f77b4'}, {id: 'b', label: 'B
 
 function Studio({storageKey = 'experiment:spec', kind = 'timeseries' as const}: {storageKey?: string; kind?: 'timeseries' | 'xy'}) {
   const [settings, setSettings] = useState<FigureSettings>(defaultFigureSettings)
-  return <FigureStudio open onClose={() => {}} request={{kind}} data={data} groups={groups} settings={settings} onSettings={setSettings} storageKey={storageKey} />
+  return <KubeStudio open onClose={() => {}} request={{kind}} data={data} groups={groups} settings={settings} onSettings={setSettings} storageKey={storageKey} />
 }
 const studio = () => screen.getByRole('dialog', {name: 'KubeStudio'})
 const figure = () => studio().querySelector('svg.pub-figure') as SVGSVGElement
@@ -226,7 +227,7 @@ describe('Spec-driven KubeStudio figures', () => {
   })
 
   it('still draws saved charts with 2 × 2 panels inside: letters, shared X and one legend', () => {
-    window.localStorage.setItem('kubephos.figureStudio.v1:experiment:spec', JSON.stringify({kind: 'timeseries', metric: 'load.p95_response_time', specs: {timeseries: {version: 1, type: 'timeseries', layout: {grid: '2x2'}, panels: [{metrics: [{metric: 'load.p95_response_time', axis: 'left'}]}, {metrics: [{metric: 'load.achieved_rps', axis: 'left'}]}]}}}))
+    window.localStorage.setItem('kubephos.figureStudio.v1:experiment:spec', JSON.stringify({charts: [{id: 'c1', kind: 'timeseries', metric: 'load.p95_response_time', spec: {version: 1, type: 'timeseries', layout: {grid: '2x2'}, panels: [{metrics: [{metric: 'load.p95_response_time', axis: 'left'}]}, {metrics: [{metric: 'load.achieved_rps', axis: 'left'}]}]}}]}))
     render(<Studio />)
     expect(figure().querySelectorAll('.figure-panel')).toHaveLength(4)
     expect([...figure().querySelectorAll('.panel-letter')].map(item => item.textContent)).toEqual(['(a)', '(b)', '(c)', '(d)'])
@@ -350,7 +351,7 @@ describe('Spec-driven KubeStudio figures', () => {
   })
 
   it('makes a custom scatter from the chart switcher and keeps recipes to one chart', () => {
-    window.localStorage.setItem('kubephos.figureStudio.v1:experiment:spec', JSON.stringify({kind: 'timeseries', specs: {timeseries: {version: 1, type: 'timeseries', layout: {grid: '2x2'}, panels: [{metrics: []}]}}}))
+    window.localStorage.setItem('kubephos.figureStudio.v1:experiment:spec', JSON.stringify({charts: [{id: 'c1', kind: 'timeseries', metric: '', spec: {version: 1, type: 'timeseries', layout: {grid: '2x2'}, panels: [{metrics: []}]}}]}))
     render(<Studio />)
     expect(figure().querySelectorAll('.figure-panel')).toHaveLength(4)
     fireEvent.click(within(studio()).getByRole('button', {name: /^Figure:/}))

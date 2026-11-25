@@ -38,11 +38,15 @@ import {CallChainPanel, hasCallChainData} from './results/CallChainPanel'
 import {formatDuration, metricTitle} from './results/format'
 import {runInsights, type Insight, type ServiceHealth} from './results/insights'
 import {comparisonVerdict, kpiCards, overviewGroups, overviewMetrics, paletteColor, primaryPanels, timelineHeadline, timelineSubtitle, rankServiceSummaries, serviceCurve, serviceDetailMetrics, type OverviewGroup} from './results/overview'
-import {Disclosure, HeaderMenu, KpiCards, PrimaryChart, QualityLine, ServicesTable, VerdictStrip, type InsightTarget, type ServiceDetail} from './results/Overview'
+import {Disclosure, KpiCards, PrimaryChart, QualityLine, ServicesTable, VerdictStrip, type InsightTarget, type ServiceDetail} from './results/Overview'
+import {HeaderMenu} from './results/HeaderMenu'
 import {AllMetrics} from './results/AllMetrics'
 import {RunFacts} from './results/RunFacts'
-import {FigureStudio, type StudioData, type StudioRequest} from './results/FigureStudio'
-import {KubeStudioMark} from './results/KubeStudioMark'
+import {KubeStudio, type StudioRequest} from './results/kubestudio/KubeStudio'
+import type {StudioData} from './results/kubestudio/image'
+import {ResultFigures} from './results/kubestudio/ResultFigures'
+import {useSavedFigures, type SavedFigure} from './results/kubestudio/savedFigures'
+import {KubeStudioMark} from './results/kubestudio/KubeStudioMark'
 import {formatSpan} from './results/display'
 import type {ServiceRow} from './results/Figures'
 import type {LoadFidelity} from './results/loadFidelity'
@@ -254,6 +258,18 @@ function ExperimentResultsView({artifacts, experiments, operations, workspaces, 
   const [activeExperiment, setActiveExperiment] = useState<string | null>(focusedExperiment?.id ?? null)
   const {sections, toggle: toggleSection, navigate, jump} = useSections()
   const [studio, setStudio] = useState<StudioRequest | null>(null)
+  // Figures kept on this page with KubeStudio; a deleted one can be restored once.
+  const savedFigures = useSavedFigures(`experiment:${focusedExperiment?.id ?? 'selection'}`)
+  const [deletedFigure, setDeletedFigure] = useState<{figure: SavedFigure; index: number}>()
+  const keepFigure = (figure: Omit<SavedFigure, 'id'>, id?: string): SavedFigure => {
+    if (!id) return savedFigures.add(figure)
+    savedFigures.update({...figure, id})
+    return {...figure, id}
+  }
+  const deleteFigure = (figure: SavedFigure) => {
+    setDeletedFigure({figure, index: savedFigures.figures.findIndex(item => item.id === figure.id)})
+    savedFigures.remove(figure.id)
+  }
   const chartMode = useChartMode()
   const [runTab, setRunTab] = useState('summary')
   const [initialized, setInitialized] = useState(Boolean(focusedExperiment))
@@ -502,8 +518,10 @@ function ExperimentResultsView({artifacts, experiments, operations, workspaces, 
   const heatmap = !comparison && focusedExperiment && (activeRun || focusedExperiment.kind !== 'suite') && placementDatasets.some(item => item.dataset.spec.placement) ? <PlacementHeatmap datasets={placementDatasets.map(item => item.dataset)} canvasHeight={465} /> : undefined
   const locust = useMemo(() => locustGroups(displayed, variantOf), [displayed, statsExperiment])
   const fidelityRows = useMemo(() => displayed.map(item => ({label: item.label, fidelity: loadFidelity(item)})), [displayed])
+  // Needed by KubeStudio and by the figures kept on the page.
+  const figuresShown = savedFigures.figures.length > 0
   const studioData = useMemo((): StudioData | undefined => {
-    if (!studio || !displayed.length) return undefined
+    if (!(studio || figuresShown) || !displayed.length) return undefined
     const plotted = metrics.filter(metric => !['scheduler.pod_scheduling_latency', 'scheduler.cycle_duration', 'descheduler.cycle_duration', 'descheduler.evictions'].includes(metric))
     const serviceCache = new Map<string, {rows: ServiceRow[]}>()
     return {
@@ -514,7 +532,7 @@ function ExperimentResultsView({artifacts, experiments, operations, workspaces, 
       services: metric => {if (!serviceCache.has(metric)) serviceCache.set(metric, serviceMetricStatistics(displayed, metric, overviewExperiment)); return serviceCache.get(metric)},
       placement: heatmap, xy: xySource, profile: sharedLoadProfile((overviewExperiment?.variants ?? []).map(variant => variant.configuration as Record<string, unknown> | undefined))
     }
-  }, [Boolean(studio), displayed, metrics, plot, provenance, overviewExperiment, xySource])
+  }, [Boolean(studio), figuresShown, displayed, metrics, plot, provenance, overviewExperiment, xySource])
   const byService = useCallback((metric: string) => {
     if (!perServiceMetrics.includes(metric)) return undefined
     const services = [...new Set(serviceMetricStatistics(displayed, metric, overviewExperiment).rows.map(row => row.service))]
@@ -588,6 +606,9 @@ function ExperimentResultsView({artifacts, experiments, operations, workspaces, 
           <div id="results-overview" className="section-anchor" />
           {singleRun && <RunFacts item={singleRun.item} name={singleRun.name} />}
           {overview && <ResultsOverview key={activeRun?.trial.id ?? 'all'} model={overview} onNavigate={navigate} single={Boolean(singleRun)} />}
+          {overview && <ResultFigures figures={savedFigures.figures} data={studioData} groups={groupsForStudio} stored={savedFigures.stored}
+            onAdd={() => setStudio({})} onEdit={figure => setStudio({figure})} onDelete={deleteFigure}
+            deleted={deletedFigure?.figure.name} onUndo={() => {if (deletedFigure) savedFigures.restore(deletedFigure.figure, deletedFigure.index); setDeletedFigure(undefined)}} />}
           <div className="results-sections" role="region" aria-label="Details">
             {locust.length > 0 && <Disclosure id="endpoints" title="Endpoints" summary={`${locust.reduce((total, group) => total + group.rows.filter(row => !row.aggregated).length, 0)} measured by Locust`} open={Boolean(sections.endpoints)} onToggle={open => toggleSection('endpoints', open)}><LocustSummaryPanel groups={locust} /></Disclosure>}
             {callChain && <Disclosure id="callchain" title="Call chain" summary="calls per request, predicted against measured" open={Boolean(sections.callchain)} onToggle={open => toggleSection('callchain', open)}><CallChainPanel datasets={displayed} /></Disclosure>}
@@ -608,7 +629,7 @@ function ExperimentResultsView({artifacts, experiments, operations, workspaces, 
         </>}
       </div>
     </div>}
-    {studio && <FigureStudio open onClose={() => setStudio(null)} request={studio} data={studioData} groups={groupsForStudio} settings={figureSettings} onSettings={setFigureSettings} storageKey={`experiment:${focusedExperiment?.id ?? 'selection'}`} onSave={focusedExperiment && !comparison && focusedExperiment.kind !== 'comparison' ? async ({metric, format, bytes}) => {
+    {studio && <KubeStudio open onClose={() => setStudio(null)} request={studio} data={studioData} groups={groupsForStudio} settings={figureSettings} onSettings={setFigureSettings} storageKey={`experiment:${focusedExperiment?.id ?? 'selection'}`} onKeep={keepFigure} onSave={focusedExperiment && !comparison && focusedExperiment.kind !== 'comparison' ? async ({metric, format, bytes}) => {
       await request<ExperimentFigure>(`/experiments/${focusedExperiment.id}/figures?metric=${encodeURIComponent(metric)}&format=${format}`, {method: 'POST', headers: {'Content-Type': 'application/pdf', 'X-KubePhos-Source-Artifacts': displayed.map(item => item.artifact.id).slice(0, 20).join(',')}, body: new Blob([bytes.buffer as ArrayBuffer])}, session.csrfToken)
     } : undefined} />}
     {!comparison && <SaveExperimentDialog open={saving} close={() => setSaving(false)} selected={selected.map(id => availableByID.get(id)).filter((item): item is Artifact => Boolean(item))} operations={operations} workspaces={workspaces} session={session} changed={changed} />}
@@ -950,6 +971,6 @@ function ComparisonResults({artifacts, experiment, comparison, onBack, session}:
         {data.complete ? <AllMetrics metrics={data.metrics} plot={plot} groups={overview?.groups ?? []} provenance={provenance} onFigure={metric => setStudio({kind: 'timeseries', metric})} xy={xySource} onXYFigure={xy => setStudio({kind: 'xy', xy})} /> : <div className="results-placeholder" role="status"><span className="results-spinner" /><strong>{state.progress ?? 'Preparing plots…'}</strong></div>}
       </Disclosure>}
     </div>
-    {studio && <FigureStudio open onClose={() => setStudio(null)} request={studio} data={studioData} groups={overview?.groups ?? []} settings={figureSettings} onSettings={setFigureSettings} storageKey={`comparison:${experiment.id}`} />}
+    {studio && <KubeStudio open onClose={() => setStudio(null)} request={studio} data={studioData} groups={overview?.groups ?? []} settings={figureSettings} onSettings={setFigureSettings} storageKey={`comparison:${experiment.id}`} />}
   </div></SeriesNotesContext.Provider></ShowEverything.Provider>
 }

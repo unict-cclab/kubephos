@@ -1,28 +1,29 @@
 import {useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode} from 'react'
-import {downloadBlob, exportChart} from '../../charts'
+import {downloadBlob, exportChart} from '../../../charts'
+import {ActionIcon} from '../../ActionIcon'
+import {ErrorFeedback, useErrorState} from '../../ToastRegion'
+import {FigureHostContext, type FigureLabelOverrides} from '../chartKit'
+import {customLimits, defaultFigureSettings, fontStacks, type FigureSettings, type FigureSize} from '../figureSettings'
+import {formatMetric, metricTitle} from '../format'
+import type {OverviewGroup} from '../overview'
+import {defaultXYOptions, defaultXYSelection, type XYState} from '../xy'
+import {figureChecks, type CheckFix} from './checks'
+import {Chips, Group, LabelField, MoreGroup, SelectField, Stepper, Toggle} from './controls'
+import {ExportPopover, exportLabels, rememberedFormat, rememberFormat, type ExportAction} from './ExportPopover'
 import {matplotlibScript, pgfplotsSnippet} from './figureCode'
-import {buildFigureModel, unitSuffix, type FigureModel, type LoadProfile, type ModelSeries} from './figureModel'
-import {builtInPresets, defaultSpec, loadPresets, normalizeSpec, parseSpec, savePresets, serializeSpec, type Annotation, type AxisSide, type AxisSpec, type FigureSpec, type PanelGrid, type RunMode, type SpecType, type StylePreset, type XAxisSpec} from './figureSpec'
-import {SpecFigure, type FigureGeometry} from './SpecFigure'
-import {AnnotationFields, annotationNames, AxisFields, AxisMetrics, NumberInput, newAnnotation, PaletteEditor, PresetsEditor, runNames, SecondY, SeriesProperties, SeriesSwatch, SpecActions, XYAxisPicker} from './SpecEditor'
-import {Chips, Group, LabelField, MoreGroup, SelectField, Stepper, Toggle} from './FigureSettingsControl'
-import type {AggregateSeries, RunLevelMetric} from '../../resultsData'
-import {ActionIcon} from '../ActionIcon'
-import {ErrorFeedback, useErrorState} from '../ToastRegion'
-import {FigureHostContext, figureMetrics, seriesStyle, type FigureLabelOverrides, type FigureReport} from './chartKit'
-import {PercentileLadder, RunDotPlot, ServiceFigure, TimeSeriesFigure, type ServiceRow} from './Figures'
-import {customLimits, defaultFigureSettings, figureSize, fontStacks, type FigureSettings, type FigureSize} from './figureSettings'
-import {formatMetric, metricTitle} from './format'
-import type {FidelitySeries} from './loadFidelity'
-import type {OverviewGroup} from './overview'
-import type {LadderSeries} from './percentiles'
-import type {ResolvedProvenance} from './runs'
-import {defaultXYOptions, defaultXYSelection, type XYSource, type XYState} from './xy'
+import {unitSuffix, type ModelSeries} from './figureModel'
+import {builtInPresets, defaultSpec, loadPresets, parseSpec, savePresets, serializeSpec, type Annotation, type AxisSide, type AxisSpec, type FigureSpec, type PanelGrid, type RunMode, type StylePreset, type XAxisSpec} from './figureSpec'
+import {useHistory} from './history'
+import {EyeIcon, layerIcons, svgProps, UndoIcon} from './icons'
+import {availableKinds, buildViews, chartContent, defaultXYState, emptyState, imagePage, imageSvg, metricOptions, timeMetrics, useReports, type ChartView, type FigureKind, type StudioData} from './image'
 import {KubeStudioMark} from './KubeStudioMark'
-import {buildRecipes, customForms, FigureSwitcher, KindIcon, kindLabels, kindOrder, runLevelExcluded, smartTimeSeriesSpec, switcherItems, timeSeriesExcluded, type CustomForm, type SwitcherItem} from './studioRecipes'
-import {cellBoxes, cellSettings, composeFigure, defaultLayout, layoutChoices, letters, maxCharts, newChartId, validLayout, type ChartLayout, type ChartState} from './studioCharts'
-import {figureChecks, type CheckFix} from './studioChecks'
-import {ExportPopover, exportLabels, rememberedFormat, rememberFormat, type ExportAction} from './StudioExport'
+import {defaultLayout, layoutChoices, letters, maxCharts, newChartId, validLayout, type ChartLayout, type ChartState} from './layout'
+import {loadStudioMemory, saveStudioMemory} from './memory'
+import {buildRecipes, customForms, FigureSwitcher, KindIcon, kindLabels, smartTimeSeriesSpec, switcherItems, type CustomForm, type SwitcherItem} from './recipes'
+import type {SavedFigure} from './savedFigures'
+import {autoAnnotations, highlightShapes, parseKey, parseTarget, selectionKey, snap, targetKey, type Selection, type Shape, type Target} from './selection'
+import {AnnotationFields, annotationNames, AxisFields, AxisMetrics, NumberInput, newAnnotation, PaletteEditor, PresetsEditor, runNames, SecondY, SeriesProperties, SeriesSwatch, SpecActions, XYAxisPicker} from './SpecEditor'
+import type {FigureGeometry} from './SpecFigure'
 import './kubestudio.css'
 
 // KubeStudio: a Figma-like workspace for one publication image made of one to four charts.
@@ -30,76 +31,18 @@ import './kubestudio.css'
 // Layers, the outline of the image (charts, each with title, axes, series, legend,
 // annotations; caption), which is also how things are selected; centre: the image on paper
 // at its true printed size, clickable and draggable; right: the properties of the selection,
-// or of the page. Every change is undoable and autosaved; export lives in the top bar.
+// or of the page. Every change is undoable and autosaved; export lives in the top bar, with
+// "Add to results", which keeps the image on the experiment's results page.
 
-export type FigureKind = 'timeseries' | 'xy' | 'runlevel' | 'ladder' | 'fidelity' | 'services' | 'placement'
-export interface StudioRequest {kind?: FigureKind; metric?: string; xy?: XYState}
-
-export interface StudioData {
-  metrics: string[]
-  plot: (metric: string) => AggregateSeries[]
-  runLevel: RunLevelMetric[]
-  ladder: LadderSeries[]
-  fidelity: FidelitySeries[]
-  services: (metric: string) => {rows: ServiceRow[]} | undefined
-  serviceMetrics: string[]
-  provenance: (metric: string) => ResolvedProvenance
-  omitSLO: boolean
-  runLabels?: Record<string, string>
-  placement?: ReactNode
-  xy?: XYSource
-  // Load profile (warm-up, phases) for automatic annotations.
-  profile?: LoadProfile
-}
+export interface StudioRequest {kind?: FigureKind; metric?: string; xy?: XYState; figure?: SavedFigure}
 
 // Saves the exported PDF as an experiment figure (POST /experiments/{id}/figures).
 export type StudioSave = (figure: {metric: string; format: 'pdf'; bytes: Uint8Array}) => Promise<void>
+// Keeps the image on the results page (a new figure, or the one being edited when id is set).
+type StudioKeep = (figure: Omit<SavedFigure, 'id'>, id?: string) => SavedFigure
 
-export const studioName = 'KubeStudio'
+const studioName = 'KubeStudio'
 const creator = 'KubePhos KubeStudio'
-
-// ---------------------------------------------------------------------------------------
-// Remembered studio state (per experiment, localStorage; failures fall back to memory). The
-// key keeps its historical "figureStudio" name; single-figure saves from before multi-chart
-// images are migrated to one chart when read.
-
-interface StudioMemory {charts?: ChartState[]; layout?: ChartLayout; sharedLegend?: boolean; name?: string; caption?: string; hidden?: string[]; zoom?: number | 'fit'}
-interface LegacyMemory {kind?: FigureKind; metric?: string; xy?: XYState; figures?: Record<string, {name?: string; caption?: string; overrides?: FigureLabelOverrides}>; specs?: Partial<Record<SpecType, unknown>>}
-const memoryPrefix = 'kubephos.figureStudio.v1:'
-const isKind = (value: unknown): value is FigureKind => kindOrder.includes(value as FigureKind)
-const validXY = (value: unknown): XYState | undefined => {
-  const xy = value as XYState | undefined
-  return xy && typeof xy === 'object' && xy.x?.metric && xy.y?.metric ? {...xy, options: {...defaultXYOptions, ...xy.options}} : undefined
-}
-const chartSpec = (kind: FigureKind, value: unknown) => (kind === 'timeseries' || kind === 'xy') && value ? normalizeSpec(value, kind) : undefined
-
-export function loadStudioMemory(key?: string): StudioMemory {
-  if (!key) return {}
-  try {
-    const value = JSON.parse(window.localStorage.getItem(memoryPrefix + key) ?? '{}') as unknown
-    if (!value || typeof value !== 'object') return {}
-    const memory = value as StudioMemory & LegacyMemory
-    const base = {hidden: Array.isArray(memory.hidden) ? memory.hidden.filter(item => typeof item === 'string') : undefined, zoom: memory.zoom === 'fit' || typeof memory.zoom === 'number' ? memory.zoom : undefined}
-    if (Array.isArray(memory.charts)) {
-      const charts = memory.charts.flatMap((item): ChartState[] => item && isKind(item.kind) ? [{id: typeof item.id === 'string' ? item.id : newChartId(), kind: item.kind, metric: typeof item.metric === 'string' ? item.metric : '', xy: validXY(item.xy) ?? {...defaultXYSelection([]), options: defaultXYOptions}, spec: chartSpec(item.kind, item.spec), overrides: item.overrides && typeof item.overrides === 'object' ? item.overrides : undefined, origin: item.origin === 'custom' || item.origin === 'recipe' ? item.origin : undefined}] : []).slice(0, maxCharts)
-      return {...base, charts: charts.length ? charts : undefined, layout: memory.layout, sharedLegend: memory.sharedLegend === true, name: typeof memory.name === 'string' ? memory.name : undefined, caption: typeof memory.caption === 'string' ? memory.caption : undefined}
-    }
-    if (!isKind(memory.kind)) return base
-    // Before multi-chart images: one figure (kind, metric, xy, specs per type, figures by key).
-    const xy = validXY(memory.xy)
-    const metric = typeof memory.metric === 'string' ? memory.metric : ''
-    const figureKey = memory.kind === 'xy' && xy ? `xy:${xy.x.metric}:${xy.x.service ?? ''}:${xy.y.metric}:${xy.y.service ?? ''}` : `${memory.kind}:${metric}`
-    const figure = memory.figures && typeof memory.figures === 'object' ? memory.figures[figureKey] : undefined
-    return {...base, charts: [{id: newChartId(), kind: memory.kind, metric, xy: xy ?? {...defaultXYSelection([]), options: defaultXYOptions}, spec: chartSpec(memory.kind, memory.specs?.[memory.kind as SpecType]), overrides: figure?.overrides}], name: figure?.name, caption: figure?.caption}
-  } catch {
-    return {}
-  }
-}
-
-function saveStudioMemory(key: string | undefined, memory: StudioMemory): boolean {
-  if (!key) return true
-  try {window.localStorage.setItem(memoryPrefix + key, JSON.stringify({version: 2, ...memory})); return true} catch {return false}
-}
 
 function useNarrow(query = '(max-width: 999px)') {
   const read = () => {try {return typeof window.matchMedia === 'function' && window.matchMedia(query).matches} catch {return false}}
@@ -115,141 +58,9 @@ function useNarrow(query = '(max-width: 999px)') {
   return narrow
 }
 
-// ---------------------------------------------------------------------------------------
-// Undo / redo over JSON snapshots of everything the user edits. Bursts (typing, dragging)
-// within 700 ms coalesce into one step.
-
-function useHistory<T>(snapshot: T, apply: (value: T) => void) {
-  const json = JSON.stringify(snapshot)
-  const past = useRef<string[]>([])
-  const future = useRef<string[]>([])
-  const last = useRef(json)
-  const changedAt = useRef(0)
-  const ready = useRef(false)
-  const [, bump] = useState(0)
-  useEffect(() => {const timer = setTimeout(() => {ready.current = true}, 0); return () => clearTimeout(timer)}, [])
-  useEffect(() => {
-    if (json === last.current) return
-    if (!ready.current) {last.current = json; return}
-    const now = Date.now()
-    if (now - changedAt.current > 700 || !past.current.length) past.current = [...past.current, last.current].slice(-100)
-    changedAt.current = now
-    future.current = []
-    last.current = json
-    bump(value => value + 1)
-  }, [json])
-  const move = (from: typeof past, to: typeof past) => {
-    const target = from.current.at(-1)
-    if (target === undefined) return false
-    from.current = from.current.slice(0, -1)
-    to.current = [...to.current, last.current]
-    last.current = target
-    changedAt.current = 0
-    apply(JSON.parse(target) as T)
-    bump(value => value + 1)
-    return true
-  }
-  return {undo: () => move(past, future), redo: () => move(future, past), canUndo: past.current.length > 0, canRedo: future.current.length > 0}
-}
-
 const slug = (value: string) => value.normalize('NFKD').replaceAll(/[^a-zA-Z0-9]+/g, '-').replaceAll(/^-+|-+$/g, '').toLowerCase().slice(0, 80) || 'figure'
 const inches = (points: number) => String(Number((points / 72).toFixed(points >= 720 ? 1 : 2)))
 const oneLine = (value: string) => value.replaceAll(/\s+/g, ' ').trim()
-
-type Report = Omit<FigureReport, 'csv'>
-const sameReport = (left: Report | undefined, right: Report) => Boolean(left) && left!.id === right.id && left!.name === right.name && left!.title === right.title && left!.caption === right.caption && left!.methods === right.methods && left!.width === right.width && left!.height === right.height && JSON.stringify(left!.labels) === JSON.stringify(right.labels)
-
-// What is selected inside a chart (undefined = the chart itself). Keys match data-select.
-type Target = {type: 'series'; key: string} | {type: 'group'; label: string} | {type: 'axis'; side: 'x' | 'left' | 'right'; panel: number} | {type: 'legend'} | {type: 'title'} | {type: 'annotation'; panel: number; id: string}
-interface Selection {chart: string; target?: Target}
-
-function parseTarget(value: string | null | undefined): Target | undefined {
-  if (!value) return undefined
-  if (value === 'legend' || value === 'title') return {type: value}
-  if (value.startsWith('series:')) return {type: 'series', key: value.slice(7)}
-  if (value.startsWith('group:')) return {type: 'group', label: value.slice(6)}
-  const [type, first, second] = value.split(':')
-  if (type === 'axis' && (first === 'x' || first === 'left' || first === 'right')) return {type: 'axis', side: first, panel: Number(second) || 0}
-  if (type === 'annotation' && second) return {type: 'annotation', panel: Number(first) || 0, id: second}
-  return undefined
-}
-
-function targetKey(target: Target | undefined): string {
-  if (!target) return ''
-  if (target.type === 'series') return `series:${target.key}`
-  if (target.type === 'group') return `group:${target.label}`
-  if (target.type === 'axis') return `axis:${target.side}:${target.panel}`
-  if (target.type === 'annotation') return `annotation:${target.panel}:${target.id}`
-  return target.type
-}
-const selectionKey = (selection: Selection | undefined) => selection ? `${selection.chart}/${targetKey(selection.target)}` : ''
-function parseKey(key: string): Selection | undefined {
-  if (!key) return undefined
-  const slash = key.indexOf('/')
-  return {chart: key.slice(0, slash), target: parseTarget(key.slice(slash + 1))}
-}
-
-const autoAnnotations: Record<string, {label: string; key: 'slo' | 'phases' | 'warmup'}> = {slo: {label: 'SLO line', key: 'slo'}, phase: {label: 'Load-phase boundaries', key: 'phases'}, warmup: {label: 'Warm-up end', key: 'warmup'}}
-
-// ---------------------------------------------------------------------------------------
-// Canvas highlight: hugs the element in chart coordinates (points), on a layer above the
-// paper that never reaches the exports.
-
-interface Shape {kind: 'path' | 'rect'; d?: string; x?: number; y?: number; width?: number; height?: number; handles?: Array<{x: number; y: number}>}
-
-function highlightShapes(cell: Element | null, key: string, geometry: FigureGeometry | undefined): Shape[] {
-  if (!cell || !key || !geometry) return []
-  const svg = cell.querySelector('svg.pub-figure')
-  if (!svg) return []
-  const elements = [...svg.querySelectorAll('[data-select]')].filter(element => element.getAttribute('data-select') === key)
-  if (!elements.length) return []
-  const paths = elements.flatMap(element => element.classList.contains('series') ? [...element.querySelectorAll('path.series-line, path.series-fit')] : []).map(path => path.getAttribute('d')).filter((d): d is string => Boolean(d))
-  if (paths.length) return paths.map(d => ({kind: 'path', d}))
-  const line = elements.length === 1 ? elements[0].querySelector(':scope > line') : null
-  if (line && elements[0].classList.contains('annotation')) {
-    const [x1, y1, x2, y2] = ['x1', 'y1', 'x2', 'y2'].map(name => Number(line.getAttribute(name)))
-    return [{kind: 'path', d: `M${x1},${y1}L${x2},${y2}`, handles: [{x: (x1 + x2) / 2, y: (y1 + y2) / 2}]}]
-  }
-  const frame = svg.getBoundingClientRect()
-  if (!frame.width) return []
-  const k = geometry.width / frame.width
-  let left = Infinity, top = Infinity, right = -Infinity, bottom = -Infinity
-  for (const element of elements) {
-    const rect = element.getBoundingClientRect()
-    if (!rect.width && !rect.height) continue
-    left = Math.min(left, rect.left); top = Math.min(top, rect.top); right = Math.max(right, rect.right); bottom = Math.max(bottom, rect.bottom)
-  }
-  if (!Number.isFinite(left)) return []
-  const pad = 1.5
-  const box = {x: (left - frame.left) * k - pad, y: (top - frame.top) * k - pad, width: (right - left) * k + pad * 2, height: (bottom - top) * k + pad * 2}
-  return [{kind: 'rect', ...box, handles: key.startsWith('annotation:') ? [{x: box.x + box.width / 2, y: box.y + box.height / 2}] : undefined}]
-}
-
-// Snap a dragged value to a readable step (1/20 of the axis span, rounded to 1-2-5).
-const snap = (value: number, span: number) => {
-  if (!Number.isFinite(value)) return value
-  const raw = Math.max(Math.abs(span), 1e-9) / 20
-  const power = 10 ** Math.floor(Math.log10(raw))
-  const step = [1, 2, 5, 10].map(factor => factor * power).find(candidate => candidate >= raw) ?? raw
-  return Number((Math.round(value / step) * step).toPrecision(10))
-}
-
-// ---------------------------------------------------------------------------------------
-// Icons.
-
-const svgProps = {width: 16, height: 16, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 1.75, strokeLinecap: 'round' as const, strokeLinejoin: 'round' as const, 'aria-hidden': true, focusable: 'false' as const}
-const UndoIcon = ({redo = false}: {redo?: boolean}) => <svg {...svgProps} style={redo ? {transform: 'scaleX(-1)'} : undefined}><path d="M9 14 4 9l5-5" /><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11" /></svg>
-const EyeIcon = ({off = false}: {off?: boolean}) => <svg {...svgProps}>{off ? <><path d="M3 3l18 18" /><path d="M10.6 6.1A9.8 9.8 0 0 1 12 6c5 0 9 6 9 6a16 16 0 0 1-2.6 3.1M6.5 7.5C4.3 9.1 3 12 3 12s4 6 9 6a8.6 8.6 0 0 0 4-1" /></> : <><path d="M3 12s4-6 9-6 9 6 9 6-4 6-9 6-9-6-9-6Z" /><circle cx="12" cy="12" r="2.5" /></>}</svg>
-const layerIcons: Record<string, ReactNode> = {
-  figure: <svg {...svgProps}><rect x="4" y="4" width="16" height="16" rx="2" /><path d="M4 12h16M12 4v16" /></svg>,
-  title: <svg {...svgProps}><path d="M6 6h12M12 6v12" /></svg>,
-  axis: <svg {...svgProps}><path d="M5 4v15h15" /><path d="M5 9h2M5 14h2M10 19v-2M15 19v-2" /></svg>,
-  legend: <svg {...svgProps}><rect x="4" y="5" width="16" height="14" rx="2" /><path d="M7 10h3M13 10h4M7 14h3M13 14h4" /></svg>,
-  annotation: <svg {...svgProps}><path d="M4 12h16" strokeDasharray="3 2.5" /><path d="M8 7h8" /></svg>,
-  caption: <svg {...svgProps}><path d="M5 7h14M5 12h14M5 17h9" /></svg>,
-  plus: <svg {...svgProps}><path d="M12 5v14M5 12h14" /></svg>,
-  chevron: <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><path d="M4 2.5 7.5 6 4 9.5" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" /></svg>
-}
 
 const shortcuts: Array<[string, string]> = [['E', 'Export'], ['Ctrl/⌘ Z', 'Undo'], ['Ctrl/⌘ Shift Z', 'Redo'], ['+ / −', 'Zoom in / out'], ['0', 'Fit the image'], ['Esc', 'Deselect, then close'], ['?', 'Show this list']]
 const sizeChoices: Array<{value: FigureSize; label: string; hint: string}> = [{value: 'single', label: '1 col', hint: 'Single column · 3.5 in · IEEE/ACM'}, {value: 'onehalf', label: '1.5 col', hint: '1.5 column · 5.5 in'}, {value: 'double', label: '2 col', hint: 'Double column · 7.16 in · IEEE/ACM'}, {value: 'slide', label: 'Slide', hint: 'Slide 16:9 · 10 × 5.63 in'}, {value: 'custom', label: 'Custom', hint: 'Custom width × plot height'}]
@@ -258,22 +69,7 @@ const suggested = ['load.p95_response_time', 'load.achieved_rps', 'cpu.cores', '
 
 interface LayerRow {key: string; label: string; depth: 1 | 2; icon?: ReactNode; heading?: boolean; selectable?: boolean; eye?: {visible: boolean; label: string; onToggle: () => void}; action?: ReactNode; dim?: boolean; menu?: ReactNode}
 
-// One chart of the image with everything derived from its state.
-interface ChartView {
-  chart: ChartState
-  index: number
-  letter?: string
-  kind: FigureKind | undefined
-  metricOptions: string[]
-  metric: string
-  xy: XYState
-  spec?: FigureSpec
-  model?: FigureModel
-  settings: FigureSettings
-  box: {x: number; width: number; row: number}
-}
-
-export function FigureStudio({open, onClose, request, data, groups, settings, onSettings, storageKey, onSave}: {open: boolean; onClose: () => void; request: StudioRequest; data: StudioData | undefined; groups: OverviewGroup[]; settings: FigureSettings; onSettings: (next: FigureSettings) => void; storageKey?: string; onSave?: StudioSave}) {
+export function KubeStudio({open, onClose, request, data, groups, settings, onSettings, storageKey, onSave, onKeep}: {open: boolean; onClose: () => void; request: StudioRequest; data: StudioData | undefined; groups: OverviewGroup[]; settings: FigureSettings; onSettings: (next: FigureSettings) => void; storageKey?: string; onSave?: StudioSave; onKeep?: StudioKeep}) {
   const id = useId()
   const dialog = useRef<HTMLDialogElement>(null)
   const stage = useRef<HTMLDivElement>(null)
@@ -282,11 +78,15 @@ export function FigureStudio({open, onClose, request, data, groups, settings, on
   const geometries = useRef<Record<string, FigureGeometry | undefined>>({})
   const geometryRefs = useRef<Record<string, {current: FigureGeometry | undefined}>>({})
   const geometryOf = (chart: string) => geometryRefs.current[chart] ??= {get current() {return geometries.current[chart]}, set current(value) {geometries.current[chart] = value}}
-  const remembered = useMemo(() => loadStudioMemory(storageKey), [storageKey])
+  // A figure kept on the results page opens as it was saved and is not autosaved as the last image.
+  const figure = request.figure
+  const memoryKey = figure ? undefined : storageKey
+  const remembered = useMemo(() => loadStudioMemory(memoryKey), [memoryKey])
   const requested = Boolean(request.kind || request.metric || request.xy)
-  const defaultXY = (): XYState => ({...defaultXYSelection(data?.xy?.metrics ?? []), options: defaultXYOptions})
-  // Opening: the request, else the last image, else the best recipe for this experiment.
+  const defaultXY = () => defaultXYState(data)
+  // Opening: the kept figure, the request, else the last image, else the best recipe for this experiment.
   const [charts, setCharts] = useState<ChartState[]>(() => {
+    if (figure) return figure.charts
     if (requested) {
       const kind = request.kind ?? 'timeseries'
       const previous = remembered.charts?.find(item => item.kind === kind)
@@ -296,10 +96,11 @@ export function FigureStudio({open, onClose, request, data, groups, settings, on
     const recipe = data ? buildRecipes(data, groups)[0] : undefined
     return recipe ? [{id: newChartId(), kind: recipe.kind, metric: recipe.metric ?? '', xy: recipe.xy ?? defaultXY(), spec: recipe.spec}] : []
   })
-  const [layout, setLayout] = useState<ChartLayout | undefined>(remembered.layout)
-  const [sharedLegend, setSharedLegend] = useState(remembered.sharedLegend ?? false)
-  const [doc, setDoc] = useState<{name?: string; caption?: string}>(() => requested ? {} : {name: remembered.name, caption: remembered.caption})
-  const [hidden, setHidden] = useState<string[]>(remembered.hidden ?? [])
+  const [layout, setLayout] = useState<ChartLayout | undefined>(figure ? figure.layout : remembered.layout)
+  const [sharedLegend, setSharedLegend] = useState(figure ? figure.sharedLegend : remembered.sharedLegend ?? false)
+  const [doc, setDoc] = useState<{name?: string; caption?: string}>(() => figure ? {name: figure.name, caption: figure.caption} : requested ? {} : {name: remembered.name, caption: remembered.caption})
+  const [hidden, setHidden] = useState<string[]>(figure ? figure.hidden : remembered.hidden ?? [])
+  const [keptId, setKeptId] = useState(figure?.id)
   const [selection, setSelection] = useState<Selection>()
   const [hoverKey, setHoverKey] = useState('')
   const [shapes, setShapes] = useState<{hover: Shape[]; selected: Shape[]; hoverChart?: string; selectedChart?: string}>({hover: [], selected: []})
@@ -319,17 +120,11 @@ export function FigureStudio({open, onClose, request, data, groups, settings, on
   const [saved, setSaved] = useState<boolean>()
   const [error, setError] = useErrorState()
   const narrow = useNarrow()
-  const [reports, setReports] = useState<Record<string, Report>>({})
-  const csvs = useRef<Record<string, (() => string) | undefined>>({})
-  const reporters = useRef<Record<string, (figure: FigureReport) => void>>({})
-  const reporter = (chart: string) => reporters.current[chart] ??= (figure: FigureReport) => {
-    csvs.current[chart] = figure.csv
-    const {csv: _csv, ...rest} = figure
-    void _csv
-    setReports(previous => sameReport(previous[chart], rest) ? previous : {...previous, [chart]: rest})
-  }
+  const {reports, csvs, hosts} = useReports(charts)
   const announce = (text: string, undo = false) => {setStatus(text); setNotice({text, undo, at: Date.now()})}
   useEffect(() => {if (!notice) return; const timer = setTimeout(() => setNotice(undefined), notice.undo ? 6000 : 2400); return () => clearTimeout(timer)}, [notice])
+  // The kept figure brings its own page style.
+  useEffect(() => {if (figure) onSettings(figure.settings)}, [])
 
   // Undo / redo of everything the user edits (style settings live in the page).
   const history = useHistory({settings, charts, layout, sharedLegend, doc, hidden}, value => {
@@ -351,61 +146,20 @@ export function FigureStudio({open, onClose, request, data, groups, settings, on
     }
   }, [open])
 
-  const available = useMemo(() => {
-    if (!data) return [] as FigureKind[]
-    const kinds = new Set<FigureKind>()
-    if (data.fidelity.length) kinds.add('fidelity')
-    if (data.metrics.some(item => !timeSeriesExcluded(item) && data.plot(item).length)) kinds.add('timeseries')
-    if ((data.xy?.metrics.length ?? 0) > 1) kinds.add('xy')
-    if (data.runLevel.some(entry => !runLevelExcluded(entry.metric) && entry.groups.some(group => group.values.length))) kinds.add('runlevel')
-    if (data.ladder.length) kinds.add('ladder')
-    if (data.serviceMetrics.length) kinds.add('services')
-    if (data.placement) kinds.add('placement')
-    return kindOrder.filter(item => kinds.has(item))
-  }, [data])
+  const available = useMemo(() => availableKinds(data), [data])
   const recipes = useMemo(() => data ? buildRecipes(data, groups) : [], [data, groups])
   const items = useMemo(() => switcherItems(available, recipes), [available, recipes])
   const forms = customForms.map(form => form.kind).filter(kind => available.includes(kind))
-  const timeMetrics = useMemo(() => data ? data.metrics.filter(item => !timeSeriesExcluded(item) && data.plot(item).length) : [], [data])
-  const metricOptionsFor = (kind: FigureKind | undefined) => !data ? [] : kind === 'timeseries' ? timeMetrics : kind === 'runlevel' ? data.runLevel.filter(entry => !runLevelExcluded(entry.metric) && entry.groups.some(group => group.values.length)).map(entry => entry.metric) : kind === 'services' ? data.serviceMetrics : []
+  const seriesMetrics = useMemo(() => data ? timeMetrics(data) : [], [data])
+  const metricOptionsFor = (kind: FigureKind | undefined) => metricOptions(data, kind)
   // Data that arrives after opening: start on the best recipe as well.
   useEffect(() => {if (!charts.length && data && recipes.length) setCharts([{id: newChartId(), kind: recipes[0].kind, metric: recipes[0].metric ?? '', xy: recipes[0].xy ?? defaultXY(), spec: recipes[0].spec}])}, [data, recipes])
-  useEffect(() => {setSaved(saveStudioMemory(storageKey, {charts, layout, sharedLegend, name: doc.name, caption: doc.caption, hidden, zoom}))}, [storageKey, charts, layout, sharedLegend, doc, hidden, zoom])
+  useEffect(() => {setSaved(saveStudioMemory(memoryKey, {charts, layout, sharedLegend, name: doc.name, caption: doc.caption, hidden, zoom}))}, [memoryKey, charts, layout, sharedLegend, doc, hidden, zoom])
 
   const shown = (label: string) => !hidden.includes(label)
-  const keepGroups = groups.filter(group => shown(group.label))
   const count = charts.length
   const effectiveLayout = validLayout(count, layout)
-  const boxes = cellBoxes(count, effectiveLayout)
-
-  // Every chart with its resolved type, data, spec and model.
-  const views: ChartView[] = useMemo(() => charts.map((chart, index) => {
-    const kind = chart.kind && available.includes(chart.kind) && !(chart.kind === 'placement' && charts.length > 1) ? chart.kind : available.includes('timeseries') ? 'timeseries' : available[0]
-    const options = metricOptionsFor(kind)
-    const metric = options.includes(chart.metric) ? chart.metric : options.includes('load.p95_response_time') ? 'load.p95_response_time' : options[0] ?? ''
-    const xy = data?.xy && chart.xy.x.metric && data.xy.metrics.includes(chart.xy.x.metric) && data.xy.metrics.includes(chart.xy.y.metric) ? chart.xy : defaultXY()
-    const box = boxes[index] ?? boxes[0]
-    const cell = cellSettings(settings, charts.length, box.width, sharedLegend && index > 0)
-    const overrides = chart.overrides ?? {}
-    let spec: FigureSpec | undefined
-    if (kind === 'timeseries' || kind === 'xy') {
-      const stored = chart.spec?.type === kind ? chart.spec : defaultSpec(kind)
-      const panels = stored.panels.map((panel, position) => {
-        if (position) return panel
-        if (stored.type === 'xy') return {...panel, xy: {x: xy.x, y: xy.y, fit: xy.options.fit, path: xy.options.path}, x: {...panel.x, log: xy.options.logX}, left: {...panel.left, log: xy.options.logY}}
-        const [first, ...rest] = panel.metrics
-        return {...panel, metrics: [{metric, axis: first?.axis ?? 'left' as const}, ...rest]}
-      })
-      spec = {...stored, panels, style: cell, labels: overrides}
-    }
-    let model: FigureModel | undefined
-    if (spec && data && (spec.type !== 'xy' || data.xy)) {
-      const slo = data.omitSLO ? undefined : data.plot('load.p95_response_time').find(item => item.sloMilliseconds)?.sloMilliseconds
-      const runs = data.xy?.level === 'run' ? (name: string) => data.xy!.runs({metric: name}) : undefined
-      model = buildFigureModel(spec, {plot: data.plot, runs, provenance: data.provenance, slo, profile: data.profile, xy: spec.type === 'xy' && data.xy ? {source: data.xy, x: xy.x, y: xy.y, options: xy.options} : undefined}, {fontSize: figureMetrics(cell).fontSize, hidden: label => groups.length > 1 && hidden.includes(label), labels: overrides})
-    }
-    return {chart, index, letter: charts.length > 1 ? `(${letters[index]})` : undefined, kind, metricOptions: options, metric, xy, spec, model, settings: cell, box}
-  }), [charts, available, data, settings, sharedLegend, hidden, groups.length, effectiveLayout])
+  const views: ChartView[] = useMemo(() => buildViews({image: {charts, layout, sharedLegend, hidden}, data, groups, settings, available}), [charts, layout, available, data, settings, sharedLegend, hidden, groups])
 
   const updateChart = (chartId: string, update: (chart: ChartState) => ChartState) => setCharts(list => list.map(item => item.id === chartId ? update(item) : item))
   const setChartSpec = (view: ChartView) => (update: (spec: FigureSpec) => FigureSpec) => {
@@ -420,60 +174,17 @@ export function FigureStudio({open, onClose, request, data, groups, settings, on
   const dataSLO = data && !data.omitSLO ? data.plot('load.p95_response_time').find(item => item.sloMilliseconds)?.sloMilliseconds : undefined
 
   // Previews.
-  const emptyState = (message: string, actions?: ReactNode) => <div className="ks-empty" role="status"><p>{message}</p>{actions && <div className="ks-actions">{actions}</div>}</div>
   const metricPicker = (view: ChartView) => data && view.metricOptions.length > 1 ? <SelectField label="Metric" value={view.metric} onChange={metric => setChartMetric(view, metric)}>{view.metricOptions.map(item => <option key={item} value={item}>{metricTitle(item, data.provenance(item))}</option>)}</SelectField> : undefined
-  const render = (view: ChartView): [ReactNode, boolean] => {
-    const {kind, spec, model, metric} = view
-    const cell = view.settings
-    if (!data || !kind) return [emptyState('No figure can be drawn from these results yet.'), false]
-    if (kind === 'placement') return [data.placement, false]
-    if (groups.length > 1 && !keepGroups.length) return [emptyState('Every series is hidden. Show one in Layers, or:', <button type="button" className="ks-button" onClick={() => setHidden([])}>Show all series</button>), false]
-    const provenance = (item: string) => ({metric: item, provenance: data.provenance(item)})
-    if (spec && model) {
-      if (model.empty) return [emptyState(model.empty, <>{hidden.length > 0 && <button type="button" className="ks-button" onClick={() => setHidden([])}>Show all series</button>}{spec.type === 'xy' && data.xy && <button type="button" className="ks-button" onClick={() => setChartXY(view, current => ({...current, ...defaultXYSelection(data.xy!.metrics)}))}>Use the suggested pair</button>}</>), false]
-      const metrics = [...new Set(model.panels.flatMap(panel => panel.metrics))]
-      const figureName = spec.type === 'xy' ? `xy-${view.xy.x.metric}${view.xy.x.service ? `-${view.xy.x.service}` : ''}-vs-${view.xy.y.metric}${view.xy.y.service ? `-${view.xy.y.service}` : ''}` : metric
-      return [<SpecFigure id={`figure-${view.index ? `${view.index}-` : ''}${figureName.replaceAll(/[^a-zA-Z0-9]/g, '-')}`} name={figureName} model={model} settings={cell} grid={spec.grid} strokeScale={spec.strokeScale} geometry={geometryOf(view.chart.id)} provenance={(spec.type === 'xy' ? [view.xy.x.metric, ...metrics] : metrics).filter((item, index, list) => list.indexOf(item) === index).map(provenance)} ariaLabel={spec.type === 'xy' ? `Scatter of ${model.title}` : `${model.title} comparison chart`} />, true]
-    }
-    if (kind === 'runlevel' && metric) {
-      const entry = data.runLevel.find(item => item.metric === metric)
-      if (!entry) return [emptyState('No run-level values for this metric. Pick another one:', metricPicker(view)), false]
-      return [<RunDotPlot data={{...entry, groups: entry.groups.filter(group => shown(group.label))}} settings={cell} provenance={provenance(metric)} runLabels={data.runLabels} />, true]
-    }
-    if (kind === 'ladder') {
-      const metrics = ['load.p95_response_time', 'application.p95_response_time'].filter(item => data.metrics.includes(item))
-      return [<PercentileLadder series={data.ladder.filter(item => shown(item.group))} settings={cell} provenance={metrics.map(provenance)} />, true]
-    }
-    if (kind === 'fidelity') {
-      const series = data.fidelity.filter(item => keepGroups.some(group => item.label.startsWith(`${group.label} · `)) || groups.length <= 1)
-      const order = [...new Set(series.filter(item => item.role === 'achieved').map(item => item.artifactID))]
-      const offeredMetric = data.metrics.includes('load.offered_rps') ? 'load.offered_rps' : 'load.configured_rps'
-      return [<TimeSeriesFigure name="load-fidelity" metric="load.achieved_rps" title={offeredMetric === 'load.offered_rps' ? 'Offered vs achieved request rate' : 'Configured vs achieved request rate'} axisLabel="Request rate (req/s)" series={series} styles={series.map(item => {const base = seriesStyle(order.indexOf(item.artifactID), item.color, cell); return item.role === 'offered' ? {...base, dash: '4 2', marker: 5} : base})} settings={cell} provenance={[offeredMetric, 'load.achieved_rps'].map(provenance)} captionLead={`${offeredMetric === 'load.offered_rps' ? 'Offered (dashed, generator target)' : 'Configured (dashed)'} and achieved (solid) request rate`} ariaLabel="Offered versus achieved request rate chart" />, true]
-    }
-    if (kind === 'services' && metric) {
-      const rows = (data.services(metric)?.rows ?? []).filter(row => keepGroups.some(group => group.id === row.groupID || group.label === row.group) || groups.length <= 1)
-      const title = metric.endsWith('p95_response_time') ? metric.startsWith('redis.') ? 'Mean window P95 per Redis operation' : 'Mean window P95 per service' : metric.startsWith('redis.') ? metricTitle(metric) : `${metricTitle(metric)} by service`
-      return rows.length ? [<ServiceFigure metric={metric} rows={rows} settings={cell} provenance={provenance(metric)} title={title} />, true] : [emptyState('No service values for this metric. Pick another one:', metricPicker(view)), false]
-    }
-    return [null, false]
-  }
-  const rendered = views.map(view => render(view))
-  const hosts = useMemo(() => Object.fromEntries(charts.map(chart => [chart.id, {overrides: chart.overrides ?? {}, report: reporter(chart.id)}])), [JSON.stringify(charts.map(chart => [chart.id, chart.overrides]))])
+  const rendered = views.map(view => chartContent(view, {data, groups, hidden, geometry: geometryOf(view.chart.id), actions: {
+    showAllSeries: () => setHidden([]),
+    suggestPair: target => setChartXY(target, current => ({...current, ...defaultXYSelection(data?.xy?.metrics ?? [])})),
+    metricPicker
+  }}))
   const isPublication = (index: number) => rendered[index]?.[1] && views[index].kind !== 'placement'
   const publication = views.length > 0 && views.every((_, index) => isPublication(index))
   const single = count === 1
-  const currentOf = (view: ChartView) => isPublication(view.index) ? reports[view.chart.id] : undefined
-  const first = views[0] ? currentOf(views[0]) : undefined
-
-  // Page geometry (points): cells laid out by row, a letter band above each row.
-  const page = figureSize(settings)
-  const pageWidth = single ? first?.width ?? page.width : page.width
-  const band = single ? 0 : settings.fontSize * 1.6
-  const rows = Math.max(0, ...views.map(view => view.box.row + 1))
-  const rowHeights = Array.from({length: rows}, (_, row) => Math.max(0, ...views.filter(view => view.box.row === row).map(view => reports[view.chart.id]?.height ?? figureSize(view.settings).height * 1.3)))
-  const rowTops = rowHeights.map((_, row) => rowHeights.slice(0, row).reduce((sum, value) => sum + value + band, 0) + band)
-  const pageHeight = single ? first?.height ?? page.height * 1.3 : rowHeights.reduce((sum, value) => sum + value + band, 0)
-  const cellOf = (view: ChartView) => ({x: view.box.x * pageWidth, y: single ? 0 : rowTops[view.box.row], width: view.box.width * pageWidth})
+  const page = imagePage(views, reports, settings, view => Boolean(isPublication(view.index)))
+  const {currentOf, first, cellOf, width: pageWidth, height: pageHeight} = page
 
   // Name, caption and methods of the whole image.
   const titles = views.map(view => currentOf(view)?.title ?? (view.kind ? kindLabels[view.kind] : 'Chart'))
@@ -550,9 +261,7 @@ export function FigureStudio({open, onClose, request, data, groups, settings, on
       await run(svgId)
       return
     }
-    const parts = views.map(view => {const report = reports[view.chart.id]; const svg = report ? document.getElementById(report.id) as SVGSVGElement | null : null; const cell = cellOf(view); return {svg, x: cell.x, y: cell.y, letter: view.letter}})
-    if (parts.some(part => !part.svg)) throw new Error('The image is not ready yet. Try again.')
-    const composite = composeFigure(`${id.replaceAll(':', '')}-image`, parts as Array<{svg: SVGSVGElement; x: number; y: number; letter?: string}>, pageWidth, pageHeight, {family: fontStacks[settings.font], size: settings.fontSize})
+    const composite = imageSvg(views, page, view => {const report = reports[view.chart.id]; return report ? document.getElementById(report.id) as SVGSVGElement | null : null}, settings, `${id.replaceAll(':', '')}-image`)
     composite.setAttribute('style', 'position:absolute;left:-10000px;top:0;width:1px;height:1px')
     document.body.appendChild(composite)
     try {await run(composite.id)} finally {composite.remove()}
@@ -629,6 +338,13 @@ export function FigureStudio({open, onClose, request, data, groups, settings, on
     } catch (cause) {setError(cause instanceof Error ? cause.message : 'Could not save the figure. Try again.')}
     finally {setBusy(null)}
   }
+  // Keeps the image on the results page; later clicks update that same figure.
+  const keep = () => {
+    if (!onKeep) return
+    const kept = onKeep({name, caption, charts, layout, sharedLegend, hidden, settings}, keptId)
+    setKeptId(kept.id)
+    announce(keptId ? 'Updated on the results page.' : 'Added to the results page: right-click it there to edit, download or delete it.')
+  }
   const copySpec = async (view: ChartView) => {
     if (!view.spec) return
     setError('')
@@ -696,7 +412,7 @@ export function FigureStudio({open, onClose, request, data, groups, settings, on
   const addChart = () => {
     if (!data || count >= maxCharts) return
     const used = new Set(views.flatMap(view => view.kind === 'timeseries' ? [view.metric] : view.kind === 'xy' ? [view.xy.y.metric] : view.kind === 'services' || view.kind === 'runlevel' ? [view.metric] : []))
-    const metric = suggested.find(item => timeMetrics.includes(item) && !used.has(item)) ?? timeMetrics.find(item => !used.has(item)) ?? timeMetrics[0]
+    const metric = suggested.find(item => seriesMetrics.includes(item) && !used.has(item)) ?? seriesMetrics.find(item => !used.has(item)) ?? seriesMetrics[0]
     const chart: ChartState = metric ? {id: newChartId(), kind: 'timeseries', metric, xy: defaultXY(), spec: smartTimeSeriesSpec(data.plot(metric)), origin: 'custom'} : {id: newChartId(), kind: available.find(kind => kind !== 'placement') ?? 'timeseries', metric: '', xy: defaultXY()}
     setCharts(list => [...list, chart])
     setLayout(defaultLayout(count + 1))
@@ -1297,6 +1013,7 @@ export function FigureStudio({open, onClose, request, data, groups, settings, on
           </div>
           {storageKey && <span className={`ks-saved ${saved === false ? 'failed' : ''}`} title={savedText}><svg {...svgProps} width={14} height={14} strokeWidth={2}>{saved === false ? <path d="M12 8v5M12 16.5v.5" /> : <path d="m5 12 5 5 9-10" />}</svg><span>{saved === false ? 'Not saved' : 'Saved'}</span><span className="visually-hidden">: {savedText}</span></span>}
           <button type="button" className="ks-icon-button" aria-label="Keyboard shortcuts" aria-keyshortcuts="?" title="Keyboard shortcuts (?)" aria-expanded={help} onClick={() => setHelp(value => !value)}><span className="ks-help-glyph" aria-hidden="true">?</span></button>
+          {onKeep && data && publication && <button type="button" className="ks-button ks-keep" onClick={keep} title={keptId ? 'Save these changes to the figure on the results page' : 'Keep this image on the experiment’s results page'}>{keptId ? 'Update in results' : 'Add to results'}</button>}
           {data && publication && <ExportPopover open={exportOpen} onOpenChange={setExportOpen} format={format} onFormat={action => {setFormat(action); rememberFormat(action)}} busy={Boolean(busy)} csv={publication} code={Boolean(codeView)}
             page={{width: pageWidth, height: pageHeight, font: settings.font === 'serif' ? 'Times' : 'Helvetica', fontSize: settings.fontSize}} base={fileName}
             onExport={action => void exportAs(action)} onCopy={action => void copyFigure(action)} onSave={onSave ? () => void save() : undefined} saving={busy === 'save'} />}
@@ -1322,5 +1039,3 @@ export function FigureStudio({open, onClose, request, data, groups, settings, on
   </dialog>
 }
 
-export const figureKindLabel = (kind: FigureKind) => kindLabels[kind]
-export type {ChartState}

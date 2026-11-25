@@ -3,7 +3,8 @@ import {afterEach, describe, expect, it, vi} from 'vitest'
 import {downloadBlob} from '../../charts'
 import type {AggregateSeries, RunLevelMetric, VariantComparison} from '../../resultsData'
 import {AllMetrics} from './AllMetrics'
-import {FigureStudio, type StudioData} from './FigureStudio'
+import {KubeStudio} from './kubestudio/KubeStudio'
+import type {StudioData} from './kubestudio/image'
 import {defaultFigureSettings} from './figureSettings'
 import type {ServiceHealth} from './insights'
 import {Disclosure, KpiCards, ServicesTable, VerdictStrip} from './Overview'
@@ -170,12 +171,13 @@ describe('time chart', () => {
     expect(screen.getByText(/0:15: Request rate, Locust side \(req\/s\) Offered \(target\) 180 req\/s; .* Client latency P95 2.41 s/)).toBeInTheDocument()
   })
 
-  it('shows the server-side ingress rate under the Locust-side rate when it was measured', () => {
-    const plot = (name: string) => name === 'load.achieved_rps' ? [curve('Default', [150, 160])] : name === 'ingress.request_rps' ? [curve('Default', [183, 195])] : name === 'load.p95_response_time' ? [curve('Default', [90, 95], 'milliseconds')] : []
+  it('shows the server-side rate and the ready pods under the Locust-side rate when they were measured', () => {
+    const plot = (name: string) => name === 'load.achieved_rps' ? [curve('Default', [150, 160])] : name === 'ingress.request_rps' ? [curve('Default', [183, 195])] : name === 'deployment.ready_replicas' ? [curve('Default', [12, 15], 'replicas')] : name === 'load.p95_response_time' ? [curve('Default', [90, 95], 'milliseconds')] : []
     const panels = primaryPanels({groups: [{id: 'a', label: 'Default', color: 'var(--chart-1)'}], plot})
     expect(panels.map(panel => [panel.title, panel.series.map(series => series.label)])).toEqual([
       ['Request rate, Locust side (req/s)', ['Achieved']],
       ['Request rate, server side (req/s)', ['Ingress proxies']],
+      ['Ready pods', ['Ready pods']],
       ['Client latency', ['P95']]
     ])
   })
@@ -186,7 +188,7 @@ describe('KubeStudio', () => {
     const series = [curve('Alpha', [1, 2, 3], 'milliseconds'), curve('Beta', [2, 3, 4], 'milliseconds')]
     const data: StudioData = {metrics: ['load.p95_response_time'], plot: () => series, runLevel: [metric('load.p95_response_time', 'milliseconds', [1, 2, 3], [2, 3, 4])], ladder: [], fidelity: [], services: () => undefined, serviceMetrics: [], provenance, omitSLO: true}
     const groups = [{id: 'a', label: 'Alpha', color: 'red'}, {id: 'b', label: 'Beta', color: 'blue'}]
-    render(<FigureStudio open onClose={() => {}} request={{kind: 'timeseries', metric: 'load.p95_response_time'}} data={data} groups={groups} settings={defaultFigureSettings} onSettings={() => {}} />)
+    render(<KubeStudio open onClose={() => {}} request={{kind: 'timeseries', metric: 'load.p95_response_time'}} data={data} groups={groups} settings={defaultFigureSettings} onSettings={() => {}} />)
     const dialog = screen.getByRole('dialog', {name: 'KubeStudio'})
     expect(within(dialog).getByRole('button', {name: /^Figure: Latency over time/})).toBeInTheDocument()
     const figure = within(dialog).getByRole('img', {name: 'P95 latency — client (Locust) comparison chart'})

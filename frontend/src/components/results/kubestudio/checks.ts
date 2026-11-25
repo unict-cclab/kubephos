@@ -1,12 +1,12 @@
 import type {FigureModel} from './figureModel'
 import {paperContrast, type FigureSpec} from './figureSpec'
-import type {FigureSettings} from './figureSettings'
+import type {FigureSettings} from '../figureSettings'
 
 // KubeStudio figure checks: readability problems and smart suggestions, each with an
 // optional one-click fix the studio applies (undoable).
 
 export type CheckFix = 'palette' | 'one-axis' | 'log-left' | 'seconds' | 'legend' | 'slide-font' | 'zero-left' | 'hide-extra'
-export interface FigureCheck {id: string; level: 'warning' | 'suggestion'; message: string; fix?: {id: CheckFix; label: string}}
+interface FigureCheck {id: string; level: 'warning' | 'suggestion'; message: string; fix?: {id: CheckFix; label: string}}
 
 const median = (values: number[]) => {
   const sorted = [...values].sort((a, b) => a - b)

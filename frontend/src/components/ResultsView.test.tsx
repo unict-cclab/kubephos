@@ -3,7 +3,7 @@ import {describe, expect, it, vi} from 'vitest'
 import {request} from '../api'
 import {timeAxis} from '../charts'
 import type {Artifact, Experiment, Operation, Session, TimeSeriesDataset} from '../types'
-import {type FigureKind} from './results/FigureStudio'
+import type {FigureKind} from './results/kubestudio/image'
 import {formatAxis, aggregateMetric, aggregatePlotMetric, cohenD, compactLabel, experimentProgress, figureDimensions, loadLeadFromConfiguration, niceAxis, ResultsView, serviceMetricStatistics, setPNGResolution, podSchedulingStatistics, statisticsCSV, summarize, svgToPDF, variantStatistics, type LoadedDataset} from './ResultsView'
 
 vi.mock('../api', () => ({request: vi.fn(async () => ({items: []}))}))
@@ -369,7 +369,7 @@ describe('focused experiment results', () => {
     await openSection('Statistics')
     expect(within(await screen.findByRole('table', {name: /^Statistics for /})).getByText('SLO violation windows').closest('tr')).toHaveTextContent(/%.*50\.0/)
     expect(within(screen.getByRole('table', {name: /^Statistics for /})).getByText('Ready replicas').closest('tr')).toHaveTextContent('4')
-    expect(screen.getByRole('img', {name: /^Request rate and client latency/}).textContent).toContain('SLO 250 ms')
+    expect(screen.getByRole('img', {name: /^Request rate, ready pods and client latency/}).textContent).toContain('SLO 250 ms')
     const studio = await openStudio('timeseries', 'load.p95_response_time')
     expect(studio.querySelector('svg.pub-figure .annotation-slo')).toHaveTextContent('SLO 250 ms')
   })

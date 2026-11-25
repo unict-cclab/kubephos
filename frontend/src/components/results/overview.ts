@@ -159,7 +159,7 @@ export interface TimelineInput {
 }
 
 // Primary chart: offered vs achieved request rate (Locust side), requests that
-// reach the ingress proxies (server side, when measured) and client latency.
+// reach the ingress proxies (server side, when measured), ready pods and client latency.
 export function primaryPanels({groups, plot, slo}: TimelineInput): ChartPanel[] {
   const multiple = groups.length > 1
   const achievedMetric = plot('load.achieved_rps').length ? 'load.achieved_rps' : 'load.successful_rps'
@@ -170,6 +170,8 @@ export function primaryPanels({groups, plot, slo}: TimelineInput): ChartPanel[] 
   if (offered[0]) rate.push({...chartSeries(offered[0], 'offered', offeredMetric === 'load.offered_rps' ? 'Offered (target)' : 'Configured (target)', 'var(--chart-target)', {dashed: true, band: false}), short: 'target'})
   achieved.forEach((series, index) => rate.push({...chartSeries(series, `achieved-${index}`, multiple ? series.label : achievedMetric === 'load.achieved_rps' ? 'Achieved' : 'Successful', colorOf(groups, series, index)), short: multiple ? series.label : achievedMetric === 'load.achieved_rps' ? 'achieved' : 'successful'}))
   const ingress = plot('ingress.request_rps').map((series, index) => ({...chartSeries(series, `ingress-${index}`, multiple ? series.label : 'Ingress proxies', colorOf(groups, series, index)), short: multiple ? series.label : 'ingress'}))
+  // Ready replicas summed over every application Deployment: the pods serving the load.
+  const pods = plot('deployment.ready_replicas').map((series, index) => ({...chartSeries(series, `pods-${index}`, multiple ? series.label : 'Ready pods', colorOf(groups, series, index)), short: multiple ? series.label : 'pods'}))
   const latency: ChartSeries[] = []
   const p95 = plot('load.p95_response_time')
   const p50 = multiple ? [] : plot('load.p50_response_time')
@@ -179,6 +181,7 @@ export function primaryPanels({groups, plot, slo}: TimelineInput): ChartPanel[] 
   return [
     {id: 'rate', title: 'Request rate, Locust side (req/s)', unit: 'requests_per_second', series: rate, shortfall},
     {id: 'ingress-rate', title: 'Request rate, server side (req/s)', unit: 'requests_per_second', series: ingress},
+    {id: 'pods', title: 'Ready pods', unit: 'replicas', series: pods},
     {id: 'latency', title: 'Client latency', unit: 'milliseconds', series: latency, reference: slo ? {value: slo, label: `SLO ${formatShortMs(slo)}`} : undefined}
   ].filter(panel => panel.series.length)
 }

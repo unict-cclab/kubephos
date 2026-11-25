@@ -2,13 +2,15 @@ import {act, cleanup, fireEvent, render, screen, within} from '@testing-library/
 import axe from 'axe-core'
 import {useState} from 'react'
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest'
-import {downloadBlob, exportChart, svgDocument} from '../../charts'
-import type {AggregateSeries, RunLevelMetric} from '../../resultsData'
-import {FigureStudio, loadStudioMemory, type StudioData, type StudioSave} from './FigureStudio'
-import {defaultFigureSettings, type FigureSettings} from './figureSettings'
-import {provenanceFor} from './runs'
+import {downloadBlob, exportChart, svgDocument} from '../../../charts'
+import type {AggregateSeries, RunLevelMetric} from '../../../resultsData'
+import {KubeStudio, type StudioSave} from './KubeStudio'
+import type {StudioData} from './image'
+import {loadStudioMemory} from './memory'
+import {defaultFigureSettings, type FigureSettings} from '../figureSettings'
+import {provenanceFor} from '../runs'
 
-vi.mock('../../charts', async original => ({...await original<typeof import('../../charts')>(), downloadBlob: vi.fn(), exportChart: vi.fn(async () => {})}))
+vi.mock('../../../charts', async original => ({...await original<typeof import('../../../charts')>(), downloadBlob: vi.fn(), exportChart: vi.fn(async () => {})}))
 
 const group = (id: string, label: string, values: number[]) => ({id, label, values, artifactIds: values.map((_, index) => `${id}-${index}`)})
 const runLevel = (name: string, unit: string): RunLevelMetric => ({metric: name, unit, groups: [group('a', 'Alpha', [1, 2, 3]), group('b', 'Beta', [2, 3, 4])]})
@@ -17,9 +19,9 @@ const data: StudioData = {metrics: ['load.p95_response_time'], plot: () => [curv
 const groups = [{id: 'a', label: 'Alpha', color: '#1f77b4'}, {id: 'b', label: 'Beta', color: '#d55e00'}]
 
 // Settings are owned by the page (useFigureSettings); a tiny stateful harness mirrors that.
-function Studio({storageKey, onSave, initial = defaultFigureSettings, request = {kind: 'timeseries' as const}}: {storageKey?: string; onSave?: StudioSave; initial?: FigureSettings; request?: Parameters<typeof FigureStudio>[0]['request']}) {
+function Studio({storageKey, onSave, initial = defaultFigureSettings, request = {kind: 'timeseries' as const}}: {storageKey?: string; onSave?: StudioSave; initial?: FigureSettings; request?: Parameters<typeof KubeStudio>[0]['request']}) {
   const [settings, setSettings] = useState(initial)
-  return <FigureStudio open onClose={() => {}} request={request} data={data} groups={groups} settings={settings} onSettings={setSettings} storageKey={storageKey} onSave={onSave} />
+  return <KubeStudio open onClose={() => {}} request={request} data={data} groups={groups} settings={settings} onSettings={setSettings} storageKey={storageKey} onSave={onSave} />
 }
 
 const studio = () => screen.getByRole('dialog', {name: 'KubeStudio'})
@@ -262,14 +264,6 @@ describe('KubeStudio', () => {
     expect(within(studio()).getByRole('img', {name: /per repetition/})).toBeInTheDocument()
     expect(within(studio()).getByLabelText('Caption', {selector: 'textarea'})).toHaveValue('Edited caption.')
     expect(within(studio()).getByRole('button', {name: /^Zoom 100 %/})).toBeInTheDocument()
-    cleanup()
-    // Saved before the rename: same storage key, older spec format.
-    window.localStorage.setItem('kubephos.figureStudio.v1:experiment:old', JSON.stringify({kind: 'timeseries', metric: 'load.p95_response_time', zoom: 'fit', figures: {'timeseries:load.p95_response_time': {name: 'Fig 2', caption: 'Old caption.'}}, specs: {timeseries: {version: 1, type: 'timeseries', runMode: 'mean', panels: [{metrics: [{metric: 'load.p95_response_time', axis: 'left'}], annotations: [{kind: 'hline', value: 3, label: 'Limit'}]}]}}}))
-    render(<Studio storageKey="experiment:old" request={{}} />)
-    expect(within(studio()).getByLabelText('Figure name')).toHaveValue('Fig 2')
-    expect(within(studio()).getByLabelText('Caption', {selector: 'textarea'})).toHaveValue('Old caption.')
-    expect(figure().querySelector('.deviation-band')).toBeNull()
-    expect(figure().querySelector('.annotation-user.annotation-hline')).toHaveTextContent('Limit')
     cleanup()
     const getItem = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {throw new Error('denied')})
     const setItem = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {throw new Error('denied')})

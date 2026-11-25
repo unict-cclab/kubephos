@@ -1,17 +1,17 @@
 import {useEffect, useId, useRef, useState, type ReactNode} from 'react'
-import {cumulativeCounterMetrics, isControlMetric, type AggregateSeries} from '../../resultsData'
+import {cumulativeCounterMetrics, isControlMetric, type AggregateSeries} from '../../../resultsData'
 import {defaultSpec, type FigureSpec} from './figureSpec'
-import {metricTitle} from './format'
-import type {OverviewGroup} from './overview'
-import {alignByTimestamp, defaultXYOptions, defaultXYSelection, type XYState} from './xy'
-import type {FigureKind, StudioData} from './FigureStudio'
+import {metricTitle} from '../format'
+import type {OverviewGroup} from '../overview'
+import {alignByTimestamp, defaultXYOptions, defaultXYSelection, type XYState} from '../xy'
+import type {FigureKind, StudioData} from './image'
 
 // KubeStudio recipes: ready-made figures drawn from THIS experiment's data (one click gives a
 // finished figure with sensible defaults), offered by the top-bar figure switcher.
 
 export const kindOrder: FigureKind[] = ['timeseries', 'xy', 'runlevel', 'ladder', 'services', 'fidelity', 'placement']
 export const kindLabels: Record<FigureKind, string> = {timeseries: 'Time series', xy: 'X–Y relationship', runlevel: 'Run-level dots', ladder: 'Percentile ladder', services: 'Services', fidelity: 'Load fidelity', placement: 'Placement'}
-export const kindHints: Record<FigureKind, string> = {timeseries: 'Metric over the measured window', xy: 'One metric against another', runlevel: 'Every repetition, mean and CI', ladder: 'P50–P99, client vs server', services: 'One value per service', fidelity: 'Offered vs achieved load', placement: 'Replicas per zone over time'}
+const kindHints: Record<FigureKind, string> = {timeseries: 'Metric over the measured window', xy: 'One metric against another', runlevel: 'Every repetition, mean and CI', ladder: 'P50–P99, client vs server', services: 'One value per service', fidelity: 'Offered vs achieved load', placement: 'Replicas per zone over time'}
 
 export const timeSeriesExcluded = (metric: string) => isControlMetric(metric)
 export const runLevelExcluded = (metric: string) => isControlMetric(metric) || ['load.configured_rps', 'load.offered_rps', 'load.users'].includes(metric) || cumulativeCounterMetrics.includes(metric)
@@ -170,12 +170,6 @@ export function buildRecipes(data: StudioData, groups: OverviewGroup[]): Recipe[
 
 // ---------------------------------------------------------------------------------------
 // Recent figures (per experiment).
-
-export interface RecentFigure {kind: FigureKind; metric?: string; xy?: XYState; name?: string; at: number}
-
-export function sameRecent(left: RecentFigure, right: RecentFigure) {
-  return left.kind === right.kind && (left.metric ?? '') === (right.metric ?? '') && JSON.stringify(left.xy ? [left.xy.x, left.xy.y] : null) === JSON.stringify(right.xy ? [right.xy.x, right.xy.y] : null)
-}
 
 
 export interface SwitcherItem {kind: FigureKind; title: string; description: string; thumb: ReactNode; recipe?: Recipe}

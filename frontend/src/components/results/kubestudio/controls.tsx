@@ -4,7 +4,7 @@ import {useId, useState, type ReactNode} from 'react'
 // above their control, every control is 32 px tall, groups are separated by 16 px with a
 // quiet 12 px heading. Choice groups are native radios (arrow keys move between them).
 
-export interface Choice<T extends string> {value: T; label: string; hint?: string; icon?: ReactNode}
+interface Choice<T extends string> {value: T; label: string; hint?: string; icon?: ReactNode}
 
 // Segmented control (radio group). With icons, the label becomes the accessible name and tooltip.
 export function Chips<T extends string>({legend, name, value, choices, onChange, className = '', disabled = false, hideLegend = false}: {legend: string; name: string; value: T; choices: Array<Choice<T>>; onChange: (value: T) => void; className?: string; disabled?: boolean; hideLegend?: boolean}) {
@@ -77,7 +77,7 @@ const snap = (value: number, step: number, direction: 1 | -1) => {
   const next = direction > 0 ? Math.floor(index + 1e-9) + 1 : Math.ceil(index - 1e-9) - 1
   return Math.round(next * step * 1000) / 1000
 }
-export const shortNumber = (value: number) => String(Number(value.toFixed(2)))
+const shortNumber = (value: number) => String(Number(value.toFixed(2)))
 
 // Numeric input with − / + buttons that snap to the step grid; shows at most 2 decimals.
 export function Stepper({label, value, min, max, step, unit, onChange}: {label: string; value: number; min: number; max: number; step: number; unit?: string; onChange: (value: number) => void}) {

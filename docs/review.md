@@ -1,3 +1,27 @@
+# Results figures review — 25 November 2026
+
+- Figure 1 adds "Ready pods" (ready replicas summed over the application
+  Deployments) under the server-side request rate, and a Download menu (PDF,
+  PNG 600 dpi, SVG). The on-screen chart is flattened into one standalone SVG
+  with explicit colours (`timeChartExport.ts`) and goes through the shared
+  exporter.
+- KubeStudio lives in `components/results/kubestudio/`: the editor
+  (`KubeStudio.tsx`, 1326 → about 1040 lines) and its parts — `image.tsx`
+  (building and drawing an image's charts, shared with the results page),
+  `memory.ts`, `history.ts`, `selection.ts`, `icons.tsx`, `layout.ts`,
+  `recipes.tsx`, `checks.ts`, `controls.tsx`, `ExportPopover.tsx` and the figure
+  spec, model, code and editor files. Removed: the reader of the pre-multi-chart
+  memory format, two unused helpers, and `export` from names used only in their
+  own file.
+- "Add to results" in KubeStudio keeps the image on the experiment's results
+  page, under "Figures made with KubeStudio" (numbered after Figure 1, stored per
+  experiment in this browser). Right-click a figure, or use its ⋯ button, to edit
+  it in KubeStudio ("Update in results" saves the changes), download it (a page
+  of several charts as one image) or delete it, with an undo.
+- Validation: typecheck, all frontend tests (895, including the new ones for
+  the figures, their storage and the Figure 1 export), the asset budget and the
+  theme contrast check passed. Not yet checked in the browser against real data.
+
 # Load profile review — 24 November 2026
 
 - Each rate of the workload phases shows the plain Locust users that would send

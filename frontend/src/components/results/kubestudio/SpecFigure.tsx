@@ -1,9 +1,9 @@
 import type {ReactNode} from 'react'
-import {FigureCard, figureMetrics, r, SvgText, type FigureMetrics} from './chartKit'
+import {FigureCard, figureMetrics, r, SvgText, type FigureMetrics} from '../chartKit'
 import {blendWhite, dashArray, type GridMode, type MarkerShape} from './figureSpec'
 import type {FigureModel, ModelAxis, ModelPanel, ModelSeries} from './figureModel'
-import type {FigureSettings} from './figureSettings'
-import type {ResolvedProvenance} from './runs'
+import type {FigureSettings} from '../figureSettings'
+import type {ResolvedProvenance} from '../runs'
 
 // Publication SVG drawn from a FigureModel. Every coordinate is absolute (no group
 // transforms), every colour opaque or a fill-opacity, and data are clipped by hand, so the
@@ -114,7 +114,7 @@ function LegendSymbol({series, x, y, width, metrics}: {series: ModelSeries; x: n
 }
 
 // Pixel ↔ data mapping of each drawn panel (points), for direct manipulation in KubeStudio.
-export interface PanelGeometry {index: number; box: Box; x: (pt: number) => number | undefined; y: (side: 'left' | 'right', pt: number) => number | undefined}
+interface PanelGeometry {index: number; box: Box; x: (pt: number) => number | undefined; y: (side: 'left' | 'right', pt: number) => number | undefined}
 export interface FigureGeometry {width: number; height: number; panels: PanelGeometry[]}
 
 const invert = (axis: ModelAxis | undefined, from: number, to: number) => (pt: number) => {
@@ -126,7 +126,7 @@ const invert = (axis: ModelAxis | undefined, from: number, to: number) => (pt: n
   return 10 ** (Math.log10(lower) + t * (Math.log10(upper) - Math.log10(lower)))
 }
 
-export interface SpecFigureProps {
+interface SpecFigureProps {
   id: string
   name: string
   model: FigureModel

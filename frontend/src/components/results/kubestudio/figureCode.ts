@@ -1,13 +1,13 @@
 import {dashArray, type LineStyle, type MarkerShape} from './figureSpec'
 import type {FigureModel, ModelAnnotation, ModelAxis, ModelPanel, ModelSeries} from './figureModel'
-import type {FigureSettings} from './figureSettings'
+import type {FigureSettings} from '../figureSettings'
 
 // Reproducibility exports: a self-contained matplotlib script or a pgfplots snippet, each
 // with a CSV of exactly the plotted values (display units). Both are generated from the
 // same FigureModel as the SVG/PDF, with the same size, fonts, colours, markers, axes and
 // annotations.
 
-export interface CodeOptions {
+interface CodeOptions {
   base: string
   title: string
   caption: string

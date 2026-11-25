@@ -1,17 +1,17 @@
 import {useId, useState} from 'react'
-import {Chips, ResetIcon, SelectField, Stepper, Toggle} from './FigureSettingsControl'
+import {Chips, ResetIcon, SelectField, Stepper, Toggle} from './controls'
 import {builtInPresets, defaultPanel, lineStyles, markerShapes, palettes, paletteColors, paperContrast, unitChoices, type Annotation, type AxisSide, type AxisSpec, type FigureSpec, type LineStyle, type MarkerShape, type PaletteId, type PanelSpec, type RunMode, type SeriesStyleSpec, type StylePreset, type TimeFormat, type XAxisSpec} from './figureSpec'
 import type {ModelSeries} from './figureModel'
-import {metricTitle} from './format'
-import type {ResolvedProvenance} from './runs'
+import {metricTitle} from '../format'
+import type {ResolvedProvenance} from '../runs'
 import {ShapeMarker} from './SpecFigure'
-import type {XYAxisSelection, XYSource} from './xy'
+import type {XYAxisSelection, XYSource} from '../xy'
 
 // KubeStudio property editors for a FigureSpec: series style, axis metrics and scales,
 // annotations, palette, presets and the spec as JSON. Each setting lives in exactly one of
 // them; the studio shows the one that matches the selected layer.
 
-export type SetSpec = (update: (spec: FigureSpec) => FigureSpec) => void
+type SetSpec = (update: (spec: FigureSpec) => FigureSpec) => void
 const markerNames: Record<MarkerShape, string> = {circle: 'Circle', square: 'Square', triangle: 'Triangle', diamond: 'Diamond', cross: 'Cross', x: 'X', none: 'No marker'}
 const lineNames: Record<LineStyle, string> = {solid: 'Solid', dashed: 'Dashed', dotted: 'Dotted', dashdot: 'Dash-dot', none: 'No line'}
 export const runNames: Record<RunMode, {label: string; hint: string}> = {ci: {label: 'Mean + 95 % CI', hint: 'Band: CI of the mean'}, sd: {label: 'Mean ± SD', hint: 'Band: ±1 SD'}, iqr: {label: 'Median + IQR', hint: 'Band: 25th–75th percentile'}, spaghetti: {label: 'All runs + mean', hint: 'Thin runs, bold mean'}, runs: {label: 'Runs only', hint: 'One line per run'}, mean: {label: 'Mean only', hint: 'No band'}}

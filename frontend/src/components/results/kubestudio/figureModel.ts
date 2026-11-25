@@ -1,13 +1,13 @@
-import {niceAxis} from '../../charts'
-import type {AggregateSeries} from '../../resultsData'
-import {quantileSorted, summarize, tCritical} from '../../statistics'
-import type {FigureLabelOverrides} from './chartKit'
-import {exportColor} from './chartColor'
-import {compactLabel, formatMetric, metricAxisLabel, metricTitle, provenanceSentence, toCSV} from './format'
+import {niceAxis} from '../../../charts'
+import type {AggregateSeries} from '../../../resultsData'
+import {quantileSorted, summarize, tCritical} from '../../../statistics'
+import type {FigureLabelOverrides} from '../chartKit'
+import {exportColor} from '../chartColor'
+import {compactLabel, formatMetric, metricAxisLabel, metricTitle, provenanceSentence, toCSV} from '../format'
 import {displayUnit, formatTick, formatTime, gridShape, relabelUnit, resolveStyle, seriesKey, timeAxisLabel, type Annotation, type AxisSide, type AxisSpec, type FigureSpec, type ResolvedStyle, type RunMode, type TimeFormat} from './figureSpec'
-import type {ResolvedProvenance} from './runs'
-import {extent, linearScale, type Scale} from './scales'
-import {buildXY, fitSummary, fitXY, type XYOptions, type XYRunInput, type XYSource} from './xy'
+import type {ResolvedProvenance} from '../runs'
+import {extent, linearScale, type Scale} from '../scales'
+import {buildXY, fitSummary, fitXY, type XYOptions, type XYRunInput, type XYSource} from '../xy'
 
 // Resolves a FigureSpec against the experiment data into a renderer-independent model:
 // series in display units with their effective styles, axes with domains and ticks, and
@@ -85,8 +85,6 @@ export interface FigureModel {
 }
 
 const letters = 'abcd'
-export const uncertaintyName: Record<RunMode, string> = {ci: 'mean with 95 % CI band', sd: 'mean ± 1 SD band', iqr: 'median with interquartile band', spaghetti: 'every repetition (thin) and their mean (bold)', runs: 'individual repetitions', mean: 'mean only'}
-
 // ---------------------------------------------------------------------------------------
 // Scales from axis specs.
 
@@ -158,7 +156,7 @@ export function axisScale(values: number[], axis: AxisSpec, {integer = false, ti
 // ---------------------------------------------------------------------------------------
 // Repetition statistics on the windows every repetition sampled (never interpolated).
 
-export interface RunStatistics {t: number[]; mean: number[]; sd: number[]; ci: number[]; median: number[]; q1: number[]; q3: number[]; runs: number[][]; step: number; n: number}
+interface RunStatistics {t: number[]; mean: number[]; sd: number[]; ci: number[]; median: number[]; q1: number[]; q3: number[]; runs: number[][]; step: number; n: number}
 
 export function runStatistics(runs: AggregateSeries[]): RunStatistics | undefined {
   if (runs.length < 2) return undefined
@@ -209,7 +207,7 @@ function withGaps(t: number[], columns: number[][], step: number): {t: number[];
 // Display suffix of an axis unit ("ms", "s", "req/s", "%"…) for threshold labels.
 const unitSuffixes: Record<string, string> = {milliseconds: 'ms', seconds: 's', requests_per_second: 'req/s', percent: '%', cores: 'cores', bytes: 'B', bytes_per_second: 'B/s'}
 export const unitSuffix = (unit: string, choice?: string) => displayUnit(unit, choice)?.label ?? unitSuffixes[unit] ?? ''
-export const thresholdText = (value: number, suffix: string) => `${Number(value.toPrecision(4)).toLocaleString('en-US', {maximumFractionDigits: 6})}${suffix === '%' ? '%' : suffix ? ` ${suffix}` : ''}`
+const thresholdText = (value: number, suffix: string) => `${Number(value.toPrecision(4)).toLocaleString('en-US', {maximumFractionDigits: 6})}${suffix === '%' ? '%' : suffix ? ` ${suffix}` : ''}`
 // Labels may carry a {value} token, replaced by the line's value in the axis display unit.
 const fillValue = (items: ModelAnnotation[], suffix: (side: AxisSide) => string) => items.map(item => item.kind === 'hline' && item.label?.includes('{value}') ? {...item, label: item.label.replaceAll('{value}', thresholdText(item.y!, suffix(item.axis)))} : item)
 

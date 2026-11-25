@@ -1,20 +1,20 @@
-import type {FigureLabelOverrides} from './chartKit'
-import {contrast} from './chartColor'
-import {defaultFigureSettings, normalizeFigureSettings, type FigureSettings} from './figureSettings'
-import type {XYAxisSelection} from './xy'
+import type {FigureLabelOverrides} from '../chartKit'
+import {contrast} from '../chartColor'
+import {defaultFigureSettings, normalizeFigureSettings, type FigureSettings} from '../figureSettings'
+import type {XYAxisSelection} from '../xy'
 
 // FigureSpec: the serializable description of one studio figure (type, data bindings,
 // per-series styles, axes, annotations, layout and style). The studio renders the preview
 // from it, every export (SVG/PDF/PNG/CSV, matplotlib, pgfplots) derives from the same
 // resolved model, and it is persisted per experiment and copied/pasted as JSON.
 
-export type SpecType = 'timeseries' | 'xy'
+type SpecType = 'timeseries' | 'xy'
 export type MarkerShape = 'circle' | 'square' | 'triangle' | 'diamond' | 'cross' | 'x' | 'none'
 export type LineStyle = 'solid' | 'dashed' | 'dotted' | 'dashdot' | 'none'
 export type RunMode = 'ci' | 'sd' | 'iqr' | 'spaghetti' | 'runs' | 'mean'
 export type AxisSide = 'left' | 'right'
-export type RangeMode = 'auto' | 'zero' | 'custom'
-export type TickMode = 'auto' | 'count' | 'step'
+type RangeMode = 'auto' | 'zero' | 'custom'
+type TickMode = 'auto' | 'count' | 'step'
 export type GridMode = 'none' | 'major' | 'minor'
 export type TimeFormat = 'min' | 's' | 'mmss'
 export type PanelGrid = '1x1' | '1x2' | '2x1' | '2x2'
@@ -22,7 +22,7 @@ export type PaletteId = 'okabe-ito' | 'tableau10' | 'tol-bright' | 'tol-muted' |
 
 export const markerShapes: MarkerShape[] = ['circle', 'square', 'triangle', 'diamond', 'cross', 'x', 'none']
 export const lineStyles: LineStyle[] = ['solid', 'dashed', 'dotted', 'dashdot', 'none']
-export const runModes: RunMode[] = ['ci', 'sd', 'iqr', 'spaghetti', 'runs', 'mean']
+const runModes: RunMode[] = ['ci', 'sd', 'iqr', 'spaghetti', 'runs', 'mean']
 
 export interface SeriesStyleSpec {
   color?: string
@@ -54,7 +54,7 @@ export interface AxisSpec {
 
 export interface XAxisSpec extends AxisSpec {time: TimeFormat}
 
-export interface MetricBinding {metric: string; axis: AxisSide}
+interface MetricBinding {metric: string; axis: AxisSide}
 
 export type Annotation =
   | {id: string; kind: 'hline'; axis: AxisSide; value: number; label?: string}
@@ -99,14 +99,14 @@ export interface FigureSpec {
 export const seriesKey = (metric: string, group: string) => `${metric}|${group}`
 
 export const defaultAxis = (range: RangeMode = 'zero'): AxisSpec => ({range, ticks: 'auto', log: false, thousands: false})
-export const defaultXAxis = (): XAxisSpec => ({...defaultAxis('auto'), time: 'min'})
+const defaultXAxis = (): XAxisSpec => ({...defaultAxis('auto'), time: 'min'})
 export const defaultPanel = (metrics: MetricBinding[] = []): PanelSpec => ({metrics, x: defaultXAxis(), left: defaultAxis(), right: defaultAxis(), annotations: []})
 
 export function defaultSpec(type: SpecType = 'timeseries', style: FigureSettings = defaultFigureSettings): FigureSpec {
   return {version: 1, type, layout: {grid: '1x1', sharedX: true, sharedY: false, letters: true}, panels: [defaultPanel()], runMode: 'ci', palette: 'okabe-ito', series: {}, order: [], auto: {phases: true, warmup: false, slo: true}, grid: 'major', strokeScale: 1, labels: {}, style}
 }
 
-export const panelCount = (grid: PanelGrid) => grid === '1x1' ? 1 : grid === '2x2' ? 4 : 2
+const panelCount = (grid: PanelGrid) => grid === '1x1' ? 1 : grid === '2x2' ? 4 : 2
 export const gridShape = (grid: PanelGrid) => ({rows: grid === '2x1' || grid === '2x2' ? 2 : 1, columns: grid === '1x2' || grid === '2x2' ? 2 : 1})
 
 // ---------------------------------------------------------------------------------------
@@ -249,7 +249,7 @@ function interpolate(colors: string[], position: number): string {
 
 // Default colour of the index-th series of an axis (count = series on that axis). With both
 // axes in use each axis draws from its own hue family; a single axis uses the interleaved list.
-export function defaultColor(palette: PaletteId, side: AxisSide, index: number, count: number, dual: boolean, pageColor?: string): string {
+function defaultColor(palette: PaletteId, side: AxisSide, index: number, count: number, dual: boolean, pageColor?: string): string {
   if (palette === 'page' && pageColor && !dual) return pageColor
   const entry = palettes[palette]
   if (entry.sequential) return interpolate(side === 'right' && dual ? entry.right : entry.left, count <= 1 ? 0 : index / (count - 1))
@@ -304,7 +304,7 @@ export function paperContrast(color: string): {ratio: number; ok: boolean} {
 // ---------------------------------------------------------------------------------------
 // Units: display conversions per base unit (factor multiplies the stored value).
 
-export interface UnitChoice {id: string; label: string; factor: number}
+interface UnitChoice {id: string; label: string; factor: number}
 export const unitChoices: Record<string, UnitChoice[]> = {
   milliseconds: [{id: 'ms', label: 'ms', factor: 1}, {id: 's', label: 's', factor: 1e-3}],
   seconds: [{id: 's', label: 's', factor: 1}, {id: 'ms', label: 'ms', factor: 1e3}],

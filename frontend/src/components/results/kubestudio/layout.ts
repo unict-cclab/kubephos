@@ -1,8 +1,8 @@
-import type {FigureLabelOverrides} from './chartKit'
-import {figureSize, type FigureSettings} from './figureSettings'
+import type {FigureLabelOverrides} from '../chartKit'
+import {figureSize, type FigureSettings} from '../figureSettings'
 import type {FigureSpec} from './figureSpec'
-import type {FigureKind} from './FigureStudio'
-import type {XYState} from './xy'
+import type {FigureKind} from './image'
+import type {XYState} from '../xy'
 
 // KubeStudio documents: one image made of 1–4 charts, each with its own figure type and
 // data, laid out on the page (side by side, stacked, 2 × 2 or 2 + 1) with panel letters.
