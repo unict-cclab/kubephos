@@ -598,6 +598,7 @@ function ExperimentResultsView({artifacts, experiments, operations, workspaces, 
           {liveDashboard &&<button type="button" className="button secondary live-dashboard-button" disabled={openingDashboard} onClick={() => void openDashboard()}><ActionIcon name="pulse" />{openingDashboard ? 'Opening…' : 'Live dashboard'}</button>}
           {!comparison && focusedExperiment?.status === 'initialized' && canManage && !stopRequested && <button className="button primary" disabled={startingTraffic} onClick={startTraffic}>{startingTraffic ? 'Starting…' : 'Start'}</button>}
           {!comparison && focusedExperiment && canManage && canStop && <button className="button danger" disabled={stopping || stopRequested} onClick={stopExperiment}>{stopping || stopRequested ? `Stopping ${stopLabel}…` : `Stop ${stopLabel}`}</button>}
+          {sectionsMenu}
           {displayed.length > 0 && <HeaderMenu label="Export" icon={<ActionIcon name="download" />} className="results-export">{close => exportPanel(close)}</HeaderMenu>}
           {displayed.length > 0 && <button type="button" className="button primary" title="Open KubeStudio to build a publication figure" onClick={() => setStudio({choose: true})}><KubeStudioMark size={18} className="kubestudio-entry" />Create figure</button>}
           {focusedExperiment && (displayed.length > 0 || (!comparison && (canManage || charts.customized))) && <PageMoreMenu>{close => <>
@@ -617,8 +618,9 @@ function ExperimentResultsView({artifacts, experiments, operations, workspaces, 
     {comparison?.sources}
     <ErrorFeedback message={actionError} />
     {!focusedExperiment && experiments.length > 0 && <div className="experiment-history"><div className="experiment-history-title"><span><b>1</b><strong>Choose an experiment</strong></span><span>{experiments.length} saved</span></div><div className="experiment-cards">{experiments.map(item => <button key={item.id} className={activeExperiment === item.id ? 'active' : ''} onClick={() => openExperiment(item)}><span className={`status-dot ${experimentDisplayStatus(item)}`} /><span><strong>{item.name}</strong><small>{item.status === 'queued' && item.scheduledFor && new Date(item.scheduledFor).getTime() > Date.now() ? `Scheduled ${formatDate(item.scheduledFor)}` : `${experimentDisplayStatus(item)} · ${item.variants.length} strategies · ${item.variants.reduce((total, variant) => total + variant.trials.filter(trial => !isPilot(trial)).length, 0)} executions`}</small></span><ActionIcon name="right" /></button>)}</div></div>}
-    {(sectionsMenu || focusedExperiment && !comparison && focusedRuns.length > 1) && <div className="results-view-bar">{focusedExperiment && !comparison && focusedRuns.length > 1 && <RunTabs runs={focusedRuns} active={runTab} select={setRunTab} />}{sectionsMenu}</div>}
-    {experiment && (!viewRun ? <>{experiment.status !== 'succeeded' && <ExperimentProgress experiment={experiment} />}{liveRun && <RunLoadProgress name={`${liveRun.variant.name} · ${trialLabel(liveRun.trial)}`} trial={liveRun.trial} configuration={liveRun.variant.configuration} operation={operations.find(item => item.id === liveRun.trial.operationId)} />}</> : <><RunDiagnostics trial={viewRun.trial} openPipelineRun={openPipelineRun} openOperation={openOperation} /><RunLoadProgress trial={viewRun.trial} configuration={viewRun.variant.configuration} operation={operations.find(item => item.id === viewRun.trial.operationId)} /></>)}
+    {focusedExperiment && !comparison && focusedRuns.length > 1 && <div className="results-view-bar"><RunTabs runs={focusedRuns} active={runTab} select={setRunTab} /></div>}
+    {experiment && (!viewRun ? <>{experiment.status !== 'succeeded' && <ExperimentProgress experiment={experiment} />}{liveRun && <RunLoadProgress name={`${liveRun.variant.name} · ${trialLabel(liveRun.trial)}`} trial={liveRun.trial} configuration={liveRun.variant.configuration} operation={operations.find(item => item.id === liveRun.trial.operationId)} />}</> : viewRun.trial.status === 'succeeded' && !viewRun.trial.error && !cleanupWarning(viewRun.trial) ? <CompletedRun trial={viewRun.trial} configuration={viewRun.variant.configuration} openPipelineRun={openPipelineRun} />
+      : <><RunDiagnostics trial={viewRun.trial} openPipelineRun={openPipelineRun} openOperation={openOperation} /><RunLoadProgress trial={viewRun.trial} configuration={viewRun.variant.configuration} operation={operations.find(item => item.id === viewRun.trial.operationId)} /></>)}
     {!selectable.length || activeRun && !viewSelected.length ? <EmptyResults experiment={experiment} runStatus={viewRun?.trial.status} /> : <div className={`results-layout ${focusedExperiment ? 'focused' : ''}`}>
       {!focusedExperiment ? <aside className="dataset-picker" aria-label="Available datasets">
         <div className="dataset-picker-title"><strong>Select executions</strong><span>{selected.length} selected</span></div>
@@ -805,6 +807,22 @@ function RunDiagnostics({trial, openPipelineRun, openOperation}: {trial: Experim
   const label = status === 'initialized' ? 'Initialization complete' : status==='initializing'?'Execution initializing':status === 'queued' ? resting ?? 'Execution waiting to start' : status === 'canceled' ? 'Execution canceled' : failed ? 'Execution needs attention' : running ? 'Execution in progress' : status === 'succeeded' ? 'Execution completed' : 'Execution status unavailable'
   if (!error && !cleanup && !resting && !running && !failed && !(pipelineRunId && openPipelineRun)) return null
   return <div className={`run-diagnostics ${failed ? 'failed' : ''}`}><div><strong>{label}</strong>{error && <p>{error}</p>}{cleanup && <p className="run-cleanup-warning">{cleanup}</p>}</div>{pipelineRunId && openPipelineRun ? <button className="button secondary compact" onClick={() => openPipelineRun(pipelineRunId)}>{running ? 'Live process logs' : 'Process logs'}</button> : operationId && openOperation ? <button className="button secondary compact" onClick={() => openOperation(operationId)}>{running ? 'Live logs' : 'Error logs'}</button> : null}</div>
+}
+
+// A completed execution needs no status panel: one quiet line, with the input load
+// profile and the process logs one click away.
+function CompletedRun({trial, configuration, openPipelineRun}: {trial: ExperimentTrial; configuration: Record<string, unknown>; openPipelineRun?: (id: string) => void}) {
+  const steps = loadStepsFromConfiguration(configuration)
+  const load = steps.reduce((total, step) => total + step.durationSeconds, 0) * 1000
+  const ran = trial.startedAt && trial.completedAt ? Date.parse(trial.completedAt) - Date.parse(trial.startedAt) : undefined
+  const text = `Execution completed${ran !== undefined && ran > 0 ? ` in ${formatDuration(ran)}` : ''}${steps.length ? ` · input load ${formatDuration(load)}, ${steps.length} step${steps.length === 1 ? '' : 's'}` : ''}`
+  return <div className="run-completed">
+    {steps.length ? <details>
+      <summary><span className="status-dot succeeded" aria-hidden="true" />{text}<span className="run-completed-more">Input load profile</span></summary>
+      <LoadProfilePreview steps={steps} />
+    </details> : <p><span className="status-dot succeeded" aria-hidden="true" />{text}</p>}
+    {trial.pipelineRunId && openPipelineRun && <button type="button" className="link-button" onClick={() => openPipelineRun(trial.pipelineRunId!)}>Process logs</button>}
+  </div>
 }
 
 function RunLoadProgress({trial, configuration, operation, name}: {trial: ExperimentTrial; configuration: Record<string, unknown>; operation?: Operation; name?: string}) {
@@ -1032,6 +1050,7 @@ function ComparisonResults({artifacts, experiment, comparison, onBack, session}:
         <div className="results-title"><h2 tabIndex={-1}>{experiment.name}</h2><ResultsMeta experiment={analysis} datasets={[]} /></div>
         <div className="results-detail-actions">
           {comparison?.actions}
+          {data && <SectionsMenu available={available} shown={page.shown} onToggle={(id, shown) => {charts.toggleSection(id, shown); if (shown) toggleSection(id as SectionID, true)}} onShowAll={() => charts.setSections(available)} />}
           {data && <HeaderMenu label="Export" icon={<ActionIcon name="download" />} className="results-export">{close => exportPanel(close)}</HeaderMenu>}
           {data?.complete && <button type="button" className="button primary" title="Open KubeStudio to build a publication figure" onClick={() => setStudio({choose: true})}><KubeStudioMark size={18} className="kubestudio-entry" />Create figure</button>}
           {(data || charts.customized) && <PageMoreMenu>{close => <>
@@ -1044,7 +1063,6 @@ function ComparisonResults({artifacts, experiment, comparison, onBack, session}:
     {comparison?.notice}
     {layoutUndo && <p className="result-charts-notice" role="status">Default charts and sections restored. <button type="button" className="link-button" onClick={() => {layoutUndo(); setLayoutUndo(undefined)}}>Undo</button></p>}
     <ResourceAttribution resource={experiment} editable />
-    {data && <div className="results-view-bar"><SectionsMenu available={available} shown={page.shown} onToggle={(id, shown) => {charts.toggleSection(id, shown); if (shown) toggleSection(id as SectionID, true)}} onShowAll={() => charts.setSections(available)} /></div>}
     <ErrorFeedback message={state.error} />
     {data && <SectionNav links={page.links} onJump={sectionState.jump} top="results-top" />}
     {state.error ? <div className="results-placeholder"><button className="button secondary" onClick={() => setRevision(value => value + 1)}>Retry loading results</button></div> : !data ? <div className="results-placeholder" role="status"><span className="results-spinner" /><strong>{state.progress}</strong></div> : <div className="results-content">

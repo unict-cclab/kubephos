@@ -233,7 +233,7 @@ export const palettes: Record<PaletteId, Palette> = {
 }
 
 // Interleaved single list (one axis): left[0], right[0], left[1], right[1], …
-function paletteColors(id: PaletteId): string[] {
+export function paletteColors(id: PaletteId): string[] {
   const palette = palettes[id]
   return Array.from({length: palette.left.length + palette.right.length}, (_, index) => index % 2 ? palette.right[(index - 1) / 2] : palette.left[index / 2]).filter(Boolean)
 }

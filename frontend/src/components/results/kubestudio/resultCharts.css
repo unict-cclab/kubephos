@@ -51,7 +51,8 @@
 .result-charts-notice { margin: 0 0 12px; font-size: 14px; }
 .result-charts-empty { padding: 32px 16px; border: 1px dashed var(--border); border-radius: var(--radius-md, 10px); color: var(--muted-foreground); text-align: center; }
 .result-charts-empty p { margin: 0; }
-.result-charts-hint { margin: 0; color: var(--muted-foreground); font-size: 13px; line-height: 1.5; }
+/* One line: cut with an ellipsis when the page is too narrow (the full text stays in the title). */
+.report-head > .result-charts-hint { max-width: none; margin: 0; overflow: hidden; color: var(--muted-foreground); font-size: 13px; line-height: 1.5; text-overflow: ellipsis; white-space: nowrap; }
 @media (hover: none) { .result-charts-hint { display: none; } }
 /* Hidden charts: collapsed under the grid, each shown again with its eye button. */
 .result-charts-hidden { margin-top: 20px; padding-top: 12px; border-top: 1px dashed var(--border); }

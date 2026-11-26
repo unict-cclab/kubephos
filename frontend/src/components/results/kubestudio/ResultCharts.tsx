@@ -35,6 +35,7 @@ interface Props {
   onEdit: (item: ChartItem) => void
 }
 
+const chartsHint = 'Click for full screen, double-click to edit in KubeStudio, right-click for more; drag to move, drag the corner to resize.'
 const sizeOf = (item: ChartItem): ChartSize => item.size ?? defaultSize
 const sizeLabel = (size: ChartSize) => chartSizes.find(entry => entry.id === size)!.label
 // Grid widths (px) below which charts show wider: two per row, then one.
@@ -133,7 +134,7 @@ export function ResultCharts({items, data, groups, settings, loading, error, onC
   return <section className="report-figure result-charts" aria-labelledby={`${id}-title`} id="results-charts">
     <header className="report-head">
       <h3 id={`${id}-title`}>Charts</h3>
-      {visible.length > 0 && <p className="result-charts-hint" id={`${id}-hint`}>Click a chart for full screen, double-click it to edit it in KubeStudio, right-click it for more. Drag a chart to move it, its corner to resize it.</p>}
+      {visible.length > 0 && <p className="result-charts-hint" id={`${id}-hint`} title={chartsHint}>{chartsHint}</p>}
     </header>
     <span className="visually-hidden" role="status">{status}</span>
     {undo && <p className="result-charts-notice" role="status">{undo.text} <button type="button" className="link-button" onClick={() => {undo.revert(); setUndo(undefined)}}>Undo</button></p>}

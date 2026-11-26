@@ -3,12 +3,12 @@ import {downloadBlob, exportChart} from '../../../charts'
 import {ActionIcon} from '../../ActionIcon'
 import {ErrorFeedback, useErrorState} from '../../ToastRegion'
 import {FigureHostContext, type FigureLabelOverrides} from '../chartKit'
-import {customLimits, defaultFigureSettings, fontStacks, type FigureSettings, type FigureSize} from '../figureSettings'
+import {customLimits, defaultFigureSettings, fontStacks, legendFontLimits, type FigureSettings, type FigureSize} from '../figureSettings'
 import {formatMetric, metricTitle} from '../format'
 import type {OverviewGroup} from '../overview'
 import {defaultXYOptions, defaultXYSelection, type XYState} from '../xy'
 import {figureChecks, type CheckFix} from './checks'
-import {Chips, Group, LabelField, MoreGroup, SelectField, Stepper, Toggle} from './controls'
+import {Chips, Group, LabelField, MoreGroup, ResetIcon, SelectField, Stepper, Toggle} from './controls'
 import {ContextMenu, type MenuAnchor, type MenuItem} from './ContextMenu'
 import {ExportPopover, exportLabels, rememberedFormat, rememberFormat, type ExportAction} from './ExportPopover'
 import {matplotlibScript, pgfplotsSnippet} from './figureCode'
@@ -517,8 +517,9 @@ export function KubeStudio({open, onClose, request, data, groups, settings, onSe
   }
   const checks = useMemo(() => views.flatMap(view => view.spec && view.model ? figureChecks(view.model, view.spec, view.settings).filter(check => !(check.id === 'legend' && sharedLegend && view.index > 0)).map(check => ({...check, view, key: `${view.chart.id}:${check.id}`, message: view.letter ? `${view.letter} ${check.message}` : check.message})) : []).filter(item => !dismissed.includes(item.key)), [views, dismissed])
 
-  // Canvas: click to select, hover to highlight, drag annotations and the SLO line.
-  const drag = useRef<{pointer: number; x: number; y: number; moved: boolean; view: ChartView; annotation?: Annotation; slo?: {factor: number}; panel: number; grab: {x?: number; y?: number}} | undefined>(undefined)
+  // Canvas: click to select, hover to highlight, drag annotations, the SLO line and the legend.
+  // legend: where the pointer took hold of the legend, from its top-left corner (points).
+  const drag = useRef<{pointer: number; x: number; y: number; moved: boolean; view: ChartView; annotation?: Annotation; slo?: {factor: number}; legend?: {x: number; y: number}; panel: number; grab: {x?: number; y?: number}} | undefined>(undefined)
   const cellAt = (target: EventTarget | null) => (target as Element | null)?.closest?.('[data-chart]') ?? null
   const toPoints = (cell: Element, event: {clientX: number; clientY: number}, chart: string) => {
     const svg = cell.querySelector('svg.pub-figure')
@@ -533,6 +534,13 @@ export function KubeStudio({open, onClose, request, data, groups, settings, onSe
     const cell = cellAt(event.target)
     const view = viewOf(cell?.getAttribute('data-chart') ?? undefined)
     const target = parseTarget((event.target as Element).closest?.('[data-select]')?.getAttribute('data-select'))
+    // The whole legend drags, its entries too (a click on an entry still selects it).
+    if (cell && view && (event.target as Element).closest?.('[data-select="legend"]') && event.button === 0) {
+      const box = geometries.current[view.chart.id]?.legend
+      const at = toPoints(cell, event, view.chart.id)
+      if (box && at) drag.current = {pointer: event.pointerId, x: event.clientX, y: event.clientY, moved: false, view, legend: {x: at.x - box.left, y: at.y - box.top}, panel: 0, grab: {}}
+      return
+    }
     if (!cell || !view?.spec || target?.type !== 'annotation' || event.button !== 0) return
     const geo = geometries.current[view.chart.id]?.panels[target.panel]
     const at = toPoints(cell, event, view.chart.id)
@@ -571,6 +579,16 @@ export function KubeStudio({open, onClose, request, data, groups, settings, onSe
     const geo = geometries.current[view.chart.id]?.panels[state.panel]
     const at = cell ? toPoints(cell, event, view.chart.id) : undefined
     if (!geo || !at) return
+    if (state.legend) {
+      // Above, below or right of the plot the legend goes outside it; anywhere else it stays where it is let go.
+      const figure = geometries.current[view.chart.id]
+      const plot = figure?.plot
+      if (!figure || !plot) return
+      const legend = at.y < plot.top ? 'top' : at.y > plot.bottom ? 'bottom' : at.x > plot.right ? 'right' : 'inside'
+      const legendAt = legend === 'inside' ? {x: Math.max(0, (at.x - state.legend.x) / figure.width), y: Math.max(0, (at.y - state.legend.y) / figure.height)} : settings.legendAt
+      onSettings({...settings, legend, legendAt})
+      return
+    }
     const panelModel = view.model?.panels[state.panel]
     const span = (side: 'x' | 'left' | 'right') => {const axis = side === 'x' ? panelModel?.x : side === 'left' ? panelModel?.left : panelModel?.right; return axis ? axis.scale.upper - axis.scale.lower : 1}
     const setSpec = setChartSpec(view)
@@ -599,7 +617,7 @@ export function KubeStudio({open, onClose, request, data, groups, settings, onSe
     drag.current = undefined
     if (state?.moved) {
       try {event.currentTarget.releasePointerCapture(event.pointerId)} catch {/* released */}
-      select({chart: state.view.chart.id, target: {type: 'annotation', panel: state.panel, id: state.annotation?.id ?? 'slo'}})
+      select({chart: state.view.chart.id, target: state.legend ? {type: 'legend'} : {type: 'annotation', panel: state.panel, id: state.annotation?.id ?? 'slo'}})
       suppressClick.current = true
     }
   }
@@ -750,6 +768,13 @@ export function KubeStudio({open, onClose, request, data, groups, settings, onSe
       {!value && view.kind && <p className="ks-hint">{kindLabels[view.kind]} is a fixed form. Pick one above to choose X and Y freely.</p>}
     </div>
   }
+  // The entries of a chart's legend, by the name the data gives them (their text is an override).
+  // name: what the data calls the entry (its text is an override of it). Line and scatter
+  // charts colour each series freely; the other forms take the variant's colour.
+  const legendEntries = (view: ChartView): Array<{key: string; name: string; color?: string; editable: boolean}> => view.model && !view.model.empty
+    ? view.model.legend.map(({series}) => ({key: series.key, name: series.defaultLabel, color: series.style.color, editable: true}))
+    : (currentOf(view)?.labels.series ?? []).map(name => ({key: name, name, color: groups.find(group => group.label === name)?.color, editable: false}))
+  const setSeriesColor = (view: ChartView, key: string, color: string) => setChartSpec(view)(current => ({...current, series: {...current.series, [key]: {...current.series[key], color}}}))
   // The axes of a chart's first panel, for the links to their settings.
   const axisTargets = (view: ChartView): Array<{side: 'x' | 'left' | 'right'; label: string}> => {
     const panel = view.model && !view.model.empty ? view.model.panels[0] : undefined
@@ -786,9 +811,29 @@ export function KubeStudio({open, onClose, request, data, groups, settings, onSe
         <p className="ks-hint">Papers usually leave the title to the caption. The file name comes from the figure name in the top bar.</p>
       </>}
       if (target.type === 'legend') return {kind: 'Legend', title: 'Legend', body: <>
-        <Chips legend="Position" name={`${id}-legend`} value={settings.legend} onChange={legend => onSettings({...settings, legend})} choices={[{value: 'top', label: 'Top'}, {value: 'right', label: 'Right'}, {value: 'bottom', label: 'Bottom'}, {value: 'inside', label: 'Inside'}, {value: 'none', label: 'None'}]} />
+        <Toggle label="Show the legend" checked={settings.legend !== 'none'} onChange={shown => onSettings({...settings, legend: shown ? 'bottom' : 'none'})} />
+        {settings.legend !== 'none' && <>
+          <p className="ks-hint">Drag the legend on the figure to move it. Dropped above, below or right of the plot, it sits outside it.</p>
+          <SelectField label="Text size (pt)" value={String(settings.legendFontSize ?? settings.fontSize)} onChange={value => onSettings({...settings, legendFontSize: Number(value) === settings.fontSize ? undefined : Number(value)})}>
+            {Array.from({length: legendFontLimits.max - legendFontLimits.min + 1}, (_, index) => legendFontLimits.min + index).map(value => <option key={value} value={value}>{value} pt{value === settings.fontSize ? ' (as the text)' : ''}</option>)}
+          </SelectField>
+        </>}
         {count > 1 && <Toggle label="One shared legend (in chart a)" checked={sharedLegend} onChange={setSharedLegend} hint="Drawn once when every chart shows the same variants" />}
-        <p className="ks-hint">Rename or restyle an entry by selecting its series.</p>
+        {legendEntries(view).length > 0 && <Group title="Entries">
+          <p className="ks-hint">Each entry is a colour and what it means. Click the colour to change it; type its text beside it.</p>
+          <ul className="ks-legend-entries">{legendEntries(view).map(entry => {
+            const text = overrides.series?.[entry.name]
+            return <li key={entry.key} className="ks-legend-entry">
+              {entry.color && (entry.editable
+                ? <label className="ks-legend-color" style={{background: entry.color}} title="Change the colour"><input type="color" className="visually-hidden" aria-label={`Colour of ${text ?? entry.name}`} value={entry.color} onChange={event => setSeriesColor(view, entry.key, event.target.value)} /></label>
+                : <span className="ks-legend-color" style={{background: entry.color}} title="The colour of this variant" />)}
+              <input type="text" aria-label={`Text for ${entry.name}`} value={text ?? entry.name} onChange={event => setSeriesLabel(view, entry.name, event.target.value === entry.name ? undefined : event.target.value)} />
+              {text !== undefined && <button type="button" className="ks-icon-button" aria-label={`Restore ${entry.name}`} title={`Restore “${entry.name}”`} onClick={() => setSeriesLabel(view, entry.name, undefined)}><ResetIcon /></button>}
+            </li>
+          })}</ul>
+          {view.model?.legend.length === 1 && overrides.series?.[legendEntries(view)[0].name] === undefined && <p className="ks-hint">With a single line the legend stays hidden until you give its entry a text.</p>}
+          {!legendEntries(view)[0].editable && <p className="ks-hint">Colours follow the variants in this chart form.</p>}
+        </Group>}
       </>}
       if (target.type === 'group') {
         const label = target.label
@@ -874,11 +919,11 @@ export function KubeStudio({open, onClose, request, data, groups, settings, onSe
           </div>}
           <p className="ks-hint">Starting points from the chart switcher stay fully editable: change X, Y and every style.</p>
         </Group>
-        {spec?.type === 'timeseries' && model && <Group title="Uncertainty">
-          <SelectField label="Repeated runs" value={spec.runMode} onChange={value => setChartSpec(view)(current => ({...current, runMode: value as RunMode}))} hint={model.runModeFallback ? 'Individual repetitions are not available here; showing the mean with its 95 % CI.' : !model.legend.some(item => item.series.n > 1) ? 'One run per series: nothing to summarise.' : runNames[spec.runMode].hint}>
+        {/* Only with repetitions: one run per series has nothing to summarise. */}
+        {spec?.type === 'timeseries' && model?.legend.some(item => item.series.n > 1) && <Group title="Uncertainty">
+          <SelectField label="Repeated runs" value={spec.runMode} onChange={value => setChartSpec(view)(current => ({...current, runMode: value as RunMode}))} hint={model.runModeFallback ? 'Individual repetitions are not available here; showing the mean with its 95 % CI.' : runNames[spec.runMode].hint}>
             {(Object.keys(runNames) as RunMode[]).map(mode => <option key={mode} value={mode}>{runNames[mode].label}</option>)}
           </SelectField>
-          {spec.layout.grid !== '1x1' && <Chips legend="Panels inside this chart" name={`${id}-grid`} value={spec.layout.grid} onChange={(grid: PanelGrid) => setChartSpec(view)(current => ({...current, layout: {...current.layout, grid}}))} choices={[{value: '1x1', label: '1'}, {value: '1x2', label: '1 × 2'}, {value: '2x1', label: '2 × 1'}, {value: '2x2', label: '2 × 2'}]} />}
         </Group>}
         {spec?.type === 'xy' && <Group title="Scatter">
           <div className="ks-toggles">
@@ -887,6 +932,7 @@ export function KubeStudio({open, onClose, request, data, groups, settings, onSe
           </div>
         </Group>}
         {spec && <Group title="Chart settings">
+          {spec.type === 'timeseries' && spec.layout.grid !== '1x1' && <Chips legend="Panels inside this chart" name={`${id}-grid`} value={spec.layout.grid} onChange={(grid: PanelGrid) => setChartSpec(view)(current => ({...current, layout: {...current.layout, grid}}))} choices={[{value: '1x1', label: '1'}, {value: '1x2', label: '1 × 2'}, {value: '2x1', label: '2 × 1'}, {value: '2x2', label: '2 × 2'}]} />}
           <Chips legend="Grid lines" name={`${id}-gridlines`} value={spec.grid} onChange={grid => setChartSpec(view)(current => ({...current, grid}))} choices={[{value: 'none', label: 'None'}, {value: 'major', label: 'Major'}, {value: 'minor', label: 'Minor', hint: 'Major and minor gridlines'}]} />
         </Group>}
         {spec && <Group title="Colours">

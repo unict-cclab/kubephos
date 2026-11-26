@@ -1,6 +1,6 @@
 import {useId, useState} from 'react'
 import {Chips, ResetIcon, SelectField, Stepper, Toggle} from './controls'
-import {builtInPresets, defaultPanel, lineStyles, markerShapes, palettes, paperContrast, unitChoices, type Annotation, type AxisSide, type AxisSpec, type FigureSpec, type LineStyle, type MarkerShape, type PaletteId, type PanelSpec, type RunMode, type SeriesStyleSpec, type StylePreset, type TimeFormat, type XAxisSpec} from './figureSpec'
+import {builtInPresets, defaultPanel, lineStyles, markerShapes, paletteColors, palettes, paperContrast, unitChoices, type Annotation, type AxisSide, type AxisSpec, type FigureSpec, type LineStyle, type MarkerShape, type PaletteId, type PanelSpec, type RunMode, type SeriesStyleSpec, type StylePreset, type TimeFormat, type XAxisSpec} from './figureSpec'
 import type {ModelSeries} from './figureModel'
 import {metricTitle} from '../format'
 import type {ResolvedProvenance} from '../runs'
@@ -228,10 +228,17 @@ export function AnnotationFields({item, onChange, onRemove, xUnit, yUnit}: {item
 // ---------------------------------------------------------------------------------------
 // Palette, style presets and the spec as JSON.
 
+// Each palette with its colours, in the order series take them.
 export function PaletteEditor({spec, setSpec}: {spec: FigureSpec; setSpec: SetSpec}) {
-  return <>
-    <SelectField label="Palette" hint={palettes[spec.palette].hint} value={spec.palette} onChange={value => setSpec(current => ({...current, palette: value as PaletteId}))}>{(Object.keys(palettes) as PaletteId[]).map(key => <option key={key} value={key} title={palettes[key].hint}>{palettes[key].label}</option>)}</SelectField>
-  </>
+  const id = useId()
+  return <fieldset className="ks-field ks-palettes">
+    <legend className="ks-label">Palette</legend>
+    {(Object.keys(palettes) as PaletteId[]).map(key => <label key={key} className="ks-palette" data-checked={key === spec.palette || undefined}>
+      <input type="radio" className="visually-hidden" name={`${id}-palette`} value={key} checked={key === spec.palette} onChange={() => setSpec(current => ({...current, palette: key}))} />
+      <span className="ks-palette-name"><strong>{palettes[key].label}</strong><small>{palettes[key].hint}</small></span>
+      <span className="ks-palette-colors" aria-hidden="true">{[...new Set(paletteColors(key))].slice(0, 6).map(color => <i key={color} style={{background: color}} />)}</span>
+    </label>)}
+  </fieldset>
 }
 
 export function PresetsEditor({presets, onApply, onSave, onDelete}: {presets: StylePreset[]; onApply: (preset: StylePreset) => void; onSave: (name: string) => void; onDelete: (name: string) => void}) {

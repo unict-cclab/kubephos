@@ -168,7 +168,11 @@ describe('Spec-driven KubeStudio figures', () => {
   it('switches palettes and draws every repeated-run mode', async () => {
     render(<Studio />)
     chartProps()
-    fireEvent.change(right().getByLabelText('Palette'), {target: {value: 'grayscale'}})
+    // Each palette is listed with its colours.
+    const palettes = within(right().getByRole('group', {name: 'Palette'}))
+    expect(palettes.getByRole('radio', {name: /^Okabe–Ito/})).toBeChecked()
+    expect(palettes.getByRole('radio', {name: /^Okabe–Ito/}).closest('label')!.querySelectorAll('.ks-palette-colors i')).toHaveLength(6)
+    fireEvent.click(palettes.getByRole('radio', {name: /^Grayscale/}))
     expect(seriesGroup('load.p95_response_time|Alpha').querySelector('path.series-line')).toHaveAttribute('stroke', '#000000')
     expect(seriesGroup('load.p95_response_time|Beta').querySelector('path.series-line')!.getAttribute('stroke-dasharray')).toBeTruthy()
     const mode = (value: string) => fireEvent.change(right().getByLabelText('Repeated runs'), {target: {value}})

@@ -18,6 +18,10 @@ export interface FigureSettings {
   showTitle: boolean
   // Legend placement (bottom = below the plot, wrapped in rows).
   legend: FigureLegend
+  // Inside legend: its top-left corner as a share of the figure's width and height (absent: top right of the plot).
+  legendAt?: {x: number; y: number}
+  // Legend text size in points (absent: the base font size).
+  legendFontSize?: number
   // Custom page size in inches (size = 'custom'): width, and height of the plot block.
   customWidth: number
   customHeight: number
@@ -33,6 +37,7 @@ export const figureSizes: Record<FigureSize, {label: string; short: string; widt
 }
 
 export const customLimits = {min: 1.5, max: 14}
+export const legendFontLimits = {min: 5, max: 16}
 
 // Physical page width and plot-block height (pt) of the selected size.
 export function figureSize(settings: FigureSettings): {width: number; height: number; label: string} {
@@ -52,6 +57,10 @@ const storagePrefix = 'kubephos.figureSettings.v1:'
 export function normalizeFigureSettings(value: unknown): FigureSettings {
   const source = value && typeof value === 'object' ? value as Partial<FigureSettings> : {}
   const fontSize = Number(source.fontSize)
+  const share = (value: unknown) => {const number = Number(value); return Number.isFinite(number) ? Math.min(1, Math.max(0, number)) : undefined}
+  const at = source.legendAt
+  const legendAt = at && typeof at === 'object' && share(at.x) !== undefined && share(at.y) !== undefined ? {x: share(at.x)!, y: share(at.y)!} : undefined
+  const legendFontSize = source.legendFontSize === undefined ? NaN : Number(source.legendFontSize)
   const inches = (value: unknown, fallback: number) => {const number = Number(value); return Number.isFinite(number) && number > 0 ? Math.min(customLimits.max, Math.max(customLimits.min, Math.round(number * 100) / 100)) : fallback}
   return {
     size: source.size && source.size in figureSizes ? source.size : defaultFigureSettings.size,
@@ -63,6 +72,8 @@ export function normalizeFigureSettings(value: unknown): FigureSettings {
     grayscale: typeof source.grayscale === 'boolean' ? source.grayscale : defaultFigureSettings.grayscale,
     showTitle: typeof source.showTitle === 'boolean' ? source.showTitle : defaultFigureSettings.showTitle,
     legend: source.legend && ['top', 'right', 'bottom', 'inside', 'none'].includes(source.legend) ? source.legend : defaultFigureSettings.legend,
+    ...(legendAt ? {legendAt} : {}),
+    ...(Number.isFinite(legendFontSize) ? {legendFontSize: Math.min(legendFontLimits.max, Math.max(legendFontLimits.min, Math.round(legendFontSize)))} : {}),
     customWidth: inches(source.customWidth, defaultFigureSettings.customWidth),
     customHeight: inches(source.customHeight, defaultFigureSettings.customHeight)
   }

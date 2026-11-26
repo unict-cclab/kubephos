@@ -1,0 +1,111 @@
+/* Christmas easter egg (see index.ts): only while the page carries data-season="christmas".
+   In the shell layer, like the rest of the application chrome. */
+@layer shell {
+  /* The logo wears a Santa hat, right above the K and slightly tilted; it tilts further on hover. */
+  :root[data-season="christmas"] .brand-mark { position: relative; overflow: visible; }
+  :root[data-season="christmas"] .brand-mark::before {
+    position: absolute;
+    top: -60%;
+    left: 50%;
+    width: 100%;
+    height: 90%;
+    background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 36'%3E%3Cpath d='M6 27C8 12 20 3 30 6c5 2 7 7 6 14-3-4-8-5-12-2 4 3 7 6 8 9Z' fill='%23d62828'/%3E%3Cpath d='M30 6c5 2 7 7 6 14-2-2-4-3-6-3 1-4 1-8 0-11Z' fill='%23a4161a'/%3E%3Crect x='3' y='24' width='31' height='9' rx='4.5' fill='%23fafafa' stroke='%23000' stroke-opacity='.15'/%3E%3Ccircle cx='36' cy='21' r='4.5' fill='%23fafafa' stroke='%23000' stroke-opacity='.15'/%3E%3C/svg%3E") center / contain no-repeat;
+    content: "";
+    pointer-events: none;
+    transform: translateX(-50%) rotate(8deg);
+    transform-origin: 50% 85%;
+    transition: transform .3s var(--ease-out, ease-out);
+  }
+  :root[data-season="christmas"] .app-brand:hover .brand-mark::before { transform: translateX(-50%) rotate(16deg); }
+
+  /* 25 December: Santa greets from the overview. */
+  /* The right column holds Santa and, beside his head, the speech bubble. */
+  :root[data-season-day="christmas-day"] .overview-greeting { position: relative; min-height: 112px; padding-right: 200px; }
+  :root[data-season-day="christmas-day"] .overview-greeting::after {
+    position: absolute;
+    top: 50%;
+    right: 0;
+    width: 112px;
+    height: 112px;
+    background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 120 120'%3E%3Ccircle cx='60' cy='64' r='26' fill='%23f6c9a8'/%3E%3Cpath d='M30 64c0 34 18 50 30 50s30-16 30-50c-8 10-18 14-30 14s-22-4-30-14Z' fill='%23fafafa' stroke='%23000' stroke-opacity='.12'/%3E%3Cellipse cx='51' cy='80' rx='10' ry='5' fill='%23fafafa' stroke='%23000' stroke-opacity='.12'/%3E%3Cellipse cx='69' cy='80' rx='10' ry='5' fill='%23fafafa' stroke='%23000' stroke-opacity='.12'/%3E%3Ccircle cx='60' cy='75' r='4.5' fill='%23e07a6a'/%3E%3Ccircle cx='50' cy='63' r='3' fill='%232b2b2b'/%3E%3Ccircle cx='70' cy='63' r='3' fill='%232b2b2b'/%3E%3Ccircle cx='43' cy='71' r='4' fill='%23f28b8b' fill-opacity='.55'/%3E%3Ccircle cx='77' cy='71' r='4' fill='%23f28b8b' fill-opacity='.55'/%3E%3Cpath d='M32 50C38 22 70 6 102 28c-8 4-12 12-10 22Z' fill='%23d62828'/%3E%3Cpath d='M102 28c-8 4-12 12-10 22h-8c0-10 6-20 18-22Z' fill='%23a4161a'/%3E%3Crect x='26' y='44' width='70' height='13' rx='6.5' fill='%23fafafa' stroke='%23000' stroke-opacity='.12'/%3E%3Ccircle cx='103' cy='29' r='8' fill='%23fafafa' stroke='%23000' stroke-opacity='.12'/%3E%3C/svg%3E") center / contain no-repeat;
+    content: "";
+    transform: translateY(-50%);
+  }
+  /* The speech bubble, its tail pointing at Santa. */
+  :root[data-season-day="christmas-day"] .overview-greeting::before {
+    position: absolute;
+    top: calc(50% - 60px);
+    right: 96px;
+    padding: 6px 12px;
+    border: 1px solid var(--border);
+    border-radius: 14px 14px 4px 14px;
+    background: var(--card);
+    box-shadow: var(--shadow-sm);
+    color: var(--foreground);
+    content: "Oh oh oh!";
+    font-size: 14px;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+  @media (max-width: 640px) {
+    :root[data-season-day="christmas-day"] .overview-greeting { min-height: 76px; padding-right: 150px; }
+    :root[data-season-day="christmas-day"] .overview-greeting::after { width: 76px; height: 76px; }
+    :root[data-season-day="christmas-day"] .overview-greeting::before { top: calc(50% - 44px); right: 60px; }
+  }
+
+  /* A string of lights along the top of the navigation, twinkling slowly. */
+  :root[data-season="christmas"] .app-sidebar::before,
+  :root[data-season="christmas"] .app-sidebar::after {
+    position: absolute;
+    top: 0;
+    right: 12px;
+    left: 12px;
+    height: 12px;
+    content: "";
+    pointer-events: none;
+  }
+  :root[data-season="christmas"] .app-sidebar::before {
+    background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 96 12'%3E%3Cpath d='M0 2q12 6 24 0t24 0 24 0 24 0' fill='none' stroke='%23748073' stroke-width='.8'/%3E%3Cg%3E%3Cellipse cx='12' cy='8' rx='2.2' ry='3' fill='%23e63946'/%3E%3Cellipse cx='36' cy='8' rx='2.2' ry='3' fill='%23f4a261'/%3E%3Cellipse cx='60' cy='8' rx='2.2' ry='3' fill='%232a9d8f'/%3E%3Cellipse cx='84' cy='8' rx='2.2' ry='3' fill='%234895ef'/%3E%3C/g%3E%3C/svg%3E") left top / 96px 12px repeat-x;
+    opacity: .9;
+  }
+  /* Every other bulb glows, then fades. */
+  :root[data-season="christmas"] .app-sidebar::after {
+    background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 96 12'%3E%3Ccircle cx='12' cy='8' r='4' fill='%23ff8a8a' opacity='.55'/%3E%3Ccircle cx='60' cy='8' r='4' fill='%237fe0cf' opacity='.55'/%3E%3C/svg%3E") left top / 96px 12px repeat-x;
+    animation: kubephos-twinkle 2.8s ease-in-out infinite alternate;
+  }
+  @keyframes kubephos-twinkle { from { opacity: 0; } to { opacity: 1; } }
+
+  /* Activity: a garland hung in festoons above the events, a bow and a bauble at each hook;
+     each event's dot becomes a bauble. */
+  :root[data-season="christmas"] .overview-activity { padding-top: 34px; }
+  :root[data-season="christmas"] .overview-activity::before {
+    position: absolute;
+    top: 0;
+    right: 0;
+    left: 24px;
+    height: 32px;
+    background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='32' viewBox='0 0 120 32'%3E%3Cpath d='M0 4Q60 34 120 4' fill='none' stroke='%2324603a' stroke-width='6' stroke-linecap='round'/%3E%3Cpath d='M0 4Q60 34 120 4' fill='none' stroke='%233c8a52' stroke-width='3.4' stroke-dasharray='1.6 2.4' stroke-linecap='round'/%3E%3Ccircle cx='40' cy='15.6' r='1.5' fill='%23e63946'/%3E%3Ccircle cx='62' cy='19' r='1.6' fill='%23d62828'/%3E%3Ccircle cx='84' cy='15' r='1.4' fill='%23e63946'/%3E%3Cpath d='M0 4 -6 0v8Z M0 4 6 0v8Z' fill='%23d62828'/%3E%3Ccircle cx='0' cy='4' r='1.8' fill='%23a4161a'/%3E%3Cpath d='M0 6v8' stroke='%239a8a5a' stroke-width='.7'/%3E%3Crect x='-1.6' y='13' width='3.2' height='2.4' rx='.6' fill='%23c9a227'/%3E%3Ccircle cx='0' cy='19.5' r='4.6' fill='%23d62828'/%3E%3Ccircle cx='-1.6' cy='18' r='1.1' fill='%23fff' opacity='.75'/%3E%3Cpath d='M120 4 114 0v8Z M120 4 126 0v8Z' fill='%23d62828'/%3E%3Ccircle cx='120' cy='4' r='1.8' fill='%23a4161a'/%3E%3Cpath d='M120 6v8' stroke='%239a8a5a' stroke-width='.7'/%3E%3Crect x='118.4' y='13' width='3.2' height='2.4' rx='.6' fill='%23c9a227'/%3E%3Ccircle cx='120' cy='19.5' r='4.6' fill='%23d62828'/%3E%3Ccircle cx='118.4' cy='18' r='1.1' fill='%23fff' opacity='.75'/%3E%3C/svg%3E") left top / 120px 32px round no-repeat;
+    content: "";
+    pointer-events: none;
+  }
+  @media (max-width: 1100px) { :root[data-season="christmas"] .overview-activity { position: relative; } :root[data-season="christmas"] .overview-activity::before { left: 0; } }
+  :root[data-season="christmas"] .activity-item::before,
+  :root[data-season="christmas"] .activity-feed li:first-child .activity-item::before {
+    top: 12px;
+    left: -1px;
+    width: 14px;
+    height: 16px;
+    border: 0;
+    border-radius: 0;
+    background: center / contain no-repeat;
+    box-shadow: none;
+  }
+  :root[data-season="christmas"] .activity-feed li:nth-child(4n+1) .activity-item::before { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 14 16'%3E%3Crect x='5' y='0' width='4' height='3.2' rx='.8' fill='%23c9a227'/%3E%3Ccircle cx='7' cy='9.5' r='6.2' fill='%23d62828'/%3E%3Cpath d='M.8 9.5a6.2 6.2 0 0 0 12.4 0' fill='%237a0f12' opacity='.35'/%3E%3Ccircle cx='4.8' cy='7.4' r='1.5' fill='%23fff' opacity='.75'/%3E%3C/svg%3E"); }
+  :root[data-season="christmas"] .activity-feed li:nth-child(4n+2) .activity-item::before { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 14 16'%3E%3Crect x='5' y='0' width='4' height='3.2' rx='.8' fill='%23c9a227'/%3E%3Ccircle cx='7' cy='9.5' r='6.2' fill='%23e0a526'/%3E%3Cpath d='M.8 9.5a6.2 6.2 0 0 0 12.4 0' fill='%238a5a00' opacity='.35'/%3E%3Ccircle cx='4.8' cy='7.4' r='1.5' fill='%23fff' opacity='.75'/%3E%3C/svg%3E"); }
+  :root[data-season="christmas"] .activity-feed li:nth-child(4n+3) .activity-item::before { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 14 16'%3E%3Crect x='5' y='0' width='4' height='3.2' rx='.8' fill='%23c9a227'/%3E%3Ccircle cx='7' cy='9.5' r='6.2' fill='%233a7bd5'/%3E%3Cpath d='M.8 9.5a6.2 6.2 0 0 0 12.4 0' fill='%23173a73' opacity='.35'/%3E%3Ccircle cx='4.8' cy='7.4' r='1.5' fill='%23fff' opacity='.75'/%3E%3C/svg%3E"); }
+  :root[data-season="christmas"] .activity-feed li:nth-child(4n+4) .activity-item::before { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 14 16'%3E%3Crect x='5' y='0' width='4' height='3.2' rx='.8' fill='%23c9a227'/%3E%3Ccircle cx='7' cy='9.5' r='6.2' fill='%232a9d8f'/%3E%3Cpath d='M.8 9.5a6.2 6.2 0 0 0 12.4 0' fill='%23124a43' opacity='.35'/%3E%3Ccircle cx='4.8' cy='7.4' r='1.5' fill='%23fff' opacity='.75'/%3E%3C/svg%3E"); }
+  @media (prefers-reduced-motion: reduce) {
+    :root[data-season="christmas"] .app-sidebar::after { animation: none; opacity: .6; }
+    :root[data-season="christmas"] .brand-mark::before { transition: none; }
+  }
+}
