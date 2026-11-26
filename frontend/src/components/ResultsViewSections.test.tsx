@@ -17,7 +17,7 @@ const dataset = {apiVersion: 'artifacts.kubephos.dev/v1alpha1', kind: 'TimeSerie
 const experiment = {id: 'experiment', kind: 'instance', name: 'Test', status: 'succeeded', variants: [{id: 'variant', name: 'Strategy', trials: [{id: 'trial-one', position: 1, status: 'succeeded', resultArtifactId: 'one'}]}]} as Experiment
 const layoutPath = '/account/result-layouts/experiments/experiment'
 
-it('shows only the charts at first, starting with the heatmap, and adds sections from the Sections menu', async () => {
+it('shows only the charts at first, starting with the heatmap, and adds sections from Display', async () => {
   vi.mocked(request).mockImplementation(async path => path === layoutPath ? {layout: null} as never : path.endsWith('/figures') ? {items: []} as never : dataset as never)
   render(<ResultsView artifacts={[artifact]} experiments={[experiment]} operations={[]} workspaces={[]} session={{authenticated: true, csrfToken: 'token'}} changed={async () => {}} openOperation={() => {}} focusedExperiment={experiment} />)
   // One execution: no run tabs ("All executions" would show the same run), its own view directly.
@@ -27,25 +27,25 @@ it('shows only the charts at first, starting with the heatmap, and adds sections
   expect(screen.queryByRole('button', {name: 'All executions'})).not.toBeInTheDocument()
   expect(screen.queryByRole('button', {name: /^Statistics/})).not.toBeInTheDocument()
   expect(screen.queryByRole('heading', {name: /Throughput|latency/i})).not.toBeInTheDocument()
-  // "Customize view" sits on the row above the content it controls (no run tabs here), not in the
-  // page header nor in the Charts header.
-  expect(charts.queryByRole('button', {name: /Customize view|Sections/})).not.toBeInTheDocument()
-  expect(within(document.querySelector('.results-detail-actions') as HTMLElement).queryByRole('button', {name: /Customize view/})).not.toBeInTheDocument()
-  fireEvent.click(within(document.querySelector('.results-view-bar') as HTMLElement).getByRole('button', {name: /^Customize view/}))
+  // "Display" is a page command: in the page header, left of Export, not in the Charts header.
+  expect(charts.queryByRole('button', {name: /^Display|Sections/})).not.toBeInTheDocument()
+  const actions = within(document.querySelector('.results-detail-actions') as HTMLElement)
+  expect(actions.getAllByRole('button').map(button => button.textContent).slice(0, 2)).toEqual([expect.stringMatching(/^Display: \d of \d sections shown$/), 'Export'])
+  fireEvent.click(actions.getByRole('button', {name: /^Display/}))
   expect(screen.getAllByRole('menuitemcheckbox').map(item => item.querySelector('strong')!.textContent)).toEqual(['Charts', 'Summary', 'Load and latency', 'Services', 'Statistics', 'Environment & methods', 'Placement'])
   fireEvent.click(screen.getByRole('menuitemcheckbox', {name: /^Statistics/}))
   expect(await screen.findByRole('button', {name: /^Statistics/})).toHaveAttribute('aria-expanded', 'true')
   expect(request).toHaveBeenCalledWith(layoutPath, {method: 'PUT', body: JSON.stringify({layout: {version: 1, sections: ['statistics']}})}, 'token')
 })
 
-it('keeps the header to Export, Create figure and ⋯ (visibility, reset), with Configuration in the meta line', async () => {
+it('keeps the header to Display, Export, Create figure and ⋯ (visibility, reset), with Configuration in the meta line', async () => {
   const configured = {...experiment, configurationId: 'cfg'} as Experiment
   vi.mocked(request).mockImplementation(async path => path === layoutPath ? {layout: {version: 1, sections: ['statistics']}} as never : path.endsWith('/sharing') ? {visibility: 'everyone', userIds: []} as never : path === '/sharing/users' ? {items: []} as never : path.endsWith('/figures') ? {items: []} as never : dataset as never)
   render(<ResultsView artifacts={[artifact]} experiments={[configured]} operations={[]} workspaces={[]} session={{authenticated: true, csrfToken: 'token', user: {id: 'u', username: 'u', role: 'admin'}} as never} changed={async () => {}} openOperation={() => {}} focusedExperiment={configured} />)
   await screen.findByRole('region', {name: 'Charts'})
-  // The header: Export, then Create figure as the one primary action, then ⋯; Configuration is a link in the meta line.
+  // The header: Display and Export, then Create figure as the one primary action, then ⋯; Configuration is a link in the meta line.
   const header = within(document.querySelector('.results-detail-actions') as HTMLElement)
-  expect(header.getAllByRole('button').map(button => button.textContent)).toEqual(['Export', 'Create figure', 'More actions'])
+  expect(header.getAllByRole('button').map(button => button.textContent)).toEqual([expect.stringMatching(/^Display/), 'Export', 'Create figure', 'More actions'])
   expect(header.getByRole('button', {name: 'Create figure'})).toHaveClass('primary')
   expect(document.querySelectorAll('.results-detail-actions .button.primary')).toHaveLength(1)
   expect(header.queryByRole('link', {name: 'Configuration'})).not.toBeInTheDocument()

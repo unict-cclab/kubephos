@@ -115,7 +115,8 @@ function LegendSymbol({series, x, y, width, metrics}: {series: ModelSeries; x: n
 
 // Pixel ↔ data mapping of each drawn panel (points), for direct manipulation in KubeStudio.
 interface PanelGeometry {index: number; box: Box; x: (pt: number) => number | undefined; y: (side: 'left' | 'right', pt: number) => number | undefined}
-export interface FigureGeometry {width: number; height: number; panels: PanelGeometry[]}
+// legend: the drawn legend's box; plot: the area of all panels (points).
+export interface FigureGeometry {width: number; height: number; panels: PanelGeometry[]; legend?: Box; plot?: Box}
 
 const invert = (axis: ModelAxis | undefined, from: number, to: number) => (pt: number) => {
   if (!axis) return undefined
@@ -143,12 +144,16 @@ export function SpecFigure({id, name, model, settings, grid, strokeScale, proven
   const fs = metrics.fontSize
   const axisLine = metrics.line * Math.sqrt(strokeScale)
   const entries = legendEntries(model)
-  const showLegend = metrics.legend !== 'none' && (model.legend.length > 1 || model.legend.some(item => item.series.low || item.series.runs)) && model.legend.length > 0
-  const symbol = fs * 2
-  const rowHeight = fs * 1.35
-  const entryWidth = (entry: LegendEntry) => entry.kind === 'header' ? metrics.text(entry.text) + fs * .5 : symbol + fs * .4 + metrics.text(entry.text) + fs * 1.1
-  const legendColumnWidth = showLegend ? Math.max(...entries.map(entry => entry.kind === 'header' ? metrics.text(entry.text) : symbol + fs * .4 + metrics.text(entry.text))) : 0
-  const reserveRight = showLegend && metrics.legend === 'right' ? legendColumnWidth + fs * 1.6 : 0
+  // One plain series needs no legend, unless the user wrote a text for it.
+  const showLegend = metrics.legend !== 'none' && model.legend.length > 0 && (model.legend.length > 1 || model.legend.some(item => item.series.low || item.series.runs || item.series.label !== item.series.defaultLabel))
+  // Legend text has its own size; its symbols and spacing follow it.
+  const lfs = settings.legendFontSize ?? fs
+  const legendText = (value: string) => metrics.text(value, lfs)
+  const symbol = lfs * 2
+  const rowHeight = lfs * 1.35
+  const entryWidth = (entry: LegendEntry) => entry.kind === 'header' ? legendText(entry.text) + lfs * .5 : symbol + lfs * .4 + legendText(entry.text) + lfs * 1.1
+  const legendColumnWidth = showLegend ? Math.max(...entries.map(entry => entry.kind === 'header' ? legendText(entry.text) : symbol + lfs * .4 + legendText(entry.text))) : 0
+  const reserveRight = showLegend && metrics.legend === 'right' ? legendColumnWidth + lfs * 1.6 : 0
   // Flowing legend (top/bottom): rows within the page width; a new row starts each axis group.
   const flow = (() => {
     if (!showLegend || (metrics.legend !== 'top' && metrics.legend !== 'bottom')) return {placed: [] as Array<{x: number; row: number}>, rows: 0}
@@ -158,14 +163,14 @@ export function SpecFigure({id, name, model, settings, grid, strokeScale, proven
     let row = 0
     const placed = entries.map(entry => {
       const width = entryWidth(entry)
-      if (x > from && (entry.break || x + width - fs * 1.1 > to)) {x = from; row++}
+      if (x > from && (entry.break || x + width - lfs * 1.1 > to)) {x = from; row++}
       const at = {x, row}
       x += width
       return at
     })
     return {placed, rows: row + 1}
   })()
-  const legendHeight = flow.rows ? flow.rows * rowHeight + fs * .4 : 0
+  const legendHeight = flow.rows ? flow.rows * rowHeight + lfs * .4 : 0
   const titleHeight = metrics.titleHeight
   const blockTop = titleHeight + (metrics.legend === 'top' ? legendHeight : 0)
   const blockHeight = metrics.height * (model.rows === 2 ? 1.5 : 1) - titleHeight
@@ -294,26 +299,41 @@ export function SpecFigure({id, name, model, settings, grid, strokeScale, proven
     return <g key={`panel-${panel.index}`} className="figure-panel" data-panel={panel.index + 1}>{children}</g>
   }
 
+  // The legend and its box; an inside legend sits where the user dragged it, kept on the page.
+  const legendBox = ((): Box | undefined => {
+    if (!showLegend) return undefined
+    if (metrics.legend === 'top' || metrics.legend === 'bottom') {
+      const top = metrics.legend === 'top' ? titleHeight + fs * .1 : blockTop + blockHeight + fs * .2
+      const right = Math.max(...entries.map((entry, index) => flow.placed[index].x + entryWidth(entry) - lfs * 1.1))
+      return {left: fs * .9, right, top, bottom: top + legendHeight}
+    }
+    const boxWidth = legendColumnWidth + lfs * .7
+    const boxHeight = entries.length * rowHeight + lfs * .25
+    if (metrics.legend === 'right') return {left: metrics.width - reserveRight + lfs * .35, right: metrics.width - reserveRight + lfs * .35 + boxWidth, top: boxes[0].top - lfs * .1, bottom: boxes[0].top - lfs * .1 + boxHeight}
+    const at = settings.legendAt
+    const left = at ? Math.min(metrics.width - boxWidth, Math.max(0, at.x * metrics.width)) : boxes[0].right - legendColumnWidth - lfs * 1.05
+    const top = at ? Math.min(height - boxHeight, Math.max(0, at.y * height)) : boxes[0].top + lfs * .25
+    return {left, right: left + boxWidth, top, bottom: top + boxHeight}
+  })()
+
   const legend = (() => {
-    if (!showLegend) return null
+    if (!showLegend || !legendBox) return null
     const items: ReactNode[] = []
     const draw = (entry: LegendEntry, x: number, y: number, index: number) => {
-      if (entry.kind === 'header') {items.push(<g key={`h-${index}`} className="legend-header">{text({x, y: y + fs * .35, fill: '#555555', children: entry.text})}</g>); return}
-      items.push(<g key={`i-${index}`} className="legend-item" data-series-key={entry.series!.key} data-select={`series:${entry.series!.key}`}><LegendSymbol series={entry.series!} x={x} y={y} width={symbol} metrics={metrics} />{text({x: x + symbol + fs * .4, y: y + fs * .35, className: 'legend-label', children: entry.text})}</g>)
+      if (entry.kind === 'header') {items.push(<g key={`h-${index}`} className="legend-header">{text({x, y: y + lfs * .35, size: lfs, fill: '#555555', children: entry.text})}</g>); return}
+      items.push(<g key={`i-${index}`} className="legend-item" data-series-key={entry.series!.key} data-select={`series:${entry.series!.key}`}><LegendSymbol series={entry.series!} x={x} y={y} width={symbol} metrics={metrics} />{text({x: x + symbol + lfs * .4, y: y + lfs * .35, size: lfs, className: 'legend-label', children: entry.text})}</g>)
     }
     if (metrics.legend === 'top' || metrics.legend === 'bottom') {
-      const origin = metrics.legend === 'top' ? titleHeight + fs * .1 : blockTop + blockHeight + fs * .2
-      entries.forEach((entry, index) => draw(entry, flow.placed[index].x, origin + flow.placed[index].row * rowHeight + fs * .5, index))
+      entries.forEach((entry, index) => draw(entry, flow.placed[index].x, legendBox.top + flow.placed[index].row * rowHeight + lfs * .5, index))
     } else {
-      const first = boxes[0]
-      const inside = metrics.legend === 'inside'
-      const x = inside ? first.right - legendColumnWidth - fs * .7 : metrics.width - reserveRight + fs * .7
-      const y = inside ? first.top + fs * .35 : boxes[0].top
-      if (inside) items.push(<rect key="box" x={r(x - fs * .35)} y={r(y - fs * .1)} width={r(legendColumnWidth + fs * .7)} height={r(entries.length * rowHeight + fs * .25)} fill="#ffffff" fillOpacity="0.88" stroke="#bdbdbd" strokeWidth={r(metrics.line * .4)} />)
-      entries.forEach((entry, index) => draw(entry, x, y + index * rowHeight + fs * .5, index))
+      const x = legendBox.left + lfs * .35
+      const y = legendBox.top + lfs * .1
+      if (metrics.legend === 'inside') items.push(<rect key="box" x={r(legendBox.left)} y={r(legendBox.top)} width={r(legendBox.right - legendBox.left)} height={r(legendBox.bottom - legendBox.top)} fill="#ffffff" fillOpacity="0.88" stroke="#bdbdbd" strokeWidth={r(metrics.line * .4)} />)
+      entries.forEach((entry, index) => draw(entry, x, y + index * rowHeight + lfs * .5, index))
     }
     return <g className="figure-legend" data-select="legend">{items}</g>
   })()
+  if (geometry?.current) geometry.current = {...geometry.current, legend: legendBox, plot: {left: Math.min(...boxes.map(box => box.left)), right: Math.max(...boxes.map(box => box.right)), top: Math.min(...boxes.map(box => box.top)), bottom: Math.max(...boxes.map(box => box.bottom))}}
 
   const first = model.panels[0]
   return <FigureCard id={id} name={name} title={model.title} caption={model.caption} methods={model.methods} ariaLabel={ariaLabel} width={metrics.width} height={height} settings={settings} provenance={provenance} csv={model.csv}

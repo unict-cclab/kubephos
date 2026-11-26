@@ -2,7 +2,7 @@ import {useState} from 'react'
 import {anchorAtButton, ContextMenu, type MenuAnchor, type MenuItem} from './kubestudio/ContextMenu'
 import {pageSections, type PageSection} from './kubestudio/resultsLayout'
 
-// "Customize view", right of the run tabs: which parts of the results page are shown. One switch per
+// "Display", in the page header next to Export: which parts of the results page are shown. One switch per
 // section (menuitemcheckbox, aria-checked), the hidden ones dimmed, each with what it holds;
 // the menu stays open while switching, and "Show all" turns every one on. Charts are always there.
 
@@ -31,9 +31,9 @@ export function SectionsMenu({available, shown, onToggle, onShowAll, details = {
     {label: 'Show all', icon: 'view', separated: true, disabled: !hidden.length, run: onShowAll}
   ]
   return <>
-    <button type="button" className="button secondary customize-view" aria-haspopup="menu" aria-expanded={Boolean(menu)} title={`${count} of ${available.length + 1} sections shown`} onClick={event => setMenu(anchorAtButton(event.currentTarget))}>
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M9 4v16M13 9h4M13 13h4" /></svg>
-      <span className="customize-view-label">Customize view</span><span className="visually-hidden">: {count} of {available.length + 1} sections shown</span>
+    <button type="button" className="button secondary display-menu" aria-haspopup="menu" aria-expanded={Boolean(menu)} title={`Choose what this page shows (${count} of ${available.length + 1} sections shown)`} onClick={event => setMenu(anchorAtButton(event.currentTarget))}>
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h4M12 17h8" /><circle cx="16" cy="7" r="2" /><circle cx="10" cy="17" r="2" /></svg>
+      <span className="display-menu-label">Display</span><span className="visually-hidden">: {count} of {available.length + 1} sections shown</span>
     </button>
     {menu && <ContextMenu at={menu} label="Sections of this page" className="sections-menu" title="Shown on this page" items={items} onClose={() => setMenu(undefined)} />}
   </>

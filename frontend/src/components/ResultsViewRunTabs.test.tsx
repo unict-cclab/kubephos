@@ -27,9 +27,10 @@ it('labels the runs of one variant without repeating its name, which stays in th
   expect(first).toHaveTextContent(/^Execution 1$/)
   expect(first).toHaveAttribute('title', 'fg-01 · Execution 1')
   expect(tabs.getAllByRole('button').map(button => button.textContent)).toEqual(['All executions', 'Execution 1', 'Execution 2', 'Execution 3', 'Execution 4', 'Execution 5'])
-  // Customize view follows the tabs in the focus order, on the same row.
-  const customize = await screen.findByRole('button', {name: /^Customize view/})
-  expect([...document.querySelector('.results-view-bar')!.querySelectorAll('button')].at(-1)).toBe(customize)
+  // The run tabs have their row to themselves: the display options are in the page header.
+  const display = await screen.findByRole('button', {name: /^Display/})
+  expect(document.querySelector('.results-view-bar')).not.toContainElement(display)
+  expect(document.querySelector('.results-detail-actions')).toContainElement(display)
 })
 
 it('keeps the variant with several variants, compactable to "what tells it apart · #n"', () => {

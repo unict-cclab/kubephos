@@ -194,6 +194,25 @@ describe('focused experiment results', () => {
     expect(screen.queryByText('Run in progress')).not.toBeInTheDocument()
   })
 
+  it('shows a completed execution as one quiet line, with the input load profile on demand', () => {
+    const configuration = {components: [{capability: 'load.session.control', configuration: {steps: [{type: 'constant', durationSeconds: 60, rps: 20}, {type: 'constant', durationSeconds: 120, rps: 40}]}}]}
+    const trial = {id: 'trial_done', position: 1, status: 'succeeded', pipelineRunId: 'run_done', startedAt: '2026-11-20T10:00:00Z', completedAt: '2026-11-20T10:05:00Z'}
+    const experiment = {id: 'exp_done', ownerUserId: 'user_a', name: 'Done', description: '', status: 'succeeded', resultType: 'TimeSeriesDataset', resultVersion: 'v1alpha1', variants: [{id: 'variant_done', name: 'Baseline', configuration, trials: [trial, {...trial, id: 'trial_two', position: 2}]}]} as unknown as Experiment
+    const openPipelineRun = vi.fn()
+    render(<ResultsView artifacts={[]} experiments={[experiment]} operations={[]} workspaces={[]} session={{authenticated: true, user: {id: 'user_a', username: 'alice', role: 'user'}} as Session} changed={async () => {}} openOperation={() => {}} openPipelineRun={openPipelineRun} focusedExperiment={experiment} />)
+    fireEvent.click(screen.getByRole('button', {name: 'Baseline · Execution 1'}))
+    const line = document.querySelector('.run-completed')!
+    expect(line).toHaveTextContent('Execution completed in 5m · input load 3m, 2 steps')
+    expect(screen.queryByText('Input load progress')).not.toBeInTheDocument()
+    expect(document.querySelector('.run-diagnostics')).toBeNull()
+    // The profile is there, closed until asked for.
+    const details = line.querySelector('details')!
+    expect(details).not.toHaveAttribute('open')
+    expect(within(details.querySelector('summary')!).getByText('Input load profile')).toBeInTheDocument()
+    fireEvent.click(within(line as HTMLElement).getByRole('button', {name: 'Process logs'}))
+    expect(openPipelineRun).toHaveBeenCalledWith('run_done')
+  })
+
   it.each(['running','initializing','initialized'])('stops an active %s suite from its detail page', async status => {
     vi.mocked(request).mockClear()
     vi.mocked(request).mockResolvedValue({items: []} as never)

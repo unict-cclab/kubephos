@@ -82,7 +82,8 @@ describe('Request mix editor', () => {
     const checkout = await screen.findByRole('spinbutton', {name: 'Weight of checkout (%)'})
     await user.clear(checkout)
     await user.type(checkout, '0')
-    expect(screen.getAllByText('At least one task needs a positive weight.').length).toBeGreaterThan(0)
+    // The message follows the typed value: wait for it rather than read it at once.
+    expect((await screen.findAllByText('At least one task needs a positive weight.')).length).toBeGreaterThan(0)
     expect(container.querySelector('form')!.checkValidity()).toBe(false)
   })
 

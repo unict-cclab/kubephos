@@ -214,7 +214,7 @@ describe('Charts', () => {
     const second = section().getAllByRole('figure')[1]
     expect(second).toHaveAttribute('tabindex', '0')
     expect(second).toHaveAttribute('aria-keyshortcuts', 'Enter F Shift+F10')
-    expect(second).toHaveAccessibleDescription(/Click a chart for full screen, double-click it to edit it in KubeStudio, right-click it for more/)
+    expect(second).toHaveAccessibleDescription(/Click for full screen, double-click to edit in KubeStudio, right-click for more/)
     fireEvent.keyDown(second, {key: 'Enter'})
     expect(onEdit).toHaveBeenLastCalledWith(expect.objectContaining({name: 'Achieved request rate'}))
     fireEvent.keyDown(within(second).getByRole('button', {name: /^Actions for/}), {key: 'Enter'})
@@ -327,12 +327,12 @@ describe('stored layouts', () => {
 })
 
 describe('the rest of the page', () => {
-  it('is chosen from Customize view: one switch per section, the state at a glance, Show all', async () => {
+  it('is chosen from Display: one switch per section, the state at a glance, Show all', async () => {
     render(<Page />)
     await waitFor(() => expect(names()).toHaveLength(2))
-    const button = () => screen.getByRole('button', {name: /^Customize view/})
-    expect(button()).toHaveAccessibleName('Customize view: 1 of 4 sections shown')
-    expect(button()).toHaveAttribute('title', '1 of 4 sections shown')
+    const button = () => screen.getByRole('button', {name: /^Display/})
+    expect(button()).toHaveAccessibleName('Display: 1 of 4 sections shown')
+    expect(button()).toHaveAttribute('title', 'Choose what this page shows (1 of 4 sections shown)')
     fireEvent.click(button())
     const menu = () => within(screen.getByRole('menu', {name: 'Sections of this page'}))
     const switches = () => menu().getAllByRole('menuitemcheckbox').map(item => [item.querySelector('strong')!.textContent, item.getAttribute('aria-checked'), item.querySelector('small')!.textContent])
@@ -344,7 +344,7 @@ describe('the rest of the page', () => {
     expect(menu().getByRole('menuitemcheckbox', {name: /^Load and latency/})).toHaveAttribute('aria-checked', 'true')
     fireEvent.click(menu().getByRole('menuitemcheckbox', {name: /^Summary/}))
     expect(savedLayout().sections).toEqual(['summary', 'timeline'])
-    expect(button()).toHaveAccessibleName('Customize view: 3 of 4 sections shown')
+    expect(button()).toHaveAccessibleName('Display: 3 of 4 sections shown')
     fireEvent.click(menu().getByRole('menuitem', {name: /^Show all/}))
     expect(savedLayout().sections).toEqual(['summary', 'timeline', 'statistics'])
     fireEvent.click(button())

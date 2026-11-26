@@ -29,6 +29,12 @@
   property is gone. "Add chart" opens KubeStudio,
   and "Add to results" puts the image in the grid (or replaces the chart it was
   opened from).
+- A completed execution shows one quiet line ("Execution completed in 5m ·
+  input load 3m, 2 steps", with Process logs) instead of the status panel and the
+  input load progress chart; the input load profile opens from that line. A
+  failed, running or warned execution keeps the full panels.
+- Display (which sections the page shows) is a page command in the header,
+  left of Export, no longer on the row of the run tabs.
 - The rest of the page (summary, load and latency, services, sources,
   endpoints, call chain, statistics, environment & methods, placement) starts
   hidden and is added from the grid's Sections menu; following a finding of the
@@ -65,6 +71,13 @@
   - "Add chart" is guided: the chart-type picker opens first and the chosen chart
     is added and selected, with its X and Y on the right. A new figure from the
     results page ("Add chart", "Create figure") opens on the same picker.
+  - The Legend properties list its entries, each a colour (click to change it)
+    beside its text (the same text as the series' own label). A single plain
+    line gets a legend once its entry has a text.
+  - "Uncertainty" shows only when a series has repetitions; the panels control
+    of old saved charts is under "Chart settings".
+  - Palettes are a list: each with its name, a short description and its
+    colours in the order series take them.
   - "Add annotation" is now "Add a line in the graph", and each kind says what it
     is for, with an example (a threshold such as the 350 ms SLO, a shaded time
     range, a vertical line at an event, a text label).
@@ -74,7 +87,7 @@
   the unused XY helpers, the line-marker sampling, and the styles of the old
   summary, the figure settings panel, the metric chips, the table notes and the
   heatmap grid.
-- Validation: typecheck, all frontend tests (903; new ones for the charts grid,
+- Validation: typecheck, all frontend tests (920; new ones for the charts grid,
   its persistence and the KubeStudio right-click menu, drag handle and caption),
   the asset budget (219.1 of 220 KiB), the theme contrast check, `go vet`, and
   the API and storage tests against PostgreSQL (new

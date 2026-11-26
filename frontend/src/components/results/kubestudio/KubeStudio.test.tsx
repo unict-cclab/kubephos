@@ -1,4 +1,4 @@
-import {act, cleanup, fireEvent, render, screen, within} from '@testing-library/react'
+import {act, cleanup, createEvent, fireEvent, render, screen, within} from '@testing-library/react'
 import axe from 'axe-core'
 import {useState} from 'react'
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest'
@@ -196,6 +196,52 @@ describe('KubeStudio', () => {
     expect(props().getByRole('button', {name: 'Y axis'})).toBeInTheDocument()
   })
 
+  it('writes the legend from the Legend properties: each entry a colour and its text', () => {
+    render(<Studio />)
+    layer('Legend')
+    const entries = within(props().getByRole('region', {name: 'Entries'}))
+    fireEvent.change(entries.getByRole('textbox', {name: 'Text for Alpha'}), {target: {value: 'Default scheduler'}})
+    expect(figure().querySelector('.figure-legend')).toHaveTextContent('Default scheduler')
+    // The colour beside it is the line's colour, and changing it recolours the line.
+    fireEvent.change(entries.getByLabelText('Colour of Default scheduler'), {target: {value: '#117733'}})
+    expect(figure().querySelector('g.series[data-series-key="load.p95_response_time|Alpha"] path.series-line')).toHaveAttribute('stroke', '#117733')
+    expect(figure().querySelector('.legend-item[data-series-key="load.p95_response_time|Alpha"]')!.innerHTML).toContain('#117733')
+    // The same text as the series' own label; the reset button restores the data's name.
+    layer('Default scheduler')
+    expect(props().getByLabelText('Label')).toHaveValue('Default scheduler')
+    layer('Legend')
+    fireEvent.click(props().getByRole('button', {name: 'Restore Alpha'}))
+    expect(figure().querySelector('.figure-legend')).toHaveTextContent('Alpha')
+  })
+
+  it('draws the legend of a single line once its entry has a text', () => {
+    render(<Studio />)
+    // One line, mean only (a band would need explaining).
+    fireEvent.click(layers().getAllByRole('button', {name: 'Hide Beta'})[0])
+    fireEvent.click(layers().getAllByRole('button', {name: /^Chart/})[0])
+    fireEvent.change(props().getByLabelText('Repeated runs'), {target: {value: 'mean'}})
+    expect(figure().querySelector('.figure-legend')).toBeNull()
+    layer('Legend')
+    expect(props().getByText(/legend stays hidden until you give its entry a text/)).toBeInTheDocument()
+    fireEvent.change(props().getByRole('textbox', {name: 'Text for Alpha'}), {target: {value: 'prova'}})
+    expect(figure().querySelector('.figure-legend')).toHaveTextContent('prova')
+    expect(props().queryByText(/legend stays hidden/)).not.toBeInTheDocument()
+  })
+
+
+  it('shows Uncertainty only when a series has repetitions', () => {
+    const chartLayer = () => fireEvent.click(layers().getAllByRole('button', {name: /^Chart/})[0])
+    render(<Studio />)
+    chartLayer()
+    expect(props().getByRole('region', {name: 'Uncertainty'})).toBeInTheDocument()
+    cleanup()
+    const single = {...data, plot: () => [{...curve('Alpha', [1, 2, 3, 4]), runs: 1, deviation: undefined}, {...curve('Beta', [2, 3, 4, 5]), runs: 1, deviation: undefined}]}
+    render(<KubeStudio open onClose={() => {}} request={{kind: 'timeseries'}} data={single} groups={groups} settings={defaultFigureSettings} onSettings={() => {}} />)
+    chartLayer()
+    expect(props().queryByRole('region', {name: 'Uncertainty'})).not.toBeInTheDocument()
+    expect(props().queryByLabelText('Repeated runs')).not.toBeInTheDocument()
+  })
+
   it('exports from one popover that shows the physical output and remembers the format', async () => {
     render(<Studio />)
     const button = within(studio()).getByRole('button', {name: 'Export'})
@@ -268,15 +314,29 @@ describe('KubeStudio', () => {
     expect(figure().querySelector('.figure-legend')).toHaveTextContent('Beta')
     const height = Number(figure().getAttribute('viewBox')!.split(' ')[3])
     layer('Legend')
-    const position = within(props().getByRole('group', {name: 'Position'}))
-    fireEvent.click(position.getByRole('radio', {name: 'None'}))
+    fireEvent.click(props().getByRole('checkbox', {name: 'Show the legend'}))
     expect(figure().querySelector('.figure-legend')).toBeNull()
     expect(Number(figure().getAttribute('viewBox')!.split(' ')[3])).toBeLessThan(height)
-    fireEvent.click(position.getByRole('radio', {name: 'Top'}))
-    expect(figure().querySelector('g[transform]')).toBeNull()
-    expect(Number(figure().querySelector('.figure-legend text')!.getAttribute('y'))).toBeLessThan(Number(figure().querySelector('rect.axis')!.getAttribute('y')))
-    fireEvent.click(position.getByRole('radio', {name: 'Right'}))
-    expect(Number(figure().querySelector('.figure-legend text')!.getAttribute('x'))).toBeGreaterThan(150)
+    fireEvent.click(props().getByRole('checkbox', {name: 'Show the legend'}))
+    fireEvent.change(props().getByLabelText('Text size (pt)'), {target: {value: '11'}})
+    expect(figure().querySelector('.figure-legend .legend-label')).toHaveAttribute('font-size', '11')
+    // Dragged with the mouse: above the plot it goes on top, inside the plot it stays where it is let go.
+    const [width, pageHeight] = figure().getAttribute('viewBox')!.split(' ').slice(2).map(Number)
+    vi.spyOn(figure(), 'getBoundingClientRect').mockReturnValue({left: 0, top: 0, width, height: pageHeight, right: width, bottom: pageHeight, x: 0, y: 0, toJSON: () => ({})})
+    const pointer = (type: 'pointerDown' | 'pointerMove' | 'pointerUp', element: Element, x: number, y: number) => {
+      const event = createEvent[type](element)
+      for (const [key, value] of Object.entries({clientX: x, clientY: y, pointerId: 1, button: 0})) Object.defineProperty(event, key, {value})
+      fireEvent(element, event)
+    }
+    const label = () => figure().querySelector('.figure-legend .legend-label')!
+    const plotTop = () => Number(figure().querySelector('rect.axis')!.getAttribute('y'))
+    pointer('pointerDown', label(), 20, pageHeight - 4)
+    pointer('pointerMove', label(), 20, 2)
+    expect(Number(label().getAttribute('y'))).toBeLessThan(plotTop())
+    pointer('pointerMove', label(), width / 2, pageHeight / 2)
+    pointer('pointerUp', label(), width / 2, pageHeight / 2)
+    expect(figure().querySelector('.figure-legend rect')).not.toBeNull()
+    expect(heading()).toBe('Legend')
   })
 
   it('selects elements by clicking them on the figure; Esc and the Figure layer deselect', () => {

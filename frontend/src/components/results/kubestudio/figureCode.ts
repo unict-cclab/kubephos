@@ -186,6 +186,8 @@ export function matplotlibScript(model: FigureModel, options: CodeOptions): {scr
     if (panel.letter) lines.push(`${ax}.set_title(${py(panel.letter)}, loc="left", fontweight="bold", fontsize=${fs})`)
   }
   const position = options.settings.legend
+  const legendSize = options.settings.legendFontSize ?? fs
+  const legendAt = options.settings.legendAt
   if (position !== 'none' && model.legend.length > 1) {
     const header = (text: string) => `Line2D([], [], ls="None", label=${py(text)})`
     // One legend row per axis group (header first); matplotlib fills columns, so interleave.
@@ -195,8 +197,10 @@ export function matplotlibScript(model: FigureModel, options: CodeOptions): {scr
     const columns = flowing ? groups.length > 1 ? Math.max(...groups.map(group => group.length)) : Math.min(groups[0].length, 4) : 1
     const items = flowing && groups.length > 1 ? Array.from({length: columns}, (_, column) => groups.map(group => group[column] ?? 'Line2D([], [], ls="None", label="")')).flat() : groups.flat()
     lines.push('', `legend_handles = [${items.join(', ')}]`)
-    if (position === 'inside') lines.push(`axes[0][0].legend(handles=legend_handles, loc="upper right", frameon=True, framealpha=0.88, edgecolor="#bdbdbd", fontsize=${fs})`)
-    else lines.push(`fig.legend(handles=legend_handles, loc=${py(legendLoc[position])}, ncol=${columns}, fontsize=${fs}, columnspacing=0.9, handlelength=1.6, handletextpad=0.4)`)
+    // A dragged inside legend: its top-left corner in figure coordinates.
+    if (position === 'inside' && legendAt) lines.push(`fig.legend(handles=legend_handles, loc="upper left", bbox_to_anchor=(${legendAt.x.toFixed(3)}, ${(1 - legendAt.y).toFixed(3)}), frameon=True, framealpha=0.88, edgecolor="#bdbdbd", fontsize=${legendSize})`)
+    else if (position === 'inside') lines.push(`axes[0][0].legend(handles=legend_handles, loc="upper right", frameon=True, framealpha=0.88, edgecolor="#bdbdbd", fontsize=${legendSize})`)
+    else lines.push(`fig.legend(handles=legend_handles, loc=${py(legendLoc[position])}, ncol=${columns}, fontsize=${legendSize}, columnspacing=0.9, handlelength=1.6, handletextpad=0.4)`)
   }
   lines.push('', 'fig.savefig(OUTPUT)', 'fig.savefig(OUTPUT.with_suffix(".png"), dpi=600)', 'print(f"Wrote {OUTPUT}")', '')
   return {script: lines.join('\n'), csv, csvName, scriptName: `${options.base}.py`}
@@ -269,8 +273,9 @@ export function pgfplotsSnippet(model: FigureModel, options: CodeOptions): {tex:
     const legendPanel = options.settings.legend === 'bottom' ? (model.rows - 1) * model.columns : 0
     const legendHere = panel.index === legendPanel && options.settings.legend !== 'none' && model.legend.length > 1
     if (legendHere) {
-      const place = options.settings.legend === 'right' ? 'at={(1.03,1)}, anchor=north west, legend columns=1' : options.settings.legend === 'top' ? 'at={(0.5,1.03)}, anchor=south, legend columns=-1' : options.settings.legend === 'inside' ? 'at={(0.98,0.98)}, anchor=north east, fill=white, fill opacity=0.88, draw=black!25, text opacity=1' : model.columns > 1 ? 'at={(0,-0.3)}, anchor=north west, legend columns=-1' : 'at={(0.5,-0.36)}, anchor=north, legend columns=-1'
-      base.push(`legend style={${place}${options.settings.legend === 'inside' ? '' : ', draw=none'}, /tikz/every even column/.append style={column sep=0.6em}}`, 'legend cell align=left')
+      const place = options.settings.legend === 'right' ? 'at={(1.03,1)}, anchor=north west, legend columns=1' : options.settings.legend === 'top' ? 'at={(0.5,1.03)}, anchor=south, legend columns=-1' : options.settings.legend === 'inside' ? `${options.settings.legendAt ? `at={(${options.settings.legendAt.x.toFixed(3)},${(1 - options.settings.legendAt.y).toFixed(3)})}, anchor=north west` : 'at={(0.98,0.98)}, anchor=north east'}, fill=white, fill opacity=0.88, draw=black!25, text opacity=1` : model.columns > 1 ? 'at={(0,-0.3)}, anchor=north west, legend columns=-1' : 'at={(0.5,-0.36)}, anchor=north, legend columns=-1'
+      const font = options.settings.legendFontSize ? `, font=\\fontsize{${options.settings.legendFontSize}}{${Math.round(options.settings.legendFontSize * 1.2)}}\\selectfont` : ''
+      base.push(`legend style={${place}${options.settings.legend === 'inside' ? '' : ', draw=none'}${font}, /tikz/every even column/.append style={column sep=0.6em}}`, 'legend cell align=left')
     }
     lines.push(`% Panel ${panel.index + 1}${panel.letter ? ` ${panel.letter}` : ''}`, `\\begin{axis}[${base.join(',\n  ')}]`)
     const draw = (side: 'left' | 'right') => {
