@@ -77,8 +77,9 @@ export interface ResultsViewProps {
   openPipelineRun?: (id: string) => void
   focusedExperiment?: Experiment
   onBack?: () => void
-  // `notice` renders just below the page header (e.g. comparison integrity).
-  comparison?: {sourceConfigurations: Record<string, Record<string, unknown>>; actions?: ReactNode; sources?: ReactNode; notice?: ReactNode}
+  // `notice` renders just below the page header (comparison integrity), with the notes the
+  // page has about the compared data.
+  comparison?: {sourceConfigurations: Record<string, Record<string, unknown>>; actions?: ReactNode; sources?: ReactNode; notice?: (notes: string[]) => ReactNode}
 }
 
 // Secondary content: collapsed by default, opened on demand (or by a verdict link).
@@ -232,7 +233,8 @@ interface OverviewModel {
 
 // Verdict and KPI cards, the primary chart and the services table, each shown once the user adds it.
 // single: one execution — no summary paragraph, only the measurement warnings that matter.
-function ResultsOverview({model, onNavigate, show, single = false}: {model: OverviewModel; onNavigate: (target: InsightTarget) => void; show: (part: PageSection) => boolean; single?: boolean}) {
+// brief: the summary's findings without their explanations until asked (saved comparisons).
+function ResultsOverview({model, onNavigate, show, single = false, brief = false}: {model: OverviewModel; onNavigate: (target: InsightTarget) => void; show: (part: PageSection) => boolean; single?: boolean; brief?: boolean}) {
   const cards = useMemo(() => kpiCards({runLevel: model.runLevel, comparisons: model.comparisons, baseline: model.baseline, slo: model.slo}), [model.runLevel, model.comparisons, model.baseline, model.slo])
   const resources = useMemo(() => resourceCards(model.groups, model.resources), [model.groups, model.resources])
   // Several variants: the strongest significant difference sits right after the first finding.
@@ -248,7 +250,7 @@ function ResultsOverview({model, onNavigate, show, single = false}: {model: Over
   const scope = model.groups.length > 1 ? activeGroup : undefined
   return <>
     {show('summary') && <>
-      {single ? <QualityLine notices={model.notices} /> : <VerdictStrip insights={insights} notices={model.notices} onNavigate={onNavigate} />}
+      {single ? <QualityLine notices={model.notices} /> : <VerdictStrip insights={insights} notices={model.notices} onNavigate={onNavigate} brief={brief} />}
       <KpiCards cards={cards} provenance={model.provenance} resources={resources} />
     </>}
     {show('timeline') && <PrimaryChart panels={panels} subtitle={model.subtitle} />}
@@ -611,7 +613,7 @@ function ExperimentResultsView({artifacts, experiments, operations, workspaces, 
         </div>
       </div>
     </header>
-    {comparison?.notice}
+    {comparison?.notice?.([])}
     {layoutUndo && <p className="result-charts-notice" role="status">Default charts and sections restored. <button type="button" className="link-button" onClick={() => {layoutUndo(); setLayoutUndo(undefined)}}>Undo</button></p>}
     {focusedExperiment && canManage && <VisibilityDialog id={focusedExperiment.id} name={focusedExperiment.name} ownerUserId={focusedExperiment.ownerUserId} open={visibilityOpen} session={session} onClose={() => setVisibilityOpen(false)} onSaved={async value => {setVisibility(value); await changed()}} />}
     {focusedExperiment && <ResourceAttribution resource={focusedExperiment} editable={Boolean(comparison)} />}
@@ -1060,15 +1062,14 @@ function ComparisonResults({artifacts, experiment, comparison, onBack, session}:
         </div>
       </div>
     </header>
-    {comparison?.notice}
+    {comparison?.notice?.(data?.warnings ?? [])}
     {layoutUndo && <p className="result-charts-notice" role="status">Default charts and sections restored. <button type="button" className="link-button" onClick={() => {layoutUndo(); setLayoutUndo(undefined)}}>Undo</button></p>}
-    <ResourceAttribution resource={experiment} editable />
+    <ResourceAttribution resource={experiment} editable compact />
     <ErrorFeedback message={state.error} />
     {data && <SectionNav links={page.links} onJump={sectionState.jump} top="results-top" />}
     {state.error ? <div className="results-placeholder"><button className="button secondary" onClick={() => setRevision(value => value + 1)}>Retry loading results</button></div> : !data ? <div className="results-placeholder" role="status"><span className="results-spinner" /><strong>{state.progress}</strong></div> : <div className="results-content">
       <div id="results-overview" className="section-anchor" />
-      {data.warnings.map(warning => <div key={warning} className="validation-item warning">{warning}</div>)}
-      {overview && <ResultsOverview model={overview} onNavigate={page.navigate} show={page.show} />}
+      {overview && <ResultsOverview model={overview} onNavigate={page.navigate} show={page.show} brief />}
       {overview && (data.complete ? <ResultCharts items={charts.items} data={studioData} groups={overview.groups} settings={figureSettings} loading={charts.loading} error={charts.error}
         onChange={charts.change} onEdit={item => setStudio({figure: item})} /> : <div className="results-placeholder" role="status"><span className="results-spinner" /><strong>{state.progress ?? 'Preparing plots…'}</strong></div>)}
     </div>}

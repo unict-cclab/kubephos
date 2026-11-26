@@ -26,13 +26,13 @@ export const compatibilityFieldLabel = (field: string) => compatibilityFieldLabe
 
 // Scalars as they are; objects and arrays as short JSON, with the full value kept for the tooltip.
 export function compatibilityValue(value: unknown): {text: string; full: string} {
-  if (value === undefined || value === null || value === '') return {text: '—', full: 'Not set'}
+  if (value === undefined || value === null || value === '') return {text: 'not set', full: 'Not set'}
   if (typeof value !== 'object') return {text: String(value), full: String(value)}
   const full = JSON.stringify(value) ?? ''
   return {text: full.length > 60 ? `${full.slice(0, 57)}…` : full, full}
 }
 
-const refreshConflict = 'A source experiment was deleted or is no longer shared with you, so this comparison cannot be refreshed. The frozen results are still shown. Edit the comparison to remove the missing experiment.'
+const refreshConflict = 'One of the experiments was deleted or is no longer shared with you, so this comparison can’t be refreshed. You still see the frozen results; edit the comparison to drop the missing experiment.'
 
 function WarningIcon() {
   return <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M10.3 3.9 2.4 17.6A2 2 0 0 0 4.1 20.6h15.8a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z" /><path d="M12 9v4m0 3.5h.01" /></svg>
@@ -42,8 +42,10 @@ function SnapshotIcon() {
   return <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="4" y="11" width="16" height="10" rx="2" /><path d="M8 11V7a4 4 0 0 1 8 0v4" /></svg>
 }
 
-// Stale-snapshot and load-profile compatibility notice shown above comparison results.
-export function ComparisonIntegrityNotice({view, onRefresh}: {view: ComparisonView; onRefresh?: () => Promise<void>}) {
+// Above comparison results: whether they are frozen, an alert when the sources changed since
+// (it asks for a refresh), and every way the sources differ in one collapsed line: the
+// measurement settings (a table) and the page's own notes about the data.
+export function ComparisonIntegrityNotice({view, onRefresh, notes = []}: {view: ComparisonView; onRefresh?: () => Promise<void>; notes?: string[]}) {
   const id = useId()
   const {confirmAction, confirmationDialog} = useDeleteConfirmation()
   const [refreshing, setRefreshing] = useState(false)
@@ -77,32 +79,28 @@ export function ComparisonIntegrityNotice({view, onRefresh}: {view: ComparisonVi
 
   return <div className="comparison-integrity">
     {confirmationDialog}
-    <div className={`comparison-snapshot ${captured ? 'is-frozen' : 'is-live'}`}>
+    <div className={`comparison-snapshot ${captured ? 'is-frozen' : 'is-live'}`} title={captured ? 'Results stay fixed until you refresh the snapshot.' : 'Results follow the source experiments until you freeze them.'}>
       <SnapshotIcon />
-      <span>{captured ? <><strong>Frozen on {formatDate(captured)}</strong> · Results stay fixed until you refresh the snapshot.</> : <><strong>Live comparison</strong> — results may change; save or refresh to freeze.</>}</span>
+      <span>{captured ? <>Frozen {formatDate(captured)}</> : <>Live: results may change</>}</span>
       {!captured && onRefresh && <button type="button" className="button secondary compact" disabled={refreshing} onClick={() => void refresh()}>{refreshing ? 'Freezing…' : 'Freeze results'}</button>}
     </div>
     {stale && <section className="comparison-integrity-alert" role="status" aria-labelledby={`${id}-stale`}>
       <WarningIcon />
       <div>
-        <h3 id={`${id}-stale`}>The source experiments changed after this snapshot</h3>
-        <p>The comparison still shows the frozen results. Refresh it to include the current runs.</p>
+        <h3 id={`${id}-stale`}>The experiments have changed since this snapshot</h3>
         {reasons.length > 0 && <ul>{reasons.map(reason => <li key={reason}>{reason}</li>)}</ul>}
         {onRefresh && <div className="comparison-integrity-actions"><button type="button" className="button secondary compact" disabled={refreshing} onClick={() => void refresh()}>{refreshing ? 'Refreshing…' : 'Refresh snapshot'}</button></div>}
       </div>
     </section>}
     {error && <p className="comparison-integrity-error" role="alert">{error}</p>}
     {refreshed && !error && <p className="visually-hidden" role="status">Comparison snapshot updated.</p>}
-    {differences.length > 0 && <section className="comparison-integrity-alert" aria-labelledby={`${id}-compat`}>
-      <WarningIcon />
-      <div>
-        <h3 id={`${id}-compat`}>Sources were not measured alike</h3>
-        <p>These measurement settings differ between sources. Differences in the results may come from them rather than from the compared configurations.</p>
-        <div className="resource-selection-scroll"><ResponsiveTable aria-label="Measurement settings that differ"><thead><tr><th>Setting</th>{labels.map(label => <th key={label}>{label}</th>)}</tr></thead><tbody>{differences.map(difference => <tr key={difference.field}><td>{compatibilityFieldLabel(difference.field)}</td>{labels.map(label => {
+    {differences.length + notes.length > 0 && <details className="comparison-caveats">
+      <summary><WarningIcon /><span>These experiments weren’t measured quite the same way</span><small>{differences.length + notes.length === 1 ? '1 difference' : `${differences.length + notes.length} differences`}</small></summary>
+      {notes.length > 0 && <ul>{notes.map(note => <li key={note}>{note}</li>)}</ul>}
+      {differences.length > 0 && <div className="resource-selection-scroll"><ResponsiveTable aria-label="Measurement settings that differ"><thead><tr><th>What differs</th>{labels.map(label => <th key={label}>{label}</th>)}</tr></thead><tbody>{differences.map(difference => <tr key={difference.field}><td>{compatibilityFieldLabel(difference.field)}</td>{labels.map(label => {
           const value = compatibilityValue(difference.values[label])
           return <td key={label} title={value.full}>{value.text}</td>
-        })}</tr>)}</tbody></ResponsiveTable></div>
-      </div>
-    </section>}
+        })}</tr>)}</tbody></ResponsiveTable></div>}
+    </details>}
   </div>
 }

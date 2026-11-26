@@ -77,13 +77,11 @@ describe('Request mix editor', () => {
 
   it('rejects a mix without positive weights', async () => {
     stubApi({withModel: false})
-    const user = userEvent.setup()
     const {container} = render(<form><RequestMixEditor prefix="load" samples={samples} context={context} values={{taskWeights: {index: 0, setCurrency: 0, browseProduct: 0, addToCart: 0, viewCart: 0}}} /></form>)
     const checkout = await screen.findByRole('spinbutton', {name: 'Weight of checkout (%)'})
-    await user.clear(checkout)
-    await user.type(checkout, '0')
-    // The message follows the typed value: wait for it rather than read it at once.
-    expect((await screen.findAllByText('At least one task needs a positive weight.')).length).toBeGreaterThan(0)
+    // A direct change: simulated keystrokes on a number field are unreliable under load.
+    fireEvent.change(checkout, {target: {value: '0'}})
+    expect(screen.getAllByText('At least one task needs a positive weight.').length).toBeGreaterThan(0)
     expect(container.querySelector('form')!.checkValidity()).toBe(false)
   })
 

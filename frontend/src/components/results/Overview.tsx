@@ -27,15 +27,18 @@ const reference: Record<InsightTarget, string> = {
 
 const sentence = (text: string) => /[.!?]$/.test(text) ? text : `${text}.`
 
-export function VerdictStrip({insights, notices, onNavigate, empty}: {insights: Insight[]; notices: QualityNotice[]; onNavigate: (target: InsightTarget) => void; empty?: string}) {
+// brief: findings only; their explanations and the measurement notes open with "Show details".
+export function VerdictStrip({insights, notices, onNavigate, empty, brief = false}: {insights: Insight[]; notices: QualityNotice[]; onNavigate: (target: InsightTarget) => void; empty?: string; brief?: boolean}) {
+  const [open, setOpen] = useState(!brief)
+  const more = insights.some(insight => insight.detail) || notices.length > 0
   return <section className="summary" aria-label="Verdict">
-    <h3>Summary</h3>
+    <div className="summary-head"><h3>Summary</h3>{brief && more && <button type="button" className="link-button" aria-expanded={open} onClick={() => setOpen(value => !value)}>{open ? 'Hide details' : 'Show details'}</button>}</div>
     {insights.length ? <ul className="summary-list">{insights.map(insight => <li key={insight.id} className={`summary-item ${insight.severity}`}>
       <p><span className="visually-hidden">{severityLabel[insight.severity]}: </span><strong>{sentence(insight.title)}</strong>
         {insight.target && <>{' '}<button type="button" className="link-button" aria-label={`Go to ${reference[insight.target]}`} onClick={() => onNavigate(insight.target!)}>{reference[insight.target]}</button></>}</p>
-      {insight.detail && <p className="summary-detail">{insight.detail}</p>}
+      {open && insight.detail && <p className="summary-detail">{insight.detail}</p>}
     </li>)}</ul> : <p>{sentence(empty ?? 'No issues detected')}</p>}
-    {notices.map(notice => <div key={notice.text} className={`validation-item ${notice.kind === 'warning' ? 'warning' : 'note'}`}>{notice.text}</div>)}
+    {open && notices.map(notice => <div key={notice.text} className={`validation-item ${notice.kind === 'warning' ? 'warning' : 'note'}`}>{notice.text}</div>)}
   </section>
 }
 

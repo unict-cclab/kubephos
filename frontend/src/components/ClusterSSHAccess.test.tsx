@@ -27,4 +27,20 @@ describe('machine SSH access',()=>{
     expect(screen.queryByRole('link',{name:/Download SSH key/})).not.toBeInTheDocument()
     expect(screen.queryByRole('link',{name:'Download kubeconfig'})).not.toBeInTheDocument()
   })
+
+  it.each(['harbor','nfs'])('offers the SSH key of the machine a %s runs on, like a standalone VM',kind=>{
+    const admin={authenticated:true,user:{role:'admin'}} as Session
+    const template={id:'template',kind:'machine-template',spec:{sshUser:'ubuntu'}} as unknown as ManagedResource
+    const service={id:`${kind}_01`,name:`${kind}-01`,kind,status:'ready',spec:{templateId:'template',address:'192.0.2.30'}} as unknown as ManagedResource
+    const {rerender}=render(<ResourceDetailsPage {...props} resources={[template]} resource={service} session={admin}/>)
+    fireEvent.click(screen.getByRole('button',{name:'Access'}))
+    expect(screen.getByRole('link',{name:'Download SSH key'})).toHaveAttribute('href',`/api/v1/infrastructure-services/${kind}_01/ssh-key`)
+    expect(screen.getByText('ubuntu')).toBeInTheDocument()
+    expect(screen.getByText('192.0.2.30')).toBeInTheDocument()
+    // Administrators only, once provisioned.
+    rerender(<ResourceDetailsPage {...props} resources={[template]} resource={service} session={{authenticated:true,user:{role:'user'}} as Session}/>)
+    expect(screen.queryByRole('link',{name:'Download SSH key'})).not.toBeInTheDocument()
+    rerender(<ResourceDetailsPage {...props} resources={[template]} resource={{...service,status:'provisioning'}} session={admin}/>)
+    expect(screen.queryByRole('link',{name:'Download SSH key'})).not.toBeInTheDocument()
+  })
 })

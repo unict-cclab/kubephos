@@ -90,8 +90,9 @@ dialog.figure-studio label, dialog.figure-studio fieldset { margin: 0; }
 .studio-thumb-icon .studio-kind-icon { width: 72px; height: 48px; }
 
 /* Layers. */
-.ks-layers ul { display: grid; gap: 0; margin: 0; padding: 8px; list-style: none; }
-.ks-layer-row { position: relative; display: flex; flex-wrap: wrap; align-items: center; gap: 2px; min-height: 32px; padding-left: calc(var(--depth, 0) * 16px); }
+/* One column as wide as the panel: long names are cut with an ellipsis, never scroll sideways. */
+.ks-layers ul { display: grid; grid-template-columns: minmax(0, 1fr); gap: 0; margin: 0; padding: 8px; list-style: none; }
+.ks-layer-row { position: relative; display: flex; min-width: 0; flex-wrap: wrap; align-items: center; gap: 2px; min-height: 32px; padding-left: calc(var(--depth, 0) * 16px); }
 .ks-layer-row[data-depth="1"] { --depth: 0; }
 .ks-layer-row[data-depth="2"] { --depth: 1; }
 .ks-layer-row[data-heading] { min-height: 28px; margin-top: 8px; }
