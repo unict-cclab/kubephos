@@ -62,7 +62,9 @@ export interface ModelAxis {
   unit: string
 }
 
-export interface ModelAnnotation {kind: 'vline' | 'hline' | 'xrange' | 'text'; axis: AxisSide; x?: number; x2?: number; y?: number; label?: string; source: 'phase' | 'warmup' | 'slo' | 'user'; color: string; id?: string}
+// shares (SLO line): per latency series, the fraction of its measured windows above the line.
+// labelKey: what the user's text for this label is kept under (see FigureSpec auto.labels).
+export interface ModelAnnotation {kind: 'vline' | 'hline' | 'xrange' | 'text'; axis: AxisSide; x?: number; x2?: number; y?: number; label?: string; labelKey?: string; source: 'phase' | 'warmup' | 'slo' | 'user'; color: string; id?: string; shares?: Array<{label: string; above: number}>}
 
 export interface ModelPanel {index: number; letter?: string; x: ModelAxis; left?: ModelAxis; right?: ModelAxis; series: ModelSeries[]; annotations: ModelAnnotation[]; title: string; metrics: string[]}
 
@@ -216,14 +218,14 @@ const xValue = (seconds: number, format: TimeFormat) => format === 'min' ? secon
 function phaseAnnotations(profile: LoadProfile | undefined, spec: FigureSpec, format: TimeFormat): ModelAnnotation[] {
   if (!profile) return []
   const out: ModelAnnotation[] = []
-  if (spec.auto.warmup && profile.warmupSeconds > 0) out.push({kind: 'vline', axis: 'left', x: 0, label: `after ${profile.warmupSeconds} s warm-up`, source: 'warmup', color: '#6b6b6b'})
+  if (spec.auto.warmup && profile.warmupSeconds > 0) out.push({kind: 'vline', axis: 'left', x: 0, label: `after ${profile.warmupSeconds} s warm-up`, labelKey: 'warmup', source: 'warmup', color: '#6b6b6b'})
   if (spec.auto.phases && profile.steps.length) {
     let at = 0
     profile.steps.forEach((step, index) => {
-      if (profile.steps.length > 1 || index > 0) out.push({kind: 'vline', axis: 'left', x: xValue(at, format), label: step.label, source: 'phase', color: '#8a8a8a'})
+      if (profile.steps.length > 1 || index > 0) out.push({kind: 'vline', axis: 'left', x: xValue(at, format), label: step.label, labelKey: step.label, source: 'phase', color: '#8a8a8a'})
       at += step.durationSeconds
     })
-    out.push({kind: 'vline', axis: 'left', x: xValue(at, format), label: 'end of load', source: 'phase', color: '#8a8a8a'})
+    out.push({kind: 'vline', axis: 'left', x: xValue(at, format), label: 'end of load', labelKey: 'end of load', source: 'phase', color: '#8a8a8a'})
   }
   return out
 }
@@ -396,10 +398,18 @@ function timeModel(spec: FigureSpec, data: ModelData, fontSize: number, hidden: 
     if (spec.auto.slo && slo && sloAxis) {
       const unit = unitOf(metricsOn(sloAxis).find(metric => metric.endsWith('response_time'))!)
       const factor = displayUnit(unit, panel[sloAxis].unit)?.factor ?? 1
-      annotations.push({kind: 'hline', axis: sloAxis, y: slo * factor, label: `SLO ${thresholdText(slo * factor, unitSuffix(unit, panel[sloAxis].unit))}`, source: 'slo', color: '#b42318'})
+      const line = slo * factor
+      const shares = series.filter(item => item.axis === sloAxis && /response_time$/.test(item.metric)).flatMap(item => {
+        const windows = item.y.filter(Number.isFinite)
+        return windows.length ? [{label: item.label, above: windows.filter(value => value > line).length / windows.length}] : []
+      })
+      const text = spec.auto.sloUnit === 'ms' ? thresholdText(slo, 'ms') : spec.auto.sloUnit === 's' ? thresholdText(slo / 1000, 's') : thresholdText(line, unitSuffix(unit, panel[sloAxis].unit))
+      annotations.push({kind: 'hline', axis: sloAxis, y: line, label: `SLO ${text}`, labelKey: 'slo', source: 'slo', color: '#b42318', shares})
     }
     const suffixOf = (side: AxisSide) => {const metric = metricsOn(side)[0]; return metric ? unitSuffix(unitOf(metric), panel[side].unit) : ''}
-    annotations.splice(0, annotations.length, ...fillValue(annotations, suffixOf))
+    // The user's own text for automatic labels.
+    const relabelled = annotations.map(item => item.labelKey && spec.auto.labels?.[item.labelKey] !== undefined ? {...item, label: spec.auto.labels[item.labelKey]} : item)
+    annotations.splice(0, annotations.length, ...fillValue(relabelled, suffixOf))
     const extra = (side: AxisSide) => annotations.filter(item => item.axis === side && (item.kind === 'hline' || item.kind === 'text')).map(item => item.y!)
     const yAxis = (side: AxisSide): ModelAxis | undefined => {
       const metrics = metricsOn(side)

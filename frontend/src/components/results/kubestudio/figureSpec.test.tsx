@@ -223,7 +223,10 @@ describe('Spec-driven KubeStudio figures', () => {
     render(<Studio />)
     expect(figure().querySelector('.annotation-phase')).toHaveTextContent('20 req/s')
     expect(figure().querySelector('.annotation-slo')).toHaveTextContent('SLO 180 ms')
-    fireEvent.click(layers().getByRole('button', {name: 'Show warm-up end'}))
+    // An automatic line that is off waits in the + menu.
+    expect(layers().queryByRole('button', {name: 'Warm-up end'})).not.toBeInTheDocument()
+    fireEvent.click(layers().getByRole('button', {name: 'Add a line in the graph'}))
+    fireEvent.click(within(layers().getByRole('group', {name: 'Line to add'})).getByRole('button', {name: /^Warm-up end/}))
     expect(figure().querySelector('.annotation-warmup')).toHaveTextContent('after 60 s warm-up')
     const add = (name: string) => {fireEvent.click(layers().getByRole('button', {name: 'Add a line in the graph'})); fireEvent.click(within(layers().getByRole('group', {name: 'Line to add'})).getByRole('button', {name: new RegExp(`^${name}`)}))}
     fireEvent.click(layers().getByRole('button', {name: 'Add a line in the graph'}))
@@ -238,8 +241,15 @@ describe('Spec-driven KubeStudio figures', () => {
     add('Text label')
     fireEvent.change(right().getByLabelText('Text'), {target: {value: 'GC pause'}})
     expect(figure().querySelector('.annotation-text')).toHaveTextContent('GC pause')
-    fireEvent.click(layers().getByRole('button', {name: 'Hide load phases'}))
+    // Right-click a line's row in Layers: delete it; it comes back from the + menu.
+    fireEvent.contextMenu(layers().getByRole('button', {name: 'Load phases'}))
+    expect(within(studio()).getAllByRole('menuitem').map(item => item.querySelector('strong')?.textContent)).toEqual(['Delete load phases'])
+    fireEvent.click(within(studio()).getByRole('menuitem', {name: /^Delete load phases/}))
     expect(figure().querySelector('.annotation-phase')).toBeNull()
+    expect(layers().queryByRole('button', {name: 'Load phases'})).not.toBeInTheDocument()
+    fireEvent.click(layers().getByRole('button', {name: 'Add a line in the graph'}))
+    expect(within(layers().getByRole('group', {name: 'Line to add'})).getByRole('button', {name: /^Load phases/})).toBeInTheDocument()
+    fireEvent.click(layers().getByRole('button', {name: 'Add a line in the graph'}))
     layer('Threshold line')
     fireEvent.click(right().getByRole('button', {name: 'Delete threshold line'}))
     expect(figure().querySelector('.annotation-user.annotation-hline')).toBeNull()
@@ -326,11 +336,86 @@ describe('Spec-driven KubeStudio figures', () => {
     render(<Studio />)
     expect(figure().querySelector('.annotation-slo')).toHaveTextContent('SLO 180 ms')
     layer('SLO line')
-    fireEvent.change(right().getByLabelText('Threshold (ms)'), {target: {value: '200'}})
+    // The experiment's value is noted only once the figure overrides it.
+    expect(right().queryByRole('button', {name: 'Reset'})).not.toBeInTheDocument()
+    fireEvent.change(right().getByLabelText('Threshold'), {target: {value: '200'}})
     expect(figure().querySelector('.annotation-slo')).toHaveTextContent('SLO 200 ms')
     expect(await exportedCaption()).toMatch(/SLO of 200\.0 ms/)
-    fireEvent.click(right().getByRole('button', {name: 'Use the experiment SLO'}))
+    expect(right().getByText(/Experiment SLO 180/)).toBeInTheDocument()
+    fireEvent.click(right().getByRole('button', {name: 'Reset'}))
     expect(figure().querySelector('.annotation-slo')).toHaveTextContent('SLO 180 ms')
+  })
+
+  it('types the SLO freely (comma or dot), in ms or s, and shows the time above it', () => {
+    render(<Studio />)
+    layer('SLO line')
+    const field = () => right().getByLabelText(/^Threshold/) as HTMLInputElement
+    // A value on its way ("0," → "0,15") stays as typed; a number applies at once.
+    fireEvent.click(right().getByRole('radio', {name: 's'}))
+    expect(field()).toHaveValue('0.18')
+    expect(figure().querySelector('.annotation-slo')).toHaveTextContent('SLO 0.18 s')
+    fireEvent.change(field(), {target: {value: '0,'}})
+    expect(field()).toHaveValue('0,')
+    expect(figure().querySelector('.annotation-slo')).toHaveTextContent('SLO 0.18 s')
+    fireEvent.change(field(), {target: {value: '0,15'}})
+    expect(figure().querySelector('.annotation-slo')).toHaveTextContent('SLO 0.15 s')
+    fireEvent.click(right().getByRole('radio', {name: 'ms'}))
+    expect(field()).toHaveValue('150')
+    expect(figure().querySelector('.annotation-slo')).toHaveTextContent('SLO 150 ms')
+    // Leaving a field that is not a number restores the value in use.
+    fireEvent.change(field(), {target: {value: 'abc'}})
+    fireEvent.blur(field())
+    expect(field()).toHaveValue('150')
+    // Time above the SLO, per series, on the plotted mean of the repetitions: Alpha is above 150 ms in 2 of 6 windows.
+    const shares = within(right().getByRole('region', {name: 'Time above the threshold'}))
+    expect(shares.getByText('Alpha').closest('li')).toHaveTextContent('Alpha33.3 %')
+    expect(shares.getByText('Beta').closest('li')).toHaveTextContent('Beta100 %')
+    expect(shares.getByText('Alpha').closest('li')!.querySelector<HTMLElement>('.ks-slo-bar > span')!.style.width).toMatch(/^33\.3/)
+    // The chart keeps a plain label; the shares stay in the panel.
+    expect(figure().querySelector('.annotation-slo')).toHaveTextContent(/^SLO 150 ms$/)
+    fireEvent.click(right().getByRole('button', {name: 'Delete SLO line'}))
+    expect(figure().querySelector('.annotation-slo')).toBeNull()
+  })
+
+  it('hides automatic lines and deletes the user’s from their right-click menu; renames their labels in place', () => {
+    render(<Studio />)
+    // Rename "end of load" by clicking its text; an empty text restores it.
+    const endOfLoad = () => [...figure().querySelectorAll('.annotation-phase text')].find(item => /end of load|finish/.test(item.textContent ?? ''))!
+    fireEvent.click(endOfLoad())
+    const field = within(studio()).getByRole('textbox', {name: 'Line label'})
+    expect(field).toHaveValue('end of load')
+    fireEvent.change(field, {target: {value: 'finish'}})
+    fireEvent.keyDown(field, {key: 'Enter'})
+    fireEvent.blur(field)
+    expect(figure().querySelector('.annotation-phase')?.parentElement).toHaveTextContent('finish')
+    fireEvent.click(endOfLoad())
+    fireEvent.change(within(studio()).getByRole('textbox', {name: 'Line label'}), {target: {value: ''}})
+    fireEvent.blur(within(studio()).getByRole('textbox', {name: 'Line label'}))
+    expect(figure()).toHaveTextContent('end of load')
+    // Right-click the load phases on the chart: delete them.
+    fireEvent.contextMenu(figure().querySelector('.annotation-phase line')!)
+    fireEvent.click(within(studio()).getByRole('menuitem', {name: /^Delete load phases/}))
+    expect(figure().querySelector('.annotation-phase')).toBeNull()
+    // The user's own line is deleted from the same menu.
+    fireEvent.click(layers().getByRole('button', {name: 'Add a line in the graph'}))
+    fireEvent.click(within(layers().getByRole('group', {name: 'Line to add'})).getByRole('button', {name: /^Threshold line/}))
+    expect(figure().querySelector('.annotation-user.annotation-hline')).not.toBeNull()
+    fireEvent.contextMenu(figure().querySelector('.annotation-user.annotation-hline line')!)
+    fireEvent.click(within(studio()).getByRole('menuitem', {name: /^Delete threshold line/}))
+    expect(figure().querySelector('.annotation-user')).toBeNull()
+  })
+
+  it('keeps the highlight of a selected line inside the plot', () => {
+    render(<Studio />)
+    layer('SLO line')
+    const halo = studio().querySelector('.ks-overlay path.ks-halo.selected')!
+    const clip = studio().querySelector(`.ks-overlay clipPath#${CSS.escape(halo.getAttribute('clip-path')!.slice(5, -1))} rect`)!
+    const frame = figure().querySelector('.figure-panel > rect.axis')!
+    expect(['x', 'y', 'width', 'height'].map(name => clip.getAttribute(name))).toEqual(['x', 'y', 'width', 'height'].map(name => frame.getAttribute(name)))
+    const handle = studio().querySelector('.ks-overlay .ks-handle')!
+    const left = Number(frame.getAttribute('x')), right = left + Number(frame.getAttribute('width'))
+    expect(Number(handle.getAttribute('x'))).toBeGreaterThanOrEqual(left)
+    expect(Number(handle.getAttribute('x')) + 4.5).toBeLessThanOrEqual(right)
   })
 
   it('adds charts to one image with letters and a layout picker, and exports them as one SVG', async () => {

@@ -87,8 +87,10 @@ export interface FigureSpec {
   series: Record<string, SeriesStyleSpec>
   // Legend and drawing order (later = drawn on top); keys not listed keep their default order.
   order: string[]
-  // sloValue: the SLO threshold in milliseconds when the figure overrides the experiment's.
-  auto: {phases: boolean; warmup: boolean; slo: boolean; sloValue?: number}
+  // sloValue: the SLO threshold in milliseconds when the figure overrides the experiment's;
+  // sloUnit: how its label and field show it (default: the axis unit); labels: the user's text
+  // for automatic labels, by their key ("slo", "warmup" or the phase's own text).
+  auto: {phases: boolean; warmup: boolean; slo: boolean; sloValue?: number; sloUnit?: 'ms' | 's'; labels?: Record<string, string>}
   grid: GridMode
   // Line and marker scale of the style preset (1 = paper).
   strokeScale: number
@@ -198,7 +200,7 @@ export function normalizeSpec(value: unknown, fallbackType: SpecType = 'timeseri
     palette: oneOf(source.palette, Object.keys(palettes) as PaletteId[], base.palette),
     series,
     order: Array.isArray(source.order) ? source.order.filter((item): item is string => typeof item === 'string').slice(0, 200) : [],
-    auto: {phases: auto.phases !== false, warmup: auto.warmup === true, slo: auto.slo !== false, ...(finite(auto.sloValue) !== undefined && finite(auto.sloValue)! > 0 ? {sloValue: finite(auto.sloValue)} : {})},
+    auto: {phases: auto.phases !== false, warmup: auto.warmup === true, slo: auto.slo !== false, ...(finite(auto.sloValue) !== undefined && finite(auto.sloValue)! > 0 ? {sloValue: finite(auto.sloValue)} : {}), ...(auto.sloUnit === 'ms' || auto.sloUnit === 's' ? {sloUnit: auto.sloUnit} : {}), ...(auto.labels && typeof auto.labels === 'object' && Object.keys(auto.labels).length ? {labels: Object.fromEntries(Object.entries(auto.labels as Record<string, unknown>).filter((entry): entry is [string, string] => typeof entry[1] === 'string'))} : {})},
     grid: oneOf(source.grid, ['none', 'major', 'minor'] as const, base.grid),
     strokeScale: clamp(finite(source.strokeScale), .5, 3) ?? 1,
     labels: normalizeLabels(source.labels),

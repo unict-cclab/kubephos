@@ -198,6 +198,27 @@ describe('Charts', () => {
     expect(sizes()).toEqual(['half', 'half'])
   })
 
+  it('gives the last chart of a row a left corner too, which widens it towards the left', async () => {
+    render(<Page />)
+    await waitFor(() => expect(names()).toHaveLength(2))
+    Object.defineProperty(grid(), 'clientWidth', {configurable: true, value: 1200})
+    const box = (left: number, right: number) => ({left, right, width: right - left, top: 0, bottom: 300, height: 300, x: left, y: 0, toJSON: () => ({})})
+    vi.spyOn(grid(), 'getBoundingClientRect').mockReturnValue(box(0, 1200))
+    vi.spyOn(cells()[0], 'getBoundingClientRect').mockReturnValue(box(0, 390))
+    vi.spyOn(cells()[1], 'getBoundingClientRect').mockReturnValue(box(810, 1200))
+    const left = (name: RegExp) => section().queryByRole('button', {name})
+    fireEvent.pointerEnter(section().getAllByRole('figure')[0])
+    expect(left(/^Resize P95 latency.*from the left/)).not.toBeInTheDocument()
+    fireEvent.pointerEnter(section().getAllByRole('figure')[1])
+    const corner = left(/^Resize Achieved request rate from the left/)!
+    pointer('pointerDown', corner, 810)
+    pointer('pointerMove', corner, 410)
+    pointer('pointerUp', corner, 410)
+    expect(sizes()).toEqual(['third', 'two-thirds'])
+    fireEvent.keyDown(corner, {key: 'ArrowRight'})
+    expect(sizes()).toEqual(['third', 'half'])
+  })
+
   it('duplicates a chart from its ⋯ button and opens charts in KubeStudio by double-click, Enter or the menu', async () => {
     const onEdit = vi.fn()
     render(<Page onEdit={onEdit} />)

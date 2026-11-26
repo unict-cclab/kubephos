@@ -29,6 +29,8 @@
   property is gone. "Add chart" opens KubeStudio,
   and "Add to results" puts the image in the grid (or replaces the chart it was
   opened from).
+- The simple chart cards (input load, topology, call chain) download PDF, SVG
+  and PNG, each button with the download icon (its slot was empty).
 - A completed execution shows one quiet line ("Execution completed in 5m ·
   input load 3m, 2 steps", with Process logs) instead of the status panel and the
   input load progress chart; the input load profile opens from that line. A
@@ -74,6 +76,17 @@
   - The Legend properties list its entries, each a colour (click to change it)
     beside its text (the same text as the series' own label). A single plain
     line gets a legend once its entry has a text.
+  - Number fields are typed freely, with a comma or a dot: the text is never
+    rewritten while typing, a number applies at once, leaving the field shows
+    the value in use. (A type="number" field turned "0," into an empty value,
+    which reset the SLO.)
+  - SLO line: shown and typed in ms or s; "Time above the SLO" gives, per
+    series, the share of measured windows above and below it (windows, not
+    single requests), optionally written in its label.
+  - Lines drawn on the chart: right-click hides an automatic one (SLO, load
+    phases, warm-up) or deletes the user's own; a click on a line's label
+    renames it in place (an empty text restores the automatic one). The
+    highlight of a selected line stays inside the plot.
   - "Uncertainty" shows only when a series has repetitions; the panels control
     of old saved charts is under "Chart settings".
   - Palettes are a list: each with its name, a short description and its
@@ -87,9 +100,9 @@
   the unused XY helpers, the line-marker sampling, and the styles of the old
   summary, the figure settings panel, the metric chips, the table notes and the
   heatmap grid.
-- Validation: typecheck, all frontend tests (920; new ones for the charts grid,
+- Validation: typecheck, all frontend tests (927; new ones for the charts grid,
   its persistence and the KubeStudio right-click menu, drag handle and caption),
-  the asset budget (219.1 of 220 KiB), the theme contrast check, `go vet`, and
+  the asset budget (219.3 of 220 KiB), the theme contrast check, `go vet`, and
   the API and storage tests against PostgreSQL (new
   `TestResultLayoutsArePerUserAndFollowResultAccess`) passed. Not yet checked in
   the browser against real data.

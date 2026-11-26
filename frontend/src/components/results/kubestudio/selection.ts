@@ -35,11 +35,20 @@ export function parseKey(key: string): Selection | undefined {
 }
 
 // Lines drawn automatically from the experiment, selectable like the user's annotations.
-export const autoAnnotations: Record<string, {label: string; key: 'slo' | 'phases' | 'warmup'}> = {slo: {label: 'SLO line', key: 'slo'}, phase: {label: 'Load-phase boundaries', key: 'phases'}, warmup: {label: 'Warm-up end', key: 'warmup'}}
+export const autoAnnotations: Record<string, {label: string; key: 'slo' | 'phases' | 'warmup'}> = {slo: {label: 'SLO line', key: 'slo'}, phase: {label: 'Load phases', key: 'phases'}, warmup: {label: 'Warm-up end', key: 'warmup'}}
 
 // Canvas highlight: hugs the element in chart coordinates (points), on a layer above
 // the paper that never reaches the exports.
-export interface Shape {kind: 'path' | 'rect'; d?: string; x?: number; y?: number; width?: number; height?: number; handles?: Array<{x: number; y: number}>}
+// clip: the plot area a line's highlight stays inside (figure coordinates).
+export interface Shape {kind: 'path' | 'rect'; d?: string; x?: number; y?: number; width?: number; height?: number; handles?: Array<{x: number; y: number}>; clip?: {x: number; y: number; width: number; height: number}}
+
+// The plot frame of the panel an element belongs to.
+function plotClip(element: Element): Shape['clip'] {
+  const frame = element.closest('.figure-panel')?.querySelector(':scope > rect.axis')
+  if (!frame) return undefined
+  const [x, y, width, height] = ['x', 'y', 'width', 'height'].map(name => Number(frame.getAttribute(name)))
+  return [x, y, width, height].every(Number.isFinite) ? {x, y, width, height} : undefined
+}
 
 export function highlightShapes(cell: Element | null, key: string, geometry: FigureGeometry | undefined): Shape[] {
   if (!cell || !key || !geometry) return []
@@ -48,11 +57,15 @@ export function highlightShapes(cell: Element | null, key: string, geometry: Fig
   const elements = [...svg.querySelectorAll('[data-select]')].filter(element => element.getAttribute('data-select') === key)
   if (!elements.length) return []
   const paths = elements.flatMap(element => element.classList.contains('series') ? [...element.querySelectorAll('path.series-line, path.series-fit')] : []).map(path => path.getAttribute('d')).filter((d): d is string => Boolean(d))
-  if (paths.length) return paths.map(d => ({kind: 'path', d}))
+  if (paths.length) {const clip = plotClip(elements[0]); return paths.map(d => ({kind: 'path', d, clip}))}
   const line = elements.length === 1 ? elements[0].querySelector(':scope > line') : null
   if (line && elements[0].classList.contains('annotation')) {
     const [x1, y1, x2, y2] = ['x1', 'y1', 'x2', 'y2'].map(name => Number(line.getAttribute(name)))
-    return [{kind: 'path', d: `M${x1},${y1}L${x2},${y2}`, handles: [{x: (x1 + x2) / 2, y: (y1 + y2) / 2}]}]
+    const clip = plotClip(elements[0])
+    // The handle sits on the line, inside the plot even when the line runs along its edge.
+    const inside = (value: number, from: number, size: number) => Math.min(Math.max(value, from + 2.25), from + size - 2.25)
+    const handle = {x: (x1 + x2) / 2, y: (y1 + y2) / 2}
+    return [{kind: 'path', d: `M${x1},${y1}L${x2},${y2}`, clip, handles: [clip ? {x: inside(handle.x, clip.x, clip.width), y: inside(handle.y, clip.y, clip.height)} : handle]}]
   }
   const frame = svg.getBoundingClientRect()
   if (!frame.width) return []

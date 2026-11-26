@@ -183,7 +183,9 @@ export function SpecFigure({id, name, model, settings, grid, strokeScale, proven
   const showX = (panel: ModelPanel) => !sharedX || Math.floor(panel.index / model.columns) === model.rows - 1
   const showLeft = (panel: ModelPanel) => !sharedY || panel.index % model.columns === 0
   const leftMargin = Math.max(fs * .9, ...model.panels.map(panel => panel.left ? (showLeft(panel) ? widest(panel.left, metrics) + fs * 2.1 : fs * .9) : fs * .9))
-  const rightMargin = Math.max(fs * .9, ...model.panels.map(panel => panel.right ? widest(panel.right, metrics) + fs * 2.1 : fs * .9))
+  // The last X tick label is centred on the plot's right edge: half of it must still fit on the page.
+  const xOverhang = (panel: ModelPanel) => showX(panel) && panel.x.scale.ticks.length ? metrics.text(panel.x.format(panel.x.scale.ticks.at(-1)!)) / 2 + fs * .25 : 0
+  const rightMargin = Math.max(fs * .9, ...model.panels.map(panel => panel.right ? widest(panel.right, metrics) + fs * 2.1 : xOverhang(panel)))
   const topMargin = multi && model.panels.some(panel => panel.letter) ? fs * 1.6 : multi ? fs * .6 : 0
   const boxes = model.panels.map(panel => {
     const row = Math.floor(panel.index / model.columns)
@@ -222,7 +224,7 @@ export function SpecFigure({id, name, model, settings, grid, strokeScale, proven
       const from = Math.max(box.left, Math.min(a, b))
       const to = Math.min(box.right, Math.max(a, b))
       if (to <= from) return
-      children.push(<g key={`xr-${index}`} className="annotation annotation-xrange" data-select={select(item)}><rect x={r(from)} y={r(box.top)} width={r(to - from)} height={r(box.bottom - box.top)} fill="#000000" fillOpacity="0.07" />{item.label && text({x: (from + to) / 2, y: box.top + fs * 1.9, anchor: 'middle', size: fs * .85, fill: '#333333', className: 'annotation-label', children: item.label})}</g>)
+      children.push(<g key={`xr-${index}`} className="annotation annotation-xrange" data-select={select(item)} data-label-key={item.labelKey ?? (item.id ? `user:${item.id}` : undefined)}><rect x={r(from)} y={r(box.top)} width={r(to - from)} height={r(box.bottom - box.top)} fill="#000000" fillOpacity="0.07" />{item.label && text({x: Math.max(box.left + metrics.text(item.label, fs * .85) / 2, Math.min(box.right - metrics.text(item.label, fs * .85) / 2, (from + to) / 2)), y: box.top + fs * 1.9, anchor: 'middle', size: fs * .85, fill: '#333333', className: 'annotation-label', children: item.label})}</g>)
     })
     // Data, in legend order (later on top).
     panel.series.forEach(series => {
@@ -258,17 +260,18 @@ export function SpecFigure({id, name, model, settings, grid, strokeScale, proven
         const x = px(item.x!)
         if (x === undefined || x < box.left - .01 || x > box.right + .01) return
         const user = item.source === 'user'
-        const near = x > box.right - fs * 4
-        children.push(<g key={`v-${index}`} className={`annotation annotation-vline annotation-${item.source}`} data-select={select(item)}><line x1={r(x)} x2={r(x)} y1={r(box.top)} y2={r(box.bottom)} stroke={item.color} strokeWidth={r(axisLine * (user ? .8 : .6))} strokeDasharray={user ? '3 2' : '1 1.6'} />{item.label && text({x: near ? x - fs * .25 : x + fs * .25, y: box.top + fs * (item.source === 'warmup' ? 1.75 : .85), anchor: near ? 'end' : 'start', size: fs * .78, fill: '#555555', className: 'annotation-label', children: item.label})}</g>)
+        // A label that would run past the plot's right edge goes on the left of its line.
+        const near = x + fs * .25 + metrics.text(item.label ?? '', fs * .78) > box.right
+        children.push(<g key={`v-${index}`} className={`annotation annotation-vline annotation-${item.source}`} data-select={select(item)} data-label-key={item.labelKey ?? (item.id ? `user:${item.id}` : undefined)}><line x1={r(x)} x2={r(x)} y1={r(box.top)} y2={r(box.bottom)} stroke={item.color} strokeWidth={r(axisLine * (user ? .8 : .6))} strokeDasharray={user ? '3 2' : '1 1.6'} />{item.label && text({x: near ? x - fs * .25 : x + fs * .25, y: box.top + fs * (item.source === 'warmup' ? 1.75 : .85), anchor: near ? 'end' : 'start', size: fs * .78, fill: '#555555', className: 'annotation-label', children: item.label})}</g>)
       } else if (item.kind === 'hline') {
         const y = yOf(item.axis)(item.y!)
         if (y === undefined || y < box.top - .01 || y > box.bottom + .01) return
-        children.push(<g key={`h-${index}`} className={`annotation annotation-hline annotation-${item.source}`} data-select={select(item)}><line x1={r(box.left)} x2={r(box.right)} y1={r(y)} y2={r(y)} stroke={item.color} strokeWidth={r(axisLine * (item.source === 'slo' ? 1 : .8))} strokeDasharray={item.source === 'slo' ? '4 3' : '3 2'} />{item.label && text({x: box.right - fs * .3, y: y - fs * .35, anchor: 'end', size: fs * .9, fill: item.color, className: 'annotation-label slo-label', children: item.label})}</g>)
+        children.push(<g key={`h-${index}`} className={`annotation annotation-hline annotation-${item.source}`} data-select={select(item)} data-label-key={item.labelKey ?? (item.id ? `user:${item.id}` : undefined)}><line x1={r(box.left)} x2={r(box.right)} y1={r(y)} y2={r(y)} stroke={item.color} strokeWidth={r(axisLine * (item.source === 'slo' ? 1 : .8))} strokeDasharray={item.source === 'slo' ? '4 3' : '3 2'} />{item.label && text({x: box.right - fs * .3, y: y - fs * .35, anchor: 'end', size: fs * .9, fill: item.color, className: 'annotation-label slo-label', children: item.label})}</g>)
       } else if (item.kind === 'text') {
         const x = px(item.x!)
         const y = yOf(item.axis)(item.y!)
         if (x === undefined || y === undefined) return
-        children.push(<g key={`t-${index}`} className="annotation annotation-text" data-select={select(item)}>{text({x: Math.min(box.right, Math.max(box.left, x)), y: Math.min(box.bottom, Math.max(box.top + fs, y)), size: fs * .9, fill: item.color, className: 'annotation-label', children: item.label})}</g>)
+        children.push(<g key={`t-${index}`} className="annotation annotation-text" data-select={select(item)} data-label-key={item.labelKey ?? (item.id ? `user:${item.id}` : undefined)}>{text({x: Math.max(box.left, Math.min(box.right - metrics.text(item.label ?? '', fs * .9), x)), y: Math.min(box.bottom, Math.max(box.top + fs, y)), size: fs * .9, fill: item.color, className: 'annotation-label', children: item.label})}</g>)
       }
     })
     // Axes.
