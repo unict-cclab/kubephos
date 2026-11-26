@@ -284,7 +284,7 @@ describe('publication figures', () => {
   const plot = (settings: FigureSettings) => {
     const item = latencyRun('fig', 10)
     const view = render(<TimeSeriesFigure name="p95" metric="load.p95_response_time" title="P95 latency" axisLabel="P95 latency (ms)" series={[{artifactID: 'fig', label: 'Baseline', unit: 'milliseconds', points: item.dataset.spec.series[0].points.map((point, index) => ({timestamp: new Date(index * 15000).toISOString(), value: point.value})), deviation: item.dataset.spec.series[0].points.map((_, index) => ({timestamp: new Date(index * 15000).toISOString(), value: 1})), runs: 3}]} settings={settings} provenance={[{metric: 'load.p95_response_time', provenance: provenanceFor([item], 'load.p95_response_time')}]} />)
-    return {view, svg: view.container.querySelector('svg') as SVGSVGElement}
+    return {view, svg: view.container.querySelector('svg[id]') as SVGSVGElement}
   }
 
   it('exports SVG and PDF at the physical size with the chosen font family and point size', () => {

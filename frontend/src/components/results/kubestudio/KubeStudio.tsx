@@ -72,7 +72,8 @@ const sizeChoices: Array<{value: FigureSize; label: string; hint: string}> = [{v
 // Metrics suggested, in order, for each chart added to an image.
 const suggested = ['load.p95_response_time', 'load.achieved_rps', 'cpu.cores', 'load.failure_percentage', 'load.successful_rps', 'memory.working_set', 'application.p95_response_time']
 
-interface LayerRow {key: string; label: string; depth: 1 | 2; icon?: ReactNode; heading?: boolean; selectable?: boolean; eye?: {visible: boolean; label: string; onToggle: () => void}; action?: ReactNode; dim?: boolean; menu?: ReactNode}
+// onMenu: the row's right-click menu (lines in the graph: Delete).
+interface LayerRow {key: string; label: string; depth: 1 | 2; icon?: ReactNode; heading?: boolean; selectable?: boolean; eye?: {visible: boolean; label: string; onToggle: () => void}; action?: ReactNode; dim?: boolean; menu?: ReactNode; onMenu?: (event: ReactMouseEvent) => void}
 
 export function KubeStudio({open, onClose, request, data, groups, settings, onSettings, storageKey, onSave, onKeep}: {open: boolean; onClose: () => void; request: StudioRequest; data: StudioData | undefined; groups: OverviewGroup[]; settings: FigureSettings; onSettings: (next: FigureSettings) => void; storageKey?: string; onSave?: StudioSave; onKeep?: StudioKeep}) {
   const id = useId()
@@ -108,9 +109,10 @@ export function KubeStudio({open, onClose, request, data, groups, settings, onSe
   const [selection, setSelection] = useState<Selection>()
   // The chart-type picker: changing the selected chart, or choosing the type of a chart to add.
   const [switcher, setSwitcher] = useState<'change' | 'add'>()
-  // The axis title being renamed on the figure, with where its field sits on the paper.
-  const [axisEdit, setAxisEdit] = useState<{chart: string; side: 'x' | 'left' | 'right'; panel: number; value: string; left: number; top: number; width: number}>()
-  const axisCancelled = useRef(false)
+  // A text renamed in place on the figure (an axis title or a line's label), with where its
+  // field sits on the paper. key: the line label's key ("user:<id>" for the user's own lines).
+  const [textEdit, setTextEdit] = useState<{chart: string; target: Target; key?: string; name: string; value: string; left: number; top: number; width: number}>()
+  const textCancelled = useRef(false)
   // The landing page of a new figure, until a suggestion, a custom chart or the last figure is chosen.
   const [landing, setLanding] = useState(Boolean(request.choose && !figure))
   // Back to suggestions (Home) from the editor: the figure stays, offered as "Continue last figure".
@@ -133,7 +135,8 @@ export function KubeStudio({open, onClose, request, data, groups, settings, onSe
   const [format, setFormat] = useState<ExportAction>(() => rememberedFormat())
   const [help, setHelp] = useState(false)
   const [captionEditing, setCaptionEditing] = useState(false)
-  const [menu, setMenu] = useState<{at: MenuAnchor; chart?: string}>()
+  // lineOnly: opened on a line's row in Layers, so only the line's own actions.
+  const [menu, setMenu] = useState<{at: MenuAnchor; chart?: string; target?: Target; lineOnly?: boolean}>()
   const [dragging, setDragging] = useState<string>()
   const [dropOn, setDropOn] = useState<string>()
   const [dismissed, setDismissed] = useState<string[]>([])
@@ -484,21 +487,39 @@ export function KubeStudio({open, onClose, request, data, groups, settings, onSe
     announce(`Chart ${view.letter} deleted.`, true)
   }
   // Right-click menu of a chart, or of the page when no chart is under the pointer.
-  const menuItems = (chartId: string | undefined): MenuItem[] => {
+  const menuItems = (chartId: string | undefined, target?: Target): MenuItem[] => {
     const view = viewOf(chartId)
+    if (view && target && menu?.lineOnly) return lineItems(view, target)
     return [
+      ...(view && target ? lineItems(view, target) : []),
       ...(view ? [
-        {label: 'Duplicate chart', icon: 'create' as const, hint: count >= maxCharts ? `An image holds up to ${maxCharts} charts` : 'Adds a copy next to it', disabled: count >= maxCharts, run: () => duplicateChart(view)},
+        {label: 'Duplicate chart', separated: Boolean(target && lineItems(view, target).length), icon: 'create' as const, hint: count >= maxCharts ? `An image holds up to ${maxCharts} charts` : 'Adds a copy next to it', disabled: count >= maxCharts, run: () => duplicateChart(view)},
         {label: 'Delete chart', icon: 'delete' as const, danger: true, hint: count <= 1 ? 'An image keeps at least one chart' : undefined, disabled: count <= 1, run: () => removeChart(view)}
       ] : []),
       {label: caption ? 'Edit caption' : 'Add caption', icon: 'edit', hint: 'Optional text that describes the figure', separated: Boolean(view), run: () => setCaptionEditing(true)}
     ]
   }
+  // A line drawn on the chart is deleted from its right-click menu. An automatic one (SLO,
+  // load phases, warm-up) can be added back with + in "Add a line in the graph".
+  const lineItems = (view: ChartView, target: Target): MenuItem[] => {
+    if (target.type !== 'annotation' || !view.spec) return []
+    const auto = autoAnnotations[target.id]
+    if (auto) return [{label: `Delete ${auto.label.toLowerCase()}`, icon: 'delete', danger: true, hint: 'Add it again with + in Layers', run: () => removeAutoLine(view, auto.key)}]
+    const item = view.spec.panels[target.panel]?.annotations.find(entry => entry.id === target.id)
+    return item ? [{label: `Delete ${annotationNames[item.kind].toLowerCase()}`, icon: 'delete', danger: true, run: () => removeNote(view, target.panel, item.id)}] : []
+  }
+  const openLineMenu = (view: ChartView, target: Target) => (event: ReactMouseEvent) => {
+    event.preventDefault()
+    select({chart: view.chart.id, target})
+    setMenu({at: {x: event.clientX, y: event.clientY}, chart: view.chart.id, target, lineOnly: true})
+  }
   const onPaperContextMenu = (event: ReactMouseEvent<HTMLDivElement>) => {
     event.preventDefault()
     const chart = cellAt(event.target)?.getAttribute('data-chart') ?? undefined
-    if (chart) select({chart})
-    setMenu({at: {x: event.clientX, y: event.clientY}, chart})
+    const target = parseTarget((event.target as Element).closest?.('[data-select]')?.getAttribute('data-select'))
+    const line = target?.type === 'annotation' ? target : undefined
+    if (chart) select({chart, target: line})
+    setMenu({at: {x: event.clientX, y: event.clientY}, chart, target: line})
   }
 
   // Check fixes (undoable like any edit).
@@ -629,26 +650,48 @@ export function KubeStudio({open, onClose, request, data, groups, settings, onSe
     if (!view) {select(undefined); return}
     const target = parseTarget((event.target as Element).closest?.('[data-select]')?.getAttribute('data-select'))
     select({chart: view.chart.id, target: target && (view.spec || target.type === 'title' || target.type === 'axis') ? target : undefined})
-    const title = (event.target as Element).closest?.('.axis-label')
-    if (target?.type === 'axis' && title && paper.current) {
-      const box = title.getBoundingClientRect()
-      const frame = paper.current.getBoundingClientRect()
-      const width = Math.min(frame.width - 8, Math.max(160, (target.side === 'x' ? box.width : box.height) + 48))
-      axisCancelled.current = false
-      setAxisEdit({chart: view.chart.id, side: target.side, panel: target.panel, value: title.textContent ?? '', width,
-        left: Math.max(4, Math.min(frame.width - width - 4, box.left + box.width / 2 - frame.left - width / 2)), top: box.top + box.height / 2 - frame.top - 15})
-    }
+    // A click on an axis title, or on the label of a line, renames it in place.
+    const clicked = event.target as Element
+    const title = clicked.closest?.('.axis-label')
+    const label = target?.type === 'annotation' ? clicked.closest?.('text')?.closest('[data-label-key]') : null
+    const edited = target?.type === 'axis' ? title : label?.querySelector('text')
+    if (!target || !edited || !paper.current) return
+    const box = edited.getBoundingClientRect()
+    const frame = paper.current.getBoundingClientRect()
+    const width = Math.min(frame.width - 8, Math.max(160, (target.type === 'axis' && target.side !== 'x' ? box.height : box.width) + 48))
+    const name = target.type === 'axis' ? `${target.side === 'x' ? 'X' : target.side === 'right' ? 'Right Y' : 'Y'} axis title` : 'Line label'
+    textCancelled.current = false
+    setTextEdit({chart: view.chart.id, target, key: label?.getAttribute('data-label-key') ?? undefined, name, value: edited.textContent ?? '', width,
+      left: Math.max(4, Math.min(frame.width - width - 4, box.left + box.width / 2 - frame.left - width / 2)), top: box.top + box.height / 2 - frame.top - 15})
   }
-  // An axis title edited in place: an empty title restores the automatic one.
-  const commitAxis = (value: string) => {
-    const edit = axisEdit
-    setAxisEdit(undefined)
+  // A text edited in place: an empty one restores the automatic text.
+  const commitText = (value: string) => {
+    const edit = textEdit
+    setTextEdit(undefined)
     const view = edit && viewOf(edit.chart)
     if (!edit || !view || value.trim() === edit.value.trim()) return
-    const label = value.trim() || undefined
-    if (edit.side !== 'right') labelOverride(view, edit.side === 'x' ? 'x' : 'y', label)
-    else if (view.spec) {const axis = view.spec.panels[Math.min(edit.panel, view.spec.panels.length - 1)].right; setAxis(view, edit.panel, 'right', {...axis, label})}
-    announce(label ? `Axis renamed to ${label}.` : 'Axis title restored.', true)
+    const text = value.trim() || undefined
+    const target = edit.target
+    if (target.type === 'axis') {
+      if (target.side !== 'right') labelOverride(view, target.side === 'x' ? 'x' : 'y', text)
+      else if (view.spec) {const axis = view.spec.panels[Math.min(target.panel, view.spec.panels.length - 1)].right; setAxis(view, target.panel, 'right', {...axis, label: text})}
+      announce(text ? `Axis renamed to ${text}.` : 'Axis title restored.', true)
+      return
+    }
+    if (!edit.key) return
+    if (edit.key.startsWith('user:')) {
+      const id = edit.key.slice(5)
+      // A text note keeps some text; a line's label can be removed.
+      setChartSpec(view)(current => ({...current, panels: current.panels.map(panel => ({...panel, annotations: panel.annotations.map(item => item.id !== id ? item : item.kind === 'text' ? {...item, text: text ?? item.text} : {...item, label: text})}))}))
+    } else {
+      const key = edit.key
+      setChartSpec(view)(current => {
+        const labels = {...current.auto.labels}
+        if (text === undefined) delete labels[key]; else labels[key] = text
+        return {...current, auto: {...current.auto, labels: Object.keys(labels).length ? labels : undefined}}
+      })
+    }
+    announce(text ? `Label changed to ${text}.` : 'Automatic label restored.', true)
   }
 
   // ---------------------------------------------------------------------------------------
@@ -685,6 +728,12 @@ export function KubeStudio({open, onClose, request, data, groups, settings, onSe
     setAddingNote(undefined)
     select({chart: view.chart.id, target: {type: 'annotation', panel: 0, id: item.id}})
   }
+  const setAutoLine = (view: ChartView, key: 'slo' | 'phases' | 'warmup', on: boolean) => setChartSpec(view)(current => ({...current, auto: {...current.auto, [key]: on}}))
+  const removeAutoLine = (view: ChartView, key: 'slo' | 'phases' | 'warmup') => {
+    setAutoLine(view, key, false)
+    select({chart: view.chart.id})
+    announce(`${Object.values(autoAnnotations).find(item => item.key === key)!.label} deleted.`, true)
+  }
   const removeNote = (view: ChartView, panel: number, noteId: string) => {
     setChartSpec(view)(current => ({...current, panels: current.panels.map((entry, index) => index === panel ? {...entry, annotations: entry.annotations.filter(item => item.id !== noteId)} : entry)}))
     select({chart: view.chart.id})
@@ -710,17 +759,25 @@ export function KubeStudio({open, onClose, request, data, groups, settings, onSe
     rows.push({key: key('legend'), label: 'Legend', depth: 2, icon: layerIcons.legend, selectable: true, dim: legendOff, eye: {visible: !legendOff, label: legendOff ? 'Show the legend' : 'Hide the legend', onToggle: () => {if (sharedLegend && view.index > 0) setSharedLegend(false); else onSettings({...settings, legend: settings.legend === 'none' ? 'bottom' : 'none'})}}})
     if (spec && model) {
       const adding = addingNote === view.chart.id
+      // The automatic lines this chart can draw; a deleted one is offered again in the + menu.
+      const sloPossible = spec.type === 'timeseries' && hasSLO && model.panels.some(panel => panel.metrics.some(item => /^load\.(p\d+|mean)_response_time$/.test(item)))
+      const autoLines = spec.type !== 'timeseries' ? [] : [
+        ...(sloPossible ? [{id: 'slo', key: 'slo' as const, label: 'SLO line', hint: 'The objective set on the experiment'}] : []),
+        ...(data?.profile ? [{id: 'phase', key: 'phases' as const, label: 'Load phases', hint: 'Where each step of the load profile starts'}, {id: 'warmup', key: 'warmup' as const, label: 'Warm-up end', hint: 'When the measured window begins'}] : [])
+      ]
+      const deleted = autoLines.filter(line => !spec.auto[line.key])
       rows.push({key: key('h-annotations'), label: 'Add a line in the graph', depth: 2, heading: true, action: !model.empty && <button type="button" className="ks-icon-button ks-small" aria-label="Add a line in the graph" aria-expanded={adding} title="Add a threshold (e.g. the SLO), a time range, a vertical line or a label" onClick={() => setAddingNote(adding ? undefined : view.chart.id)}>{layerIcons.plus}</button>,
-        menu: adding && <div className="ks-add-menu" role="group" aria-label="Line to add">{(['hline', 'xrange', 'vline', 'text'] as const).map(item => <button key={item} type="button" className="ks-add-option" onClick={() => addNote(view, item)}><strong>{annotationNames[item]}</strong><small>{annotationExamples[item]}</small></button>)}</div>})
-      if (spec.type === 'timeseries') {
-        const sloShown = model.panels.some(panel => panel.annotations.some(item => item.source === 'slo'))
-        if (hasSLO && model.panels.some(panel => panel.metrics.some(item => /^load\.(p\d+|mean)_response_time$/.test(item)))) rows.push({key: key('annotation:0:slo'), label: 'SLO line', depth: 2, icon: layerIcons.annotation, selectable: sloShown, dim: !spec.auto.slo, eye: {visible: spec.auto.slo, label: spec.auto.slo ? 'Hide the SLO line' : 'Show the SLO line', onToggle: () => setChartSpec(view)(current => ({...current, auto: {...current.auto, slo: !current.auto.slo}}))}})
-        if (data?.profile) {
-          rows.push({key: key('annotation:0:phase'), label: 'Load phases', depth: 2, icon: layerIcons.annotation, selectable: spec.auto.phases, dim: !spec.auto.phases, eye: {visible: spec.auto.phases, label: spec.auto.phases ? 'Hide load phases' : 'Show load phases', onToggle: () => setChartSpec(view)(current => ({...current, auto: {...current.auto, phases: !current.auto.phases}}))}})
-          rows.push({key: key('annotation:0:warmup'), label: 'Warm-up end', depth: 2, icon: layerIcons.annotation, selectable: spec.auto.warmup, dim: !spec.auto.warmup, eye: {visible: spec.auto.warmup, label: spec.auto.warmup ? 'Hide warm-up end' : 'Show warm-up end', onToggle: () => setChartSpec(view)(current => ({...current, auto: {...current.auto, warmup: !current.auto.warmup}}))}})
-        }
+        menu: adding && <div className="ks-add-menu" role="group" aria-label="Line to add">
+          {(['hline', 'xrange', 'vline', 'text'] as const).map(item => <button key={item} type="button" className="ks-add-option" onClick={() => addNote(view, item)}><strong>{annotationNames[item]}</strong><small>{annotationExamples[item]}</small></button>)}
+          {deleted.map(line => <button key={line.id} type="button" className="ks-add-option" onClick={() => {setAutoLine(view, line.key, true); setAddingNote(undefined)}}><strong>{line.label}</strong><small>{line.hint}</small></button>)}
+        </div>})
+      for (const line of autoLines.filter(item => spec.auto[item.key])) {
+        const target: Target = {type: 'annotation', panel: 0, id: line.id}
+        const drawn = model.panels.some(panel => panel.annotations.some(item => item.source === line.id))
+        rows.push({key: key(`annotation:0:${line.id}`), label: line.label, depth: 2, icon: layerIcons.annotation, selectable: drawn, onMenu: openLineMenu(view, target)})
       }
-      spec.panels.forEach((panel, index) => panel.annotations.forEach(item => rows.push({key: key(`annotation:${index}:${item.id}`), label: item.kind === 'text' ? item.text || 'Text label' : item.label && item.label !== 'Threshold {value}' ? `${annotationNames[item.kind]} · ${item.label.replaceAll('{value}', '').trim()}` : annotationNames[item.kind], depth: 2, icon: layerIcons.annotation, selectable: true})))
+      spec.panels.forEach((panel, index) => panel.annotations.forEach(item => rows.push({key: key(`annotation:${index}:${item.id}`), label: item.kind === 'text' ? item.text || 'Text label' : item.label && item.label !== 'Threshold {value}' ? `${annotationNames[item.kind]} · ${item.label.replaceAll('{value}', '').trim()}` : annotationNames[item.kind], depth: 2, icon: layerIcons.annotation, selectable: true,
+        onMenu: openLineMenu(view, {type: 'annotation', panel: index, id: item.id!})})))
     }
     return rows
   }
@@ -729,7 +786,7 @@ export function KubeStudio({open, onClose, request, data, groups, settings, onSe
   const layerRow = (row: LayerRow) => <li key={row.key} className="ks-layer-row" data-depth={row.depth} data-heading={row.heading || undefined} data-dim={row.dim || undefined}
     onPointerEnter={() => {if (row.selectable) setHoverKey(row.key)}} onPointerLeave={() => setHoverKey('')}>
     {row.heading ? <span className="ks-layer-heading">{row.label}</span>
-      : <button type="button" className="ks-layer" aria-current={selectedKey === row.key || undefined} disabled={!row.selectable} onClick={() => select(parseKey(row.key))}>{row.icon}<span>{row.label}</span></button>}
+      : <button type="button" className="ks-layer" aria-current={selectedKey === row.key || undefined} disabled={!row.selectable && !row.onMenu} aria-haspopup={row.onMenu ? 'menu' : undefined} onClick={() => {if (row.selectable) select(parseKey(row.key))}} onContextMenu={row.onMenu}>{row.icon}<span>{row.label}</span></button>}
     {row.eye && <button type="button" className="ks-icon-button ks-small ks-eye" aria-label={row.eye.label} title={row.eye.label} aria-pressed={!row.eye.visible} onClick={row.eye.onToggle}><EyeIcon off={!row.eye.visible} /></button>}
     {row.action}
     {row.menu}
@@ -884,22 +941,35 @@ export function KubeStudio({open, onClose, request, data, groups, settings, onSe
         if (auto?.key === 'slo') {
           const line = model.panels[target.panel]?.annotations.find(entry => entry.source === 'slo')
           const axis = line?.axis === 'right' ? model.panels[target.panel].right : model.panels[target.panel].left
-          const suffix = axis ? unitSuffix(axis.unit, axis.spec.unit) : 'ms'
-          const factor = line && (spec.auto.sloValue ?? dataSLO) ? line.y! / (spec.auto.sloValue ?? dataSLO)! : 1
-          const value = line?.y
+          // The threshold is kept in ms and shown in the unit the user picks (default: the axis').
+          const unit = spec.auto.sloUnit ?? (axis && unitSuffix(axis.unit, axis.spec.unit) === 's' ? 's' : 'ms')
+          const scale = unit === 's' ? 1000 : 1
+          const threshold = spec.auto.sloValue ?? dataSLO
+          const percent = (value: number) => `${Number((value * 100).toFixed(1))} %`
+          const overridden = spec.auto.sloValue !== undefined
+          // The threshold, its unit beside it; below, how long each series stays above it.
           return {kind: 'Threshold', title: 'SLO line', body: <>
-            <Toggle label="Show the SLO line" checked={spec.auto.slo} onChange={value => setChartSpec(view)(current => ({...current, auto: {...current.auto, slo: value}}))} />
             <div className="ks-field">
-              <label className="ks-label" htmlFor={`${id}-slo`}>Threshold ({suffix})</label>
-              <NumberInput id={`${id}-slo`} min={0} value={value === undefined ? undefined : Number(value.toPrecision(6))} onChange={next => {if (next !== undefined && next > 0) setChartSpec(view)(current => ({...current, auto: {...current.auto, sloValue: Number((next / factor).toPrecision(6))}}))}} />
-              <p className="ks-hint">{spec.auto.sloValue !== undefined ? <>Experiment SLO: {formatMetric(dataSLO, 'milliseconds')}. <button type="button" className="ks-link" onClick={() => setChartSpec(view)(current => {const {sloValue: _, ...rest} = current.auto; void _; return {...current, auto: rest}})}>Use the experiment SLO</button></> : 'From the experiment. Type a value or drag the line on the figure.'}</p>
+              <label className="ks-label" htmlFor={`${id}-slo`}>Threshold</label>
+              <div className="ks-threshold">
+                <NumberInput id={`${id}-slo`} min={0} value={threshold === undefined ? undefined : Number((threshold / scale).toPrecision(6))} onChange={next => {if (next !== undefined && next > 0) setChartSpec(view)(current => ({...current, auto: {...current.auto, sloValue: Number((next * scale).toPrecision(6))}}))}} />
+                <Chips legend="Unit" hideLegend name={`${id}-slo-unit`} value={unit} onChange={(next: 'ms' | 's') => setChartSpec(view)(current => ({...current, auto: {...current.auto, sloUnit: next}}))} choices={[{value: 'ms', label: 'ms'}, {value: 's', label: 's'}]} />
+              </div>
+              {overridden && <p className="ks-hint">Experiment SLO {formatMetric(dataSLO, 'milliseconds')} · <button type="button" className="ks-link" onClick={() => setChartSpec(view)(current => {const {sloValue: _, ...rest} = current.auto; void _; return {...current, auto: rest}})}>Reset</button></p>}
             </div>
-            <p className="ks-hint">For a threshold on another metric or the right axis, add a threshold line with + in “Add a line in the graph”.</p>
+            {line?.shares && line.shares.length > 0 && <Group title="Time above the threshold">
+              <ul className="ks-slo-shares">{line.shares.map(share => <li key={share.label} title={`${percent(share.above)} of the measured windows`}>
+                <span className="ks-slo-name">{share.label}</span>
+                <span className="ks-slo-bar" aria-hidden="true"><span style={{width: `${share.above * 100}%`}} /></span>
+                <strong>{percent(share.above)}</strong>
+              </li>)}</ul>
+            </Group>}
+            <div className="ks-actions"><button type="button" className="ks-button ks-danger" onClick={() => removeAutoLine(view, 'slo')}>Delete SLO line</button></div>
           </>}
         }
         if (auto) return {kind: 'Annotation', title: auto.label, body: <>
-          <Toggle label={`Show ${auto.label.toLowerCase()}`} checked={spec.auto[auto.key]} onChange={value => setChartSpec(view)(current => ({...current, auto: {...current.auto, [auto.key]: value}}))} />
-          <p className="ks-hint">Drawn automatically from the experiment’s load profile.</p>
+          <p className="ks-hint">From the experiment’s load profile. Click a label on the chart to rename it.</p>
+          <div className="ks-actions"><button type="button" className="ks-button ks-danger" onClick={() => removeAutoLine(view, auto.key)}>Delete {auto.label.toLowerCase()}</button></div>
         </>}
         const item = spec.panels[target.panel].annotations.find(entry => entry.id === target.id)!
         return {kind: item.kind === 'hline' ? 'Threshold' : 'Annotation', title: annotationNames[item.kind], body: <AnnotationFields key={item.id} item={item} xUnit={spec.type === 'xy' ? model.panels[0]?.x.label ?? 'X' : 's'} yUnit={ySuffix(view, target.panel)} onRemove={() => removeNote(view, target.panel, item.id)}
@@ -1008,7 +1078,10 @@ export function KubeStudio({open, onClose, request, data, groups, settings, onSe
     if (!geometry || (!hoverShapes.length && !selectedShapes.length)) return null
     return <svg className="ks-overlay" viewBox={`0 0 ${geometry.width} ${geometry.height}`} aria-hidden="true" focusable="false">
       {([['hover', hoverShapes], ['selected', selectedShapes]] as const).flatMap(([which, list]) => list.map((shape, index) => shape.kind === 'path'
-        ? <path key={`${which}-${index}`} className={`ks-halo ${which}`} d={shape.d} />
+        ? <g key={`${which}-${index}`}>
+          {shape.clip && <clipPath id={`${id}-${view.chart.id}-${which}-${index}`}><rect x={shape.clip.x} y={shape.clip.y} width={shape.clip.width} height={shape.clip.height} /></clipPath>}
+          <path className={`ks-halo ${which}`} d={shape.d} clipPath={shape.clip ? `url(#${id}-${view.chart.id}-${which}-${index})` : undefined} />
+        </g>
         : <rect key={`${which}-${index}`} className={`ks-box ${which}`} x={shape.x} y={shape.y} width={shape.width} height={shape.height} rx="1.5" />))}
       {selectedShapes.flatMap((shape, index) => (shape.handles ?? []).map((handle, position) => <rect key={`h-${index}-${position}`} className="ks-handle" x={handle.x - 2.25} y={handle.y - 2.25} width="4.5" height="4.5" rx=".75" />))}
     </svg>
@@ -1040,11 +1113,11 @@ export function KubeStudio({open, onClose, request, data, groups, settings, onSe
                   {overlayFor(view)}
                 </div>
               })}
-              {axisEdit && <input className="ks-axis-input" aria-label={`${axisEdit.side === 'x' ? 'X' : axisEdit.side === 'right' ? 'Right Y' : 'Y'} axis title`} defaultValue={axisEdit.value} autoFocus maxLength={120}
-                style={{left: axisEdit.left, top: axisEdit.top, width: axisEdit.width}} onFocus={event => event.currentTarget.select()}
+              {textEdit && <input className="ks-axis-input" aria-label={textEdit.name} defaultValue={textEdit.value} autoFocus maxLength={120}
+                style={{left: textEdit.left, top: textEdit.top, width: textEdit.width}} onFocus={event => event.currentTarget.select()}
                 onClick={event => event.stopPropagation()} onPointerDown={event => event.stopPropagation()}
-                onBlur={event => {if (axisCancelled.current) axisCancelled.current = false; else commitAxis(event.currentTarget.value)}}
-                onKeyDown={event => {event.stopPropagation(); if (event.key === 'Enter') event.currentTarget.blur(); else if (event.key === 'Escape') {event.preventDefault(); axisCancelled.current = true; setAxisEdit(undefined)}}} />}
+                onBlur={event => {if (textCancelled.current) textCancelled.current = false; else commitText(event.currentTarget.value)}}
+                onKeyDown={event => {event.stopPropagation(); if (event.key === 'Enter') event.currentTarget.blur(); else if (event.key === 'Escape') {event.preventDefault(); textCancelled.current = true; setTextEdit(undefined)}}} />}
             </div>}
       {publication && (captionEditing
         ? <div className="ks-caption-editor" style={{width: `${Math.round(px(pageWidth))}px`}}>
@@ -1155,7 +1228,7 @@ export function KubeStudio({open, onClose, request, data, groups, settings, onSe
         {panel('canvas', 'ks-centre', canvas, 'Figure')}
         {panel('properties', 'ks-right', inspector, 'Properties')}
       </div>}
-      {menu && <ContextMenu at={menu.at} label={menu.chart ? `Chart ${viewOf(menu.chart)?.letter ?? ''}`.trim() : 'Figure'} onClose={() => setMenu(undefined)} items={menuItems(menu.chart)} />}
+      {menu && <ContextMenu at={menu.at} label={menu.chart ? `Chart ${viewOf(menu.chart)?.letter ?? ''}`.trim() : 'Figure'} onClose={() => setMenu(undefined)} items={menuItems(menu.chart, menu.target)} />}
       {help && <div className="ks-popover ks-help" role="dialog" aria-label="Keyboard shortcuts" onKeyDown={event => {if (event.key === 'Escape') {event.preventDefault(); event.stopPropagation(); setHelp(false)}}}>
         <div className="ks-help-head"><strong>Keyboard shortcuts</strong><button type="button" className="ks-icon-button ks-small" aria-label="Close shortcuts" onClick={() => setHelp(false)}><ActionIcon name="close" /></button></div>
         <dl>{shortcuts.map(([keys, action]) => <div key={keys}><dt><kbd>{keys}</kbd></dt><dd>{action}</dd></div>)}</dl>

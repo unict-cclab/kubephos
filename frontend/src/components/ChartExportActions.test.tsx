@@ -14,6 +14,7 @@ it('shows export progress, prevents duplicate submissions and leaves unrelated c
  fireEvent.click(screen.getByRole('button',{name:'PDF'}))
  expect(screen.getByRole('button',{name:'Preparing PDF'})).toBeDisabled()
  expect(screen.getByRole('button',{name:'PNG'})).toBeDisabled()
+ expect(screen.getByRole('button',{name:'SVG'})).toBeDisabled()
  expect(screen.getByRole('status')).toHaveTextContent('Preparing PDF…')
  expect(screen.getByRole('group',{name:'Export plot'})).toHaveAttribute('aria-busy','true')
  fireEvent.click(screen.getByRole('button',{name:'PNG'}))
@@ -23,6 +24,16 @@ it('shows export progress, prevents duplicate submissions and leaves unrelated c
  finish()
  await waitFor(()=>expect(screen.getByRole('button',{name:'PDF'})).toBeEnabled())
  expect(screen.getByRole('status')).toBeEmptyDOMElement()
+})
+
+it('offers PDF, SVG and PNG, each with the download icon',async()=>{
+ vi.mocked(exportChart).mockResolvedValue(undefined)
+ render(<ChartExportActions chartID="plot" metric="cpu"/>)
+ const buttons=screen.getAllByRole('button')
+ expect(buttons.map(button=>button.textContent)).toEqual(['PDF','SVG','PNG'])
+ for(const button of buttons) expect(button.querySelector('.chart-export-indicator svg')).not.toBeNull()
+ fireEvent.click(screen.getByRole('button',{name:'SVG'}))
+ await waitFor(()=>expect(exportChart).toHaveBeenCalledExactlyOnceWith('plot','cpu','svg'))
 })
 
 it('clears loading after a failure and permits retry in either format',async()=>{

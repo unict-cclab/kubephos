@@ -33,6 +33,7 @@
 .result-chart-name:focus { outline: 2px solid color-mix(in srgb, var(--ring, var(--blue)) 30%, transparent); }
 /* Corner handle: drag to span more or fewer columns. */
 .result-chart-resize { position: absolute; right: 0; bottom: 0; display: grid; place-items: center; width: 24px; height: 24px; padding: 0; border: 0; border-radius: 4px; background: transparent; color: var(--muted-foreground); cursor: ew-resize; opacity: 0; touch-action: none; transition: opacity .12s ease-out; }
+.result-chart-resize[data-edge="left"] { right: auto; left: 0; }
 .result-chart-resize svg { fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; }
 .result-chart:hover .result-chart-resize, .result-chart-resize:focus-visible { opacity: 1; }
 .result-chart-resize:hover { color: var(--foreground); }

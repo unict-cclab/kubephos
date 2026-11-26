@@ -35,17 +35,29 @@ export function SeriesSwatch({series}: {series: ModelSeries}) {
 
 // Number input that keeps partial text ("-", "1.") while typing and follows outside changes
 // (undo, dragging on the canvas).
-export function NumberInput({value, onChange, id, ...rest}: {value: number | undefined; onChange: (value: number | undefined) => void; id?: string; min?: number; step?: string | number; 'aria-label'?: string}) {
-  const show = (number: number | undefined) => number === undefined ? '' : String(Number(number.toPrecision(10)))
-  const [state, setState] = useState({text: show(value), value})
+// A number typed freely, with a comma or a dot. What is typed is never rewritten while typing:
+// a number applies at once (the parent may refuse it, e.g. an SLO of 0 on the way to 0.2), and
+// the text follows the value only when it changes from elsewhere (undo, a unit switch). Leaving
+// the field shows the value in use; leaving it empty clears it.
+const numberText = (number: number | undefined) => number === undefined ? '' : String(Number(number.toPrecision(10)))
+const parseNumber = (raw: string) => {const clean = raw.trim().replace(',', '.'); return /^[-+]?(\d+(\.\d+)?|\.\d+)(e[-+]?\d+)?$/i.test(clean) ? Number(clean) : undefined}
+
+export function NumberInput({value, onChange, id, min, ...rest}: {value: number | undefined; onChange: (value: number | undefined) => void; id?: string; min?: number; 'aria-label'?: string}) {
+  // value: the last value received, to tell a change from elsewhere.
+  const [state, setState] = useState({text: numberText(value), value})
   let text = state.text
-  if (state.value !== value) {text = show(value); setState({text, value})}
-  return <input id={id} type="number" step="any" {...rest} value={text} onChange={event => {
+  if (state.value !== value) {
+    if (parseNumber(state.text) !== value) text = numberText(value)
+    setState({text, value})
+  }
+  return <input id={id} type="text" inputMode="decimal" autoComplete="off" spellCheck={false} {...rest} value={text} onChange={event => {
     const raw = event.target.value
-    const number = raw.trim() === '' ? undefined : Number(raw)
-    const valid = number === undefined || Number.isFinite(number)
-    setState({text: raw, value: valid && number !== undefined ? number : state.value})
-    if (valid) onChange(number)
+    setState(current => ({...current, text: raw}))
+    const number = parseNumber(raw)
+    if (number !== undefined && Number.isFinite(number) && (min === undefined || number >= min)) onChange(number)
+  }} onBlur={() => {
+    if (text.trim() === '') {if (value !== undefined) onChange(undefined); return}
+    if (parseNumber(text) !== value) setState({text: numberText(value), value})
   }} />
 }
 

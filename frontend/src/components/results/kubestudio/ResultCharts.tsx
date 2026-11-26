@@ -17,7 +17,8 @@ import './resultCharts.css'
 // columns and fills its rows densely: a chart takes ⅓, ½, ⅔ or the full width, and the
 // others reflow around it (a narrower page shows every chart wider). Drag a chart onto the
 // edge of another to move it there, or onto its middle to swap the two (Alt + arrow keys on
-// its ⋯ button move it too); drag its bottom-right corner to resize it. Click a chart (or press
+// its ⋯ button move it too); drag its bottom-right corner to resize it (the last chart of a row
+// has a bottom-left one too). Click a chart (or press
 // F, or its ⤢ button) for full screen; double-click it (or press Enter) to edit it in KubeStudio;
 // right-click it (or Shift+F10, or its ⋯ button) for every action, among them Hide: hidden charts wait,
 // collapsed, under "Hidden charts" at the bottom. The rest of the page (summary, tables,
@@ -256,8 +257,17 @@ function ChartCard({item, position, grid, hint, data, groups, settings, dragging
     if (name && name !== item.name) actions.rename(item, name)
   }
   const allowed = () => sizesFor(grid.current?.clientWidth ?? 0)
-  // Drag the corner: the chart snaps to the size nearest to the pointer, and the others reflow live.
+  // The last chart of a row also has a bottom-left corner, to grow towards the left.
+  const [rowEnd, setRowEnd] = useState(false)
+  const checkRowEnd = (card: HTMLElement) => {
+    const cell = card.closest('li')
+    const list = grid.current
+    if (cell && list) setRowEnd(cell.getBoundingClientRect().right >= list.getBoundingClientRect().right - 2)
+  }
+  // Drag a corner: the chart snaps to the size nearest to the pointer, and the others reflow live.
+  // From the left corner, moving left makes it wider.
   const onResizeStart = (event: PointerEvent<HTMLButtonElement>) => {
+    const direction = event.currentTarget.dataset.edge === 'left' ? -1 : 1
     const cell = event.currentTarget.closest('li')
     const list = grid.current
     if (!cell || !list || event.button !== 0) return
@@ -268,7 +278,7 @@ function ChartCard({item, position, grid, hint, data, groups, settings, dragging
     const steps = allowed()
     const startX = event.clientX
     const startWidth = cell.getBoundingClientRect().width
-    const sizeAt = (x: number) => snapSize((startWidth + x - startX) / Math.max(1, list.clientWidth), steps)
+    const sizeAt = (x: number) => snapSize((startWidth + direction * (x - startX)) / Math.max(1, list.clientWidth), steps)
     const move = (moved: globalThis.PointerEvent) => actions.resize(item, sizeAt(moved.clientX), false)
     const end = (ended: globalThis.PointerEvent) => {
       pressingHandle.current = false
@@ -282,9 +292,11 @@ function ChartCard({item, position, grid, hint, data, groups, settings, dragging
     handle.addEventListener('pointerup', end)
     handle.addEventListener('pointercancel', end)
   }
-  // Arrow keys on the corner step through the sizes this grid shows.
+  // Arrow keys on a corner step through the sizes this grid shows (on the left corner, left is wider).
   const onResizeKey = (event: KeyboardEvent<HTMLButtonElement>) => {
-    const by = event.key === 'ArrowLeft' || event.key === 'ArrowDown' ? -1 : event.key === 'ArrowRight' || event.key === 'ArrowUp' ? 1 : 0
+    const outward = event.currentTarget.dataset.edge === 'left' ? 'ArrowLeft' : 'ArrowRight'
+    const inward = event.currentTarget.dataset.edge === 'left' ? 'ArrowRight' : 'ArrowLeft'
+    const by = event.key === inward || event.key === 'ArrowDown' ? -1 : event.key === outward || event.key === 'ArrowUp' ? 1 : 0
     if (!by) return
     event.preventDefault()
     const steps = allowed()
@@ -316,7 +328,7 @@ function ChartCard({item, position, grid, hint, data, groups, settings, dragging
       event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/plain', item.id); actions.dragStart(item.id)
     }} onDragEnd={actions.dragEnd}
     onContextMenu={(event: MouseEvent<HTMLElement>) => {event.preventDefault(); clearTimeout(pending.current); openMenu(event)}}
-    onClick={onCardClick} onDoubleClick={onCardDoubleClick}>
+    onClick={onCardClick} onDoubleClick={onCardDoubleClick} onPointerEnter={event => checkRowEnd(event.currentTarget)} onFocus={event => {if (event.target === event.currentTarget) checkRowEnd(event.currentTarget)}}>
     <figcaption className="result-chart-head">
       {renaming
         ? <input className="result-chart-name" aria-label="Chart name" defaultValue={item.name} maxLength={120} autoFocus onFocus={event => event.currentTarget.select()} onDoubleClick={stop}
@@ -335,6 +347,10 @@ function ChartCard({item, position, grid, hint, data, groups, settings, dragging
       onPointerDown={onResizeStart} onKeyDown={onResizeKey} onDoubleClick={stop} onClick={stop}>
       <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><path d="M11 4 4 11M11 8l-3 3" /></svg>
     </button>
+    {rowEnd && <button type="button" className="result-chart-resize" data-edge="left" aria-label={`Resize ${item.name} from the left: drag it (now ${sizeLabel(size)})`} title="Drag to make the chart wider or narrower"
+      onPointerDown={onResizeStart} onKeyDown={onResizeKey} onDoubleClick={stop} onClick={stop}>
+      <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><path d="M1 4l7 7M1 8l3 3" /></svg>
+    </button>}
     {menu && <ContextMenu at={menu} label={item.name} items={menuItems} onClose={() => setMenu(undefined)} />}
   </figure>
 }

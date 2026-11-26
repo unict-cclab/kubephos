@@ -180,8 +180,8 @@ dialog.figure-studio label, dialog.figure-studio fieldset { margin: 0; }
 /* With a caption the paper keeps the top free space and the caption follows it. */
 .ks-stage:has(> .ks-caption, > .ks-caption-editor) > .ks-paper { margin-bottom: 0; }
 .ks-paper { position: relative; flex: none; margin: auto; background: #ffffff; line-height: 0; box-shadow: 0 1px 2px rgb(0 0 0 / .08), 0 12px 32px -12px rgb(0 0 0 / .28); }
-/* Axis titles are renamed in place: a click opens this field over the title. */
-.ks-paper .axis-label { cursor: text; }
+/* Axis titles and line labels are renamed in place: a click opens this field over the text. */
+.ks-paper .axis-label, .ks-paper [data-label-key] text { cursor: text; }
 .ks-axis-input { position: absolute; z-index: 3; height: 30px; padding: 0 8px; border: 1px solid var(--blue); border-radius: 6px; background: #ffffff; color: #111111; font: 500 13px/1.2 var(--font-sans); text-align: center; box-shadow: 0 4px 14px -6px rgb(0 0 0 / .35); }
 .ks-axis-input:focus { outline: 2px solid color-mix(in srgb, var(--blue) 35%, transparent); }
 .ks-paper svg.pub-figure { display: block; width: 100%; height: auto; }
@@ -378,3 +378,13 @@ dialog.figure-studio label, dialog.figure-studio fieldset { margin: 0; }
 label.ks-legend-color { cursor: pointer; }
 label.ks-legend-color:hover { box-shadow: inset 0 0 0 1px rgb(0 0 0 / .15), 0 0 0 2px var(--border); }
 label.ks-legend-color:has(input:focus-visible) { outline: 2px solid var(--blue); outline-offset: 2px; }
+
+/* SLO line: the share of each series' windows above the threshold. */
+/* SLO line: the value with its unit beside it, then a slim meter per series of the time spent above it. */
+.ks-threshold { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; align-items: center; }
+.ks-slo-shares { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; font-size: 13px; }
+.ks-slo-shares li { display: grid; grid-template-columns: minmax(0, 1fr) 72px 48px; column-gap: 10px; align-items: center; }
+.ks-slo-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ks-slo-bar { position: relative; height: 4px; overflow: hidden; border-radius: 2px; background: var(--muted); }
+.ks-slo-bar > span { position: absolute; inset: 0 auto 0 0; border-radius: inherit; background: var(--destructive, #b42318); }
+.ks-slo-shares strong { font-weight: 600; font-variant-numeric: tabular-nums; text-align: right; }

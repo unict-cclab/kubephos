@@ -8,7 +8,7 @@ import type {JsonSchema} from '../types'
 describe('load profile preview', () => {
   it.each([900, 2700, 2460, 73])('ends the time axis and completed profile at the configured duration (%s seconds)', durationSeconds => {
     const view = render(<LoadProfilePreview steps={loadProfileSteps([{type: 'constant', durationSeconds, rps: 10}])} progressSeconds={durationSeconds} />)
-    const svg = view.container.querySelector('svg')!
+    const svg = view.container.querySelector<SVGSVGElement>('svg[id]')!
     const frame = svg.querySelector('.axis')!
     const right = Number(frame.getAttribute('x')) + Number(frame.getAttribute('width'))
     const path = svg.querySelector('path')!.getAttribute('d')!
@@ -55,7 +55,7 @@ describe('load profile preview', () => {
     expect(screen.getByText('Time (min)')).toBeInTheDocument()
     expect(screen.getByRole('button', {name: 'PDF'})).toBeInTheDocument()
     expect(screen.getByRole('button', {name: 'PNG'})).toBeInTheDocument()
-    const svg = view.container.querySelector('svg')!
+    const svg = view.container.querySelector<SVGSVGElement>('svg[id]')!
     const pdf = new TextDecoder().decode(svgToPDF(svg))
     expect(pdf).toMatch(/^%PDF-1\.4/)
     expect(pdf).toContain('Requests / second')
