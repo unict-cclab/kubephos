@@ -13,7 +13,17 @@ export function modifiedByLabel(resource: AttributedResource): string {
   return '—'
 }
 
-export function ResourceAttribution({resource, editable = false}: {resource: AttributedResource; editable?: boolean}) {
+// compact: one quiet line ("Created 26 Nov by alice · updated 27 Nov by bob"), the update only
+// when it differs from the creation.
+export function ResourceAttribution({resource, editable = false, compact = false}: {resource: AttributedResource; editable?: boolean; compact?: boolean}) {
+  if (compact) {
+    const by = (name: string) => name !== '—' ? ` by ${name}` : ''
+    const updated = editable && resource.updatedAt && resource.createdAt && Date.parse(resource.updatedAt) !== Date.parse(resource.createdAt)
+    return <p className="attribution-line">
+      Created {resource.createdAt ? <time dateTime={resource.createdAt}>{formatDate(resource.createdAt)}</time> : '—'}{by(createdByLabel(resource))}
+      {updated && <> · updated <time dateTime={resource.updatedAt}>{formatDate(resource.updatedAt!)}</time>{by(modifiedByLabel(resource))}</>}
+    </p>
+  }
   return <dl className="resource-attribution">
     <div><dt>Created</dt><dd>{resource.createdAt ? <time dateTime={resource.createdAt}>{formatDate(resource.createdAt)}</time> : '—'}</dd></div>
     <div><dt>Created by</dt><dd>{createdByLabel(resource)}</dd></div>

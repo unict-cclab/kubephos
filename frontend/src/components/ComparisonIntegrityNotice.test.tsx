@@ -16,7 +16,7 @@ async function audit() {
 describe('comparison snapshot status', () => {
   it('reports when a snapshot was frozen and stays quiet when it is current and compatible', () => {
     render(<ComparisonIntegrityNotice view={{...base, snapshot: {capturedAt: captured}, stale: false, compatibility: {compatible: true, differences: [], sources: []}}} onRefresh={async () => {}} />)
-    expect(screen.getByText(`Frozen on ${formatDate(captured)}`)).toBeInTheDocument()
+    expect(screen.getByText(`Frozen ${formatDate(captured)}`).closest('[title]')).toHaveAttribute('title', 'Results stay fixed until you refresh the snapshot.')
     expect(screen.queryByRole('button')).not.toBeInTheDocument()
     expect(screen.queryByRole('table')).not.toBeInTheDocument()
     expect(screen.queryByRole('status')).not.toBeInTheDocument()
@@ -25,8 +25,7 @@ describe('comparison snapshot status', () => {
   it('marks legacy comparisons as live and offers to freeze them', async () => {
     const onRefresh = vi.fn().mockResolvedValue(undefined)
     render(<ComparisonIntegrityNotice view={base} onRefresh={onRefresh} />)
-    expect(screen.getByText('Live comparison')).toBeInTheDocument()
-    expect(screen.getByText(/results may change; save or refresh to freeze/)).toBeInTheDocument()
+    expect(screen.getByText('Live: results may change')).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', {name: 'Freeze results'}))
     fireEvent.click(within(await screen.findByRole('dialog', {name: 'Freeze comparison?'})).getByRole('button', {name: 'Freeze results'}))
     await waitFor(() => expect(onRefresh).toHaveBeenCalledOnce())
@@ -39,7 +38,7 @@ describe('stale snapshots', () => {
   it('lists why the snapshot is stale and refreshes only after confirmation', async () => {
     const onRefresh = vi.fn().mockResolvedValue(undefined)
     render(<main><ComparisonIntegrityNotice view={stale} onRefresh={onRefresh} /></main>)
-    const banner = screen.getByRole('status', {name: 'The source experiments changed after this snapshot'})
+    const banner = screen.getByRole('status', {name: 'The experiments have changed since this snapshot'})
     expect(within(banner).getByText('Baseline: 1 newer completed run is not included.')).toBeInTheDocument()
     await audit()
     fireEvent.click(within(banner).getByRole('button', {name: 'Refresh snapshot'}))
@@ -60,7 +59,7 @@ describe('stale snapshots', () => {
     fireEvent.click(within(await screen.findByRole('dialog', {name: 'Refresh snapshot?'})).getByRole('button', {name: 'Refresh snapshot'}))
     const alert = await screen.findByRole('alert')
     expect(alert).toHaveTextContent('deleted or is no longer shared with you')
-    expect(alert).toHaveTextContent('The frozen results are still shown.')
+    expect(alert).toHaveTextContent('You still see the frozen results')
   })
 
   it('shows other refresh failures as reported by the API', async () => {
@@ -84,26 +83,31 @@ describe('load profile compatibility', () => {
       {field: 'metrics.sloMilliseconds', values: {Baseline: 200, Scheduler: 250}},
       {field: 'custom.field', values: {Baseline: 'x'}}
     ]}}
-    render(<main><ComparisonIntegrityNotice view={view} /></main>)
-    expect(screen.getByRole('heading', {name: 'Sources were not measured alike'})).toBeInTheDocument()
+    render(<main><ComparisonIntegrityNotice view={view} notes={['They ran on different clusters.']} /></main>)
+    // One line, closed: the differences and the page's notes open together.
+    const caveats = screen.getByText('These experiments weren’t measured quite the same way').closest('details')!
+    expect(caveats).not.toHaveAttribute('open')
+    expect(caveats.querySelector('summary')).toHaveTextContent('4 differences')
+    fireEvent.click(caveats.querySelector('summary')!)
+    expect(within(caveats).getByText('They ran on different clusters.')).toBeInTheDocument()
     const table = screen.getByRole('table', {name: 'Measurement settings that differ'})
-    expect(within(table).getAllByRole('columnheader').map(cell => cell.textContent)).toEqual(['Setting', 'Baseline', 'Scheduler'])
+    expect(within(table).getAllByRole('columnheader').map(cell => cell.textContent)).toEqual(['What differs', 'Baseline', 'Scheduler'])
     const rows = within(table).getAllByRole('row').slice(1)
     expect(rows[0]).toHaveTextContent('Load profile steps[{"durationSeconds":60,"users":10}][{"durationSeconds":120,"users":10}]')
     expect(rows[1]).toHaveTextContent('Response time SLO (ms)200250')
-    expect(rows[2]).toHaveTextContent('custom.fieldx—')
+    expect(rows[2]).toHaveTextContent('custom.fieldxnot set')
     await audit()
   })
 
   it('shows no warning when sources are compatible', () => {
     render(<ComparisonIntegrityNotice view={{...base, snapshot: {capturedAt: captured}, compatibility: {compatible: true, differences: []}}} />)
-    expect(screen.queryByText('Sources were not measured alike')).not.toBeInTheDocument()
+    expect(screen.queryByText('These experiments weren’t measured quite the same way')).not.toBeInTheDocument()
   })
 
   it('labels known fields and shortens long values', () => {
     expect(compatibilityFieldLabel('load.replicas')).toBe('Load generator workers')
     expect(compatibilityFieldLabel('network.phases')).toBe('Network phases')
-    expect(compatibilityValue(null).text).toBe('—')
+    expect(compatibilityValue(null).text).toBe('not set')
     expect(compatibilityValue(false).text).toBe('false')
     const long = compatibilityValue({phases: Array.from({length: 10}, (_, index) => ({latency: index}))})
     expect(long.text.length).toBeLessThanOrEqual(58)

@@ -39,21 +39,20 @@ export function comparisonWarnings(datasets: LoadedDataset[], configurations: Re
   if (datasets.length < 2) return []
   const warnings: string[] = []
   const different = (values: unknown[]) => new Set(values.map(canonical)).size > 1
-  if (different(datasets.map(item => item.dataset.spec.stepSeconds))) warnings.push('Data resolution differs between experiments. Plots use the common time windows.')
+  if (different(datasets.map(item => item.dataset.spec.stepSeconds))) warnings.push('The experiments sampled data at different intervals, so the charts only use the time windows they share.')
   const components = (id: string, prefix: string) => {
     const value = configurations[id]?.components
     return Array.isArray(value) ? value.filter(component => component && typeof component === 'object' && String(component.capability).startsWith(prefix)).map(component => ({pluginId: component.pluginId, configuration: component.configuration})) : []
   }
-  if (different(datasets.map(item => ({application: item.dataset.spec.applicationRef, values: configurations[item.artifact.id]?.applicationValues})))) warnings.push('Application settings differ between experiments.')
-  if (different(datasets.map(item => ({target: item.dataset.spec.sloMilliseconds, settings: components(item.artifact.id, 'metrics.')})))) warnings.push('Monitoring settings or SLO targets differ. Violations use each experiment’s own target.')
-  if (different(datasets.map(item => item.dataset.spec.clusterServer))) warnings.push('Experiments were collected from different clusters.')
-  if (different(datasets.map(item => [...new Set(item.dataset.spec.series.map(series => `${series.metric}:${series.unit}`))].sort()))) warnings.push('Available metrics differ between experiments. Missing measurements are not treated as zero.')
+  if (different(datasets.map(item => ({target: item.dataset.spec.sloMilliseconds, settings: components(item.artifact.id, 'metrics.')})))) warnings.push('They weren’t monitored with the same settings or SLO, so each one is checked against its own SLO.')
+  if (different(datasets.map(item => item.dataset.spec.clusterServer))) warnings.push('They ran on different clusters.')
+  if (different(datasets.map(item => [...new Set(item.dataset.spec.series.map(series => `${series.metric}:${series.unit}`))].sort()))) warnings.push('Some metrics were recorded in only one of them. A missing metric is simply left out, never counted as zero.')
   const units = new Map<string, Set<string>>()
   for (const item of datasets) for (const series of item.dataset.spec.series) {
     const values = units.get(series.metric) ?? new Set<string>()
     values.add(series.unit); units.set(series.metric, values)
   }
-  if ([...units.values()].some(values => values.size > 1)) warnings.push('Metrics with inconsistent units are excluded from this comparison.')
+  if ([...units.values()].some(values => values.size > 1)) warnings.push('A few metrics were recorded in different units, so they are left out of this comparison.')
   return warnings
 }
 

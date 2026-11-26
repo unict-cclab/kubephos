@@ -1,3 +1,35 @@
+# Comparison page review — 26 November 2026
+
+- Saved comparisons say much less. The snapshot is a small "Frozen <date>"
+  line (what it means is in its tooltip). The "Sources were not measured
+  alike" box and the separate yellow notes are one closed line, "These
+  experiments weren't measured quite the same way · N differences", which
+  opens onto the notes and the table of differing settings ("What differs").
+  The note "Application settings differ" is gone: configurations are meant
+  to differ in a comparison. The alert about sources that changed since the
+  snapshot stays, shorter, because it asks for a refresh.
+- The meta line is one sentence ("Created <date> by <user>", the update only
+  when it differs); other pages keep their attribution grid.
+- The summary shows its findings only; their explanations and the measurement
+  notes open with "Show details" (experiment pages are unchanged).
+- The notes are written plainly ("They ran on different clusters.", "Some
+  metrics were recorded in only one of them…").
+- Validation: typecheck, all frontend tests (932), the asset budget (219.5 of
+  220 KiB) and the theme contrast check passed. Not checked in the browser.
+
+# Infrastructure access review — 26 November 2026
+
+- Harbor and NFS show the same Access tab as a standalone VM: address, SSH user
+  and "Download SSH key" (administrators, once ready). They run on a dedicated
+  machine provisioned by the same "machine" stage, so
+  `GET /api/v1/infrastructure-services/{id}/ssh-key` now serves `harbor` and
+  `nfs` as well as `vm` (other kinds and clusters get 404; clusters keep
+  their own route). The audit action stays `vm.ssh-key.download`, so existing
+  logs and filters keep working; the target id says which resource.
+- Validation: `go vet`, gofmt and the API and storage tests against PostgreSQL
+  (the SSH key test now covers Harbor, NFS and the refused kinds), and the
+  frontend tests.
+
 # Results figures review — 25 November 2026
 
 - The load and latency chart adds "Ready pods" (ready replicas summed over the
@@ -87,6 +119,8 @@
     phases, warm-up) or deletes the user's own; a click on a line's label
     renames it in place (an empty text restores the automatic one). The
     highlight of a selected line stays inside the plot.
+  - Long names in Layers are cut with an ellipsis (full name on hover); the
+    panel no longer scrolls sideways.
   - "Uncertainty" shows only when a series has repetitions; the panels control
     of old saved charts is under "Chart settings".
   - Palettes are a list: each with its name, a short description and its
@@ -100,7 +134,7 @@
   the unused XY helpers, the line-marker sampling, and the styles of the old
   summary, the figure settings panel, the metric chips, the table notes and the
   heatmap grid.
-- Validation: typecheck, all frontend tests (927; new ones for the charts grid,
+- Validation: typecheck, all frontend tests (930; new ones for the charts grid,
   its persistence and the KubeStudio right-click menu, drag handle and caption),
   the asset budget (219.3 of 220 KiB), the theme contrast check, `go vet`, and
   the API and storage tests against PostgreSQL (new

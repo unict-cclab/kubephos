@@ -106,6 +106,7 @@
 .results-page .results-detail-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; }
 .results-page .results-detail-actions .button { min-height: 36px; height: 36px; padding: 0 14px; font-size: 14px; }
 .results-page .results-detail-actions .button svg { width: 16px; height: 16px; }
+.results-page > .attribution-line { margin: 0 0 16px; color: var(--muted-foreground); font-size: 12px; }
 .results-page > .resource-attribution { display: flex; flex-wrap: wrap; gap: 4px 24px; margin: 0 0 16px; padding: 0; border: 0; background: transparent; overflow: visible; }
 .results-page > .resource-attribution > div { display: flex; align-items: baseline; gap: 6px; padding: 0; border: 0 !important; }
 .results-page > .resource-attribution dt { margin: 0; font-size: 12px; }
@@ -150,6 +151,7 @@
 
 /* Summary: the findings of the verdict */
 .summary { display: grid; gap: 10px; padding: 4px 0 28px; }
+.summary-head { display: flex; align-items: baseline; gap: 12px; }
 .summary h3 { margin: 0; font-size: 16px; font-weight: 600; }
 .summary-list { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
 .summary-item { position: relative; padding-left: 16px; }

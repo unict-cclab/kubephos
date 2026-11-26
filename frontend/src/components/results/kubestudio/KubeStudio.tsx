@@ -786,7 +786,7 @@ export function KubeStudio({open, onClose, request, data, groups, settings, onSe
   const layerRow = (row: LayerRow) => <li key={row.key} className="ks-layer-row" data-depth={row.depth} data-heading={row.heading || undefined} data-dim={row.dim || undefined}
     onPointerEnter={() => {if (row.selectable) setHoverKey(row.key)}} onPointerLeave={() => setHoverKey('')}>
     {row.heading ? <span className="ks-layer-heading">{row.label}</span>
-      : <button type="button" className="ks-layer" aria-current={selectedKey === row.key || undefined} disabled={!row.selectable && !row.onMenu} aria-haspopup={row.onMenu ? 'menu' : undefined} onClick={() => {if (row.selectable) select(parseKey(row.key))}} onContextMenu={row.onMenu}>{row.icon}<span>{row.label}</span></button>}
+      : <button type="button" className="ks-layer" aria-current={selectedKey === row.key || undefined} disabled={!row.selectable && !row.onMenu} aria-haspopup={row.onMenu ? 'menu' : undefined} onClick={() => {if (row.selectable) select(parseKey(row.key))}} onContextMenu={row.onMenu} title={row.label}>{row.icon}<span>{row.label}</span></button>}
     {row.eye && <button type="button" className="ks-icon-button ks-small ks-eye" aria-label={row.eye.label} title={row.eye.label} aria-pressed={!row.eye.visible} onClick={row.eye.onToggle}><EyeIcon off={!row.eye.visible} /></button>}
     {row.action}
     {row.menu}

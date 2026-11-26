@@ -37,8 +37,9 @@ describe('comparisons and suite regression', () => {
     b.dataset.spec.applicationRef = 'redis'
     b.dataset.spec.series[0].unit = 'millicores'
     const warnings = comparisonWarnings([a, b], {a1: {components: [{capability: 'load.kubernetes', configuration: {rps: 10}}]}, a2: {components: [{capability: 'load.kubernetes', configuration: {rps: 20}}]}})
-    expect(warnings.some(message => message.includes('resolution'))).toBe(true)
-    expect(warnings.some(message => message.includes('Application'))).toBe(true)
+    expect(warnings.some(message => message.includes('different intervals'))).toBe(true)
+    // Configurations are meant to differ in a comparison: no note about them.
+    expect(warnings.some(message => /application/i.test(message))).toBe(false)
     expect(warnings.some(message => message.includes('Load profiles'))).toBe(false)
     expect(warnings.some(message => message.includes('Durations differ'))).toBe(false)
     expect(comparisonMetricCompatible([a, b], 'cpu.cores')).toBe(false)
@@ -68,5 +69,5 @@ it('checks metric units in linear time and ignores the number of pod series', ()
   expect(warnings).toEqual([])
   expect(reads).toBeLessThan(12000)
   b.dataset.spec.series = [{...series, unit: 'seconds'}]
-  expect(comparisonWarnings([a, b], {}).some(message => message.includes('inconsistent units'))).toBe(true)
+  expect(comparisonWarnings([a, b], {}).some(message => message.includes('different units'))).toBe(true)
 })

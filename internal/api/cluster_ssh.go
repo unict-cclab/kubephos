@@ -12,16 +12,17 @@ import (
 	"kubephos.dev/kubephos/internal/storage"
 )
 
+// Serves the private key of the machines a resource runs on: the nodes of a Kubernetes
+// cluster, or the dedicated machine of an infrastructure service (a standalone VM, Harbor or
+// NFS: each provisioned by a "machine" stage that produces the machine access).
 func (s *Server) downloadClusterSSHKey(response http.ResponseWriter, request *http.Request) {
 	vm := strings.HasPrefix(request.URL.Path, "/api/v1/infrastructure-services/")
-	wantedKind := "kubernetes-cluster"
 	label := "Kubernetes cluster"
 	if vm {
-		wantedKind = "vm"
-		label = "VM"
+		label = "Infrastructure service"
 	}
 	resource, err := s.store.GetManagedResource(request.Context(), request.PathValue("id"))
-	if errors.Is(err, storage.ErrNotFound) || err == nil && resource.Kind != wantedKind {
+	if errors.Is(err, storage.ErrNotFound) || err == nil && (vm && !infrastructureServiceKind(resource.Kind) || !vm && resource.Kind != "kubernetes-cluster") {
 		writeError(response, http.StatusNotFound, "not_found", label+" not found.")
 		return
 	}

@@ -107,6 +107,28 @@ func TestClusterSSHKeyDownload(t *testing.T) {
 	if w.Code != 200 || w.Body.String() != keys[3] || !strings.Contains(w.Header().Get("Cache-Control"), "no-store") {
 		t.Fatal("VM did not return its own protected machine key", w.Code)
 	}
+	// Harbor and NFS run on a dedicated machine provisioned like a standalone VM: same key.
+	service := func(id string) *httptest.ResponseRecorder {
+		r := httptest.NewRequest("GET", "/api/v1/infrastructure-services/"+id+"/ssh-key", nil)
+		r.SetPathValue("id", id)
+		w := httptest.NewRecorder()
+		server.downloadClusterSSHKey(w, r)
+		return w
+	}
+	for _, kind := range []string{"harbor", "nfs"} {
+		exec(`INSERT INTO managed_resources(id,workspace_id,name,kind,provider,plugin_id,plugin_version,spec,pipeline_id,pipeline_run_id) VALUES('` + kind + `_ssh','ws_default','` + kind + `','` + kind + `','proxmox','test','v1','{}','pipe_ssh','run_ssh')`)
+		w := service(kind + "_ssh")
+		if w.Code != 200 || w.Body.String() != keys[3] || !strings.Contains(w.Header().Get("Content-Disposition"), kind+"-ssh-key.pem") {
+			t.Fatalf("%s did not return its machine key: %d", kind, w.Code)
+		}
+	}
+	// Other kinds are not infrastructure services; a cluster has its own route.
+	exec(`INSERT INTO managed_resources(id,workspace_id,name,kind,provider,plugin_id,plugin_version,spec,pipeline_id,pipeline_run_id) VALUES('template_ssh','ws_default','template','machine-template','proxmox','test','v1','{}','pipe_ssh','run_ssh')`)
+	for _, id := range []string{"template_ssh", "cluster_ssh"} {
+		if w := service(id); w.Code != 404 {
+			t.Fatalf("%s served through the infrastructure route: %d", id, w.Code)
+		}
+	}
 	exec(`UPDATE pipeline_runs SET status='failed' WHERE id='run_ssh'`)
 	if w := call("?cluster=east"); w.Code != 409 {
 		t.Fatal("failed resource accepted")
