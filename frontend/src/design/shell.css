@@ -287,7 +287,9 @@ body {
 
 /* Phones: the sidebar collapses into a top bar whose body opens as a sheet. */
 @media (max-width: 720px) {
-  .app-shell { grid-template-columns: minmax(0, 1fr); }
+  /* The bar takes the height it needs and the page the rest: on a short page (an empty list)
+     the extra height used to be shared with the bar, which grew a large grey band. */
+  .app-shell { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
   .app-sidebar { height: auto; max-height: 100vh; padding: 10px 16px; border-bottom: 1px solid var(--sidebar-border); background: var(--background); }
   .app-main { min-height: 0; margin: 0; border-radius: 0; box-shadow: none; }
   .app-nav-toggle { display: inline-flex; }
@@ -296,8 +298,11 @@ body {
   .app-sidebar-body.is-open { display: flex; }
   .app-nav { flex: none; overflow: visible; }
   .page-content { padding: 32px 16px 72px; }
-  .stats-grid { grid-template-columns: minmax(0, 1fr); }
-  .stat-card + .stat-card { border-left: 0; border-top: 1px solid var(--border); }
+  /* Key numbers stay a 2 × 2 grid, a little smaller. */
+  .stat-card { padding: 16px; }
+  .stat-card .stat-value { font-size: 32px; }
+  /* Section tabs wrap onto a second line rather than run off the edge. */
+  .resource-tabs { display: flex; flex-wrap: wrap; row-gap: 4px; overflow: visible; }
   /* Short states stay on the step row; the current action wraps below the copy. */
   .setup-step > .button { grid-column: 2 / -1; justify-self: start; }
 }

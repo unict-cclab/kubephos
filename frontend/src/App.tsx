@@ -215,13 +215,13 @@ function PlatformApp() {
     {confirmationDialog}
     {paletteOpen && <CommandPalette items={navigationTargets(isAdmin)} close={() => setPaletteOpen(false)} select={navigate} />}
     <div className={`app-shell${railCollapsed ? ' is-nav-collapsed' : ''}`}>
-      <aside className="app-sidebar">
+      <aside className="app-sidebar" onKeyDown={event => {if (event.key === 'Escape' && mobileNavigationOpen) closeMobileNavigation()}}>
         <div className="app-sidebar-head">
           <button className="app-brand" type="button" onClick={() => navigate('overview')} aria-label="KubePhos home"><span className="brand-mark">K</span><strong>KubePhos</strong></button>
           <button className="app-nav-collapse icon-button" type="button" aria-label={navigationCollapsed ? 'Expand navigation' : 'Collapse navigation'} title={navigationCollapsed ? 'Expand navigation' : 'Collapse navigation'} aria-controls="main-navigation" aria-expanded={!navigationCollapsed} onClick={() => collapseNavigation(!navigationCollapsed)}><ActionIcon name="sidebar" /></button>
           <button ref={mobileNavigationButton} className="app-nav-toggle icon-button" type="button" aria-label={mobileNavigationOpen ? 'Close navigation' : 'Open navigation'} aria-controls="main-navigation" aria-expanded={mobileNavigationOpen} onClick={() => setMobileNavigationOpen(value => !value)}><ActionIcon name={mobileNavigationOpen ? 'close' : 'menu'} /></button>
         </div>
-        <div id="main-navigation" className={`app-sidebar-body${mobileNavigationOpen ? ' is-open' : ''}`} onKeyDown={event => {if (event.key === 'Escape' && mobileNavigationOpen) closeMobileNavigation()}}>
+        <div id="main-navigation" className={`app-sidebar-body${mobileNavigationOpen ? ' is-open' : ''}`}>
           <button type="button" className="app-jump" title={railCollapsed ? 'Jump to…' : undefined} aria-label={railCollapsed ? 'Jump to…' : undefined} onClick={() => setPaletteOpen(true)}><ActionIcon name="search" /><span>Jump to…</span><kbd>{paletteShortcut()}</kbd></button>
           <SidebarNavigation sections={navigationSections} view={view} navigate={navigate} collapsed={railCollapsed} expandSidebar={() => collapseNavigation(false)} badges={isAdmin ? {requests: data.adminRequests.filter(item => item.status === 'open').length} : {}} />
           <AccountMenu session={session} username={session.user?.username ?? 'Account'} isAdmin={isAdmin} version={data.system?.version} refreshing={refreshing} refresh={() => void load(false)} signOut={() => void logout()} />

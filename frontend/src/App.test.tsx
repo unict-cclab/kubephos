@@ -34,6 +34,16 @@ describe('application navigation', () => {
     window.location.hash = 'overview'
   })
 
+  it('closes the phone menu with Esc, also from the button that opened it', async () => {
+    render(<App />)
+    const toggle = await screen.findByRole('button', {name: 'Open navigation'})
+    fireEvent.click(toggle)
+    expect(toggle).toHaveAttribute('aria-expanded', 'true')
+    fireEvent.keyDown(toggle, {key: 'Escape'})
+    expect(screen.getByRole('button', {name: 'Open navigation'})).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.getByRole('button', {name: 'Open navigation'})).toHaveFocus()
+  })
+
   it('closes activity logs when a menu item is selected', async () => {
     render(<App />)
 

@@ -1,3 +1,24 @@
+# Mobile review — 27 November 2026
+
+- Short pages (VMs, Deployments, Comparisons, Requests, Import and export…)
+  no longer show a tall grey band under the top bar on phones: the shell's
+  two rows were sharing the spare height; now the bar takes what it needs
+  (`grid-template-rows: auto minmax(0, 1fr)`).
+- Home: the four key numbers stay a 2 × 2 grid on phones, a little smaller.
+- Catalog (and every page with section tabs): the tabs wrap onto a second line
+  instead of running off the edge without a scrollbar.
+- Page headings keep the title and its action on one row while they fit; the
+  shared stylesheet (also used by the Go web UI) stacked them in a column on
+  phones. The fix is in that rule, as the stylesheet asks.
+- Esc closes the phone menu from anywhere in the top bar, including the button
+  that opened it.
+- Checked at 375 px with the built frontend and an empty preview API: home,
+  infrastructure, catalog, deployments, configurations, runs, comparisons,
+  users, requests, notifications, import and export, the menu and a dialog.
+  Pages with real data (results, detail pages) were not seen.
+- Validation: typecheck, all frontend tests (935), the asset budget (219.5 of
+  220 KiB), the theme contrast check and the Go web UI tests passed.
+
 # Comparison page review — 26 November 2026
 
 - Saved comparisons say much less. The snapshot is a small "Frozen <date>"
