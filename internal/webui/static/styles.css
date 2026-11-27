@@ -1430,7 +1430,8 @@ summary { color: var(--muted-foreground); font-size: 13px; font-weight: 500; cur
   .managed-grid, .infrastructure-stats { grid-template-columns: 1fr; }
   .operation-row { grid-template-columns: 1fr auto; }
   .operation-row > :nth-child(2), .operation-row > :nth-child(4) { display: none; }
-  .section-heading { align-items: flex-start; flex-direction: column; gap: 8px; }
+  /* Title and actions share the row while they fit, then the actions wrap below. */
+  .section-heading { flex-wrap: wrap; gap: 8px 16px; }
   .field-row { grid-template-columns: 1fr; gap: 0; }
   .pool-row { grid-template-columns: 1fr 90px; }
   .pool-row label:nth-child(3) { grid-column: 1 / -1; }
