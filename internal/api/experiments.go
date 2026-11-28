@@ -133,12 +133,26 @@ func (s *Server) listExperiments(response http.ResponseWriter, request *http.Req
 			limit = parsed
 		}
 	}
-	items, err := s.store.ListExperimentsVisibleToUser(request.Context(), viewerID(requestUser(request)), limit)
+	offset := 0
+	if raw := request.URL.Query().Get("offset"); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed < 0 || parsed > 100000 {
+			writeError(response, http.StatusBadRequest, "invalid_offset", "Invalid page offset.")
+			return
+		}
+		offset = parsed
+	}
+	items, err := s.store.ListExperimentsVisibleToUserPage(request.Context(), viewerID(requestUser(request)), limit, offset)
 	if err != nil {
 		writeError(response, http.StatusInternalServerError, "database_error", "Could not list experiments.")
 		return
 	}
-	writeJSON(response, http.StatusOK, map[string]any{"items": items})
+	var nextOffset *int
+	if len(items) == limit {
+		next := offset + len(items)
+		nextOffset = &next
+	}
+	writeJSON(response, http.StatusOK, map[string]any{"items": items, "nextOffset": nextOffset})
 }
 
 func (s *Server) deleteExperiment(response http.ResponseWriter, request *http.Request) {

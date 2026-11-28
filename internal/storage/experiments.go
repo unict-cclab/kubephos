@@ -88,6 +88,14 @@ func (s *Store) ListExperimentsVisibleToUser(ctx context.Context, userID string,
 }
 
 func (s *Store) readListExperimentsForUser(ctx context.Context, userID string, limit int, shared bool) ([]domain.Experiment, error) {
+	return s.readExperimentPage(ctx, userID, limit, 0, shared)
+}
+
+func (s *Store) ListExperimentsVisibleToUserPage(ctx context.Context, userID string, limit, offset int) ([]domain.Experiment, error) {
+	return s.readExperimentPage(ctx, userID, limit, offset, true)
+}
+
+func (s *Store) readExperimentPage(ctx context.Context, userID string, limit, offset int, shared bool) ([]domain.Experiment, error) {
 	visibility := "$1 = '' OR experiment.owner_user_id = $1"
 	if shared {
 		visibility = "$1 = '' OR can_view_experiment($1, experiment.id)"
@@ -105,9 +113,9 @@ func (s *Store) readListExperimentsForUser(ctx context.Context, userID string, l
 		FROM experiments experiment
 		JOIN users owner ON owner.id = experiment.owner_user_id
 		WHERE `+visibility+`
-		ORDER BY experiment.created_at DESC
-		LIMIT $2
-	`, userID, limit)
+		ORDER BY experiment.created_at DESC, experiment.id DESC
+		LIMIT $2 OFFSET $3
+	`, userID, limit, offset)
 	if err != nil {
 		return nil, err
 	}

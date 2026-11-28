@@ -1,6 +1,7 @@
 import {useCallback, useEffect, useRef, useState, type Dispatch, type SetStateAction} from 'react'
 import {ApiError, request} from '../api'
 import type {PlatformData, Session} from '../types'
+import {loadExperimentHistory} from '../experimentHistory'
 
 export const emptyData: PlatformData = {system: null, pluginRuntime: null, workspaces: [], pipelines: [], pipelineRuns: [], experiments: [], experimentConfigurations: [], operations: [], artifacts: [], plugins: [], pluginPackages: [], pluginImports: [], applications: [], strategies: [], credentials: [], connections: [], machineTemplates: [], infrastructureServices: [], kubernetesClusters: [], deployments: [], resources: [], audit: [], users: [], clusterAssignments: [], adminRequests: []}
 
@@ -50,7 +51,7 @@ export function usePlatformData(session: Session | null, setSession: Dispatch<Se
     const selected = endpoints.filter(endpoint => (!endpoint.admin || session.user?.role === 'admin') && (!live || endpoint.live))
     const pending = (async () => {
       const results = await Promise.allSettled(selected.map(async endpoint => {
-        const value = await request<Record<string, unknown>>(endpoint.path, {}, undefined, active.signal)
+        const value: Record<string, unknown> = endpoint.key === 'experiments' ? await loadExperimentHistory(active.signal) : await request<Record<string, unknown>>(endpoint.path, {}, undefined, active.signal)
         if (!value || typeof value !== 'object' || endpoint.list && !Array.isArray(value.items)) throw new ApiError(200, {code: 'invalid_response', message: 'KubePhos returned incomplete data. Refresh the page and try again.'})
         return {...endpoint, value}
       }))
